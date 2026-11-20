@@ -1,0 +1,20 @@
+# Extends the default gitleaks rules. Only two known false positives from the
+# upstream import are allowlisted, each by path AND line text.
+title = "leaf gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "GPU engine counter key in a comment (not a secret)"
+condition = "AND"
+paths = ['''^tools/gpustress/src/main\.rs$''']
+regexTarget = "line"
+regexes = ['''luid_\.\._phys_0_eng_N''']
+
+[[allowlists]]
+description = "Test constant in the vendored velopack process code (not a secret)"
+condition = "AND"
+paths = ['''^vendor/velopack/src/process_win\.rs$''']
+regexTarget = "line"
+regexes = ['''VP_INHERIT_TEST_12345''']
