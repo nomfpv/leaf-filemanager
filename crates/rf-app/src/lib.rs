@@ -61,7 +61,6 @@ mod select_box;
 mod settings_view;
 mod share;
 mod taskbar_preview;
-mod update_splash;
 mod shelf_view;
 mod status_center;
 mod transfer_view;
@@ -531,11 +530,6 @@ pub fn main() {
         .format_timestamp_millis()
         .init();
     start_mark("logging");
-    // a copy of this exe showing the update window while the installed one is replaced
-    if std::env::args().nth(1).as_deref() == Some(update_splash::ARG) {
-        update_splash::run();
-        return;
-    }
 
     // As default file manager we also receive shell namespaces (Control Panel = "::{…}") and
     // non-folders: hand those back to Explorer so nothing becomes unreachable.
@@ -939,9 +933,6 @@ pub fn main() {
             // Win+E for the default file manager while no dock takes it (issue 44: Windows' newer Win+E skips the registry)
             shell::keylayer::watch_main(cx);
         }
-        // updates from GitHub Releases (installed copies only)
-        installer::set_beta_updates(cx.global::<settings::Settings>().beta_updates);
-        installer::spawn_checks(cx, |cx| cx.refresh_windows());
         // DirectLook ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
         if cx.global::<settings::Settings>().directlook_enabled && std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_none() && !bar_preview {
             look::ipc::send(look::ipc::Msg::Wake, true);

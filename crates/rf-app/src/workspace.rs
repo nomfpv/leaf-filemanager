@@ -4653,41 +4653,6 @@ impl Render for Workspace {
             .flatten();
         let status = self.render_statusbar(&p, strip_bar_w, cx);
         let picker_footer = self.picker.clone().map(|pk| crate::picker::footer(self, &pk, &p, window, cx));
-        let star_strip = (self.picker.is_none() && crate::installer::star_due(cx.global::<crate::settings::Settings>())).then(|| {
-            let action = |id: &'static str, label: &'static str, star: bool| {
-                div()
-                    .id(id)
-                    .px_2()
-                    .py_0p5()
-                    .rounded(theme::RADIUS_SM)
-                    .cursor_pointer()
-                    .when(star, |d| d.text_color(p.accent))
-                    .hover(|s| s.bg(p.hover))
-                    .child(label)
-                    .on_click(move |_, _, cx| {
-                        if star {
-                            std::thread::spawn(|| {
-                                let _ = rf_win::shell::open(std::path::Path::new(crate::installer::REPO));
-                            });
-                        }
-                        crate::settings::update(cx, |s| s.star_asked = true);
-                    })
-            };
-            h_flex()
-                .flex_shrink_0()
-                .px_3()
-                .py_1()
-                .gap_2()
-                .items_center()
-                .border_t_1()
-                .border_color(p.divider)
-                .text_xs()
-                .text_color(p.text_secondary)
-                .child(Icon::new(L::Star).size(px(12.)).text_color(p.accent))
-                .child(div().flex_1().child(t!("rustyfiles işinize yarıyor mu? GitHub'da bir yıldız, başkalarının da bulmasına yardım eder.")))
-                .child(action("star-yes", t!("Yıldız ver"), true))
-                .child(action("star-no", t!("Bir daha gösterme"), false))
-        });
         // now and then, a note from the author; its message changes each time it is answered
         let donate_strip = (self.picker.is_none() && crate::installer::donate_due(cx.global::<crate::settings::Settings>())).then(|| {
             let s = cx.global::<crate::settings::Settings>();
@@ -5103,7 +5068,6 @@ impl Render for Workspace {
                             .child(main_row)
                             // the floating card of a running operation (Settings → Aktarım ilerlemesi → Yüzen kart)
                             .children(cards)
-                            .children(star_strip)
                             .children(donate_strip)
                             .when(show_statusbar, |d| d.child(status))
                             .children(picker_footer),

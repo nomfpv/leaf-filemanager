@@ -2978,13 +2978,12 @@ fn update_card(p: &Palette, s: &Settings) -> AnyElement {
         State::NotInstalled => t!("Bu kopya kurulum programıyla kurulmadı: güncellemeleri GitHub'dan indirin.").to_string(),
         State::Idle => t!("Güncellemeler GitHub'dan gelir.").to_string(),
         State::Checking => t!("Denetleniyor…").to_string(),
-        State::UpToDate => t!("rustyfiles güncel.").to_string(),
         State::Downloading(v, pct) => format!("{} {v} · %{pct}", t!("İndiriliyor:")),
         State::Ready(v) => format!("{} {v}. {}", t!("İndirildi:"), t!("Yeniden başlatınca uygulanır.")),
-        State::Failed(e) => format!("{} {e}", t!("Denetlenemedi:")),
     };
     let control = match state {
-        State::NotInstalled => button("upd-web", p, t!("Sürümler sayfası"), |_, _| open_url(RELEASES_URL)),
+        // (update checks are off in this fork: no link to the upstream releases)
+        State::NotInstalled => div().into_any_element(),
         State::Ready(_) => button("upd-restart", p, t!("Yeniden başlat ve güncelle"), |_, _| {
             std::thread::spawn(crate::installer::restart_to_update);
         }),
@@ -3056,8 +3055,6 @@ fn glow(c: Hsla, alpha: f32) -> Div {
 
 /// "Check for updates": runs off the UI thread and redraws while it checks and downloads.
 pub(crate) fn check_updates_now(cx: &mut App) {
-    // (the beta switch as it is now: the check itself runs off this thread)
-    crate::installer::set_beta_updates(cx.global::<Settings>().beta_updates);
     cx.spawn(async move |cx| {
         let run = cx.background_executor().spawn(async { crate::installer::check() });
         crate::installer::redraw_while_busy(cx).await;
@@ -3087,24 +3084,6 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             button("copy-ver", p, t!("Kopyala"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("rustyfiles {ver}")))),
         ),
         update_card(p, &s),
-        card(
-            p,
-            L::Download,
-            t!("Güncellemeleri kendiliğinden indir"),
-            Some(t!("Arka planda denetlenir ve indirilir; bir sonraki açılışta uygulanır.")),
-            sw("auto-upd", p, s.auto_update, |s, v| s.auto_update = v),
-        ),
-        card(
-            p,
-            L::Sparkles,
-            t!("Beta sürümlerini de al"),
-            Some(if crate::installer::is_beta(env!("CARGO_PKG_VERSION")) && !s.beta_updates {
-                t!("Bu kopya bir beta sürümüdür: anahtar kapalıyken de sonraki betaları alır, kararlı sürüm çıkınca ona geçer.")
-            } else {
-                t!("Yayınlanmadan önce denenen sürümler: yenilikler erken gelir, hatalar da olabilir. Kapalıyken yalnızca kararlı sürümler indirilir.")
-            }),
-            sw("beta-upd", p, s.beta_updates, |s, v| s.beta_updates = v),
-        ),
         section(p, "GitHub"),
         link_row(p, "gh-star", L::Star, t!("GitHub'da yıldız ver"), Some(t!("rustyfiles işinize yarıyorsa başkalarının da bulmasına yardım eder.")), |_, _| open_url(REPO_URL)),
         link_row(p, "coffee", L::Coffee, t!("Geliştiriciye bir kahve ısmarla"), Some(t!("rustyfiles'ı tek başıma geliştiriyorum; her destek, devam etmeme yardım eder.")), |_, _| open_url(crate::installer::DONATE)),
