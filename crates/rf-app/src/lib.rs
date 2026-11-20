@@ -8,11 +8,6 @@ mod fast_start;
 mod bench_view;
 mod donate;
 mod ferry;
-mod addons;
-mod addons_page;
-mod hyperdownload;
-mod hd_history;
-mod downloads_view;
 mod archive_view;
 mod bulk_rename;
 mod command_palette;
@@ -551,8 +546,6 @@ pub fn main() {
     // `--quick-search`: the quick search window, as its hotkey opens it (a shortcut of the
     // user's own can run this)
     let quick_search = std::env::args().nth(1).as_deref() == Some(quick_search::LAUNCH_ARG);
-    // `--hd-follow=<gid>`: started by HyperDownload's browser host: show that download (in the running window, or in a new one)
-    let hd_follow = std::env::args().nth(1).and_then(|a| a.strip_prefix("--hd-follow=").map(str::to_string));
     // `--dock`: the dock (see dock/), a process of its own that lives beside the main rustyfiles. `--shell` is the same process under
     // its new name, the shell host (see shell/): the one with the desktop cover, the shell mode and the probe.
     let dock = shell::is_host_arg(std::env::args().nth(1).as_deref());
@@ -573,10 +566,7 @@ pub fn main() {
     let arg = arg.filter(|_| !open_look_settings && pick.is_none() && !bar_preview && !quick_search && !dock && !no_window && !snip_only);
     // jump list task "New window"
     let new_window = arg.as_deref() == Some(rf_win::jumplist::NEW_WINDOW_ARG);
-    // `--downloads`: HyperDownload's window (a running rustyfiles opens it; a first start opens it beside its own window)
-    let downloads_window = arg.as_deref() == Some(downloads_view::LAUNCH_ARG);
-    // (`--hd-follow=` is not a folder either: it was handed to Explorer, which opened Documents, and the download was never shown)
-    let arg = arg.filter(|_| !new_window && !downloads_window && hd_follow.is_none());
+    let arg = arg.filter(|_| !new_window);
     // several folders on the command line (issue 125): a first one that is gone (moved, renamed) is passed over, not handed to Explorer
     // with its error, and the first one that is there opens instead; `first_taken` is how many arguments that used up
     let mut first_taken = 1;
@@ -744,9 +734,7 @@ pub fn main() {
         _ if open_look_settings => look::ipc::ToApp::OpenSettings.encode(),
         _ if pick.is_some() => format!("{}{}", picker::PICK_PREFIX, pick.as_deref().unwrap_or_default()),
         _ if new_window => rf_win::jumplist::NEW_WINDOW_ARG.to_string(),
-        _ if downloads_window => downloads_view::LAUNCH_ARG.to_string(),
         _ if quick_search => quick_search::LAUNCH_ARG.to_string(),
-        _ if hd_follow.is_some() => format!("{}{}", hyperdownload::FOLLOW_PREFIX, hd_follow.as_deref().unwrap_or_default()),
         _ if no_window => search_pipe::START_MSG.to_string(),
         _ if select.is_some() => format!("{}{}", workspace::SELECT_PREFIX, select.as_deref().unwrap_or_default()),
         Some(Location::Path(p)) => p.to_string_lossy().into_owned(),
@@ -802,15 +790,8 @@ pub fn main() {
     // second launches: each comes with the acknowledgement it waits for (the other senders of ipc_tx need none)
     let (launch_tx, launch_rx) = futures::channel::mpsc::unbounded::<(String, rf_win::handover::Ack)>();
     // (this process is the first: its own extra folders open as tabs once the window is there, like second launches do)
-    // (this process is the first one and was started for a browser download: it is shown once the window is there)
-    if let Some(gid) = &hd_follow {
-        let _ = ipc_tx.unbounded_send(format!("{}{gid}", hyperdownload::FOLLOW_PREFIX));
-    }
     for folder in more_folders {
         let _ = ipc_tx.unbounded_send(folder);
-    }
-    if downloads_window {
-        let _ = ipc_tx.unbounded_send(downloads_view::LAUNCH_ARG.to_string());
     }
     if let Some(rx) = shell_select {
         let tx = ipc_tx.clone();
@@ -867,7 +848,6 @@ pub fn main() {
                     "filetypes" => settings_view::Page::FileTypes,
                     "hypersearch" => settings_view::Page::Search,
                     "advanced" => settings_view::Page::Advanced,
-                    "addons" => settings_view::Page::Addons,
                     _ => settings_view::Page::Look,
                 },
                 cx,

@@ -750,18 +750,6 @@ pub fn set_result(cx: &mut App, id: u64, title: Option<String>, action: Option<R
     });
 }
 
-/// A button on a running operation that stays when it ends ("İzle": play a video while it downloads).
-pub fn set_live_action(cx: &mut App, id: u64, action: ResultAction) {
-    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
-    entity.update(cx, |ops, cx| {
-        if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
-            op.action = Some(action);
-            op.live = true;
-        }
-        cx.notify();
-    });
-}
-
 /// Takes a finished operation off the list (an automatic run that found nothing to do should
 /// not leave a row behind).
 pub fn remove(cx: &mut App, id: u64) {
@@ -1473,8 +1461,7 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
                 .min_w_0()
                 .gap_1()
                 .child(div().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(op.title.clone()))
-                .when_some(running.then(|| crate::downloads_view::card_bar(op.id, &p)).flatten(), |d, bar| d.child(bar))
-                .when(running && crate::downloads_view::card_bar(op.id, &p).is_none(), |d| {
+                .when(running, |d| {
                     d.child(
                         div()
                             .h(px(3.))

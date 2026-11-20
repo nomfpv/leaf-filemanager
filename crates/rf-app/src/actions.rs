@@ -47,7 +47,6 @@ gpui_kit::actions!(
         RenameItem,
         NewFolder,
         NewTextFile,
-        DownloadFromLink,
         ShowContextMenu,
         CopyPath,
         OpenWith,

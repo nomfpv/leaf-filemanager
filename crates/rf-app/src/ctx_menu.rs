@@ -379,18 +379,6 @@ impl FolderView {
                 None => Item::sub(t!("Sıkıştır"), icon(L::Archive), sub_items),
             });
         }
-        // a .torrent file, with HyperDownload installed: downloaded next to it
-        if items.len() == 1
-            && items[0].extension().is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
-            && items[0].is_file()
-            && crate::addons::installed(crate::hyperdownload::ID).is_some()
-        {
-            let file = items[0].clone();
-            v.push(Item::action(t!("HyperDownload ile indir"), icon(L::Download), move |_, cx| {
-                let dir = file.parent().map(|d| d.to_path_buf()).unwrap_or_default();
-                crate::hyperdownload::download_torrent(file.clone(), dir, cx)
-            }));
-        }
         if mp.compress && !items.is_empty() && items.iter().all(|p| rf_archive::is_supported(p)) {
             use crate::status_center::ExtractTo;
             let list = items.to_vec();
@@ -474,10 +462,6 @@ impl FolderView {
         let in_archive = crate::archive_view::split(dir).is_some() && !dir.exists();
         if !in_archive {
             v.push(Item::action(t!("Kısayol yapıştır"), icon(L::ClipboardPaste), act(me, |v, w, cx| v.paste_shortcuts(w, cx))).enabled(rf_win::clipboard::has_files()));
-        }
-        // HyperDownload installed: a link downloaded into this folder (it was only in the command palette)
-        if !in_archive && !rf_win::ftp::is_ftp(dir) && crate::addons::installed(crate::hyperdownload::ID).is_some() {
-            v.push(Item::action(t!("Bağlantıdan indir…"), icon(L::Download), act(me, |v, w, cx| v.download_from_link(w, cx))));
         }
         let d = dir.to_path_buf();
         v.push(Item::action(t!("Kenar çubuğuna sabitle"), icon(L::Pin), act(me, move |v, _, cx| v.pin(d.clone(), cx))));

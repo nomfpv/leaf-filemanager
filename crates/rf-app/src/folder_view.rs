@@ -570,8 +570,6 @@ pub struct FolderView {
     recycle: Option<Entity<crate::recycle_view::RecycleView>>,
     /// The disk usage page of this tab (kept while the tab stays on that folder).
     disk_usage: Option<Entity<crate::disk_usage::DiskUsageView>>,
-    /// HyperDownload's page, while this view shows it.
-    downloads: Option<Entity<crate::downloads_view::DownloadsView>>,
     /// Git status of the repository containing this folder (if any).
     pub git: Option<Arc<rf_win::git::GitStatus>>,
     /// Last commit per child of the current folder (commit columns), keyed by name.
@@ -759,7 +757,6 @@ impl FolderView {
             typeahead: (String::new(), Instant::now()),
             recycle: None,
             disk_usage: None,
-            downloads: None,
             git: None,
             git_commits: None,
             column_cache: Default::default(),
@@ -785,12 +782,6 @@ impl FolderView {
         };
         this.load(cx);
         this
-    }
-
-    /// "Bağlantıdan indir…": asks for a link (one on the clipboard is filled in) and downloads it into this folder with HyperDownload.
-    pub fn download_from_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Location::Path(dir) = self.location().clone() else { return };
-        crate::hyperdownload::ask_link(dir, window, cx);
     }
 
     pub fn location(&self) -> &Location {
@@ -5309,17 +5300,8 @@ impl Render for FolderView {
                 };
                 div().size_full().child(dv).into_any_element()
             }
-            Location::Downloads => {
-                let dv = match &self.downloads {
-                    Some(dv) => dv.clone(),
-                    None => {
-                        let dv = cx.new(|cx| crate::downloads_view::DownloadsView::new(false, cx));
-                        self.downloads = Some(dv.clone());
-                        dv
-                    }
-                };
-                div().size_full().child(dv).into_any_element()
-            }
+            // (the HyperDownload page is cut: a tab restored on it shows nothing)
+            Location::Downloads => div().size_full().into_any_element(),
             Location::RecycleBin => {
                 let rv = match &self.recycle {
                     Some(rv) => rv.clone(),
@@ -5443,7 +5425,6 @@ impl Render for FolderView {
             }))
             .on_action(cx.listener(|this, _: &NewFolder, _, cx| this.create_new(true, cx)))
             .on_action(cx.listener(|this, _: &NewTextFile, _, cx| this.create_new(false, cx)))
-            .on_action(cx.listener(|this, _: &DownloadFromLink, window, cx| this.download_from_link(window, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
             .on_action(cx.listener(|this, _: &CopyPathQuoted, _, cx| this.copy_path_with(true, cx)))
             .on_action(cx.listener(|this, _: &RotateRight, window, cx| this.rotate_selection(true, window, cx)))

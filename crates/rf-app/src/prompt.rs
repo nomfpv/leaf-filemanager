@@ -134,11 +134,6 @@ pub fn show_secret(title: impl Into<SharedString>, message: Option<String>, plac
     show_inner(title, message, Some((String::new(), placeholder)), true, Vec::new(), Vec::new(), buttons, window, cx)
 }
 
-/// A dialog with a list of check boxes (a long list scrolls).
-pub fn show_checks(title: impl Into<SharedString>, message: Option<String>, checks: Vec<Check>, buttons: Vec<Button>, window: &mut Window, cx: &mut App) {
-    show_inner(title, message, None, false, Vec::new(), checks, buttons, window, cx)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn show_inner(
     title: impl Into<SharedString>,

@@ -356,13 +356,6 @@ impl FolderView {
                 let _ = cx.update(|cx| {
                     let item = cx.read_from_clipboard();
                     let text = item.as_ref().and_then(|c| c.text());
-                    // a link on the clipboard, with HyperDownload installed: offered for download into this folder
-                    if let Some(link) = text.as_deref().map(str::trim).filter(|t| crate::hyperdownload::is_link(t))
-                        && crate::addons::installed(crate::hyperdownload::ID).is_some()
-                    {
-                        crate::hyperdownload::offer_pasted_link(link.to_string(), dir.clone(), cx);
-                        return;
-                    }
                     // text or a picture: a file of it here, with the rename box on it (issue 151)
                     let image = item.as_ref().and_then(|c| {
                         c.entries().iter().find_map(|e| match e {
