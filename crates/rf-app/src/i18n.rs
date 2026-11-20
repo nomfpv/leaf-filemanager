@@ -375,6 +375,25 @@ macro_rules! t {
     };
 }
 
+/// For tests that compare texts: the interface language is one process-wide value and one test of `i18n` switches it for a few
+/// milliseconds, so a test that reads the Turkish keys runs its body again when the language was not Turkish all the way through.
+#[cfg(test)]
+pub(crate) fn while_turkish(body: impl Fn()) {
+    for _ in 0..400 {
+        if crate::i18n::is_tr() {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&body));
+            if crate::i18n::is_tr() {
+                if let Err(e) = result {
+                    std::panic::resume_unwind(e);
+                }
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the interface language did not settle on Turkish");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

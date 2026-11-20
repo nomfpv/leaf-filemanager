@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn the_dialog_takes_extensions_and_says_what_is_wrong_with_the_rest() {
         let rules = [rule(&["dll", "sys"], &[], true), rule(&["js"], &[], true)];
-        crate::dock_page::while_turkish(|| {
+        crate::i18n::while_turkish(|| {
             assert_eq!(exts_answer(&rules, None, ".bin, DAT"), Ok(vec!["bin".to_string(), "dat".to_string()]));
             assert_eq!(exts_answer(&rules, Some(0), "dll, sys, bin"), Ok(vec!["dll".to_string(), "sys".to_string(), "bin".to_string()]), "a list keeps its own extensions");
             assert_eq!(exts_answer(&rules, None, "  "), Err("En az bir uzantı yazın.".to_string()));
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn a_lists_line_says_what_a_double_click_does() {
-        crate::dock_page::while_turkish(|| {
+        crate::i18n::while_turkish(|| {
             assert_eq!(rule_line(&rule(&["dll"], &[r"C:\t\dnSpy.exe", r"C:\t\ghidraRun.bat"], true)), "Çift tıklama: dnSpy");
             assert!(rule_line(&rule(&["exe"], &[r"C:\t\ghidraRun.bat"], false)).starts_with("Çift tıklama Windows'un varsayılanıyla açar"));
             assert!(rule_line(&rule(&["dll"], &[], true)).starts_with("Henüz program yok"));

@@ -25,8 +25,6 @@ use crate::theme::{self, Palette};
 pub enum Page {
     General,
     Appearance,
-    Dock,
-    Desktop,
     Layout,
     Files,
     FileTypes,
@@ -41,11 +39,9 @@ pub enum Page {
     About,
 }
 
-const PAGES: [(Page, L, &str); 16] = [
+const PAGES: [(Page, L, &str); 14] = [
     (Page::General, L::Settings, "Genel"),
     (Page::Appearance, L::Palette, "Görünüm"),
-    (Page::Dock, L::PanelBottom, "Dock"),
-    (Page::Desktop, L::Monitor, "Masaüstü"),
     (Page::Layout, L::LayoutGrid, "Sayfa düzeni"),
     (Page::Files, L::Folder, "Dosyalar ve klasörler"),
     (Page::FileTypes, L::FileType, "Dosya türleri"),
@@ -63,7 +59,7 @@ const PAGES: [(Page, L, &str); 16] = [
 /// The pages that are experimental: marked with a small "Deneysel" pill in the page list and "(deneysel)" in their title. The mark is
 /// NOT part of the page name in [`PAGES`], so the search and the translations still know the pages as "Dock" and "Masaüstü".
 fn experimental(page: Page) -> bool {
-    matches!(page, Page::Dock | Page::Desktop | Page::Ferry)
+    matches!(page, Page::Ferry)
 }
 
 /// The heading of a page: its name, and "(deneysel)" after it for an experimental page.
@@ -206,16 +202,6 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
     match page {
         Page::General => general(p, s, cx),
         Page::Appearance => appearance(p, s, cx),
-        Page::Dock => {
-            let size = crate::dock::size_slider::control(p, s, cx);
-            // a part of the dock that could not start tells the page so (a look in the background; not while the search builds pages)
-            if !collecting() {
-                crate::dock::parts_status::poll(cx);
-            }
-            // (the weather-from-position card is part of the page, directly under the weather city's row: `dock_page::page`)
-            crate::dock_page::page(p, s, Some(size))
-        }
-        Page::Desktop => crate::desktop_page::page(p, s),
         Page::Layout => layout(p, s, cx),
         Page::Files => files(p, s, cx),
         Page::FileTypes => crate::open_rules_page::page(p, s),
@@ -898,7 +884,6 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
 
     v.push(section(p, t!("Kaydırma")));
     v.push(card(p, L::ChevronsUpDown, t!("Akıcı kaydırma"), None, sw("smooth", p, s.smooth_scroll, |s, v| s.smooth_scroll = v)));
-    v.extend(crate::snip::settings_cards(p, s));
     v
 }
 
@@ -1421,16 +1406,6 @@ pub(crate) fn slider_for(spec: SliderSpec, p: &Palette, value: u8, focus: FocusH
         }
     })
     .into_any_element()
-}
-
-/// Whether the slider `id` is the one being dragged right now (for the lens thumb). A flag left by a drag that ended without its mouse-up
-/// is cleared here.
-pub(crate) fn slider_dragged(cx: &App, id: usize) -> bool {
-    if !cx.has_active_drag() {
-        HG_DRAG.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
-        return false;
-    }
-    HG_DRAG.load(std::sync::atomic::Ordering::Relaxed) == id
 }
 
 /// The focus handle of slider `i`, made at the first call.
@@ -3310,9 +3285,7 @@ fn index_exclusions(p: &Palette, s: &Settings) -> AnyElement {
 
 #[cfg(test)]
 mod search_tests {
-    use super::{COLLECT, COLLECT_AT, Found, PAGES, Page, matching};
-    use crate::settings::Settings;
-    use crate::theme::Palette;
+    use super::{Found, Page, matching};
 
     #[test]
     fn settings_are_found_by_every_word_of_the_query() {
@@ -3332,169 +3305,6 @@ mod search_tests {
         assert_eq!(titles("ÖNİZLEME"), vec!["Önizleme paneli"]);
         assert_eq!(titles("ilerleme"), vec!["İlerleme çubuğu"]);
         assert!(titles("   ").is_empty());
-    }
-
-    /// Builds the Dock page the way the search does (the builders note their texts) and returns what was noted.
-    fn noted_on_the_dock_page(s: &Settings, p: &Palette) -> Vec<Found> {
-        COLLECT.with(|c| *c.borrow_mut() = Some(Vec::new()));
-        COLLECT_AT.with(|a| a.set((Page::Dock, None)));
-        let _ = crate::dock_page::page(p, s, None);
-        COLLECT.with(|c| c.borrow_mut().take()).unwrap_or_default()
-    }
-
-    #[test]
-    fn the_weather_from_position_card_stands_directly_after_the_weather_city_row() {
-        crate::dock_page::while_turkish(|| {
-            let p = Palette::light();
-            let s = Settings { dock_enabled: true, ..Default::default() };
-            let titles: Vec<String> = noted_on_the_dock_page(&s, &p).into_iter().map(|f| f.title).collect();
-            let city = titles.iter().position(|t| t == "Hava durumu şehri").expect("the city row");
-            assert_eq!(titles.get(city + 1).map(String::as_str), Some("Konumumu kullan"), "{titles:?}");
-            // and it is in the left island's section, not after the last one: the next row after it is the middle island's first
-            assert!(city + 2 < titles.len(), "the page goes on after the card: {titles:?}");
-            assert_eq!(titles.iter().filter(|t| *t == "Konumumu kullan").count(), 1);
-        });
-    }
-
-    #[test]
-    fn the_dock_page_follows_the_look_page_and_the_search_finds_every_dock_setting_on_it() {
-        crate::dock_page::while_turkish(|| {
-            let at = |pg: Page| PAGES.iter().position(|x| x.0 == pg).unwrap();
-            assert_eq!(at(Page::Dock), at(Page::Appearance) + 1, "the Dock page comes right after Görünüm");
-            for p in [Palette::light(), Palette::dark()] {
-                // dock off (the dimmed rows) and on (the live ones): the same texts are noted either way
-                for dock_enabled in [false, true] {
-                    let s = Settings { dock_enabled, ..Default::default() };
-                    let noted = noted_on_the_dock_page(&s, &p);
-                    let entries = crate::dock_page::entries();
-                    // (the weather-from-position card stands right after the weather city's row, inside the page, and notes its texts too)
-                    // (and the card of the right island's own buttons, at the end of the right island's section: one more)
-                    // (and the card of what our control centre shows, right under that switch: one more)
-                    let extra = crate::dock::weather_card::cards(&p, &s).len() + 2;
-                    assert_eq!(noted.len(), entries.len() + extra, "one card per entry, none dropped and none twice");
-                    assert_eq!(noted.last().map(|f| f.title.as_str()), Some("Durum simgeleri"), "the buttons' card closes the page");
-                    for e in &entries {
-                        // searched by its own title, and by a word of its description, it is found and opens the Dock page
-                        let hits = matching(noted.clone(), e.title);
-                        assert!(hits.iter().any(|f| f.title == e.title && f.page == Page::Dock), "{} is not found by its title", e.field);
-                        if let Some(d) = e.desc {
-                            let word = d.split_whitespace().find(|w| w.chars().count() > 6).unwrap_or(d);
-                            assert!(matching(noted.clone(), word).iter().any(|f| f.title == e.title), "{} is not found by `{word}`", e.field);
-                        }
-                    }
-                    assert!(noted.iter().all(|f| f.page == Page::Dock));
-                }
-            }
-        });
-    }
-}
-
-#[cfg(test)]
-mod desktop_page_tests {
-    use super::{COLLECT, COLLECT_AT, Found, PAGES, Page, experimental, matching, page_title};
-    use crate::settings::Settings;
-    use crate::theme::Palette;
-
-    fn noted_on_the_desktop_page(s: &Settings, p: &Palette) -> Vec<Found> {
-        COLLECT.with(|c| *c.borrow_mut() = Some(Vec::new()));
-        COLLECT_AT.with(|a| a.set((Page::Desktop, None)));
-        let _ = crate::desktop_page::page(p, s);
-        COLLECT.with(|c| c.borrow_mut().take()).unwrap_or_default()
-    }
-
-    #[test]
-    fn the_desktop_page_follows_the_dock_page_and_the_search_finds_every_desktop_setting_on_it() {
-        crate::dock_page::while_turkish(|| {
-            let at = |pg: Page| PAGES.iter().position(|x| x.0 == pg).unwrap();
-            assert_eq!(at(Page::Desktop), at(Page::Dock) + 1, "the Masaüstü page comes right after Dock");
-            for p in [Palette::light(), Palette::dark()] {
-                for dock_enabled in [false, true] {
-                    let s = Settings { dock_enabled, ..Default::default() };
-                    let noted = noted_on_the_desktop_page(&s, &p);
-                    let entries = crate::desktop_page::entries();
-                    assert_eq!(noted.len(), entries.len(), "one card per entry, none dropped and none twice");
-                    for e in &entries {
-                        let hits = matching(noted.clone(), e.title);
-                        assert!(hits.iter().any(|f| f.title == e.title && f.page == Page::Desktop), "{} is not found by its title", e.field);
-                    }
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn the_experimental_pages_are_marked_and_the_mark_is_not_part_of_their_names() {
-        crate::dock_page::while_turkish(|| {
-            let exp: Vec<Page> = PAGES.iter().map(|x| x.0).filter(|p| experimental(*p)).collect();
-            assert_eq!(exp, [Page::Dock, Page::Desktop, Page::Ferry], "exactly these");
-            for (page, _, name) in PAGES {
-                let title = page_title(page, name);
-                if experimental(page) {
-                    assert!(title.starts_with(name) && title.ends_with("(deneysel)"), "{title}");
-                    assert!(!name.contains("eney"), "the name in the list stays plain so the search and the translation find it: {name}");
-                } else {
-                    assert_eq!(title, name, "a page that is not experimental is not marked");
-                }
-            }
-            // the mark and the title word have their English pair
-            let en: std::collections::HashSet<&str> = crate::i18n_en::EN.iter().map(|(k, _)| *k).collect();
-            assert!(en.contains("Deneysel") && en.contains("deneysel"));
-            assert!(en.contains("Masaüstü"));
-        });
-    }
-
-    /// The text of the function that starts with `signature`, from its opening brace to the matching closing one (string literals are
-    /// skipped, so a brace inside a text does not count). The page's own braces end it, not a marker comment that may be moved.
-    fn fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
-        let start = src.find(signature).unwrap_or_else(|| panic!("{signature} is not in the file any more"));
-        let open = start + src[start..].find('{').expect("a body");
-        let (mut depth, mut in_str, mut esc) = (0usize, false, false);
-        for (i, c) in src[open..].char_indices() {
-            if in_str {
-                match (esc, c) {
-                    (true, _) => esc = false,
-                    (false, '\\') => esc = true,
-                    (false, '"') => in_str = false,
-                    _ => {}
-                }
-                continue;
-            }
-            match c {
-                '"' => in_str = true,
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return &src[open..open + i + 1];
-                    }
-                }
-                _ => {}
-            }
-        }
-        panic!("{signature} has no closing brace");
-    }
-
-    #[test]
-    fn the_body_finder_stops_at_the_functions_own_closing_brace() {
-        let src = "fn a() { let s = \"}{\"; if x { y } }
-fn b() { z }";
-        assert_eq!(fn_body(src, "fn a("), "{ let s = \"}{\"; if x { y } }");
-        assert_eq!(fn_body(src, "fn b("), "{ z }");
-    }
-
-    #[test]
-    fn nothing_of_the_dock_or_the_desktop_is_on_the_developer_or_advanced_page() {
-        // the pages' builders live in this file: their source must not read or write a dock_*, shell_* (but shell_submenu) or desktop_* field
-        let src = include_str!("settings_view.rs");
-        let dev = fn_body(src, "fn dev(p: &Palette");
-        let adv = fn_body(src, "fn advanced(p: &Palette");
-        // (a finder that found the wrong text would let anything through: both pages are long and are made of rows)
-        assert!(dev.len() > 300 && adv.len() > 300, "{} {}", dev.len(), adv.len());
-        for (name, body) in [("dev", dev), ("advanced", adv)] {
-            for needle in [".dock_", ".shell_desktop", ".shell_win", ".shell_own", ".shell_tray", ".shell_hide", ".desktop_"] {
-                assert!(!body.contains(needle), "{name} page still touches {needle}");
-            }
-        }
     }
 }
 

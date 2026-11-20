@@ -216,15 +216,6 @@ pub fn save_with(path: &Path, baseline: &Table, mine: &Table) -> Saved {
 /// What a process last knew the settings file to hold, kept between its reads and its saves.
 pub type BaselineCell = parking_lot::Mutex<Option<Table>>;
 
-/// The process has just taken the file's state as its own (`file` is the table the file gave, before this process changed anything of
-/// it): from now on only what it changes on top of THIS is its change. A process that follows the file (the dock reloads it when
-/// another process writes) must call this each time it replaces its settings with a reload; otherwise its baseline stays at the
-/// start-up table, what another writer set since looks like the follower's own change, and its next save writes that old value back
-/// over whatever the file has become meanwhile.
-pub fn follow(cell: &BaselineCell, file: Table) {
-    *cell.lock() = Some(file);
-}
-
 /// [`save_with`] against the baseline in `cell` (`default_base` stands in when none was taken yet), and the baseline moves to what was
 /// saved when the save went through (or needed no write); a save that did not happen keeps it, so the next one carries the same changes.
 pub fn save_tracked(cell: &BaselineCell, path: &Path, mine: Table, default_base: impl FnOnce() -> Table) -> Saved {
@@ -371,7 +362,8 @@ mod tests {
     #[test]
     fn the_real_settings_a_desktop_switch_from_one_writer_and_a_session_from_another() {
         use crate::settings::Settings;
-        // the old process holds the defaults; another writer turned the desktop cover on (and a newer build added a key)
+        // the old process holds the defaults; another writer (an older build that still had the desktop cover) turned it on, and a
+        // newer build added a key: neither is a field of this build, both are kept
         let old_base = Table::try_from(Settings::default()).unwrap();
         let mut file = old_base.clone();
         file.insert("shell_desktop_cover".into(), Value::Boolean(true));
@@ -384,7 +376,6 @@ mod tests {
         assert_eq!(merged.get("a_key_from_the_future"), Some(&Value::String("kept".into())));
         let text = toml::to_string_pretty(&merged).unwrap();
         let back = Settings::parse_lenient_pub(&text).unwrap();
-        assert!(back.shell_desktop_cover);
         assert_eq!(back.session_tabs, vec!["C:\\x".to_string()]);
     }
 
@@ -429,49 +420,6 @@ mod tests {
         assert_eq!(table(&std::fs::read_to_string(&p).unwrap()), table("a = 2\n"));
         let kept = std::fs::read_dir(p.parent().unwrap()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().contains(".bozuk-")).count();
         assert_eq!(kept, 1, "the broken file is kept for repair");
-        let _ = std::fs::remove_dir_all(p.parent().unwrap());
-    }
-
-    #[test]
-    fn a_follower_that_took_the_reload_as_its_baseline_does_not_write_the_reloaded_values_back() {
-        // The dock process: starts with a=0; another writer sets a=1; the dock reloads (memory a=1). Then the file moves on to a=2.
-        // The dock's slider (key `size`) is saved afterwards.
-        let p = scratch("follow");
-        let cell: BaselineCell = parking_lot::Mutex::new(Some(table("a = 0
-size = 5
-")));
-        // the reload: the dock's memory is now what the file held (a = 1)
-        follow(&cell, table("a = 1
-size = 5
-"));
-        std::fs::write(&p, "a = 2
-size = 5
-").unwrap();
-        let mine = table("a = 1
-size = 9
-");
-        assert_eq!(save_tracked(&cell, &p, mine, || table("")), Saved::Wrote);
-        assert_eq!(table(&std::fs::read_to_string(&p).unwrap()), table("a = 2
-size = 9
-"), "the file's newer `a` survived the dock's slider");
-        // and the baseline moved to what this process holds: the same save again changes nothing
-        assert_eq!(save_tracked(&cell, &p, table("a = 1
-size = 9
-"), || table("")), Saved::Nothing);
-
-        // without following (the old behaviour): the stale baseline made `a` look like the dock's own change
-        let stale: BaselineCell = parking_lot::Mutex::new(Some(table("a = 0
-size = 5
-")));
-        std::fs::write(&p, "a = 2
-size = 5
-").unwrap();
-        assert_eq!(save_tracked(&stale, &p, table("a = 1
-size = 9
-"), || table("")), Saved::Wrote);
-        assert_eq!(table(&std::fs::read_to_string(&p).unwrap()), table("a = 1
-size = 9
-"), "this is the loss `follow` prevents");
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }
 

@@ -13,9 +13,6 @@ mod command_palette;
 mod conflict_dialog;
 mod ctx_menu;
 mod disk_usage;
-pub mod dock;
-mod desktop_page;
-mod dock_page;
 mod fluent_menu;
 mod flyout;
 mod glass;
@@ -48,13 +45,10 @@ mod places;
 mod settings;
 mod settings_merge;
 mod shellless;
-pub mod shell;
-mod snip;
 mod shell_view;
 mod select_box;
 mod settings_view;
 mod share;
-mod taskbar_preview;
 mod shelf_view;
 mod status_center;
 mod transfer_view;
@@ -69,7 +63,6 @@ mod quick_search;
 mod quicklook;
 mod run_names;
 mod settings_rows;
-mod search_pipe;
 mod hotkey_field;
 mod recycle_settings_view;
 mod recycle_text;
@@ -152,8 +145,6 @@ pub(crate) fn install_panic_log() {
                 let _ = f.write_all(line.as_bytes());
             }
         }
-        // (the shell host's process also says it in the log, where the other exit reasons are)
-        shell::exits::on_panic(info);
         prev(info);
     }));
 }
@@ -424,8 +415,8 @@ fn save_and_quit(cx: &mut App) {
 /// The variable a restarted rustyfiles is started with: the process id of the one that is ending (see [`restart`]).
 const AFTER_EXIT_ENV: &str = "RUSTYFILES_AFTER_EXIT";
 
-/// Restarts rustyfiles: DirectLook and the dock are asked to stop, a new rustyfiles is started that waits for this one to end, and
-/// this one quits the usual way (settings and session written). The new one opens its last session and brings the dock and
+/// Restarts rustyfiles: DirectLook is asked to stop, a new rustyfiles is started that waits for this one to end, and
+/// this one quits the usual way (settings and session written). The new one opens its last session and brings
 /// DirectLook back as the settings say. WHY (the owner, 2026-11-17, after a morning where the dock came up empty: "bir de bir
 /// kısayol ekleyelim. rustyfiles'ı restart etsin"): there was no way to start everything afresh short of ending the processes by
 /// hand. Ctrl+Alt+Shift+R and the command palette.
@@ -434,7 +425,6 @@ pub(crate) fn restart(cx: &mut App) {
     let pid = std::process::id().to_string();
     std::thread::spawn(move || {
         rf_win::single_instance::send_to(&look::ipc::app_name(), &look::ipc::Msg::Quit.encode());
-        dock::control::stop_for_update();
         // (no folder: the new process opens the last session; its working directory is never the installation folder)
         let dir = std::env::temp_dir();
         if let Err(e) = std::process::Command::new(&me).env(AFTER_EXIT_ENV, &pid).current_dir(dir).spawn() {
@@ -505,9 +495,10 @@ pub fn main() {
     // Not in the installation folder: the updater renames it, and Windows refuses while it is a working directory of this process
     // or of anything this process starts (`rf_win::ownfolder`). Before everything else, so that every child inherits the way out.
     rf_win::ownfolder::leave();
-    // `--shell-probe`: what the shell host finds, windowless and read-only, before anything else is done (see shell::probe)
-    if std::env::args().nth(1).as_deref() == Some(shell::probe::ARG) {
-        std::process::exit(shell::probe::run());
+    // the side processes and previews of the cut taskbar/desktop/snip/download features: started by an old shortcut, autostart entry
+    // or browser host, they end here without doing anything
+    if std::env::args().nth(1).as_deref().is_some_and(retired_arg) {
+        return;
     }
     // Velopack (installer / updater): first, it may run an install hook and exit
     installer::startup();
@@ -531,38 +522,15 @@ pub fn main() {
     // appearing for the whole SMB timeout. Undecided after 2 s = treat as a (slow) folder.
     // `--settings=directlook`: DirectLook'un simge menüsünden "DirectLook ayarları"
     // `--settings=speed`: straight to Settings → Speed test
-    // `--settings=dock`: straight to Settings → Dock
     let settings_arg = std::env::args().nth(1).and_then(|a| a.strip_prefix("--settings=").map(str::to_string));
     let open_look_settings = settings_arg.is_some();
     // `--pick <pipe>`: an app's Open/Save dialog (rustyfiles_dialog.dll) asks for a file
     let pick = (std::env::args().nth(1).as_deref() == Some("--pick")).then(|| std::env::args().nth(2)).flatten();
-    // `--bar-preview`: our taskbar, as an ordinary window (see taskbar_preview)
-    // `--desktop-preview`: our desktop, as an ordinary window (see shell::desktop); treated like the bar preview everywhere below
-    let desktop_preview = std::env::args().nth(1).as_deref() == Some(shell::desktop::args::ARG);
-    // `--switcher-preview`: our window switcher, shown once (see shell::switcher); also treated like the bar preview below
-    let switcher_preview = std::env::args().nth(1).as_deref() == Some(shell::switcher::ARG);
-    let bar_preview = desktop_preview || switcher_preview || std::env::args().nth(1).as_deref() == Some("--bar-preview");
     // `--quick-search`: the quick search window, as its hotkey opens it (a shortcut of the
     // user's own can run this)
     let quick_search = std::env::args().nth(1).as_deref() == Some(quick_search::LAUNCH_ARG);
-    // `--dock`: the dock (see dock/), a process of its own that lives beside the main rustyfiles. `--shell` is the same process under
-    // its new name, the shell host (see shell/): the one with the desktop cover, the shell mode and the probe.
-    let dock = shell::is_host_arg(std::env::args().nth(1).as_deref());
-    // `--snip`: our own screen snip and nothing else (see snip/): no window of the app, no forwarding to a running copy
-    let snip_only = snip::is_arg(std::env::args().nth(1).as_deref());
-    // `--no-window`: the main app with no window, started by the dock so that its search has the file index (see search_pipe)
-    let no_window = std::env::args().nth(1).as_deref() == Some(search_pipe::START_ARG);
-    if bar_preview || dock {
-        quick_search::disable_hotkey();
-    }
-    if dock {
-        // before the settings are loaded: the dock owns no tray icon, no name index and no hotkey
-        background::DOCK_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
-        // which mode it runs in: found by looking at the shell window (read-only); only logged for now
-        shell::note_host_start(&std::env::args().skip(1).collect::<Vec<_>>());
-    }
     let arg = std::env::args().nth(1).map(|a| a.trim().trim_matches('"').to_string()).filter(|a| !a.is_empty());
-    let arg = arg.filter(|_| !open_look_settings && pick.is_none() && !bar_preview && !quick_search && !dock && !no_window && !snip_only);
+    let arg = arg.filter(|_| !open_look_settings && pick.is_none() && !quick_search);
     // jump list task "New window"
     let new_window = arg.as_deref() == Some(rf_win::jumplist::NEW_WINDOW_ARG);
     let arg = arg.filter(|_| !new_window);
@@ -660,14 +628,10 @@ pub fn main() {
     // Cache the registry state for the settings page (read once, off the hot path).
     // A picker started for another app's Open/Save (--pick) only reads: whichever rustyfiles.exe
     // the dialog DLL started (a test build too) must not re-point the user's registrations.
-    // The dock is a side process that only reads: it neither re-points the registrations nor cleans the main app's temp copies.
-    // (nor from the switcher preview, a try-out of one window: it re-points nothing in the registry, config directory or not)
-    let registers = pick.is_none() && !dock && !switcher_preview && std::env::var_os("RUSTYFILES_CONFIG_DIR").is_none();
+    let registers = pick.is_none() && std::env::var_os("RUSTYFILES_CONFIG_DIR").is_none();
     std::thread::spawn(move || {
         // copies opened/copied out of archives days ago
-        if !dock {
-            crate::archive_view::clean_temp();
-        }
+        crate::archive_view::clean_temp();
         // default file manager whose registered exe vanished (moved / rebuilt elsewhere):
         // re-point it here, or Windows can't open any folder. Not from test instances.
         if registers {
@@ -734,7 +698,6 @@ pub fn main() {
         _ if pick.is_some() => format!("{}{}", picker::PICK_PREFIX, pick.as_deref().unwrap_or_default()),
         _ if new_window => rf_win::jumplist::NEW_WINDOW_ARG.to_string(),
         _ if quick_search => quick_search::LAUNCH_ARG.to_string(),
-        _ if no_window => search_pipe::START_MSG.to_string(),
         _ if select.is_some() => format!("{}{}", workspace::SELECT_PREFIX, select.as_deref().unwrap_or_default()),
         Some(Location::Path(p)) => p.to_string_lossy().into_owned(),
         Some(Location::RecycleBin) => "shell:RecycleBinFolder".to_string(),
@@ -747,24 +710,7 @@ pub fn main() {
         _ => String::new(),
     };
     // RUSTYFILES_MULTI_INSTANCE=1 skips forwarding (automated tests run several copies).
-    let multi = std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some() || bar_preview || dock || snip_only;
-    // the dock is a single instance of its own group: a second `--dock` greets the first and ends; the guard lives to the end
-    let dock_instance = if dock {
-        match dock::acquire() {
-            Some(held) => Some(held),
-            None => {
-                // (this used to end the process without a word)
-                shell::exits::log_exit(shell::exits::Exit::AnotherHost, "");
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    let (_dock_guard, mut dock_messages) = match dock_instance {
-        Some((guard, rx)) => (Some(guard), Some(rx)),
-        None => (None, None),
-    };
+    let multi = std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some();
     rf_win::handover::trace(&format!("main: launch, request of {} bytes, multi {multi}", message.len()));
     let _instance = if multi {
         None
@@ -784,7 +730,7 @@ pub fn main() {
             rf_win::single_instance::Role::Primary(guard) => Some(guard),
         }
     };
-    let primary_instance = _instance.is_some() && pick.is_none() && !quick_search && !bar_preview && !dock;
+    let primary_instance = _instance.is_some() && pick.is_none() && !quick_search;
     let (ipc_tx, ipc_rx) = futures::channel::mpsc::unbounded::<String>();
     // second launches: each comes with the acknowledgement it waits for (the other senders of ipc_tx need none)
     let (launch_tx, launch_rx) = futures::channel::mpsc::unbounded::<(String, rf_win::handover::Ack)>();
@@ -801,8 +747,6 @@ pub fn main() {
         });
     }
     if !multi {
-        // the dock's file search has a pipe of its own (an older main app never sees its requests as launch arguments)
-        search_pipe::serve(ipc_tx.clone());
         rf_win::handover::serve(move |m, ack| {
             let _ = launch_tx.unbounded_send((m, ack));
         });
@@ -811,7 +755,7 @@ pub fn main() {
     // a drag of files that live inside the source (a mail's attachment, a browser's image) is dropped as files (see rf_win::vfiles)
     gpui_windows::dnd_hint::set_virtual_reader(rf_win::vfiles::drag_paths);
     // (the first window on the CPU renderer or on the card: what this machine was like the last time, see `fast_start`)
-    fast_start::before_app(!dock && !bar_preview && pick.is_none() && !quick_search && !snip_only && !no_window && !open_look_settings);
+    fast_start::before_app(pick.is_none() && !quick_search && !open_look_settings);
     start_mark("before the app");
     gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(move |cx| {
         start_mark("app running");
@@ -843,7 +787,6 @@ pub fn main() {
                     "speed" => settings_view::Page::Speed,
                     "general" => settings_view::Page::General,
                     "appearance" => settings_view::Page::Appearance,
-                    "dock" => settings_view::Page::Dock,
                     "filetypes" => settings_view::Page::FileTypes,
                     "hypersearch" => settings_view::Page::Search,
                     "advanced" => settings_view::Page::Advanced,
@@ -863,26 +806,9 @@ pub fn main() {
         match pick.clone() {
             // started only to answer a dialog: no main window
             Some(pipe) => picker::begin(pipe, cx),
-            None if desktop_preview => {
-                let args: Vec<String> = std::env::args().skip(1).collect();
-                shell::desktop::open_preview(shell::desktop::args::parse(&args, std::env::var(shell::desktop::args::ENV_DIR).ok().as_deref()), cx)
-            }
-            // (when no window could be made the process would stay with nothing on the screen and no tray icon: it ends here)
-            None if switcher_preview => {
-                if !shell::switcher::open_preview(cx) {
-                    cx.quit();
-                }
-            }
-            None if bar_preview => taskbar_preview::open(cx),
-            // the dock: three islands, no main window
-            None if dock => dock::run(dock_messages.take(), cx),
-            // the screen snip alone: it ends by itself when it is over
-            None if snip_only => snip::run_standalone(cx),
             // started for the quick search only: no main window (it quits when that closes,
             // unless running in the background)
             None if quick_search => quick_search::toggle(cx),
-            // started by the dock for its file search: no window, no tray icon; it ends by itself when nobody searches for a while
-            None if no_window => search_pipe::watch_idle(cx),
             None => {
                 start_mark("opening the window");
                 open_main_window(if open_look_settings { Some(Location::Settings) } else { start }, None, None, cx);
@@ -892,26 +818,8 @@ pub fn main() {
                 status_center::offer_resume(cx);
             }
         }
-        if snip_only {
-            // nothing else of the app runs in this process; the snip quits it when it is over
-            cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
-            return;
-        }
-        if dock {
-            // a side process: no updates, no DirectLook, no tray, no drive-eject handler, and no "last window closed" saving of
-            // the settings (it only ever reads them); it ends when the dock module quits it
-            cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
-            return;
-        }
-        // the dock, when the setting is on (a separate process, started off the UI thread; it keeps running without us)
-        // (not for a picker or the quick search started on their own, not for a test copy)
-        if pick.is_none() && !quick_search && !multi {
-            dock::control::start_if_wanted(cx.global::<settings::Settings>());
-            // Win+E for the default file manager while no dock takes it (issue 44: Windows' newer Win+E skips the registry)
-            shell::keylayer::watch_main(cx);
-        }
         // DirectLook ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
-        if cx.global::<settings::Settings>().directlook_enabled && std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_none() && !bar_preview {
+        if cx.global::<settings::Settings>().directlook_enabled && std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_none() {
             look::ipc::send(look::ipc::Msg::Wake, true);
         }
         // "Safely remove" / eject: let go of a drive when Windows asks (see rf_win::removal)
@@ -950,7 +858,7 @@ pub fn main() {
                 // (no window could be made: the second launch is told, and shows the folder itself)
                 let quit_held_back = if shown { ack.done() } else { ack.refuse() };
                 if quit_held_back {
-                    cx.update(|cx| last_window::settle(cx, switcher_preview));
+                    cx.update(|cx| last_window::settle(cx));
                 }
             }
         })
@@ -971,12 +879,17 @@ pub fn main() {
         cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
         cx.on_window_closed(move |cx, id| {
             workspace::save_closed_placement(id, cx);
-            last_window::settle(cx, switcher_preview);
+            last_window::settle(cx);
         })
         .detach();
         cx.activate(true);
     });
     rf_win::handover::trace("main: event loop ended");
-    // (the host's process says why it ended when no earlier line did)
-    shell::exits::after_run();
+}
+
+/// The first arguments of the cut side processes and previews (dock / shell host, snip, taskbar / desktop / switcher previews, the
+/// dock's windowless search helper, HyperDownload's window and browser hand-over, the update splash).
+fn retired_arg(a: &str) -> bool {
+    matches!(a, "--dock" | "--shell" | "--shell-probe" | "--snip" | "--bar-preview" | "--desktop-preview" | "--switcher-preview" | "--no-window" | "--downloads" | "--update-splash")
+        || a.starts_with("--hd-follow=")
 }

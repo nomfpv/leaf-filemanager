@@ -50,11 +50,6 @@ static HELD: Mutex<Option<(Option<String>, Option<rf_win::hotkey::HotkeyError>)>
 
 static NO_HOTKEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// A side copy of rustyfiles (the taskbar preview) must not take the user's hotkey.
-pub fn disable_hotkey() {
-    NO_HOTKEY.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// This process registers the hotkey: the one rustyfiles (not DirectLook, not a test copy). `RUSTYFILES_QUICK_HOTKEY=1` lets a test
 /// copy hold it like the real one (a copy the user tries the next version with, while the installed app is not running); without it a
 /// test copy never takes the user's hotkey.
@@ -335,12 +330,6 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// Reads the use counts from the file again at the next search. The dock calls it when its panel opens: the main app writes the same
-/// file, and a process that loaded it once would otherwise rank by what it saw at its own start.
-pub(crate) fn reload_usage() {
-    USAGE.lock().unwrap().loaded = false;
-}
-
 fn file_stamp(path: Option<PathBuf>) -> Option<SystemTime> {
     path.and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok())
 }
@@ -526,21 +515,10 @@ pub(crate) fn pick_points(weight: f64) -> i32 {
     (weight.max(0.0).ln_1p() * 400.0).min(800.0) as i32
 }
 
-/// The key of the item that would be the best match for these weights, if any is: the heaviest from [`BEST_MIN`] on.
-fn best_key(weights: &HashMap<String, f64>) -> Option<&String> {
-    weights.iter().filter(|(_, w)| **w >= BEST_MIN).max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.0.cmp(a.0))).map(|(k, _)| k)
-}
-
 /// What the picks say for a query as typed (read from the store).
 fn weights_for(query: &str) -> HashMap<String, f64> {
     let q = pick_query(query);
     with_store(|u| pick_weights(&u.picks, &q, now_secs()))
-}
-
-/// Whether the item the picks speak for most, for this query, is a file or a folder: the dock's search gets its files a moment after
-/// the rest, and Enter in that moment must wait for them (the first row is about to change).
-pub(crate) fn best_is_a_file(query: &str) -> bool {
-    best_key(&weights_for(query)).is_some_and(|k| k.starts_with("path:"))
 }
 
 /// Keeps the choice of `target` for the typed `query` (not a web search, not without a query). The use count is another matter
@@ -1436,7 +1414,7 @@ mod pick_tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use super::{BEST_MIN, Item, MAX_PICK_QUERIES, MAX_PICKS_PER_QUERY, Pick, Picks, Section, Target, best_key, merge_with, note_pick, parse_picks, pick_points, pick_query, pick_weights, score_with};
+    use super::{BEST_MIN, Item, MAX_PICK_QUERIES, MAX_PICKS_PER_QUERY, Pick, Picks, Section, Target, merge_with, note_pick, parse_picks, pick_points, pick_query, pick_weights, score_with};
 
     const DAY: u64 = 86_400;
     const NOW: u64 = 1_800_000_000;
@@ -1540,17 +1518,6 @@ mod pick_tests {
         w.insert("web:ra".to_string(), 9.0);
         let got = merge_with(&w, vec![app("Radyo", 830), web("ra")], Vec::new());
         assert!(got.iter().all(|i| i.section != Section::Best));
-    }
-
-    #[test]
-    fn the_best_key_is_the_heaviest_from_the_threshold_on() {
-        let mut w = HashMap::new();
-        assert_eq!(best_key(&w), None);
-        w.insert("app:a".to_string(), BEST_MIN - 0.01);
-        assert_eq!(best_key(&w), None);
-        w.insert("path:c:\\x".to_string(), 2.0);
-        w.insert("app:b".to_string(), 1.0);
-        assert_eq!(best_key(&w).map(String::as_str), Some("path:c:\\x"));
     }
 
     #[test]

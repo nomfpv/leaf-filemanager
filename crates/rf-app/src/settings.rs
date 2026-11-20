@@ -127,65 +127,6 @@ pub enum AnimPref {
     Off,
 }
 
-/// Settings -> Dock: how much the dock's icons grow under the pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum DockMagnify {
-    /// They stay as they are.
-    Off,
-    /// The icon under the pointer grows to 1.25 times.
-    Subtle,
-    /// To 1.55 times, like the Mac's dock.
-    #[default]
-    Full,
-}
-
-impl DockMagnify {
-    /// What the dock's magnification takes.
-    pub fn strength(self) -> rf_win::dock::magnify::Strength {
-        use rf_win::dock::magnify::Strength;
-        match self {
-            DockMagnify::Off => Strength::Off,
-            DockMagnify::Subtle => Strength::Subtle,
-            DockMagnify::Full => Strength::Full,
-        }
-    }
-}
-
-/// Settings -> Dock: the left island's search, as Windows 11's taskbar offers it (issue 41: "Add an option to show/hide search bar
-/// on taskbar"). `Icon` is the button a narrow secondary monitor already gets; `Hidden` leaves the Start logo (and, on the primary
-/// monitor, the weather).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum DockSearch {
-    #[default]
-    Field,
-    Icon,
-    Hidden,
-}
-
-/// Settings -> Dock: which dock shows which running app when there is a dock on every monitor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum DockAppsWhere {
-    /// Every dock shows the pinned apps and every running app.
-    #[default]
-    All,
-    /// The pins are on every dock; a running app that is not pinned is only on the dock of the monitor its window is on, and a pinned
-    /// app's running mark only there.
-    Window,
-}
-
-impl DockAppsWhere {
-    /// The rule `rf_win::dock::monitors` works with.
-    pub fn rule(self) -> rf_win::dock::monitors::AppsWhere {
-        match self {
-            DockAppsWhere::All => rf_win::dock::monitors::AppsWhere::Everywhere,
-            DockAppsWhere::Window => rf_win::dock::monitors::AppsWhere::WindowMonitor,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BackdropPref {
@@ -674,134 +615,6 @@ pub struct Settings {
     /// commands only; Ctrl+P still searches past folders.
     pub palette_folder_history: bool,
 
-    // ---- Dock (dock/: `rustyfiles --dock`, a separate process; experimental)
-    /// The dock runs: started with rustyfiles and when this is switched on, stopped when it is switched off.
-    pub dock_enabled: bool,
-    /// The dock keeps other windows from going under it (it registers as an application desktop toolbar).
-    pub dock_reserve: bool,
-    /// The city the dock's weather is for. Empty: no weather and no network request.
-    pub dock_weather_city: String,
-    /// The dock's weather is for the PC's approximate position from Windows' location service (off by default). The order: the position
-    /// when this is on and Windows gives it, else the city above, else no weather (see `rf_win::weather_location`). The position is
-    /// never stored here or anywhere else.
-    pub dock_weather_location: bool,
-    /// The dock's logo opens our own Start panel and its search field our own search (on). Off: the old behaviour, the logo sends the
-    /// Windows key and the field opens the quick search window.
-    pub dock_own_start: bool,
-    /// The dock's network and volume symbols open our own control centre (on). Off: the old behaviour, they send Win+A (Windows' quick
-    /// settings).
-    pub dock_own_control_centre: bool,
-    /// The parts of our control centre the user hid (Settings > Dock): names of `dock::cc_model::PARTS` (a tile, a card, the row of
-    /// quick buttons) and of single quick buttons (`Quick::key`). Empty: everything the machine has is shown.
-    pub dock_cc_hidden: Vec<String>,
-    /// The dock's clock opens our own calendar panel (on). Off: the old behaviour, it sends Win+N (Windows' notification centre and calendar).
-    pub dock_own_calendar: bool,
-    /// The dock's bell opens our own notification panel and wears a dot while there are notifications (on). Off: the old behaviour,
-    /// it sends Win+N.
-    pub dock_own_notifications: bool,
-    /// The order of the right island's own buttons, as keys ("eject", "security", "network", "volume"); empty: the usual order. A list
-    /// that names only some, or names a key this version does not know, is completed (`rf_win::dock::status_order`).
-    pub dock_status_order: Vec<String>,
-    /// Which of those buttons the user hid (the same keys); empty: all are shown.
-    pub dock_status_hidden: Vec<String>,
-    /// The left and the right island are as tall as the middle one (off: they are lower, as they always were). While the dock is thin
-    /// under a maximised window all three are the thin height either way.
-    pub dock_side_tall: bool,
-    /// The dock hides at the bottom of the screen and comes up when the pointer reaches the edge (off; issue 112). It reserves no
-    /// band then: windows use the whole screen.
-    pub dock_autohide: bool,
-    /// With auto-hide on: the dock hides only while a window lies where it stands, and comes back up when that window is minimised,
-    /// closed or moved away (off: it hides whenever the pointer leaves it). A user on Discord, 2026-11-20.
-    pub dock_autohide_windows: bool,
-    /// The dock's islands on a solid fill instead of the glass (off; issue 113).
-    pub dock_opaque: bool,
-    /// A thin "Show desktop" strip at the right end of the primary monitor's right island, after the bell, as on Windows' taskbar (off;
-    /// issue 127).
-    pub dock_show_desktop: bool,
-    /// The app's name under each icon of the middle island (off). Issue 137: "would really like to see app names under the icon".
-    pub dock_labels: bool,
-    /// Pinned apps that are not running stand in the left island, as launchers; the middle one holds the running apps (off). Issue 137:
-    /// "I would like to see apps pinned appearing on the left dock when they are not open".
-    pub dock_pins_left: bool,
-    /// The left island's search: a field, its button only, or none (`DockSearch`).
-    pub dock_search: DockSearch,
-    /// A click on the dock's search field or button opens HyperSearch instead of the Start panel (issue 41). Off by default.
-    pub dock_search_hypersearch: bool,
-    /// The tray icons of the right island stand closer together (18 px a cell instead of 24; off). Issue 34.
-    pub dock_tray_compact: bool,
-    /// The tray icons in two rows at their usual size (off). Issue 34: compact was too small on a wide screen.
-    pub dock_tray_two_rows: bool,
-    /// Turning the mouse wheel over a running app's icon in the dock turns that app's own sound level up or down (on; issue 21).
-    pub dock_scroll_volume: bool,
-    /// How much the dock's icons grow under the pointer (off / subtle / full).
-    pub dock_magnify: DockMagnify,
-    /// Resting the pointer on a running app's icon in the dock shows a preview of its windows (on; the dock itself is opt-in). Off: nothing.
-    pub dock_hover_previews: bool,
-    /// A right click on an app's icon in the dock opens the dock's own app menu (on). Off: it does nothing, as before.
-    pub dock_app_menu: bool,
-    /// While a window is maximised on the dock's monitor the middle island drops to the side islands' height, the band it reserves
-    /// shrinks with it, and it grows back when the pointer comes near (on; the dock itself is opt-in). Off: the dock of before.
-    pub dock_thin_when_maximized: bool,
-    /// The Start panel shows "Önerilenler" (the documents opened most recently) under the pinned apps (on). Off: the section is not
-    /// drawn and the pinned grid takes its room.
-    pub dock_start_recommended: bool,
-    /// The Start panel grows out of the left island: the island's glass widens upwards into the panel and shrinks back into the island
-    /// when it closes (`dock/grow_host.rs`). On by default; off: the panel opens above the island as a window of its own, as it always did.
-    pub dock_start_grow: bool,
-    /// How big the whole dock is (small / medium / large / extra large; medium is the dock as it always was).
-    pub dock_size: crate::dock::size_pref::DockSizePref,
-    /// A dock on every monitor, not only the primary one (on by default: the user asked for it; the dock itself is opt-in). The other
-    /// monitors' docks hold the Start logo and search, the apps, and the clock and bell. Off, or with one monitor: the single dock of before.
-    pub dock_all_monitors: bool,
-    /// With a dock on every monitor: whether every dock shows every running app, or an app only where its window is.
-    pub dock_apps_where: DockAppsWhere,
-
-    // ---- The dock's parts (shell/: `rustyfiles --shell`, the dock's process). ONE switch starts them all: `dock_enabled` (Settings ->
-    // Dock). These five are the parts' own values, kept in the file under their old names as TROUBLESHOOTING OVERRIDES that the page
-    // shows no switch for: a part runs when `dock_enabled` is on AND its own value is not false (`dock/parts.rs` is the rule). Their
-    // default is true. Files written before the one switch hold `false` here (the old default was written into every saved file):
-    // a false is read as "held off", the Dock page says so in one line and "Hepsini aç" clears it.
-    /// Our desktop (the wallpaper, the icons) is drawn over Explorer's, one window per monitor, while the shell host runs. Explorer's
-    /// desktop stays underneath and is visible again when the host stops.
-    pub shell_desktop_cover: bool,
-    /// A tap of the Windows key alone opens rustyfiles' Start panel instead of Windows' (the shell host listens to the keyboard with a
-    /// system-wide hook while this or `shell_own_switcher` runs; see `shell/keylayer.rs`).
-    pub shell_win_key: bool,
-    /// Alt+Tab opens rustyfiles' window switcher instead of Windows' (same hook).
-    pub shell_own_switcher: bool,
-    /// The shell host owns a window of class `Shell_TrayWnd` in front of Explorer's, takes the icons programs send to the notification
-    /// area, and passes every message on to Explorer's own window unchanged (see `shell/trayhost.rs`, `docs/design/tray-host.md`).
-    pub shell_tray_host: bool,
-    /// Explorer's taskbar windows (and with them its notification icons) are hidden while the dock runs and shown again when it stops;
-    /// only with rustyfiles-shellguard.exe running as the safety net (see `shell/taskbar_hide.rs`).
-    pub shell_hide_taskbar: bool,
-    /// Every screen snip is also saved to Pictures\Screenshots without asking (off: it is only copied to the clipboard, and the
-    /// notice's Kaydet button saves it by hand). See `snip/`.
-    pub snip_autosave: bool,
-    /// Set once a build with the one switch has read the file (`dock/parts.rs`, FILES FROM BEFORE). While the file does not have it and
-    /// has the dock on, the parts it does not name are held off (see [`Settings::migrate`]); the first save writes it, together with the
-    /// held values, so that the hold survives the marker.
-    pub dock_one_switch: bool,
-    /// Not in the file. The parts' own values the file did not name, when it came from before the one switch with the dock on: what
-    /// [`Settings::migrate`] turns into held-off values. Empty for every other file.
-    #[serde(skip)]
-    pub parts_unnamed_in_old_file: Vec<String>,
-
-    // ---- Desktop (shell/desktop/; Settings -> "Masaüstü"; experimental, it only matters while the desktop part runs)
-    // Each system icon of the desktop (and "show desktop icons" as a whole) follows Windows' own setting by default; "show" and "hide"
-    // are this app's own choice and are never written to Windows' settings (see `rf_core::desktop::virtuals`).
-    pub desktop_icon_this_pc: rf_core::desktop::virtuals::IconChoice,
-    pub desktop_icon_user_files: rf_core::desktop::virtuals::IconChoice,
-    pub desktop_icon_network: rf_core::desktop::virtuals::IconChoice,
-    pub desktop_icon_recycle_bin: rf_core::desktop::virtuals::IconChoice,
-    pub desktop_icon_control_panel: rf_core::desktop::virtuals::IconChoice,
-    /// "Show desktop icons" as a whole: follow Windows, always show, or hide every icon (files included).
-    pub desktop_show_icons: rf_core::desktop::virtuals::IconChoice,
-    /// The desktop's wallpaper is drawn with rounded corners of this radius (logical px; 0, the default: square, as it always was).
-    /// All four corners of every monitor, black behind them (`rf_core::desktop::corners` for the bottom pixel row). An experiment
-    /// the user asked for, to go with the dock's round islands.
-    pub desktop_corner_radius: u8,
-
     // ---- Ferry (sending files to rustyfiles on the network's other devices; Settings -> "Ferry"; crates/rf-nearby and ferry.rs)
     /// Ferry runs in the main process (off by default: it listens on a network port, and Windows' firewall may ask about that).
     pub ferry_enabled: bool,
@@ -959,55 +772,6 @@ impl Default for Settings {
             quick_search_bookmarks: true,
             quick_search_recent: true,
             palette_folder_history: true,
-            dock_enabled: false,
-            dock_reserve: true,
-            dock_weather_city: String::new(),
-            dock_weather_location: false,
-            dock_own_start: true,
-            dock_own_control_centre: true,
-            dock_cc_hidden: Vec::new(),
-            dock_own_calendar: true,
-            dock_own_notifications: true,
-            dock_status_order: Vec::new(),
-            dock_status_hidden: Vec::new(),
-            dock_side_tall: false,
-            dock_autohide: false,
-            dock_autohide_windows: false,
-            dock_opaque: false,
-            dock_show_desktop: false,
-            dock_labels: false,
-            dock_pins_left: false,
-            dock_search: DockSearch::Field,
-            dock_search_hypersearch: false,
-            dock_tray_compact: false,
-            dock_tray_two_rows: false,
-            dock_scroll_volume: true,
-            dock_magnify: DockMagnify::Full,
-            dock_hover_previews: true,
-            dock_app_menu: true,
-            dock_thin_when_maximized: true,
-            dock_start_recommended: true,
-            // on: the user asked for the Start panel to grow out of the island; the switch on the Dock page turns it off
-            dock_start_grow: true,
-            dock_size: Default::default(),
-            dock_all_monitors: true,
-            dock_apps_where: DockAppsWhere::All,
-            // (the parts' own values: true, so the one switch `dock_enabled` brings them all; see `dock/parts.rs`)
-            shell_desktop_cover: true,
-            shell_win_key: true,
-            shell_own_switcher: true,
-            shell_tray_host: true,
-            shell_hide_taskbar: true,
-            snip_autosave: false,
-            dock_one_switch: false,
-            parts_unnamed_in_old_file: Vec::new(),
-            desktop_icon_this_pc: Default::default(),
-            desktop_icon_user_files: Default::default(),
-            desktop_icon_network: Default::default(),
-            desktop_icon_recycle_bin: Default::default(),
-            desktop_icon_control_panel: Default::default(),
-            desktop_show_icons: Default::default(),
-            desktop_corner_radius: 0,
             ferry_enabled: false,
             ferry_visibility: FerryVisibility::Trusted,
             ferry_name: String::new(),
@@ -1158,13 +922,6 @@ impl Settings {
         Some((s, file))
     }
 
-    /// The process has replaced its settings with a [`Settings::load_followed`]: what the file held then is what it now knows. Without
-    /// this its next save would take every value the file got from another writer since start-up for its own change and write it back
-    /// over whatever the file has become meanwhile (see `settings_merge::follow`).
-    pub fn follow_file(file: toml::Table) {
-        crate::settings_merge::follow(&BASELINE, file);
-    }
-
     /// The material the windows really have: the chosen one, or "Solid" on a Windows without materials. The setting itself is left
     /// as it is (the same file may be read on a Windows 11 later).
     pub fn backdrop_in_use(&self) -> BackdropPref {
@@ -1186,32 +943,14 @@ impl Settings {
             }
             self.adaptive_offered = true;
         }
-        // The one dock switch (`dock/parts.rs`): a file with the dock on that came from before it and does not name a part cannot be
-        // told from "the user chose this" (a save writes only what changed, so the old `false` defaults were often never written), and
-        // nobody is given a keyboard hook or a hidden taskbar by an update: the parts it does not name are held off, the Dock page
-        // says so, and "Hepsini aç" clears it. The marker makes this happen once; the first save writes it and the held values.
-        if !self.dock_one_switch {
-            for field in std::mem::take(&mut self.parts_unnamed_in_old_file) {
-                if let Some(part) = crate::dock::parts::Part::from_field(&field) {
-                    part.set_own_value(self, false);
-                }
-            }
-            self.dock_one_switch = true;
-        }
-        self.parts_unnamed_in_old_file.clear();
     }
 
     /// Field by field: a value this version doesn't understand (a newer build's theme, a
     /// mistyped enum) falls back to its default instead of resetting every setting. Only a
-    /// TOML syntax error fails.
+    /// TOML syntax error fails. Keys this build does not know (the cut dock / desktop / snip settings of older files) are ignored here
+    /// and kept in the file by the save (see `settings_merge.rs`).
     fn parse_lenient(text: &str) -> Result<Settings, toml::de::Error> {
         let table: toml::Table = toml::from_str(text)?;
-        // (before the loop takes the table apart) a file from before the one switch that has the dock on: which parts does it not name?
-        let unnamed: Vec<String> = if matches!(table.get("dock_enabled"), Some(toml::Value::Boolean(true))) && !table.contains_key("dock_one_switch") {
-            crate::dock::parts::Part::ALL.iter().map(|p| p.field()).filter(|f| !table.contains_key(*f)).map(str::to_string).collect()
-        } else {
-            Vec::new()
-        };
         let mut base = toml::Table::try_from(Settings::default()).unwrap_or_default();
         for (k, v) in table {
             let mut trial = base.clone();
@@ -1220,16 +959,9 @@ impl Settings {
                 base = trial;
             } else {
                 log::warn!("settings: ignoring invalid value for '{k}'");
-                // A part's own value that cannot be read holds the part OFF, not on: the default of these is true, and a typo must not
-                // install a keyboard hook or hide the taskbar. The Dock page lists it among the parts the file holds off.
-                if crate::dock::parts::Part::from_field(&k).is_some() {
-                    base.insert(k, toml::Value::Boolean(false));
-                }
             }
         }
-        let mut s = Settings::deserialize(toml::Value::Table(base)).unwrap_or_default();
-        s.parts_unnamed_in_old_file = unnamed;
-        Ok(s)
+        Ok(Settings::deserialize(toml::Value::Table(base)).unwrap_or_default())
     }
 
     /// What `load` makes of a file's text (parsed, then brought up to date): for the tests of what an old file becomes.
@@ -1350,11 +1082,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     let s = cx.global::<Settings>().clone();
     s.apply_side_effects();
     apply_component_theme(cx);
-    std::thread::spawn(move || {
-        s.save();
-        // after the save: the dock process reads the file when it is told to reload
-        crate::dock::control::sync_process(&s);
-    });
+    std::thread::spawn(move || s.save());
     // (Ferry follows its settings: started, stopped, started anew, or shown to others differently)
     crate::ferry::apply(cx);
     cx.refresh_windows();
@@ -1374,11 +1102,7 @@ pub fn update_live(cx: &mut App, f: impl FnOnce(&mut Settings)) {
         if SERIAL.load(Ordering::Relaxed) == mine {
             cx.update(|cx| {
                 let snapshot = cx.global::<Settings>().clone();
-                std::thread::spawn(move || {
-                    snapshot.save();
-                    // the running dock takes the look from the file: tell it, or it hears of a slider only at its next look at the file
-                    crate::dock::control::sync_process(&snapshot);
-                });
+                std::thread::spawn(move || snapshot.save());
             });
         }
     })
@@ -1505,6 +1229,22 @@ yeni_alan = 3").unwrap();
         assert!(s.show_hidden, "valid fields survive");
         assert_eq!(s.sidebar_width, Settings::default().sidebar_width);
         assert!(Settings::parse_lenient("[[[bozuk").is_err(), "syntax errors still fail");
+    }
+
+    /// A file written by a build that still had the dock, the desktop, the snip and the update / donate strips loads: those keys are
+    /// ignored and every other setting is kept.
+    #[test]
+    fn a_file_with_the_cut_features_keeps_the_rest() {
+        let s = Settings::parse_migrated(
+            "dock_enabled = true\ndock_one_switch = true\ndock_magnify = \"subtle\"\ndock_size = \"large\"\nshell_win_key = false\n\
+             shell_hide_taskbar = true\nsnip_autosave = true\ndesktop_icon_this_pc = \"show\"\ndesktop_corner_radius = 12\n\
+             auto_update = true\nbeta_updates = true\nstar_asked = true\nstarts = 40\ndonate_never = true\n\
+             show_hidden = true\nsidebar_width = 333.0\ntheme = \"dark\"\n",
+        )
+        .unwrap();
+        assert!(s.show_hidden);
+        assert_eq!(s.sidebar_width, 333.0);
+        assert_eq!(s.theme, super::ThemePref::Dark);
     }
 
     #[test]
@@ -1650,125 +1390,4 @@ fn sync_name_index(on: bool, excluded: &[String]) {
         };
         rf_win::indexer::start(roots, dir);
     });
-}
-
-#[cfg(test)]
-mod dock_tests {
-    use super::Settings;
-
-    #[test]
-    fn the_dock_is_off_keeps_windows_out_from_under_it_and_has_no_city() {
-        let s = Settings::default();
-        assert!(!s.dock_enabled, "experimental: off until asked for");
-        assert!(s.dock_reserve);
-        assert!(s.dock_weather_city.is_empty(), "no city, so no weather request");
-        // a settings file from before the dock has none of the keys: the same defaults
-        let old = Settings::parse_lenient("theme = \"dark\"\n").unwrap();
-        assert!(!old.dock_enabled && old.dock_reserve && old.dock_weather_city.is_empty());
-    }
-
-    #[test]
-    fn the_dock_opens_our_own_control_centre_unless_told_not_to() {
-        assert!(Settings::default().dock_own_control_centre);
-        assert!(Settings::parse_lenient("theme = \"dark\"
-").unwrap().dock_own_control_centre, "a file from before it: on");
-        let off = Settings { dock_own_control_centre: false, ..Default::default() };
-        let back = Settings::parse_lenient(&toml::to_string_pretty(&off).unwrap()).unwrap();
-        assert!(!back.dock_own_control_centre);
-        assert!(Settings::parse_lenient("dock_own_control_centre = 3
-").unwrap().dock_own_control_centre, "a wrong value falls back to the default");
-    }
-
-    #[test]
-    fn the_dock_opens_our_own_calendar_and_notification_panels_unless_told_not_to() {
-        let d = Settings::default();
-        assert!(d.dock_own_calendar && d.dock_own_notifications);
-        // a settings file from before them has neither key: both on
-        let old = Settings::parse_lenient("theme = \"dark\"
-").unwrap();
-        assert!(old.dock_own_calendar && old.dock_own_notifications, "a file from before them: on");
-        let off = Settings { dock_own_calendar: false, dock_own_notifications: false, ..Default::default() };
-        let back = Settings::parse_lenient(&toml::to_string_pretty(&off).unwrap()).unwrap();
-        assert!(!back.dock_own_calendar && !back.dock_own_notifications, "off survives a save and a load");
-        let wrong = Settings::parse_lenient("dock_own_calendar = \"nein\"
-dock_own_notifications = 3
-").unwrap();
-        assert!(wrong.dock_own_calendar && wrong.dock_own_notifications, "wrong values fall back to the default");
-    }
-
-    /// The weather from the PC's position is a mode nobody gets without asking: off by default, off for a file from before it, and a
-    /// wrong value costs nothing.
-    #[test]
-    fn the_weather_from_the_position_is_off_unless_asked_for() {
-        assert!(!Settings::default().dock_weather_location);
-        assert!(!Settings::parse_lenient("theme = \"dark\"\n").unwrap().dock_weather_location, "a file from before it: off");
-        let on = Settings { dock_weather_location: true, ..Default::default() };
-        let text = toml::to_string_pretty(&on).unwrap();
-        assert!(Settings::parse_lenient(&text).unwrap().dock_weather_location);
-        assert!(!Settings::parse_lenient("dock_weather_location = \"yes\"\n").unwrap().dock_weather_location, "a wrong value falls back to off");
-        // and no coordinates are ever part of the settings file
-        assert!(!text.to_lowercase().contains("latitude") && !text.to_lowercase().contains("longitude"));
-    }
-
-    #[test]
-    fn the_dock_opens_our_own_start_unless_told_not_to() {
-        assert!(Settings::default().dock_own_start);
-        assert!(Settings::parse_lenient("theme = \"dark\"\n").unwrap().dock_own_start, "a file from before it: on");
-        let off = Settings { dock_own_start: false, ..Default::default() };
-        let back = Settings::parse_lenient(&toml::to_string_pretty(&off).unwrap()).unwrap();
-        assert!(!back.dock_own_start);
-        assert!(Settings::parse_lenient("dock_own_start = \"nein\"\n").unwrap().dock_own_start, "a wrong value falls back to the default");
-    }
-
-    #[test]
-    fn the_dock_settings_round_trip() {
-        let s = Settings { dock_enabled: true, dock_reserve: false, dock_weather_city: "Erzincan".into(), ..Default::default() };
-        let text = toml::to_string_pretty(&s).unwrap();
-        let back = Settings::parse_lenient(&text).unwrap();
-        assert!(back.dock_enabled);
-        assert!(!back.dock_reserve);
-        assert_eq!(back.dock_weather_city, "Erzincan");
-    }
-
-    #[test]
-    fn the_magnification_is_full_by_default_and_round_trips() {
-        use super::DockMagnify;
-        use rf_win::dock::magnify::Strength;
-        assert_eq!(Settings::default().dock_magnify, DockMagnify::Full);
-        // the user's own programs for a kind of file: none at first, and a list comes back from the file as it was written
-        assert!(Settings::default().open_rules.is_empty());
-        // the accent: Windows' own until the user writes a colour, and a text that is no colour is none
-        assert!(Settings::default().accent_color.is_empty());
-        assert_eq!(Settings::parse_lenient("accent_color = '#F7630C'\n").unwrap().accent_color, "#F7630C");
-        assert_eq!(rf_win::accent::parse_hex(&Settings::parse_lenient("accent_color = 'turuncu'\n").unwrap().accent_color), None);
-        let rule = rf_core::openrules::OpenRule { exts: vec!["dll".into(), "sys".into()], programs: vec![r"C:\Araçlar\dnSpy.exe".into()], double_click: false };
-        let text = toml::to_string_pretty(&Settings { open_rules: vec![rule.clone()], ..Default::default() }).unwrap();
-        assert!(text.contains("[[open_rules]]"), "{text}");
-        assert_eq!(Settings::parse_lenient(&text).unwrap().open_rules, vec![rule]);
-        let by_hand = Settings::parse_lenient("[[open_rules]]\nexts = [\"js\"]\nprograms = ['C:\\x.exe']\n").unwrap();
-        assert!(by_hand.open_rules[0].double_click, "a list written by hand without the switch opens on a double click");
-        // the wheel over an icon: on, also for a file from before, and it can be switched off
-        assert!(Settings::default().dock_scroll_volume);
-        assert!(Settings::parse_lenient("theme = \"dark\"\n").unwrap().dock_scroll_volume);
-        assert!(!Settings::parse_lenient("dock_scroll_volume = false\n").unwrap().dock_scroll_volume);
-        assert_eq!(Settings::parse_lenient("theme = \"dark\"\n").unwrap().dock_magnify, DockMagnify::Full, "a file from before has none: the default");
-        for (m, s, name) in [(DockMagnify::Off, Strength::Off, "off"), (DockMagnify::Subtle, Strength::Subtle, "subtle"), (DockMagnify::Full, Strength::Full, "full")] {
-            assert_eq!(m.strength(), s);
-            let text = toml::to_string_pretty(&Settings { dock_magnify: m, ..Default::default() }).unwrap();
-            assert!(text.contains(&format!("dock_magnify = \"{name}\"")), "{text}");
-            assert_eq!(Settings::parse_lenient(&text).unwrap().dock_magnify, m);
-        }
-        // a value this version does not know falls back to the default, the rest of the file is kept
-        let s = Settings::parse_lenient("dock_magnify = \"huge\"\nshow_hidden = true\n").unwrap();
-        assert_eq!(s.dock_magnify, DockMagnify::Full);
-        assert!(s.show_hidden);
-    }
-
-    #[test]
-    fn a_wrong_dock_value_falls_back_without_costing_the_other_settings() {
-        let s = Settings::parse_lenient("dock_enabled = \"evet\"\ndock_reserve = false\nshow_hidden = true\n").unwrap();
-        assert!(!s.dock_enabled);
-        assert!(!s.dock_reserve);
-        assert!(s.show_hidden);
-    }
 }

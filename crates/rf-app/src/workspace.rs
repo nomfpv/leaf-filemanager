@@ -599,10 +599,6 @@ pub fn route_ipc(msg: String, cx: &mut App) {
 /// [`route_ipc`], saying whether the request is taken care of: false only when it needed a window and none could be made. The
 /// launch of a second process waits for this answer (see `rf_win::handover`) and shows the folder itself on false.
 pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
-    // the dock's file search asks this app over the pipe (the dock does not hold the name index), and a window-less start greets it
-    if crate::search_pipe::handle_private(&msg, cx.global::<crate::settings::Settings>().name_index) {
-        return true;
-    }
     if let Some(pipe) = msg.strip_prefix(crate::picker::PICK_PREFIX) {
         crate::picker::begin(pipe.to_string(), cx);
         return true;
@@ -636,7 +632,6 @@ pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
         crate::quick_search::toggle(cx);
         return true;
     }
-    crate::shell::desktop::open::mark("main: the line to open a place arrived");
     let (loc, select) = parse_launch(&msg);
     // (with "open folders from other programs in a new window" on, no window takes it as a tab: issue 77)
     let list = if cx.global::<crate::settings::Settings>().launch_in_new_window {
@@ -659,15 +654,12 @@ pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
             })
             .is_ok();
         if ok {
-            crate::shell::desktop::open::mark("main: the place is open in a new tab and the window asked to come forward");
             return true;
         }
     }
     *START_SELECT.lock().unwrap() = select;
     let start = launch_window_start(&msg, has_browser_window(cx), loc);
-    let made = crate::open_main_window_made(start, None, None, cx);
-    crate::shell::desktop::open::mark("main: a new window was made for the place");
-    made
+    crate::open_main_window_made(start, None, None, cx)
 }
 
 /// Puts a search at the front of the remembered ones (once, whatever its case; ten are kept).

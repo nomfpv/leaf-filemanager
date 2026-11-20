@@ -140,22 +140,6 @@ impl PopupGlass {
         Self::start_with(hwnd, dark, true)
     }
 
-    /// [`start_panel`](Self::start_panel) for a small panel that wants a THIN edge: the glass's rim band is at most `rim_cap` CSS px
-    /// wide (`rf_win::glass::set_rim_cap`, set before the window is attached; it goes when the glass is released).
-    pub fn start_panel_thin_rim(hwnd: isize, dark: bool, rim_cap: f32) -> PopupGlass {
-        rf_win::glass::set_rim_cap(hwnd, Some(rim_cap));
-        Self::start_with(hwnd, dark, true)
-    }
-
-    /// [`start_panel`](Self::start_panel) for a panel that is a SHAPE inside its window while an island grows into it (the dock's
-    /// `grow_host.rs`): the glass is `shape` (x, y, w, h in the window's device px) with `radius_px`, cuts its own corners, and the
-    /// caller moves both with `rf_win::glass::set_options`. The system's rounding is not asked for here: the caller has put it away
-    /// (`rf_win::dock::grow::set_frameless`).
-    pub fn start_panel_shaped(hwnd: isize, dark: bool, shape: [f32; 4], radius_px: f32) -> PopupGlass {
-        let opts = rf_win::glass::GlassOptions { dark, radius_px: Some(radius_px), cut_corners: true, shape: Some(shape), shadow: None };
-        Self::start_with_options(hwnd, dark, true, Some(opts))
-    }
-
     fn start_with(hwnd: isize, dark: bool, round: bool) -> PopupGlass {
         Self::start_with_options(hwnd, dark, round, None)
     }
