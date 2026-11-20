@@ -6388,7 +6388,6 @@ dependencies = [
  "ttf-parser",
  "unicode-bidi",
  "unicode-segmentation",
- "ureq",
  "velopack",
  "windows 0.62.2",
  "windows-registry 0.6.1",

@@ -6,7 +6,6 @@ mod background;
 pub mod bench;
 mod fast_start;
 mod bench_view;
-mod donate;
 mod ferry;
 mod archive_view;
 mod bulk_rename;
@@ -885,8 +884,6 @@ pub fn main() {
             // started by the dock for its file search: no window, no tray icon; it ends by itself when nobody searches for a while
             None if no_window => search_pipe::watch_idle(cx),
             None => {
-                installer::count_start(cx);
-                donate::refresh();
                 start_mark("opening the window");
                 open_main_window(if open_look_settings { Some(Location::Settings) } else { start }, None, None, cx);
                 start_mark("window opened");
