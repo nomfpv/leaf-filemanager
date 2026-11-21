@@ -30,6 +30,8 @@ pub struct AccountView {
     pub days_left: Option<i64>,
     /// The device was removed from the account (on the website).
     pub device_gone: bool,
+    /// The settings say there is a sign-in, but the keyring could not be read (locked): leaf's words and the keyring's.
+    pub keyring_locked: Option<String>,
 }
 
 #[derive(Default)]
@@ -100,18 +102,29 @@ fn kept(v: &Vault) -> Option<(AccountNumber, Device)> {
     Some((acc, dev))
 }
 
+/// [`kept`], telling "nothing kept" (`Ok(None)`) from "the keyring cannot be read" (`Err`: locked, or no keyring).
+fn kept_checked(v: &Vault) -> Result<Option<(AccountNumber, Device)>, String> {
+    let acc = v.try_get(&SecretId::vpn(ACCOUNT))?.and_then(|s| AccountNumber::parse(s.as_str()));
+    let dev = v.try_get(&SecretId::vpn(DEVICE))?.and_then(|s| Device::from_kept(s.as_str()));
+    Ok(acc.zip(dev))
+}
+
 /// Keeps a sign-in in the keyring, and only there.
 pub(crate) fn keep_sign_in(v: &Vault, acc: &AccountNumber, dev: &Device) -> Result<(), String> {
     v.keep(&SecretId::vpn(ACCOUNT), &Secret::new(acc.expose().to_string()))?;
     v.keep(&SecretId::vpn(DEVICE), &Secret::new(dev.to_kept().to_string()))
 }
 
-fn forget_sign_in(v: &Vault) {
+/// Deletes both entries; the first failure is returned (the other is still tried).
+fn forget_sign_in(v: &Vault) -> Result<(), String> {
+    let mut first = None;
     for item in [DEVICE, ACCOUNT] {
         if let Err(e) = v.forget(&SecretId::vpn(item)) {
             log::warn!("vpn: {e}");
+            first.get_or_insert(e);
         }
     }
+    first.map_or(Ok(()), Err)
 }
 
 // ------------------------------------------------------------------------------------------------ start
@@ -154,6 +167,13 @@ pub fn want_account(cx: &mut App) {
     }
 }
 
+/// "Try again" after a locked keyring.
+pub fn retry_account(cx: &mut App) {
+    if !busy() {
+        refresh_account(cx, false);
+    }
+}
+
 /// Reads the account from the keyring and asks Mullvad for the days left (and whether this device is still on the account).
 fn refresh_account(cx: &mut App, then_connect: bool) {
     with_ui(|u| {
@@ -163,10 +183,15 @@ fn refresh_account(cx: &mut App, then_connect: bool) {
     ui_changed();
     let work = cx.background_executor().spawn(async move {
         let v = vault();
-        let Some((acc, dev)) = kept(&v) else {
-            // (an empty keyring that works: the sign-in is gone; one that does not open says nothing about it)
-            let gone = matches!(v.state(), leaf_remote::Keyring::Ready);
-            return (AccountView::default(), gone.then(String::new));
+        let (acc, dev) = match kept_checked(&v) {
+            Ok(Some(k)) => k,
+            // (an empty keyring that works: the sign-in is gone)
+            Ok(None) => return (AccountView::default(), Some(String::new())),
+            // one that does not open says nothing about it: the page says so instead of offering a second sign-in
+            Err(why) => {
+                let locked = format!("{}\n{why}", t!("The system keyring cannot be read (it may be locked). Unlock it, then try again: signing in again would register a second device."));
+                return (AccountView { keyring_locked: Some(locked), ..AccountView::default() }, None);
+            }
         };
         let mut view = AccountView { signed_in: true, hint: acc.hint(), device: dev.name.clone(), ..AccountView::default() };
         let rt = leaf_remote::runtime_handle();
@@ -255,10 +280,22 @@ fn sign_in(acc: AccountNumber, cx: &mut App) {
             return Err(format!("{}\n{why}", t!("leaf keeps the Mullvad account only in the system keyring, and it cannot be used")));
         }
         let rt = leaf_remote::runtime_handle();
+        // a device kept from before is taken off its account first (five devices at most); a keyring that cannot be read
+        // stops here, so no second device is registered beside one that is still kept
+        match kept_checked(&v) {
+            Ok(Some((old_acc, old_dev))) => {
+                if let Err(e) = rt.block_on(account::sign_out(&old_acc, &old_dev.id)) {
+                    log::warn!("vpn: the earlier device could not be removed from its account: {e}");
+                }
+                forget_sign_in(&v).map_err(|e| format!("{}\n{e}", t!("The earlier sign-in could not be deleted from the system keyring")))?;
+            }
+            Ok(None) => {}
+            Err(why) => return Err(format!("{}\n{why}", t!("The system keyring cannot be read (it may be locked). Unlock it, then sign in."))),
+        }
         let signed = rt.block_on(account::sign_in(&acc)).map_err(|e| e.to_string())?;
         if let Err(e) = keep_sign_in(&v, &acc, &signed.device) {
             let _ = rt.block_on(account::sign_out(&acc, &signed.device.id));
-            forget_sign_in(&v);
+            let _ = forget_sign_in(&v);
             return Err(format!("{}\n{e}", t!("The sign-in could not be kept in the system keyring")));
         }
         log::info!("vpn: signed in to Mullvad as device \"{}\"", signed.device.name);
@@ -269,6 +306,7 @@ fn sign_in(acc: AccountNumber, cx: &mut App) {
             device: signed.device.name.clone(),
             days_left: signed.expiry.as_deref().and_then(|e| account::days_left(e, now_unix())),
             device_gone: false,
+            keyring_locked: None,
         })
     });
     cx.spawn(async move |cx| {
@@ -303,7 +341,7 @@ pub fn sign_out(cx: &mut App) {
             },
             None => None,
         };
-        forget_sign_in(&v);
+        let _ = forget_sign_in(&v);
         note
     });
     cx.spawn(async move |cx| {
@@ -532,7 +570,7 @@ mod tests {
         assert_eq!(acc.hint(), "…3456");
 
         // signing out removes both entries
-        forget_sign_in(&v);
+        forget_sign_in(&v).unwrap();
         assert!(kept(&v).is_none());
         assert!(store.0.lock().unwrap().is_empty());
     }

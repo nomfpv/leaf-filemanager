@@ -209,6 +209,13 @@ impl Vault {
         }
     }
 
+    /// The saved secret, telling "nothing saved" (`Ok(None)`) from "the keyring cannot be read" (`Err`, a locked one).
+    pub fn try_get(&self, id: &SecretId) -> Result<Option<Secret>, String> {
+        let s = self.0.as_ref().ok_or_else(|| NOT_SAVED.to_string())?;
+        s.available()?;
+        s.get(id)
+    }
+
     /// Keeps `secret` when the user asked for it ("Remember" ticked); a failure is logged, the login goes on.
     pub fn keep_if_asked(&self, id: &SecretId, secret: &Secret) {
         if !secret.wants_remember() {

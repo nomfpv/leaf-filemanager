@@ -37,6 +37,9 @@ pub fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 crate::vpn::sign_out(cx)
             }
         }))
+    } else if let Some(locked) = acc.keyring_locked.clone() {
+        // (the settings say there is a sign-in that cannot be read now: never a second sign-in, which would register another device)
+        (locked, button("vpn-retry", p, if busy { t!("Working…") } else { t!("Try again") }, move |_, cx| crate::vpn::retry_account(cx)))
     } else {
         (
             t!("Sign in with your Mullvad account number. Only leaf's own connections use the VPN: other programs and the rest of the PC are not changed, and no administrator rights are needed.").to_string(),
