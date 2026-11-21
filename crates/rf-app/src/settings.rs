@@ -762,7 +762,7 @@ impl Default for Settings {
             preview_open: true,
             sidebar_open: true,
             sidebar_rail: false,
-            sidebar_width: 232.,
+            sidebar_width: 236.,
             sidebar_hidden: Vec::new(),
             home_hidden: Vec::new(),
             home_layout: None,
