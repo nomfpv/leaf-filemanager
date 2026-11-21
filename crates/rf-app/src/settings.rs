@@ -1095,22 +1095,18 @@ pub fn apply_component_theme(cx: &mut App) {
     // The component root paints the theme background under every window; keep it clear so
     // the Mica backdrop shows through (our own surfaces bring their own fills).
     Theme::update(cx, |t| t.background = gpui_kit::transparent_black());
-    // the chosen font, else the theme's (when it is installed), else Windows 11's own typeface (optical sizes) when present
+    // the chosen font, else the theme's (a font that is not installed falls back to the system's), else Windows 11's own typeface
+    // (optical sizes) when present
     let theme_font = crate::theme::Palette::dark().font_ui;
     if let Some(f) = cx.global::<Settings>().font.clone() {
         Theme::update(cx, |t| t.font_family = f.into());
-    } else if !theme_font.is_empty() && font_installed(theme_font, cx) {
+    } else if !theme_font.is_empty() {
         Theme::update(cx, |t| t.font_family = theme_font.into());
     } else if std::path::Path::new(r"C:\Windows\Fonts\SegUIVar.ttf").exists() {
         Theme::update(cx, |t| t.font_family = "Segoe UI Variable Text".into());
     }
 }
 
-/// Whether the system has a font family of this name (the list is read once per run).
-pub fn font_installed(name: &str, cx: &App) -> bool {
-    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| cx.text_system().all_font_names()).iter().any(|n| n.eq_ignore_ascii_case(name))
-}
 
 /// Mutates the global settings, applies side effects, saves in the background and refreshes windows.
 pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {

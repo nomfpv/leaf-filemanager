@@ -308,15 +308,7 @@ impl Palette {
         }
     }
 
-    // The classic constructors are the theme in use, for windows that do not ask `for_window` (they follow the theme too).
-    pub fn light() -> Self {
-        current().light
-    }
-
-    pub fn black() -> Self {
-        current().black
-    }
-
+    /// The theme in use, dark, for windows that do not ask `for_window` (they follow the theme too).
     pub fn dark() -> Self {
         current().dark
     }
@@ -452,7 +444,8 @@ pub fn popup_material(liquid: bool) -> WindowBackgroundAppearance {
 /// What a popup paints behind its content on a Windows that gives it no Acrylic: the plain colour Windows 11 itself uses for a
 /// flyout without transparency. `None` where the Acrylic is the surface and the popup paints nothing.
 pub fn popup_fill(p: &Palette) -> Option<Hsla> {
-    (!crate::settings::materials_available()).then(|| Hsla { a: 1.0, ..p.card_bg })
+    // (a solid theme, Stem or Index, paints its menus too: their raised colour, not Acrylic)
+    (!crate::settings::materials_available() || !p.backdrop).then(|| Hsla { a: 1.0, ..p.card_bg })
 }
 
 /// The alpha of `window_bg` and `content_bg` over a window that shows glass, for the surface value (0..=100) of the HyperGlass

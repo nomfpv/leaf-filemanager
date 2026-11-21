@@ -2234,8 +2234,12 @@ impl Workspace {
                     .pr_1()
                     .gap_2()
                     .items_center()
-                    .rounded_t(theme::RADIUS)
+                    .rounded_t(px(p.control_radius + 2.))
                     .text_sm()
+                    // Stem: the accent line on top of the tab in front
+                    .when(active && p.tab_marker > 0., |d| {
+                        d.relative().child(div().absolute().top_0().left(px(12.)).right(px(12.)).h(px(p.tab_marker)).rounded_b(px(2.)).bg(p.accent))
+                    })
                     // while the tab moves (tabs open or close beside it, the window is resized) the scene paints the fill itself: the
                     // engine's lens would trail the tab (see glass::LensPhase)
                     .when(active && (tab_lens.is_none() || crate::glass::lens_phase(self.glass_hwnd, crate::glass::SLOT_TAB) != crate::glass::LensPhase::Rest), |d| d.bg(p.tab_active))
@@ -2909,10 +2913,10 @@ impl Workspace {
             .gap_1()
             .items_center()
             // a capsule, like Files' Omnibar
-            .rounded_full()
-            .bg(p.content_bg)
+            .rounded(px(p.control_radius + 2.))
+            .bg(p.field_bg)
             .border_1()
-            .border_color(if focused { p.accent } else { p.border })
+            .border_color(if focused { p.accent } else { p.field_border })
             .relative()
             .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 if this.search_mode && ev.keystroke.key == "escape" {
@@ -3381,10 +3385,12 @@ impl Workspace {
             .gap_2()
             .items_center()
             .when(rail, |d| d.justify_center())
-            .rounded(theme::RADIUS_SM)
+            .rounded(px(p.control_radius))
             .text_sm()
             .relative()
             .when(fluent, |d| d.bg(p.selection).child(theme::selection_pill(p)))
+            // Canopy: a soft accent outline round the current place
+            .when(fluent && p.selection_border.a > 0., |d| d.border_1().border_color(Hsla { a: p.selection_border.a * 0.8, ..p.selection_border }))
             // while the row moves (the sidebar scrolls) the scene paints the pill itself: the engine's lens would trail the row
             .when(lens_key.is_some() && crate::glass::lens_phase(self.glass_hwnd, crate::glass::SLOT_SIDEBAR) != crate::glass::LensPhase::Rest, |d| {
                 d.child(crate::glass::lens_stand_in(p.dark, 32.))
@@ -3692,6 +3698,8 @@ impl Workspace {
     }
 
     fn render_statusbar(&mut self, p: &Palette, strip_bar_w: Option<f32>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // the status line's own colours (Index: an inverted readout)
+        let p = &p.for_status();
         let tab = self.active_tab().read(cx);
         let count = tab.item_count();
         let (sel, sel_size, has_dir) = tab.selection_summary();
@@ -3770,6 +3778,7 @@ impl Workspace {
             .justify_between()
             .border_t_1()
             .border_color(p.divider)
+            .bg(p.status_bg)
             .text_xs()
             .text_color(p.text_secondary)
             .child(left)
@@ -4558,8 +4567,8 @@ impl Render for Workspace {
                             this.set_active_pane(is_right, cx)
                         }))
                         .child(view)
-                        .when(active, |d| {
-                            d.child(div().absolute().top_0().left_0().right_0().h(px(2.)).bg(p.accent))
+                        .when(active && p.focus_width > 0., |d| {
+                            d.child(div().absolute().top_0().left_0().right_0().h(px(p.focus_width)).bg(p.focus))
                         })
                 };
                 let left = pane(tab_state.left.clone(), false, !tab_state.right_active, cx);
@@ -4680,6 +4689,8 @@ impl Render for Workspace {
             .size_full()
             .bg(p.window_bg)
             .text_color(p.text)
+            // the theme's typeface (Index: Bahnschrift) unless the user chose one; a missing font falls back to the system's
+            .when(!p.font_ui.is_empty() && cx.global::<crate::settings::Settings>().font.is_none(), |d| d.font_family(p.font_ui))
             // the pointer coming over the window gives its glass back the full rate (and thaws it): one event on entering, none while
             // it moves
             .on_hover(cx.listener(|this, over: &bool, _, _| {
@@ -4828,7 +4839,7 @@ impl Render for Workspace {
             .relative()
             .children(backdrop_layers)
             .child(titlebar)
-            .child(toolbar)
+            .child(div().w_full().bg(p.toolbar_bg).child(toolbar))
             .child(
                 h_flex()
                     .flex_1()
@@ -4849,6 +4860,7 @@ impl Render for Workspace {
                             .h_full()
                             .relative()
                             .flex_shrink_0()
+                            .bg(p.sidebar_bg)
                             .child(s)
                             .child(resize_handle("sidebar-resize", ResizeSidebar, false))
                             // on the rail, hovering opens the full sidebar over the content
@@ -4878,7 +4890,7 @@ impl Render for Workspace {
                             .min_w_0()
                             .h_full()
                             .mr_2()
-                            .rounded(theme::RADIUS)
+                            .rounded(px(p.radius))
                             .bg(p.content_bg)
                             .border_1()
                             .border_color(p.border)

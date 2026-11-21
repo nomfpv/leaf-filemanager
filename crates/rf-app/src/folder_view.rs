@@ -2679,6 +2679,8 @@ impl FolderView {
                 let Some(&ei) = self.visible.get(vi) else { break };
                 let e = &self.entries[ei as usize];
                 let selected = self.selected.contains(&ei);
+                // (a selected tile's text wears the selection's colour: Index's solid accent)
+                let p = if selected { p.on_row_selection() } else { p };
                 let cat = icons::category(e);
                 let dim = e.is_hidden() || e.is_cloud_placeholder();
                 // Settings → "Show thumbnails" off: the file type's icon instead of a preview
@@ -2803,7 +2805,7 @@ impl FolderView {
                     .h(row_h - px(4.))
                     .rounded(theme::RADIUS)
                     // tiles: quiet fill + a thin accent outline (a pill would read as a crop)
-                    .when(selected, |d| d.bg(p.selection).border_1().border_color(p.selection_border))
+                    .when(selected, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
                     .when(!selected, |d| d.border_1().border_color(transparent_black()))
                     .when(!selected && part.is_none(), |d| d.hover(|s| s.bg(p.hover)))
                     .when(!selected && part.is_some() && self.grid_hover.is_some_and(|(h, _)| h == vi), |d| d.bg(p.hover))
@@ -3832,7 +3834,7 @@ impl FolderView {
             .overflow_hidden()
             .text_xs()
             .border_b_1()
-            .border_color(p.divider)
+            .border_color(p.border)
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ColumnResize>, _, cx| {
                 let Some((ix, sx, sw)) = this.col_drag else { return };
                 let dx = f32::from(e.event.position.x) - sx;
@@ -3985,6 +3987,8 @@ impl FolderView {
         let name_w = self.name_fixed(cx);
         let grouped = self.grouped();
         let row_h = self.row_h();
+        // Index: sizes and dates in the theme's monospace face
+        let mono = p.mono_numbers && !p.font_mono.is_empty();
         let (col_tags, col_git, col_sync) = (vis.tags, vis.git, vis.sync);
         // columns for Windows properties: None (and nothing else below runs) when the user has added none
         let prop_ctx = self.props_row_ctx(cx);
@@ -4051,6 +4055,9 @@ impl FolderView {
             let sel_above = selected && vi > 0 && self.visible.get(vi - 1).is_some_and(|e| self.selected.contains(e));
             let sel_below = selected && self.visible.get(vi + 1).is_some_and(|e| self.selected.contains(e));
             let is_cursor = self.cursor == Some(vi);
+            // (a selected row's text wears the selection's colour: Index's solid accent; the stripe is every second row's)
+            let striped = !selected && p.stripe.a > 0. && vi % 2 == 1;
+            let p = if selected { p.on_row_selection() } else { p };
             let cat = icons::category(e);
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
@@ -4120,7 +4127,7 @@ impl FolderView {
                 let mut cell = h_flex().w(px(cw[4])).flex_shrink_0().px_2().gap_1().items_center().overflow_hidden().text_color(p.text_secondary);
                 for (i, id) in ids.iter().enumerate() {
                     if let Some(d) = store.def(*id) {
-                        cell = cell.child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(crate::tags::color(d.color)));
+                        cell = cell.child(div().size(px(p.tag_dot)).flex_shrink_0().rounded_full().bg(crate::tags::color(d.color)));
                         if i == 0 {
                             cell = cell.child(div().whitespace_nowrap().overflow_hidden().text_ellipsis().child(crate::i18n::td(&d.name)));
                         }
@@ -4135,7 +4142,7 @@ impl FolderView {
                     let mut row = h_flex().gap_0p5().flex_shrink_0();
                     for id in ids {
                         if let Some(d) = store.def(*id) {
-                            row = row.child(div().size(px(8.)).rounded_full().bg(crate::tags::color(d.color)));
+                            row = row.child(div().size(px(p.tag_dot)).rounded_full().bg(crate::tags::color(d.color)));
                         }
                     }
                     row
@@ -4206,6 +4213,7 @@ impl FolderView {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
+                    .when(p.name_weight != 400., |d| d.font_weight(FontWeight(p.name_weight)))
                     .when(dim, |d| d.opacity(0.6))
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true))
                     .child(name)
@@ -4217,14 +4225,18 @@ impl FolderView {
                 .h(row_h)
                 .w_full()
                 .px(px(4.))
-                .rounded(theme::RADIUS_SM)
+                .rounded(px(p.row_radius))
                 .items_center()
                 .text_sm()
                 .relative()
-                .when(selected, |d| d.bg(p.selection).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
+                .when(striped, |d| d.bg(p.stripe))
+                .when(selected, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
                 .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
-                .when(is_cursor && selected && self.selected.len() > 1, |d| {
-                    d.border_1().border_color(p.selection_border)
+                // the focused item of a multiple selection, else the theme's outline of a selected row (Canopy's), else none
+                .map(|d| match (selected, is_cursor && self.selected.len() > 1) {
+                    (true, true) => d.border_1().border_color(p.cursor),
+                    (true, false) if p.selection_border.a > 0. => d.border_1().border_color(p.selection_border),
+                    _ => d,
                 })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -4321,6 +4333,7 @@ impl FolderView {
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_ellipsis()
+                        .when(mono, |d| d.font_family(p.font_mono))
                         .child(format::datetime(e.modified_ms))
                 }))
                 .children(show_created.then(|| {
@@ -4332,6 +4345,7 @@ impl FolderView {
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_ellipsis()
+                        .when(mono, |d| d.font_family(p.font_mono))
                         .child(format::datetime(e.created_ms))
                 }))
                 .when(show_type, |row| row.child(
@@ -4374,7 +4388,7 @@ impl FolderView {
                         ),
                         None => {
                             let text = if !e.is_dir() { format::size(e.size) } else { dir_size.clone().unwrap_or_default() };
-                            cell.text_color(p.text_secondary).child(text)
+                            cell.text_color(p.text_secondary).when(mono, |d| d.font_family(p.font_mono)).child(text)
                         }
                     };
                     row.child(cell)
