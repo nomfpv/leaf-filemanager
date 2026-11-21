@@ -94,58 +94,113 @@ pub fn available(when: WhenDone) -> bool {
     }
 }
 
-/// The notice: a dialog that counts down and can be cancelled (or left with Esc, which cancels too); then the PC does it.
+/// What the countdown does next. `state`: 0 = counting, 1 = "now" was pressed, 2 = cancelled; `own_open`: the countdown's own dialog
+/// is the one on screen (any other dialog replaced it, or Esc closed it: not open); `due`: the 60 s are over.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    Wait,
+    Go,
+    Cancel,
+}
+
+fn step(state: u8, own_open: bool, due: bool) -> Step {
+    match state {
+        1 => Step::Go,
+        2 => Step::Cancel,
+        _ if !own_open => Step::Cancel,
+        _ if due => Step::Go,
+        _ => Step::Wait,
+    }
+}
+
+static COUNTING: AtomicBool = AtomicBool::new(false);
+
+/// The notice: a dialog that counts down and can be cancelled (or left with Esc, which cancels too); then the PC does it. It is shown
+/// when no other dialog is open (it waits its turn), and only its own dialog counts: if something else takes the place on screen, the
+/// PC is left as it is.
 fn countdown(action: leaf_sys::power::Action, cx: &mut App) {
+    if COUNTING.swap(true, Ordering::Relaxed) {
+        return;
+    }
     let Some(w) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
         log::warn!("downloads done: no window to ask in, the PC is left as it is");
+        COUNTING.store(false, Ordering::Relaxed);
         return;
     };
     let sleep = action == leaf_sys::power::Action::Sleep;
-    let deadline = Instant::now() + Duration::from_secs(NOTICE_SECS);
-    // 0 = counting, 1 = now, 2 = cancelled
     let state = Rc::new(Cell::new(0u8));
-    let shown = w.update(cx, {
-        let state = state.clone();
-        move |_, window, cx| {
-            let live: Rc<dyn Fn() -> String> = Rc::new(move || {
-                let left = deadline.saturating_duration_since(Instant::now()).as_secs() + 1;
-                format!("{} {left} {}", if sleep { t!("The downloads are done. This PC goes to sleep in") } else { t!("The downloads are done. This PC shuts down in") }, t!("seconds."))
-            });
-            let (now, stop) = (state.clone(), state.clone());
-            let buttons = vec![
-                Button::new(if sleep { t!("Sleep now") } else { t!("Shut down now") }, Kind::Primary, move |_, _, _| {
-                    now.set(1);
-                    Ok(())
-                }),
-                Button::new(t!("Cancel"), Kind::Normal, move |_, _, _| {
-                    stop.set(2);
-                    Ok(())
-                }),
-            ];
-            prompt::show_live(if sleep { t!("Sleep") } else { t!("Shut down") }, live, Vec::new(), buttons, window, cx);
-        }
-    });
-    if shown.is_err() {
-        return;
-    }
     cx.spawn(async move |cx| {
+        let mut shown: Option<(Entity<prompt::DialogView>, Instant)> = None;
         loop {
             cx.background_executor().timer(Duration::from_millis(500)).await;
-            let open = w.update(cx, |_, window, cx| prompt::current(window, cx).is_some()).unwrap_or(false);
-            let go = state.get() == 1 || (state.get() == 0 && open && Instant::now() >= deadline);
-            if go {
-                let _ = w.update(cx, |_, window, cx| prompt::close(window, cx));
-                if let Err(e) = leaf_sys::power::run(action) {
-                    log::warn!("downloads done: {e}");
+            let Some((own, deadline)) = shown.clone() else {
+                // waits until no dialog is open in the window, then shows its own
+                let r = w.update(cx, |_, window, cx| {
+                    if prompt::current(window, cx).is_some() {
+                        return None;
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(NOTICE_SECS);
+                    let live: Rc<dyn Fn() -> String> = Rc::new(move || {
+                        let left = deadline.saturating_duration_since(Instant::now()).as_secs() + 1;
+                        format!("{} {left} {}", if sleep { t!("The downloads are done. This PC goes to sleep in") } else { t!("The downloads are done. This PC shuts down in") }, t!("seconds."))
+                    });
+                    let (now, stop) = (state.clone(), state.clone());
+                    let buttons = vec![
+                        Button::new(if sleep { t!("Sleep now") } else { t!("Shut down now") }, Kind::Primary, move |_, _, _| {
+                            now.set(1);
+                            Ok(())
+                        }),
+                        Button::new(t!("Cancel"), Kind::Normal, move |_, _, _| {
+                            stop.set(2);
+                            Ok(())
+                        }),
+                    ];
+                    prompt::show_live(if sleep { t!("Sleep") } else { t!("Shut down") }, live, Vec::new(), buttons, window, cx);
+                    prompt::current(window, cx).map(|e| (e, deadline))
+                });
+                match r {
+                    Ok(Some(d)) => shown = Some(d),
+                    Ok(None) => {}
+                    Err(_) => break,
                 }
-                return;
+                continue;
+            };
+            let Ok(own_open) = w.update(cx, |_, window, cx| prompt::current(window, cx).is_some_and(|c| c == own)) else { break };
+            match step(state.get(), own_open, Instant::now() >= deadline) {
+                Step::Go => {
+                    let _ = w.update(cx, |_, window, cx| {
+                        if prompt::current(window, cx).is_some_and(|c| c == own) {
+                            prompt::close(window, cx);
+                        }
+                    });
+                    if let Err(e) = leaf_sys::power::run(action) {
+                        log::warn!("downloads done: {e}");
+                    }
+                    break;
+                }
+                Step::Cancel => break,
+                Step::Wait => {
+                    let _ = cx.update(|cx| cx.refresh_windows());
+                }
             }
-            // cancelled with the button, or the dialog went away some other way (Esc)
-            if state.get() == 2 || !open {
-                return;
-            }
-            let _ = cx.update(|cx| cx.refresh_windows());
         }
+        COUNTING.store(false, Ordering::Relaxed);
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Step, step};
+
+    #[test]
+    fn only_the_countdowns_own_dialog_counts() {
+        // another dialog took its place: no shutdown, even when the time is up
+        assert_eq!(step(0, false, true), Step::Cancel);
+        assert_eq!(step(0, false, false), Step::Cancel);
+        // its own dialog, time up: go; before: wait
+        assert_eq!(step(0, true, true), Step::Go);
+        assert_eq!(step(0, true, false), Step::Wait);
+        assert_eq!(step(2, true, true), Step::Cancel);
+    }
 }
