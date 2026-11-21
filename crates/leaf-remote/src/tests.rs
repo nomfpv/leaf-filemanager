@@ -891,7 +891,7 @@ fn edit_refuses_when_the_server_copy_changed() {
 
     // someone else changes it on the server: refused, the server's file and folder untouched
     std::fs::write(served.0.join("notes.txt"), b"their change").unwrap();
-    let e = save_back_with(&fs, &at, &local, &fetched, &|| false).unwrap_err();
+    let e = save_back_with(&fs, &at, &local, &fetched, false, &|| false).unwrap_err();
     assert!(matches!(e, SaveError::Changed(f) if f.size == 12), "{e:?}");
     assert_eq!(std::fs::read(served.0.join("notes.txt")).unwrap(), b"their change");
     assert_eq!(names_in(&served.0), ["notes.txt"]);
@@ -903,11 +903,11 @@ fn edit_refuses_when_the_server_copy_changed() {
 
     // against the version that is there now: uploaded, the old one kept as the backup; the next save replaces the backup
     let now = Fetched::of(&fs.stat(&at).unwrap());
-    let after = save_back_with(&fs, &at, &local, &now, &|| false).unwrap();
+    let after = save_back_with(&fs, &at, &local, &now, false, &|| false).unwrap();
     assert_eq!(std::fs::read(served.0.join("notes.txt")).unwrap(), b"my edit");
     assert_eq!(std::fs::read(served.0.join("notes.txt.leaf-bak")).unwrap(), b"their change");
     std::fs::write(&local, b"second edit").unwrap();
-    save_back_with(&fs, &at, &local, &after, &|| false).unwrap();
+    save_back_with(&fs, &at, &local, &after, false, &|| false).unwrap();
     assert_eq!(std::fs::read(served.0.join("notes.txt")).unwrap(), b"second edit");
     assert_eq!(std::fs::read(served.0.join("notes.txt.leaf-bak")).unwrap(), b"my edit");
     assert_eq!(names_in(&served.0), ["notes (edited).txt", "notes.txt", "notes.txt.leaf-bak"]);

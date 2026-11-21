@@ -1109,7 +1109,7 @@ fn edit_channel(cx: &mut App) -> mpsc::UnboundedSender<PathBuf> {
     let (tx, mut rx) = mpsc::unbounded::<PathBuf>();
     cx.spawn(async move |cx| {
         while let Some(local) = rx.next().await {
-            cx.update(|cx| save_edit(local, cx));
+            cx.update(|cx| save_edit(local, false, cx));
         }
     })
     .detach();
@@ -1203,39 +1203,70 @@ pub fn edit_file(cx: &mut App, v: VPath, size: u64) {
 }
 
 /// The editing copy `local` was saved: uploaded over the server's file (the old version kept as `name.leaf-bak`), or, when
-/// the server's file changed since it was fetched, refused with the choice of saving it as a copy on the server.
-fn save_edit(local: PathBuf, cx: &mut App) {
+/// the server's file changed since it was fetched, refused with the choice of saving it as a copy on the server. Sent only
+/// once the copy has stopped changing (an editor saves in steps); an empty copy over a non-empty file is asked about first.
+fn save_edit(local: PathBuf, allow_empty: bool, cx: &mut App) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Then {
+        Nothing,
+        OfferCopy,
+        AskEmpty,
+    }
     let found = EDITS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(l, _)| *l == local).map(|(_, e)| (e.remote.clone(), e.fetched.clone(), e.stamp.clone(), e.saving.clone()));
     let Some((remote, fetched, stamp, saving)) = found else { return };
-    let changed: Arc<Mutex<bool>> = Arc::default();
-    let refused = changed.clone();
+    let then: Arc<Mutex<Then>> = Arc::new(Mutex::new(Then::Nothing));
+    let next = then.clone();
     let (r2, l2) = (remote.clone(), local.clone());
-    let done: crate::status_center::OnDone = Box::new(move |_, cx| {
-        if *refused.lock().unwrap_or_else(|e| e.into_inner()) {
-            offer_copy(r2, l2, cx);
-        }
+    let done: crate::status_center::OnDone = Box::new(move |_, cx| match *next.lock().unwrap_or_else(|e| e.into_inner()) {
+        Then::OfferCopy => offer_copy(r2, l2, cx),
+        Then::AskEmpty => ask_empty(r2, l2, cx),
+        Then::Nothing => {}
     });
+    let again = EDIT_TX.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let title = format!("{} {}", t!("Saving to the server:"), remote.name());
     crate::status_center::start_with(
         cx,
         title,
         move |tr| {
             let _one = saving.lock().unwrap_or_else(|e| e.into_inner());
-            let now = local_stamp(&local);
+            let cancelled = || tr.cancel.load(Ordering::Relaxed);
+            // the copy must hold still for 300 ms (at most ~10 s of waiting; a later change comes as its own save)
+            let mut now = local_stamp(&local);
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                if cancelled() {
+                    return Ok(false);
+                }
+                let later = local_stamp(&local);
+                if later == now {
+                    break;
+                }
+                now = later;
+            }
             if now.is_none() || now == *stamp.lock().unwrap_or_else(|e| e.into_inner()) {
-                // (a save that came in while the one before ran: already sent)
+                // (gone for now, or a save that came in while the one before ran: already sent)
                 return Ok(true);
             }
             let before = *fetched.lock().unwrap_or_else(|e| e.into_inner());
-            match leaf_remote::edit::save_back(&remote, &local, &before, &|| tr.cancel.load(Ordering::Relaxed)) {
+            match leaf_remote::edit::save_back(&remote, &local, &before, allow_empty, &cancelled) {
                 Ok(after) => {
                     *fetched.lock().unwrap_or_else(|e| e.into_inner()) = after;
                     *stamp.lock().unwrap_or_else(|e| e.into_inner()) = now;
+                    // changed while it was being sent: the newer version goes too
+                    if local_stamp(&local) != now
+                        && let Some(tx) = again.as_ref()
+                    {
+                        let _ = tx.unbounded_send(local.clone());
+                    }
                     Ok(true)
                 }
                 Err(leaf_remote::edit::SaveError::Changed(_)) => {
-                    *changed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                    *then.lock().unwrap_or_else(|e| e.into_inner()) = Then::OfferCopy;
                     Err(anyhow::anyhow!(t!("The file on the server changed since you opened it. Your version was not uploaded; nothing there was overwritten.")))
+                }
+                Err(leaf_remote::edit::SaveError::WouldEmpty) => {
+                    *then.lock().unwrap_or_else(|e| e.into_inner()) = Then::AskEmpty;
+                    Err(anyhow::anyhow!(t!("The edited copy is empty; it was not uploaded over the file on the server.")))
                 }
                 Err(leaf_remote::edit::SaveError::Fs(FsError::Cancelled)) => Ok(false),
                 Err(leaf_remote::edit::SaveError::Fs(e)) => Err(anyhow_of(e)),
@@ -1243,6 +1274,29 @@ fn save_edit(local: PathBuf, cx: &mut App) {
         },
         Some(done),
     );
+}
+
+/// The edited copy is empty and the server's file is not: uploaded only when the user says so.
+fn ask_empty(remote: VPath, local: PathBuf, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let Some(w) = crate::workspace::main_windows(cx).first().copied() else { return };
+    let _ = w.update(cx, |_, window, cx| {
+        let msg = format!("{}\n\n{}", remote.name(), t!("The edited copy is now empty. Upload it, emptying the file on the server? (The server's version is kept as the .leaf-bak backup.)"));
+        crate::prompt::show(
+            t!("Upload an empty file?"),
+            Some(msg),
+            None,
+            vec![
+                Button::new(t!("Upload empty file"), Kind::Danger, move |_, _, cx| {
+                    save_edit(local.clone(), true, cx);
+                    Ok(())
+                }),
+                Button::cancel(),
+            ],
+            window,
+            cx,
+        );
+    });
 }
 
 /// The server's file changed under an edit: say so, and offer to put this version beside it under a new name.

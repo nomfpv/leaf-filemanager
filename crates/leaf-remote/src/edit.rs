@@ -33,6 +33,9 @@ impl Fetched {
 pub enum SaveError {
     /// The file on the server is not the one that was fetched any more (what it is now); nothing was sent.
     Changed(Fetched),
+    /// The edited copy is empty and the server's file is not: nothing was sent (the caller asks first, then saves again
+    /// with `allow_empty`).
+    WouldEmpty,
     Fs(FsError),
 }
 
@@ -40,6 +43,7 @@ impl std::fmt::Display for SaveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SaveError::Changed(_) => f.write_str("The file on the server changed since it was opened; your version was not uploaded"),
+            SaveError::WouldEmpty => f.write_str("The edited copy is empty; it was not uploaded over the file on the server"),
             SaveError::Fs(e) => e.fmt(f),
         }
     }
@@ -107,10 +111,11 @@ fn backend(v: &VPath) -> Result<std::sync::Arc<SftpFs>, FsError> {
     Ok(crate::sftp_backend())
 }
 
-/// Uploads the edited `local` over `v`, unless the server's file changed since `fetched`. Returns what the server says
-/// about the new version (the next save compares with it). Blocks: a worker thread.
-pub fn save_back(v: &VPath, local: &Path, fetched: &Fetched, cancelled: &dyn Fn() -> bool) -> Result<Fetched, SaveError> {
-    save_back_with(&*backend(v)?, v, local, fetched, cancelled)
+/// Uploads the edited `local` over `v`, unless the server's file changed since `fetched`, or `local` is empty and the
+/// server's file is not (`WouldEmpty`, unless `allow_empty`: an editor that cut the file while saving must not empty the
+/// server's). Returns what the server says about the new version (the next save compares with it). Blocks: a worker thread.
+pub fn save_back(v: &VPath, local: &Path, fetched: &Fetched, allow_empty: bool, cancelled: &dyn Fn() -> bool) -> Result<Fetched, SaveError> {
+    save_back_with(&*backend(v)?, v, local, fetched, allow_empty, cancelled)
 }
 
 /// Uploads `local` next to `v` under a new name (`name (edited).ext`, `name (edited 2).ext`...), never over anything.
@@ -118,7 +123,7 @@ pub fn save_as_copy(v: &VPath, local: &Path, cancelled: &dyn Fn() -> bool) -> Re
     save_as_copy_with(&*backend(v)?, v, local, cancelled)
 }
 
-pub(crate) fn save_back_with(fs: &SftpFs, v: &VPath, local: &Path, fetched: &Fetched, cancelled: &dyn Fn() -> bool) -> Result<Fetched, SaveError> {
+pub(crate) fn save_back_with(fs: &SftpFs, v: &VPath, local: &Path, fetched: &Fetched, allow_empty: bool, cancelled: &dyn Fn() -> bool) -> Result<Fetched, SaveError> {
     let now = fs.stat(v)?;
     if now.kind != Kind::File {
         return Err(SaveError::Fs(FsError::Other("This is not a regular file on the server any more".into())));
@@ -126,6 +131,9 @@ pub(crate) fn save_back_with(fs: &SftpFs, v: &VPath, local: &Path, fetched: &Fet
     if Fetched::of(&now) != *fetched {
         log::info!("remote: {} changed on the server since it was fetched; not uploaded", v.name());
         return Err(SaveError::Changed(Fetched::of(&now)));
+    }
+    if !allow_empty && now.size > 0 && std::fs::metadata(local).map_err(FsError::from)?.len() == 0 {
+        return Err(SaveError::WouldEmpty);
     }
     let w = fs.open_write_keeping_backup(v, &backup_name(v.name()))?;
     send(local, w, cancelled)?;
