@@ -4124,7 +4124,8 @@ impl Workspace {
         let drives_folded = !rail && self.drives_open.map(|o| !o).unwrap_or_else(|| {
             let n_tags = if shown("tags") { cx.global::<crate::tags::Tags>().0.defs.len() } else { 0 };
             let n_cloud = if shown("cloud") { self.places.read(cx).cloud.len() } else { 0 };
-            let rows = (pinned_n + 2 + n_cloud + n_tags) as f32 * p.sidebar_row + drives.len() as f32 * (p.sidebar_row + 7.);
+            let drive_h = p.sidebar_row + 7. + if self.sidebar_w >= DRIVE_SPACE_MIN_W { p.fs_xs + 5. } else { 0. };
+            let rows = (pinned_n + 2 + n_cloud + n_tags) as f32 * p.sidebar_row + drives.len() as f32 * drive_h;
             let heads = (2 + usize::from(n_cloud > 0) + usize::from(n_tags > 0)) as f32 * 38.;
             let room = self.viewport_h - p.titlebar_h - 48. - p.typebar_h - p.status_h - 56.;
             !drives.is_empty() && rows + heads > room
@@ -4151,14 +4152,24 @@ impl Workspace {
             let loc = Location::Path(d.root.clone());
             let active = cur == loc || lit.as_ref() == Some(&d.root);
             let frac = d.used_fraction();
+            // the bar, and under it "129 GB free of 932 GB" as on the Home page's drive tiles (asked by the first Linux tester); the
+            // line only where the sidebar has room for it (not on the rail, not near its narrowest)
+            let words = (self.sidebar_w >= DRIVE_SPACE_MIN_W).then(|| format!("{} {} {}", format::size(d.free), t!("free of"), format::size(d.total)));
             let bar = (d.total > 0).then(|| {
-                div()
-                    .mt(px(5.))
-                    .h(px(2.))
+                v_flex()
                     .w_full()
-                    .rounded_full()
-                    .bg(p.pressed)
-                    .child(div().h_full().rounded_full().bg(if frac > 0.9 { p.danger } else { p.accent }).w(relative(frac)))
+                    .child(
+                        div()
+                            .mt(px(5.))
+                            .h(px(2.))
+                            .w_full()
+                            .rounded_full()
+                            .bg(p.pressed)
+                            .child(div().h_full().rounded_full().bg(if frac > 0.9 { p.danger } else { p.accent }).w(relative(frac))),
+                    )
+                    .children(words.map(|w| {
+                        div().mt(px(2.)).text_size(px(p.fs_xs)).line_height(px(p.fs_xs + 3.)).font_weight(FontWeight::NORMAL).text_color(p.text_tertiary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(w)
+                    }))
                     .into_any_element()
             });
             col = col.child(self.sidebar_item(
@@ -4583,6 +4594,8 @@ const TAB_CHROME_W: f32 = 12. + 14. + 8. + 8. + 22. + 4. + 2.;
 /// The terminal button and its gap, on a tab that has one.
 const TAB_TERMINAL_W: f32 = 22. + 8.;
 const SIDEBAR_MIN: f32 = 160.;
+/// The sidebar width from which a drive row also says its free and total space in words (narrower: the bar alone).
+const DRIVE_SPACE_MIN_W: f32 = 190.;
 /// The icons-only sidebar, and the width below which a drag collapses to it.
 const RAIL_W: f32 = 56.;
 /// The full sidebar's way out of the rail: the spring's time and how far it swings past its place (a little: it is a panel, not a
