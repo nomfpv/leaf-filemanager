@@ -205,10 +205,39 @@ fn confirm_and_run(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut
     crate::prompt::show(if risky { t!("This run removes many files") } else { t!("Run sync job?") }, Some(message), None, buttons, window, cx);
 }
 
+/// The jobs whose run is going (two runs of one job would write the same files and the same state file).
+static RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn is_running(job_id: &str) -> bool {
+    RUNNING.lock().is_ok_and(|g| g.iter().any(|j| j == job_id))
+}
+
+/// Takes the job off [`RUNNING`] when dropped: when the run's work ends, also by a panic, or when it never started.
+struct Running(String);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Ok(mut g) = RUNNING.lock() {
+            g.retain(|j| *j != self.0);
+        }
+    }
+}
+
+fn refuse_running(cx: &mut App) {
+    in_window(cx, |window, cx| {
+        crate::prompt::notice(t!("This job is running"), t!("Wait until its run ends, or cancel it in the Status Center.").to_string(), window, cx)
+    });
+}
+
 /// The run, as one Status Center job; the report is on its card at the end.
 fn start_run(plan: Plan, cx: &mut App) {
     let name = plan.job.name.clone();
     let job_id = plan.job.id.clone();
+    match RUNNING.lock() {
+        Ok(mut g) if !g.contains(&job_id) => g.push(job_id.clone()),
+        _ => return refuse_running(cx),
+    }
+    let running = Running(job_id.clone());
     let plan = Arc::new(plan);
     let out: Arc<Mutex<Option<Result<Report, leaf_sync::Error>>>> = Arc::new(Mutex::new(None));
     let id_cell = Rc::new(std::cell::Cell::new(0u64));
@@ -218,6 +247,7 @@ fn start_run(plan: Plan, cx: &mut App) {
         cx,
         format!("{} {name}", t!("Sync:")),
         move |tracker| {
+            let _running = running;
             let r = (|| {
                 let (lf, rf) = (side_fs(&p2.left_root)?, side_fs(&p2.right_root)?);
                 let cancelled = || tracker.cancel.load(Ordering::Relaxed);
@@ -577,6 +607,9 @@ impl SyncView {
 
     /// Run: the plan first (off the UI thread), then the question.
     fn run_job(&mut self, job: Job, window: &mut Window, cx: &mut Context<Self>) {
+        if is_running(&job.id) {
+            return refuse_running(cx);
+        }
         self.busy = Some(job.id.clone());
         let work = cx.background_spawn(async move { make_plan(&job, &AtomicBool::new(false)) });
         self._task = Some(cx.spawn_in(window, async move |this, cx| {
