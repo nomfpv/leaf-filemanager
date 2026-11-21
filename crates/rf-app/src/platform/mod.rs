@@ -22,6 +22,14 @@ pub(crate) fn owner_of(window: &Window) -> leaf_sys::Owner {
     leaf_sys::geom::owner_from_raw(hwnd_of(window))
 }
 
+/// Whether menus, select lists, flyouts and the job list open as pop-up windows of their own (Windows: Acrylic popups placed in screen
+/// space). Off Windows they are drawn inside the app window: Wayland places a new top-level window where it likes (the middle of the
+/// screen) and gives it no grab, so a "menu window" stood apart and went away on its own (first Linux tester). `RF_INWINDOW_MENU=1`
+/// asks for the in-window way on Windows too.
+pub(crate) fn popup_windows() -> bool {
+    cfg!(windows) && std::env::var_os("RF_INWINDOW_MENU").is_none()
+}
+
 /// The default log filter: the hybrid renderer of our GPUI fork logs its GPU/CPU switches at info level.
 #[cfg(windows)]
 pub(crate) const LOG_FILTER: &str = "warn,gpui_windows=info";

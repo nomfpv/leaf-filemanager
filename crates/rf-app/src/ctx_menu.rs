@@ -735,7 +735,7 @@ impl FolderView {
                 }
                 v
             }
-            BarMenu::View { dual, shelf } if std::env::var_os("RF_INWINDOW_MENU").is_none() => {
+            BarMenu::View { dual, shelf } if crate::platform::popup_windows() => {
                 // Files' layout flyout (tiles, size slider, switches)
                 // opened after this update: its first frame reads this view
                 window.defer(cx, move |window, cx| crate::layout_panel::open(me, dual, shelf, pos, window, cx));

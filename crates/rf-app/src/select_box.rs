@@ -151,6 +151,20 @@ fn open(key: SharedString, field: Bounds<Pixels>, choices: Vec<Choice>, window: 
         return;
     }
     close_open(cx);
+    if !crate::platform::popup_windows() {
+        // drawn inside the window (`platform::popup_windows`): the app's menu under the field, the chosen option ticked; no search box
+        use crate::fluent_menu::{Item, Menu, MenuIcon};
+        let items = choices
+            .into_iter()
+            .map(|c| {
+                let run = c.run.clone();
+                Item::action(c.label, MenuIcon::None, move |w, cx| run(w, cx)).checked(c.selected)
+            })
+            .collect();
+        let at = point(field.origin.x, field.origin.y + field.size.height + px(4.));
+        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, at, window, cx);
+        return;
+    }
     let search = choices.len() > SEARCH_FROM;
     // opened from a window that shows glass (or from a popup that does): the liquid list on real glass
     let liquid = crate::glass::liquid(crate::look::window::hwnd_of(window));

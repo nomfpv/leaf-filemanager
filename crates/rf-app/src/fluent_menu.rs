@@ -233,9 +233,9 @@ fn show_ex(menu: Menu, pos: Point<Pixels>, liquid: Option<bool>, window: &mut Wi
         glides: RefCell::new(BTreeMap::new()),
     });
 
-    // Acrylic popups (Windows 11); RF_INWINDOW_MENU=1 or a failure falls back to drawing the
-    // menu inside the window.
-    if std::env::var_os("RF_INWINDOW_MENU").is_none() {
+    // Acrylic popups (Windows 11); elsewhere, with RF_INWINDOW_MENU=1 or after a failure the menu is drawn inside the window
+    // (`platform::popup_windows`).
+    if crate::platform::popup_windows() {
         let anchor = window.bounds().origin + pos;
         let area = window.display(cx).map(|d| d.bounds()).unwrap_or_else(|| window.bounds());
         let display = crate::theme::popup_display(window, cx);
