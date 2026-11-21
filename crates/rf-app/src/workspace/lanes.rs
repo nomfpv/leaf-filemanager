@@ -31,6 +31,7 @@ pub(crate) fn error_text(e: &LaneError) -> String {
     match e {
         LaneError::Uncommitted(v) => format!("{}{}", t!("The lane has files that are not committed. Commit them in the lane, or discard the lane."), listed(v)),
         LaneError::BaseUncommitted(v) => format!("{}{}", t!("The folder of the base branch has changes that are not committed. Commit or put them away there first."), listed(v)),
+        LaneError::Ignored(v) => format!("{}{}", t!("The lane has ignored files (local settings, .env, caches). Remove would delete them for good: Discard the lane instead, which moves them to the Trash with the folder."), listed(v)),
         LaneError::Unmerged(v) => format!("{}{}", t!("The lane has commits its base branch does not have. Merge the lane first, or discard it."), listed(v)),
         LaneError::Conflicts(v) => format!("{}{}", t!("Merging would conflict in these files. Nothing was changed. Merge by hand, or bring the lane up to date with its base first."), listed(v)),
         LaneError::BaseNotCheckedOut(b) => format!("{}\n  {b}", t!("The base branch is not checked out in any folder of the repository, so there is nowhere to merge. Check it out first.")),
@@ -321,6 +322,9 @@ fn end_dialog(lane: Lane, info: leaf_dev::lanes::EndInfo, me: WeakEntity<Workspa
     } else {
         msg.push_str(&format!("\n\n{} ({}):{}", t!("Uncommitted files"), info.uncommitted.len(), listed(&info.uncommitted)));
     }
+    if !info.ignored.is_empty() {
+        msg.push_str(&format!("\n\n{} ({}):{}", t!("Ignored files (Remove would delete them; Discard keeps them in the Trash)"), info.ignored.len(), listed(&info.ignored)));
+    }
     let review = Button::new(t!("Review"), Kind::Normal, {
         let (me, path) = (me.clone(), lane.path.clone());
         move |_, window, cx| {
@@ -376,6 +380,9 @@ fn end_dialog(lane: Lane, info: leaf_dev::lanes::EndInfo, me: WeakEntity<Workspa
             }
             if !info.ahead.is_empty() {
                 return Err(format!("{}{}", t!("Remove keeps work safe: these commits are not in the base. Merge first, or discard the lane."), listed(&info.ahead)));
+            }
+            if !info.ignored.is_empty() {
+                return Err(format!("{}{}", t!("Remove would delete these ignored files for good. Discard the lane instead: it moves them to the Trash."), listed(&info.ignored)));
             }
             let l = lane.clone();
             let work = cx.background_spawn(async move { leaf_dev::lanes::remove(&l.repo, &l.path, &l.branch, &l.base) });

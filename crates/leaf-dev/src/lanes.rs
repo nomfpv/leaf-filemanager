@@ -24,6 +24,8 @@ pub enum LaneError {
     Uncommitted(Vec<String>),
     /// The worktree of the base branch has changes that are not committed.
     BaseUncommitted(Vec<String>),
+    /// Ignored files and folders in the lane (`git worktree remove` would delete them for good; Discard keeps them in the Trash).
+    Ignored(Vec<String>),
     /// Commits of the lane that the base branch does not have (`abc1234 subject`).
     Unmerged(Vec<String>),
     /// Merging would conflict in these files.
@@ -41,6 +43,7 @@ impl fmt::Display for LaneError {
         match self {
             LaneError::Uncommitted(v) => write!(f, "{} uncommitted files in the lane", v.len()),
             LaneError::BaseUncommitted(v) => write!(f, "{} uncommitted files in the base worktree", v.len()),
+            LaneError::Ignored(v) => write!(f, "{} ignored entries in the lane", v.len()),
             LaneError::Unmerged(v) => write!(f, "{} commits not in the base branch", v.len()),
             LaneError::Conflicts(v) => write!(f, "the merge would conflict in {} files", v.len()),
             LaneError::BaseNotCheckedOut(b) => write!(f, "the base branch {b} is not checked out in any worktree"),
@@ -164,6 +167,15 @@ fn changes(dir: &Path, with_untracked: bool) -> Result<Vec<String>, LaneError> {
     Ok(list.into_iter().filter(|c| with_untracked || !c.untracked).map(|c| c.path).collect())
 }
 
+/// The ignored files and folders of `dir` (a folder that is ignored as a whole is one entry, ending in `/`).
+fn ignored(dir: &Path) -> Result<Vec<String>, LaneError> {
+    let o = exec(dir, ["status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=normal"])?;
+    if !o.ok {
+        return Err(failed("git status could not be read", &o));
+    }
+    Ok(o.stdout.split('\0').filter_map(|r| r.strip_prefix("!! ")).filter(|p| !p.is_empty()).map(String::from).collect())
+}
+
 /// The commits of `head` (run in `dir`) that `base` does not have, newest first, as `abc1234 subject` (at most 200).
 fn commits_not_in(dir: &Path, head: &str, base: &str) -> Result<Vec<String>, LaneError> {
     let o = exec(dir, ["log", "-n200", "--no-color", "--format=%h %s", &format!("{base}..{head}")])?;
@@ -226,6 +238,8 @@ pub struct EndInfo {
     pub behind: u32,
     /// Uncommitted files in the lane (untracked ones too).
     pub uncommitted: Vec<String>,
+    /// Ignored files and folders in the lane: Remove refuses while there are any.
+    pub ignored: Vec<String>,
     /// The worktree that has the base branch checked out, and its uncommitted tracked files.
     pub base_dir: Option<PathBuf>,
     pub base_dirty: Vec<String>,
@@ -242,6 +256,7 @@ pub fn end_info(repo: &Path, dir: &Path, base: &str) -> EndInfo {
         ahead: if dir.is_dir() { commits_not_in(dir, "HEAD", base).unwrap_or_default() } else { Vec::new() },
         behind: progress.behind,
         uncommitted: if dir.is_dir() { changes(dir, true).unwrap_or_default() } else { Vec::new() },
+        ignored: if dir.is_dir() { ignored(dir).unwrap_or_default() } else { Vec::new() },
         base_dir,
         base_dirty,
     }
@@ -332,8 +347,8 @@ pub fn merge(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<Merged
     }
 }
 
-/// Removes the lane's worktree (`git worktree remove`, without `--force`): refused with the list when it has uncommitted files
-/// or commits the base does not have. Then the branch is deleted when it is merged (`git branch -d`); `Ok(true)` when it was.
+/// Removes the lane's worktree (`git worktree remove`, without `--force`): refused with the list when it has uncommitted files,
+/// commits the base does not have, or ignored files (which git would delete for good). Then the branch is deleted when it is merged (`git branch -d`); `Ok(true)` when it was.
 pub fn remove(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<bool, LaneError> {
     let list = worktrees(repo)?;
     if !own_worktree(repo, &list, dir) {
@@ -346,6 +361,11 @@ pub fn remove(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<bool,
     let ahead = commits_not_in(dir, "HEAD", base)?;
     if !ahead.is_empty() {
         return Err(LaneError::Unmerged(ahead));
+    }
+    // `worktree remove` deletes ignored files for good (`.env`, local settings, databases): only Discard, through the Trash
+    let kept = ignored(dir)?;
+    if !kept.is_empty() {
+        return Err(LaneError::Ignored(kept));
     }
     let o = exec(repo, [OsStr::new("worktree"), OsStr::new("remove"), dir.as_os_str()])?;
     if !o.ok {
@@ -543,6 +563,23 @@ mod tests {
         // pruned, the unmerged branch kept
         assert!(!r.git(&r.main, &["worktree", "list"]).contains("feat"));
         assert!(r.git(&r.main, &["branch", "--list", "feat"]).contains("feat"));
+    }
+
+    #[test]
+    fn lane_remove_refuses_ignored_files() {
+        let r = Repo::new("ignored");
+        r.commit(&r.main, ".gitignore", "*.env\ncache/\n");
+        let dir = r.lane("feat");
+        std::fs::write(dir.join("local.env"), "SECRET=1\n").unwrap();
+        std::fs::create_dir_all(dir.join("cache")).unwrap();
+        std::fs::write(dir.join("cache/db"), "x").unwrap();
+        assert_eq!(end_info(&r.main, &dir, "main").ignored, vec!["cache/".to_string(), "local.env".to_string()]);
+        match remove(&r.main, &dir, "feat", "main") {
+            Err(LaneError::Ignored(v)) => assert_eq!(v.len(), 2),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("local.env")).unwrap(), "SECRET=1\n");
+        assert!(dir.join("cache/db").is_file());
     }
 
     #[test]
