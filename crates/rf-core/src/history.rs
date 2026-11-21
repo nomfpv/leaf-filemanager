@@ -27,6 +27,8 @@ pub enum Location {
     Changes(PathBuf),
     /// HyperDownload's page: what is downloading and what was downloaded.
     Downloads,
+    /// A folder that is not a local one, listed through the virtual filesystem (`leaf-vfs`): `sftp://`, `mem://`...
+    Remote(crate::vpath::VPath),
 }
 
 impl Location {
@@ -115,6 +117,7 @@ impl Location {
                 Some(Location::Home)
             }
             Location::Shell { parsing, .. } => Some(shell_parent(parsing)),
+            Location::Remote(v) => Some(v.parent().map_or(Location::Home, Location::Remote)),
             Location::Home => None,
         }
     }
@@ -134,6 +137,9 @@ impl Location {
             Location::BuildJunk(p) => format!("Build junk — {}", display_name(p)),
             Location::Changes(p) => format!("Changes — {}", display_name(p)),
             Location::Downloads => "HyperDownload".into(),
+            Location::Remote(v) if v.is_root() && v.authority().is_empty() => v.scheme().to_string(),
+            Location::Remote(v) if v.is_root() => v.authority().to_string(),
+            Location::Remote(v) => v.name().to_string(),
             Location::Path(p) => display_name(p),
         }
     }

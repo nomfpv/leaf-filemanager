@@ -29,6 +29,8 @@ pub mod terminal;
 pub mod transfer;
 pub mod treemap;
 pub mod tssource;
+pub mod vpath;
+pub mod hosts;
 
 pub use entry::{Entry, EntryKind, attrs};
 pub use history::{History, Location};
