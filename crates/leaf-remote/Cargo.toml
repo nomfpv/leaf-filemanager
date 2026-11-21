@@ -39,8 +39,9 @@ keyring-core = "1"
 windows-native-keyring-store = "1"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
-# Secret Service over zbus (zbus is in the tree already; the D-Bus C library is not needed)
-zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+# Secret Service over zbus (zbus is in the tree already; the D-Bus C library is not needed); its own runtime choice
+# (async-io), not left to another crate's zbus features
+zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
 
 [dev-dependencies]
 leaf-vfs = { workspace = true, features = ["suite"] }
