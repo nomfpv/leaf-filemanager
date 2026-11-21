@@ -147,6 +147,8 @@ pub fn parse_hunks(text: &[u8], max_lines: usize) -> RDiff {
             Some(b'+') => LineKind::Added,
             Some(b'-') => LineKind::Removed,
             Some(b' ') => LineKind::Context,
+            // (an empty line inside a hunk: a blank context line printed without its space)
+            None => LineKind::Context,
             Some(b'\\') => {
                 if let Some(r) = h.raw.as_mut() {
                     r.extend_from_slice(raw_line);
@@ -168,7 +170,7 @@ pub fn parse_hunks(text: &[u8], max_lines: usize) -> RDiff {
         if let Some(r) = h.raw.as_mut() {
             r.extend_from_slice(raw_line);
         }
-        let body_b = &line_b[1..];
+        let body_b = line_b.get(1..).unwrap_or_default();
         let body_b = body_b.strip_suffix(b"\r").unwrap_or(body_b);
         h.bytes.push(body_b.to_vec());
         let body = String::from_utf8_lossy(body_b).into_owned();
@@ -277,12 +279,12 @@ fn read_diff(root: &Path, args: &[&str]) -> Option<RDiff> {
 
 /// What is not staged yet of one file (index against work tree). `None` when git could not answer.
 pub fn unstaged(root: &Path, rel: &str) -> Option<RDiff> {
-    read_diff(root, &["diff", "--no-color", "--no-ext-diff", "-U3", "--", rel])
+    read_diff(root, &["-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "--", rel])
 }
 
 /// What is staged of one file (HEAD against the index). `from`: a rename's old name.
 pub fn staged(root: &Path, rel: &str, from: Option<&str>) -> Option<RDiff> {
-    let mut args = vec!["diff", "--cached", "--no-color", "--no-ext-diff", "-M", "-U3", "--"];
+    let mut args = vec!["-c", "diff.suppressBlankEmpty=false", "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "-U3", "--"];
     if let Some(f) = from {
         args.push(f);
     }
