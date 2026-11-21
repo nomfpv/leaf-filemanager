@@ -202,6 +202,11 @@ pub struct Workspace {
     drag_hover_tab: Option<(usize, u64)>,
     /// Files are being dragged over the window: the sidebar shows its "drop here to pin" row.
     sidebar_ext_drag: bool,
+    /// The Recycle Bin's item count for the sidebar, and when it was last asked for (the shell is asked again after a while).
+    recycle_count: Option<u64>,
+    recycle_asked: Option<std::time::Instant>,
+    /// The free space under the status line: (the folder it is for, when it was read, the bytes).
+    free_cache: Option<(PathBuf, std::time::Instant, Option<u64>)>,
     /// The sidebar's folder tree (empty unless the setting is on).
     side_tree: sidebar_tree::Holder,
     /// Window width from the last frame (breadcrumb collapsing).
@@ -902,6 +907,9 @@ impl Workspace {
             tab_anim_serial: 0,
             drag_hover_tab: None,
             sidebar_ext_drag: false,
+            recycle_count: None,
+            recycle_asked: None,
+            free_cache: None,
             side_tree: Default::default(),
             viewport_w: 1300.,
             crumb_room: Default::default(),
@@ -2149,6 +2157,7 @@ impl Workspace {
         let popups_open = self.popups_open(cx);
         // (pill tabs float in the middle of the strip, the others stand on its bottom edge)
         let pill = p.tab_shape == "pill";
+        let at_home = *self.active_tab().read(cx).location() == Location::Home;
         // the saved session this window holds, at the far left of the tabs
         let session_label = self.session_name.clone().filter(|n| cx.global::<crate::settings::Settings>().saved_sessions.iter().any(|s| &s.name == n)).map(|name| {
             h_flex()
@@ -2191,7 +2200,7 @@ impl Workspace {
         }
         // Equal-width tabs that share the strip (like Files / WinUI TabView "Equal"): wide
         // while there are few, shrinking as more open, scrolling only below the minimum.
-        let strip = (self.viewport_w - 150. - TITLEBAR_LEAD - 40.).max(120.);
+        let strip = (self.viewport_w - 150. - TITLEBAR_LEAD - 40. - 40.).max(120.);
         let n = self.tabs.len().max(1) as f32;
         let tab_max = p.tab_w.max(TAB_MIN_W);
         let tab_w = ((strip - 4.) / n - 4.).clamp(TAB_MIN_W, tab_max);
@@ -2431,10 +2440,30 @@ impl Workspace {
                                 .text_color(p.text_secondary)
                                 .hover(|s| s.bg(p.hover))
                                 .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Tab actions")).build(w, cx)))
-                                .child(Icon::new(if self.compact.is_some() { L::PictureInPicture2 } else { L::AppWindow }).size(px(16.)))
+                                // the leaf: the app's mark, as in the mockups (it opens the window menu)
+                                .child(Icon::new(if self.compact.is_some() { L::PictureInPicture2 } else { L::Leaf }).size(px(16.)).text_color(p.accent))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(|this, _, window, cx| this.tab_actions_menu(window, cx))),
                         ),
+                    )
+                    // Home, left of the tabs (the mockups'): a tab-like button, lit while Home is shown
+                    .child(
+                        div()
+                            .id("tb-home")
+                            .flex_shrink_0()
+                            .size(px(if pill { 36. } else { 28. }))
+                            .when(!pill, |d| d.mb(px(2.)))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(p.control_radius))
+                            .text_color(if at_home { p.text } else { p.text_secondary })
+                            .when(at_home, |d| d.bg(p.tab_active).when(pill, |d| d.shadow(p.lifted_shadows())))
+                            .when(!at_home, |d| d.hover(|s| s.bg(p.hover).text_color(p.text)))
+                            .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Home")).build(w, cx)))
+                            .child(Icon::new(L::House).size(px(16.)))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(|this, _, window, cx| this.navigate(Location::Home, window, cx))),
                     )
                     .children(session_label)
                     .child(tabs)
@@ -3787,9 +3816,15 @@ impl Workspace {
         let accent = p.accent;
         // the open folder is already a selected row of the sidebar (a pinned folder or a drive): the tree draws no second selection
         let mut shown_elsewhere = pinned.iter().any(|f| cur == Location::Path(f.path.clone()));
+        // the place the open folder is in stays lit (the mockups': "Projects" while in Projects\leaf-site): the closest pinned folder
+        // that holds it, else the drive it is on (with the folder tree on, the tree marks the folder itself)
+        let lit: Option<PathBuf> = (!self.shows_tree(rail)).then(|| cur.path().map(Path::to_path_buf)).flatten().and_then(|here| {
+            let best = pinned.iter().map(|f| &f.path).filter(|p| here.starts_with(p)).max_by_key(|p| p.as_os_str().len()).cloned();
+            best.or_else(|| drives.iter().map(|d| &d.root).filter(|r| here.starts_with(r)).max_by_key(|r| r.as_os_str().len()).cloned())
+        });
         for (i, f) in pinned.into_iter().enumerate() {
             let loc = Location::Path(f.path.clone());
-            let active = cur == loc;
+            let active = cur == loc || lit.as_ref() == Some(&f.path);
             let title = crate::i18n::td(&f.title);
             let drag = PinDrag { ix: i, path: f.path.clone(), title: title.clone().into() };
             let target_path = f.path.clone();
@@ -3827,7 +3862,9 @@ impl Workspace {
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.pin_dropped(paths, cx))),
             );
         }
-        col = col.child(self.sidebar_item(
+        // the Recycle Bin with how many items it holds, at the row's right (the mockups' Trash)
+        let binned = self.recycle_items(cx);
+        let bin = self.sidebar_item(
             "sb-recycle".into(),
             L::Trash,
             p.text_secondary,
@@ -3837,7 +3874,10 @@ impl Workspace {
             None,
             p,
             cx,
-        ));
+        );
+        col = col.child(bin.when(!rail, |d| {
+            d.children(binned.map(|n| div().flex_shrink_0().text_size(px(p.fs_xs)).text_color(p.text_tertiary).child(n.to_string())))
+        }));
         // the folder tree stands right under the pinned folders, above the drives and the tags (where the user asked for it: the
         // tree is what one works in, the drives and tags are looked at less often)
         let hidden = cx.global::<crate::settings::Settings>().sidebar_hidden.clone();
@@ -3851,7 +3891,7 @@ impl Workspace {
         }
         for (i, d) in drives.into_iter().enumerate() {
             let loc = Location::Path(d.root.clone());
-            let active = cur == loc;
+            let active = cur == loc || lit.as_ref() == Some(&d.root);
             let frac = d.used_fraction();
             let bar = (d.total > 0).then(|| {
                 div()
@@ -3959,6 +3999,57 @@ impl Workspace {
             .child(div().px_2().py_1().child(settings))
     }
 
+    /// The free bytes on the volume `path` is on, and its root: read in the background, at most every 20 seconds per volume.
+    fn free_space(&mut self, path: &Path, cx: &mut Context<Self>) -> Option<(u64, PathBuf)> {
+        let root = path.ancestors().last()?.to_path_buf();
+        if leaf_sys::ftp::is_ftp(path) || root.as_os_str().is_empty() {
+            return None;
+        }
+        let now = std::time::Instant::now();
+        if let Some((r, at, bytes)) = &self.free_cache
+            && *r == root
+            && now.duration_since(*at) < std::time::Duration::from_secs(20)
+        {
+            return bytes.map(|b| (b, root));
+        }
+        let kept = self.free_cache.as_ref().filter(|(r, _, _)| *r == root).and_then(|c| c.2);
+        self.free_cache = Some((root.clone(), now, kept));
+        let r2 = root.clone();
+        cx.spawn(async move |this, cx| {
+            let got = cx.background_spawn(async move { leaf_sys::volume::volume_info(&r2).ok().filter(|v| v.total > 0).map(|v| v.free) }).await;
+            let _ = this.update(cx, |w, cx| {
+                if let Some((r, _, bytes)) = &mut w.free_cache
+                    && *r == root
+                    && *bytes != got
+                {
+                    *bytes = got;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        kept.map(|b| (b, self.free_cache.as_ref().map(|c| c.0.clone()).unwrap_or_default()))
+    }
+
+    /// The Recycle Bin's item count for the sidebar, asked of the shell in the background at most every 15 seconds.
+    fn recycle_items(&mut self, cx: &mut Context<Self>) -> Option<u64> {
+        let now = std::time::Instant::now();
+        if self.recycle_asked.is_none_or(|at| now.duration_since(at) >= std::time::Duration::from_secs(15)) {
+            self.recycle_asked = Some(now);
+            cx.spawn(async move |this, cx| {
+                let got = cx.background_spawn(async move { leaf_sys::recycle::info().ok().map(|(n, _)| n) }).await;
+                let _ = this.update(cx, |w, cx| {
+                    if got.is_some() && w.recycle_count != got {
+                        w.recycle_count = got;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        self.recycle_count
+    }
+
     fn render_statusbar(&mut self, p: &Palette, strip_bar_w: Option<f32>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // the status line's own colours (Index: an inverted readout)
         let p = &p.for_status();
@@ -3998,11 +4089,17 @@ impl Workspace {
         let mut left = h_flex().gap_2().items_center();
         let mut busy = false;
         // the free space of the drive the folder is on ("214 GB free on C:")
-        let free = tab.location().path().and_then(|path| {
+        let here = tab.location().path().map(Path::to_path_buf);
+        let listed = here.as_ref().and_then(|path| {
             let drives = &self.places.read(cx).drives;
             let d = drives.iter().filter(|d| path.starts_with(&d.root)).max_by_key(|d| d.root.as_os_str().len())?;
-            (d.total > 0).then(|| format!("{} {} {}", format::size(d.free), t!("free on"), d.root.to_string_lossy().trim_end_matches('\\')))
+            (d.total > 0).then(|| (d.free, d.root.clone()))
         });
+        // (a drive the sidebar does not list, or the list not read yet: asked of the volume itself, off the UI thread)
+        let free = listed.or_else(|| here.as_ref().and_then(|path| self.free_space(path, cx))).map(|(bytes, root)| {
+            format!("{} {} {}", format::size(bytes), t!("free on"), root.to_string_lossy().trim_end_matches('\\'))
+        });
+        let tab = self.active_tab().read(cx);
         let dot = || div().size(px(3.)).rounded_full().bg(p.text_tertiary).flex_shrink_0();
         if in_folder {
             // "3 of 19 selected · 48.5 MB · 214 GB free on C:", or "19 items · 214 GB free on C:" (the mockups' status line)
