@@ -1099,6 +1099,38 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
     Ok(done)
 }
 
+/// Puts ONE file of `plan` back the way its checkpoint has it (the Review page's "Revert"): what is there now goes to `trash` first
+/// (never overwritten), then the checkpoint's content is written beside and renamed in. A file added since only goes to `trash`.
+pub fn restore_one(store: &Store, plan: &Plan, rel: &str, trash: &dyn Fn(&[PathBuf]) -> Result<(), String>) -> Result<(), String> {
+    let it = plan.items.iter().find(|i| i.rel == rel).ok_or("the file is not in the comparison any more")?;
+    let folder = store.folder().to_path_buf();
+    let copy = matches!(store, Store::Copy { .. });
+    let path = if copy { folder.join(name_from_text(rel)) } else { folder.join(rel) };
+    no_link_on_the_way(&folder, rel, copy)?;
+    if let Ok(m) = std::fs::symlink_metadata(&path) {
+        if m.is_dir() {
+            return Err("a folder of that name is in the way".into());
+        }
+        trash(std::slice::from_ref(&path))?;
+        if std::fs::symlink_metadata(&path).is_ok() {
+            return Err("it is still there after moving it to the Trash".into());
+        }
+    }
+    match (&it.src, store) {
+        (Src::None, _) => Ok(()),
+        (Src::File(src), _) => put(&path, |tmp| reflink_copy::reflink_or_copy(src, tmp).map(|_| ())),
+        (Src::Blob { oid, mode }, Store::Git { root, git_dir, empty_tree, .. }) => {
+            let bytes = Blobs::open(root, git_dir, empty_tree).map_err(|e| e.to_string())?.get(oid)?;
+            if *mode == 0o120000 {
+                put_link(&path, &bytes)
+            } else {
+                put(&path, |tmp| std::fs::write(tmp, &bytes)).map(|()| set_exec(&path, *mode == 0o100755))
+            }
+        }
+        (Src::Blob { .. }, Store::Copy { .. }) => Err("no repository".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

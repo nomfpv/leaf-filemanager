@@ -1,6 +1,6 @@
 //! Reading a git repository, never changing it: the repository root, `status`, and the `diff` of one file against HEAD.
 //!
-//! The one exception is [`add_worktree`], which runs `git worktree add`. Otherwise only `rev-parse`, `status`, `diff`, `ls-files`,
+//! The one exception is [`add_worktree`], which runs `git worktree add` (the Review page's staging and commit are in `review`). Otherwise only `rev-parse`, `status`, `diff`, `ls-files`,
 //! `worktree list` and `for-each-ref` are run (no shell; `GIT_OPTIONAL_LOCKS=0` so even `status` takes no lock and
 //! writes nothing), each with a time limit and a cap on the output. Everything here blocks: call it off the UI thread. The
 //! parsers are plain functions on text so they can be tested without a repository.
@@ -138,7 +138,7 @@ pub fn revert_file(root: &Path, rel: &str, put_away: &dyn Fn(&Path) -> Result<()
 
 /// Runs git with `args` in `dir`: the output (at most `cap` bytes) and whether it was cut, or `None` when git is missing, fails or
 /// takes longer than `timeout`.
-fn run(dir: &Path, args: &[&str], timeout: Duration, cap: usize) -> Option<(Vec<u8>, bool)> {
+pub(crate) fn run(dir: &Path, args: &[&str], timeout: Duration, cap: usize) -> Option<(Vec<u8>, bool)> {
     let mut child = git(dir).args(args).spawn().ok()?;
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
