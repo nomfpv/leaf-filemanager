@@ -19,6 +19,8 @@ pub enum Location {
     Shell { parsing: String, name: String },
     /// Where the space goes under a folder or drive (the disk usage view).
     DiskUsage(PathBuf),
+    /// Identical files under these folders (the duplicate finder's results page).
+    Duplicates(Vec<PathBuf>),
     /// HyperDownload's page: what is downloading and what was downloaded.
     Downloads,
 }
@@ -74,6 +76,7 @@ impl Location {
             Location::Path(p) => Location::Path(clean_path(&p)),
             Location::Search { root, query } => Location::Search { root: clean_path(&root), query },
             Location::DiskUsage(p) => Location::DiskUsage(clean_path(&p)),
+            Location::Duplicates(v) => Location::Duplicates(v.iter().map(|p| clean_path(p)).collect()),
             other => other,
         }
     }
@@ -99,6 +102,7 @@ impl Location {
             },
             Location::Search { root, .. } => Some(Location::Path(root.clone())),
             Location::DiskUsage(p) => Some(Location::Path(p.clone())),
+            Location::Duplicates(v) => Some(v.first().map_or(Location::Home, |p| Location::Path(p.clone()))),
             Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads => {
                 Some(Location::Home)
             }
@@ -118,6 +122,7 @@ impl Location {
             Location::Shell { parsing, name } if name.is_empty() => shell_last_segment(parsing).to_string(),
             Location::Shell { name, .. } => name.clone(),
             Location::DiskUsage(p) => format!("Disk usage — {}", display_name(p)),
+            Location::Duplicates(_) => "Duplicates".into(),
             Location::Downloads => "HyperDownload".into(),
             Location::Path(p) => display_name(p),
         }

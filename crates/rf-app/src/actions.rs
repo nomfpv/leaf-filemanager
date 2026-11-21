@@ -107,6 +107,7 @@ gpui_kit::actions!(
         OpenTerminalAdmin,
         OrganizeFolder,
         CompareFolders,
+        FindDuplicates,
         ShowFeatures,
         CustomizeHome,
         ResetHome,

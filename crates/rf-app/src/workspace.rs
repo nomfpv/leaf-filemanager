@@ -1103,7 +1103,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_));
+                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_));
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -2889,6 +2889,7 @@ impl Workspace {
                 .map(|l| match l {
                     Location::Path(p) => p.to_string_lossy().into_owned(),
                     Location::DiskUsage(p) => crate::disk_usage::title(p),
+                    Location::Duplicates(r) => crate::duplicates_view::title(r),
                     other => crate::i18n::td(&other.title()),
                 })
                 .collect()
@@ -3665,6 +3666,7 @@ impl Workspace {
             // the shell's own name for the folder (the location may carry none)
             Location::Shell { .. } => vec![(self.active_tab().read(cx).title(cx), loc.clone())],
             Location::DiskUsage(path) => vec![(crate::disk_usage::title(path), loc.clone())],
+            Location::Duplicates(roots) => vec![(crate::duplicates_view::title(roots), loc.clone())],
             other => vec![(crate::i18n::td(&other.title()), other.clone())],
         };
         // Too long for the address box: hide leading segments after the drive behind "…"
@@ -5010,6 +5012,13 @@ impl Render for Workspace {
                 self.toggle_compare(window, cx);
             }
         }
+        // (likewise `LEAF_CHECK_DUPES=<folder>` opens the duplicate finder on that folder)
+        if let Ok(dir) = std::env::var("LEAF_CHECK_DUPES") {
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) && !self.tabs.is_empty() {
+                self.open_tab(Location::Duplicates(vec![PathBuf::from(dir)]), window, cx);
+            }
+        }
         self.compare_sync(cx);
         let compare_bar = match (&self.compare, self.tabs.get(self.active)) {
             (Some(st), Some(t)) if t.left == st.left => Some(crate::compare_mode::bar(st, &p, cx)),
@@ -5407,6 +5416,18 @@ impl Render for Workspace {
                 crate::settings::update(cx, |s| s.theme = if dark { ThemePref::Light } else { ThemePref::Dark });
             }))
             .on_action(cx.listener(|this, _: &CompareFolders, window, cx| this.toggle_compare(window, cx)))
+            .on_action(cx.listener(|this, _: &FindDuplicates, _, cx| {
+                // the selected folders, else this folder
+                let v = this.active_tab().clone();
+                let roots: Vec<PathBuf> = {
+                    let v = v.read(cx);
+                    let sel: Vec<PathBuf> = v.selection_paths().into_iter().filter(|p| p.is_dir()).collect();
+                    if sel.is_empty() { v.current_dir().into_iter().collect() } else { sel }
+                };
+                if !roots.is_empty() {
+                    v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::Duplicates(roots))));
+                }
+            }))
             .on_action(cx.listener(|this, _: &OrganizeFolder, window, cx| {
                 match this.active_tab().read(cx).location().path().map(Path::to_path_buf) {
                     Some(dir) => crate::organizer::organize_folder(dir, window, cx),

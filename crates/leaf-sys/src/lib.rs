@@ -11,7 +11,7 @@ use leaf_unix as os;
 
 // the same code on every system
 pub use leaf_common::stub::Unsupported;
-pub use leaf_common::{design, docs, elf, hash, ownfolder, portable, tree_watch, watch};
+pub use leaf_common::{design, docs, dupes, elf, hash, ownfolder, portable, tree_watch, watch};
 
 // one backend per system
 pub use os::{

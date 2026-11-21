@@ -579,6 +579,9 @@ pub struct FolderView {
     recycle: Option<Entity<crate::recycle_view::RecycleView>>,
     /// The disk usage page of this tab (kept while the tab stays on that folder).
     disk_usage: Option<Entity<crate::disk_usage::DiskUsageView>>,
+    /// The duplicate finder page and the file it has selected (for the preview pane).
+    dups: Option<Entity<crate::duplicates_view::DuplicatesView>>,
+    dup_selected: Option<(PathBuf, Entry)>,
     /// Git status of the repository containing this folder (if any).
     pub git: Option<Arc<leaf_sys::git::GitStatus>>,
     /// Last commit per child of the current folder (commit columns), keyed by name.
@@ -774,6 +777,8 @@ impl FolderView {
             typeahead: (String::new(), Instant::now()),
             recycle: None,
             disk_usage: None,
+            dups: None,
+            dup_selected: None,
             git: None,
             git_commits: None,
             column_cache: Default::default(),
@@ -829,6 +834,9 @@ impl FolderView {
         if let Location::DiskUsage(p) = self.location() {
             return crate::disk_usage::title(p);
         }
+        if let Location::Duplicates(r) = self.location() {
+            return crate::duplicates_view::title(r);
+        }
         crate::i18n::td(&self.location().title())
     }
 
@@ -842,6 +850,7 @@ impl FolderView {
             Location::Library { .. } => L::Library,
             Location::Shell { .. } => L::Usb,
             Location::DiskUsage(_) => L::ChartPie,
+            Location::Duplicates(_) => L::Copy,
             Location::Downloads => L::ArrowDownToLine,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
@@ -3681,6 +3690,9 @@ impl FolderView {
 
     /// Item shown in the preview pane.
     pub fn preview_target(&self) -> Option<(PathBuf, Entry)> {
+        if matches!(self.location(), Location::Duplicates(_)) {
+            return self.dup_selected.clone();
+        }
         let ei = self.cursor_entry()?;
         let e = self.entries.get(ei as usize)?;
         Some((self.path_of(ei)?, e.clone()))
@@ -5298,6 +5310,34 @@ impl Render for FolderView {
                         })
                         .detach();
                         self.disk_usage = Some(dv.clone());
+                        dv
+                    }
+                };
+                div().size_full().child(dv).into_any_element()
+            }
+            Location::Duplicates(roots) => {
+                let roots = roots.clone();
+                let dv = match &self.dups {
+                    Some(dv) if dv.read(cx).roots() == roots.as_slice() => dv.clone(),
+                    _ => {
+                        let dv = cx.new(|cx| crate::duplicates_view::DuplicatesView::new(roots, cx));
+                        cx.subscribe(&dv, |this, _, ev: &crate::duplicates_view::DupEvent, cx| match ev {
+                            crate::duplicates_view::DupEvent::Selected(path, size, ms) => {
+                                this.dup_selected = path.as_ref().map(|p| {
+                                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    (p.clone(), Entry::new(&name, rf_core::EntryKind::File, *size, *ms, 0, 0))
+                                });
+                                cx.notify();
+                            }
+                            crate::duplicates_view::DupEvent::ShowInFolder(path) => {
+                                if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+                                    this.set_reselect(name.to_string_lossy().into_owned());
+                                    this.navigate(Location::Path(parent.to_path_buf()), cx);
+                                }
+                            }
+                        })
+                        .detach();
+                        self.dups = Some(dv.clone());
                         dv
                     }
                 };

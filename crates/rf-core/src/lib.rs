@@ -4,6 +4,7 @@ pub mod actions;
 pub mod addrcmd;
 pub mod compare;
 pub mod copy_path;
+pub mod dupes;
 pub mod entry;
 pub mod format;
 pub mod history;

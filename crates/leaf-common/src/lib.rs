@@ -19,6 +19,7 @@ pub mod thumbs;
 
 // modules that work on every system as they are
 pub mod design;
+pub mod dupes;
 pub mod docs;
 pub mod elf;
 pub mod hash;
