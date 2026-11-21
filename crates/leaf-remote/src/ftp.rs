@@ -394,7 +394,25 @@ impl Inner {
         let connector = || -> Result<RustlsConnector, FsError> { Ok(RustlsConnector::from(Arc::new(tls_config(check.clone())?))) };
         let s = match t.tls {
             Tls::Implicit => {
-                let s = RustlsFtpStream::connect_secure_implicit(addrs[0], connector()?, &t.host).map_err(|e| connect_error(e, "connecting"))?;
+                // suppaftp connects itself here (no stream can be handed in): each address is first tried with the connect
+                // timeout and the first one that answers is used; the socket gets its read and write timeouts in the TLS
+                // connector, before the handshake and the greeting
+                let mut last = FsError::Offline("no address".into());
+                let mut made = None;
+                for a in addrs {
+                    if let Err(e) = connect_any(std::slice::from_ref(a), ct) {
+                        last = e;
+                        continue;
+                    }
+                    match RustlsFtpStream::connect_secure_implicit(*a, Timed { inner: connector()?, op }, &t.host) {
+                        Ok(s) => {
+                            made = Some(s);
+                            break;
+                        }
+                        Err(e) => last = connect_error(e, "connecting"),
+                    }
+                }
+                let s = made.ok_or(last)?;
                 timeouts(&s.get_ref());
                 s
             }
@@ -523,6 +541,24 @@ impl Inner {
             }
             HostKeyAnswer::Cancel => Err(FsError::Cancelled),
         }
+    }
+}
+
+/// The TLS connector with the request timeouts set on the socket before the handshake (implicit TLS, where suppaftp opens the
+/// socket itself).
+#[derive(Debug)]
+struct Timed {
+    inner: RustlsConnector,
+    op: Duration,
+}
+
+impl suppaftp::TlsConnector for Timed {
+    type Stream = <RustlsConnector as suppaftp::TlsConnector>::Stream;
+    fn connect(&self, domain: &str, stream: TcpStream) -> suppaftp::FtpResult<Self::Stream> {
+        let _ = stream.set_read_timeout(Some(self.op));
+        let _ = stream.set_write_timeout(Some(self.op));
+        let _ = stream.set_nodelay(true);
+        self.inner.connect(domain, stream)
     }
 }
 
