@@ -309,6 +309,10 @@ fn put_in_place(c: &Conn, from: &str, to: &str, replace: bool, backup: Option<&s
             // the old one back under its name
             if let Err(back) = plain_rename(c, &aside, to, limit) {
                 log::warn!("remote: the old file could not be moved back after a failed replace ({back}); it is kept beside it");
+                // the user must learn where the old version is: under its name there is nothing now
+                return Err(FsError::Other(format!(
+                    "The new version could not take the name {name} ({e}), and the old version could not be put back ({back}).                      The old version is kept on the server as {aside}"
+                )));
             }
             Err(e)
         }
