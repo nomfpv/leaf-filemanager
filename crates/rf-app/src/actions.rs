@@ -106,6 +106,7 @@ gpui_kit::actions!(
         OpenInNewWindow,
         OpenTerminalAdmin,
         OrganizeFolder,
+        ShowFeatures,
     ]
 );
 

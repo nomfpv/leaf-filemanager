@@ -69,6 +69,7 @@ mod hotkey_field;
 mod recycle_settings_view;
 mod recycle_text;
 mod recycle_view;
+mod registry;
 mod rename_exec;
 mod rename_presets;
 mod rtl;
