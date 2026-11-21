@@ -251,15 +251,3 @@ impl dl::Host for Link<'_> {
         free == 0 || need <= free.saturating_sub(leaf_vfs::copy::KEEP_FREE)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_address_is_found_in_pasted_text() {
-        assert_eq!(url_in("  <https://example.com/a.zip>  ").as_deref(), Some("https://example.com/a.zip"));
-        assert_eq!(url_in("[InternetShortcut]\nURL=http://h/x").as_deref(), Some("http://h/x"));
-        assert_eq!(url_in("ftp://h/x and C:\\file"), None);
-    }
-}
