@@ -24,6 +24,8 @@ pub enum LaneError {
     Uncommitted(Vec<String>),
     /// The worktree of the base branch has changes that are not committed.
     BaseUncommitted(Vec<String>),
+    /// Submodules of the lane (paths) with commits that no remote has: their repositories live in git's record of the lane.
+    SubmoduleWork(Vec<String>),
     /// Ignored files and folders in the lane (`git worktree remove` would delete them for good; Discard keeps them in the Trash).
     Ignored(Vec<String>),
     /// Commits of the lane that the base branch does not have (`abc1234 subject`).
@@ -44,6 +46,7 @@ impl fmt::Display for LaneError {
             LaneError::Uncommitted(v) => write!(f, "{} uncommitted files in the lane", v.len()),
             LaneError::BaseUncommitted(v) => write!(f, "{} uncommitted files in the base worktree", v.len()),
             LaneError::Ignored(v) => write!(f, "{} ignored entries in the lane", v.len()),
+            LaneError::SubmoduleWork(v) => write!(f, "{} submodules with commits no remote has", v.len()),
             LaneError::Unmerged(v) => write!(f, "{} commits not in the base branch", v.len()),
             LaneError::Conflicts(v) => write!(f, "the merge would conflict in {} files", v.len()),
             LaneError::BaseNotCheckedOut(b) => write!(f, "the base branch {b} is not checked out in any worktree"),
@@ -401,6 +404,30 @@ fn admin_of(repo: &Path, dir: &Path) -> Result<Option<PathBuf>, LaneError> {
     Ok(None)
 }
 
+/// The submodules checked out in `dir` whose head or local branches have commits that no remote of theirs has.
+fn unpushed_submodules(dir: &Path) -> Result<Vec<String>, LaneError> {
+    let o = exec(dir, ["ls-files", "-s", "-z"])?;
+    if !o.ok {
+        return Err(failed("git could not list the lane's files", &o));
+    }
+    let mut out = Vec::new();
+    for rec in o.stdout.split('\0') {
+        let Some((meta, path)) = rec.split_once('\t') else { continue };
+        if !meta.starts_with("160000 ") {
+            continue;
+        }
+        let sub = dir.join(path);
+        if !sub.join(".git").exists() {
+            continue;
+        }
+        let r = exec(&sub, ["rev-list", "-n1", "HEAD", "--branches", "--not", "--remotes"])?;
+        if r.ok && !r.stdout.trim().is_empty() {
+            out.push(path.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// What a discard did besides putting the folder away.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Discarded {
@@ -462,6 +489,11 @@ pub fn discard(repo: &Path, dir: &Path, name: &str, branch: &str, put_away: &dyn
         }
         if !dir.is_dir() {
             return Err(LaneError::NotALane(format!("{} is not a folder", dir.display())));
+        }
+        // a submodule's repository lives in git's record of the lane, not in the folder: work no remote has is refused here
+        let subs = unpushed_submodules(dir)?;
+        if !subs.is_empty() {
+            return Err(LaneError::SubmoduleWork(subs));
         }
         kept = keep_detached_head(dir, name)?;
     } else if !list.iter().skip(1).any(|w| key(&w.path) == key(dir)) {
@@ -663,6 +695,38 @@ mod tests {
         let other = r.lane("plain");
         r.commit(&other, "c.txt", "x\n");
         assert_eq!(discard(&r.main, &other, "plain", "plain", &put_away).unwrap().kept, None);
+    }
+
+    #[test]
+    fn lane_discard_refuses_submodule_commits_no_remote_has() {
+        let r = Repo::new("submodule");
+        // a library repository, added to the project as a submodule
+        let lib = r.top.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        r.git(&lib, &["init", "-q"]);
+        r.git(&lib, &["config", "user.name", "t"]);
+        r.git(&lib, &["config", "user.email", "t@t"]);
+        r.commit(&lib, "lib.txt", "one\n");
+        let url = lib.to_string_lossy().replace('\\', "/");
+        r.git(&r.main, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", &url, "lib"]);
+        r.git(&r.main, &["commit", "-q", "-m", "lib"]);
+        let dir = r.lane("feat");
+        r.git(&dir, &["-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init"]);
+        let sub = dir.join("lib");
+        r.git(&sub, &["config", "user.name", "t"]);
+        r.git(&sub, &["config", "user.email", "t@t"]);
+        r.commit(&sub, "work.txt", "not pushed\n");
+        let handed = std::cell::Cell::new(false);
+        let put_away = |_: &Path| -> Result<(), String> {
+            handed.set(true);
+            Err("must not be called".into())
+        };
+        match discard(&r.main, &dir, "feat", "feat", &put_away) {
+            Err(LaneError::SubmoduleWork(v)) => assert_eq!(v, vec!["lib".to_string()]),
+            other => panic!("{other:?}"),
+        }
+        assert!(!handed.get());
+        assert!(sub.join("work.txt").is_file());
     }
 
     #[test]

@@ -31,6 +31,7 @@ pub(crate) fn error_text(e: &LaneError) -> String {
     match e {
         LaneError::Uncommitted(v) => format!("{}{}", t!("The lane has files that are not committed. Commit them in the lane, or discard the lane."), listed(v)),
         LaneError::BaseUncommitted(v) => format!("{}{}", t!("The folder of the base branch has changes that are not committed. Commit or put them away there first."), listed(v)),
+        LaneError::SubmoduleWork(v) => format!("{}{}", t!("These submodules of the lane have commits that no remote has. Push them before you discard the lane."), listed(v)),
         LaneError::Ignored(v) => format!("{}{}", t!("The lane has ignored files (local settings, .env, caches). Remove would delete them for good: Discard the lane instead, which moves them to the Trash with the folder."), listed(v)),
         LaneError::Unmerged(v) => format!("{}{}", t!("The lane has commits its base branch does not have. Merge the lane first, or discard it."), listed(v)),
         LaneError::Conflicts(v) => format!("{}{}", t!("Merging would conflict in these files. Nothing was changed. Merge by hand, or bring the lane up to date with its base first."), listed(v)),
