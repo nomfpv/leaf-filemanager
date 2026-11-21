@@ -234,6 +234,12 @@ impl Shared {
         lock(&self.keys).clear();
     }
 
+    /// Forgets the unlocked key file whose path has this SHA-256 (as [`SecretId::passphrase`] has it): "Forget" of a saved
+    /// passphrase, so the next login with that key asks for it again.
+    pub fn forget_key(&self, fingerprint: &str) {
+        lock(&self.keys).retain(|p, _| !matches!(SecretId::passphrase(p), SecretId::Passphrase { fingerprint: f, .. } if f == fingerprint));
+    }
+
     /// Forgets the passwords kept in memory for the server `host:port` (any user): "Forget saved password".
     pub fn forget_passwords_of(&self, host: &str, port: u16) {
         let suffix = format!("@{}", known_hosts::host_name(host, port)).to_ascii_lowercase();

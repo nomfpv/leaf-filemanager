@@ -106,14 +106,16 @@ pub fn saved_secrets() -> Result<Vec<SecretId>, String> {
     vault().list()
 }
 
-/// "Forget saved password": deletes it from the keyring and, for a password, from this run's memory (asked next time).
+/// "Forget saved password": deletes it from the keyring and from this run's memory (a password, or the key file a
+/// passphrase unlocked), so it is asked next time.
 pub fn forget_saved(id: &SecretId) -> Result<(), String> {
-    if let SecretId::Password { scheme, host, port, .. } = id {
-        match scheme.as_str() {
+    match id {
+        SecretId::Password { scheme, host, port, .. } => match scheme.as_str() {
             "sftp" => sftp_backend().forget_passwords(host, *port),
             "ftp" | "ftps" => ftp_backend().forget_passwords(host, *port),
             _ => {}
-        }
+        },
+        SecretId::Passphrase { fingerprint, .. } => sftp_backend().forget_key(fingerprint),
     }
     vault().forget(id)
 }

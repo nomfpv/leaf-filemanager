@@ -1112,3 +1112,52 @@ fn a_saved_password_is_not_sent_to_a_key_trusted_once() {
     fs.stat(&server.addr("/")).unwrap();
     assert!(ans.asked().is_empty(), "{:?}", ans.asked());
 }
+
+/// "Forget" of a saved passphrase also drops the key file this run unlocked with it: the next login with that key asks for
+/// the passphrase again (not logged in silently with the key kept in memory).
+#[test]
+fn forgetting_a_passphrase_drops_the_unlocked_key() {
+    use crate::secrets::{MemoryStore, SecretId, Vault};
+    let tmp = Temp::new("forget-key");
+    let served = Temp::new("forget-key-served");
+    let client_key = new_key();
+    let server = TestServer::start(&served.0, &format!("pw-{}-unused", std::process::id()), client_key.public_key().clone(), new_key());
+    let line = crate::known_hosts::line_for("127.0.0.1", server.port, server.host_key.public_key()).unwrap();
+    std::fs::write(tmp.0.join("known_hosts"), format!("{line}\n")).unwrap();
+    let pass = format!("phrase-{}-forget", std::process::id());
+    let enc = client_key.encrypt(&mut russh::keys::key::safe_rng(), pass.as_bytes()).unwrap();
+    let key_path = tmp.0.join("forget_key");
+    std::fs::write(&key_path, enc.to_openssh(russh::keys::ssh_key::LineEnding::LF).unwrap().as_bytes()).unwrap();
+    let mut h = rf_core::hosts::Host::new("test", "127.0.0.1");
+    h.port = Some(server.port);
+    h.user = Some(USER.into());
+    h.key_file = Some(key_path.display().to_string());
+    rf_core::hosts::Hosts { hosts: vec![h] }.save(&tmp.0).unwrap();
+    let store = Arc::new(MemoryStore::default());
+    let mut cfg = config(&tmp.0);
+    cfg.vault = Vault::new(store.clone());
+    let id = SecretId::passphrase(&key_path);
+    let addr = VPath::parse(&format!("sftp://127.0.0.1:{}/", server.port)).unwrap();
+
+    // asked, ticked "Remember": saved, and the unlocked key is kept for this run
+    let ans = Answers::with(&[], &[Some(&pass), Some(&pass)]);
+    ans.remember.store(true, Ordering::Relaxed);
+    let fs = SftpFs::new(cfg, ans.clone());
+    fs.stat(&addr).unwrap();
+    assert_eq!(ans.asked(), ["passphrase retry=false"]);
+    assert!(store.saved.lock().unwrap().contains_key(&id));
+
+    // Forget: out of the keyring and out of memory; the next login asks again
+    cfg_forget(&fs, &store, &id);
+    fs.drop_connections();
+    fs.stat(&addr).unwrap();
+    assert_eq!(ans.asked(), ["passphrase retry=false"]);
+}
+
+/// What `crate::forget_saved` does for a passphrase, on this test's own backend and keyring.
+fn cfg_forget(fs: &SftpFs, store: &Arc<crate::secrets::MemoryStore>, id: &crate::secrets::SecretId) {
+    let crate::secrets::SecretId::Passphrase { fingerprint, .. } = id else { panic!("not a passphrase") };
+    fs.forget_key(fingerprint);
+    crate::secrets::Vault::new(store.clone()).forget(id).unwrap();
+    assert!(!store.saved.lock().unwrap().contains_key(id));
+}

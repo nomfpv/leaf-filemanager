@@ -78,6 +78,11 @@ impl SftpFs {
         }
     }
 
+    /// Forgets the key file this run unlocked whose path has the SHA-256 `fingerprint` (its passphrase is asked again).
+    pub fn forget_key(&self, fingerprint: &str) {
+        self.shared.forget_key(fingerprint);
+    }
+
     #[cfg(test)]
     pub(crate) fn drop_connections(&self) {
         self.shared.drop_all();
