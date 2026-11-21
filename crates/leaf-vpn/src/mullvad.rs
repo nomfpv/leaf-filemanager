@@ -244,7 +244,13 @@ pub struct Mullvad {
     pub device: Device,
     pub place: Place,
     pub dns: DnsBlocking,
+    /// The device was registered moments ago: Mullvad's servers learn a new key within about a minute, so the first
+    /// handshake is given that long (and the fastest-server measure, which needs a known key, is skipped).
+    pub fresh: bool,
 }
+
+/// How long the first handshake may take with a key registered moments ago.
+pub const FRESH_KEY_WAIT: Duration = Duration::from_secs(60);
 
 impl Provider for Mullvad {
     fn name(&self) -> &'static str {
@@ -262,7 +268,7 @@ impl Provider for Mullvad {
             if pool.is_empty() {
                 return Err("Mullvad has no server in the chosen place right now. Choose another country or city.".to_string());
             }
-            let relay = if self.place.fastest {
+            let relay = if self.place.fastest && !self.fresh {
                 match fastest(&pool, &self.device.key).await {
                     Some((r, rtt)) => {
                         log::info!("vpn: fastest server {} ({} ms)", r.hostname, rtt.as_millis());
@@ -285,6 +291,7 @@ impl Provider for Mullvad {
                 country: relay.country,
                 city: relay.city,
                 server: relay.hostname,
+                handshake_wait: if self.fresh { FRESH_KEY_WAIT } else { crate::tunnel::HANDSHAKE_WAIT },
             })
         })
     }

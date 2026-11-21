@@ -52,6 +52,8 @@ pub struct Prepared {
     pub city: String,
     /// The server's name (`se-got-wg-001`).
     pub server: String,
+    /// How long the first handshake may take (longer right after a new key was registered: the servers learn it within a minute).
+    pub handshake_wait: Duration,
 }
 
 /// Where the traffic left the tunnel, as the provider's own check saw it.
@@ -226,8 +228,8 @@ enum Refusal {
 async fn up_once(provider: &dyn Provider, generation: u64) -> Result<Option<Arc<Tunnel>>, Refusal> {
     let prepared = provider.prepare().await.map_err(Refusal::Provider)?;
     set_state(generation, State::Connecting { place: format!("{}, {}", prepared.country, prepared.city) });
-    let Prepared { config, country, city, server } = prepared;
-    let t = Arc::new(Tunnel::start(config, tunnel::HANDSHAKE_WAIT).await.map_err(|e| Refusal::Tunnel(e.to_string()))?);
+    let Prepared { config, country, city, server, handshake_wait } = prepared;
+    let t = Arc::new(Tunnel::start(config, handshake_wait).await.map_err(|e| Refusal::Tunnel(e.to_string()))?);
     {
         let mut m = manager();
         if m.generation != generation {

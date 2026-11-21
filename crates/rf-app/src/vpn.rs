@@ -45,6 +45,8 @@ struct Ui {
 }
 
 static UI: Mutex<Option<Ui>> = Mutex::new(None);
+/// When this run signed in (a connect in the minutes after gives the servers time to learn the new key).
+static SIGNED_IN_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static UI_CHANGES: AtomicU64 = AtomicU64::new(0);
 
 fn with_ui<T>(f: impl FnOnce(&mut Ui) -> T) -> T {
@@ -260,6 +262,7 @@ fn sign_in(acc: AccountNumber, cx: &mut App) {
             return Err(format!("{}\n{e}", t!("The sign-in could not be kept in the system keyring")));
         }
         log::info!("vpn: signed in to Mullvad as device \"{}\"", signed.device.name);
+        *SIGNED_IN_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         Ok(AccountView {
             signed_in: true,
             hint: acc.hint(),
@@ -348,7 +351,10 @@ pub fn connect(cx: &mut App) {
     set_message(None);
     let work = cx.background_executor().spawn(async move { kept(&vault()) });
     cx.spawn(async move |_| match work.await {
-        Some((_, device)) => leaf_vpn::connect(Arc::new(Mullvad { device, place, dns })),
+        Some((_, device)) => {
+            let fresh = SIGNED_IN_AT.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() < Duration::from_secs(300));
+            leaf_vpn::connect(Arc::new(Mullvad { device, place, dns, fresh }))
+        }
         None => set_message(Some(t!("The Mullvad sign-in is no longer in the system keyring. Sign in again.").to_string())),
     })
     .detach();
