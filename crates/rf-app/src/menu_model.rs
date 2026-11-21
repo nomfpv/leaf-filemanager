@@ -428,6 +428,7 @@ pub fn render(ctx: &MenuContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::MenuPrefs;
 
     /// The cases of `menu_snapshots.txt` whose name starts with `prefix`, in the file's order: (name, text).
     fn cases(prefix: &str) -> Vec<(String, String)> {
@@ -504,5 +505,32 @@ mod tests {
             MenuContext { in_archive: true, archive_path: true, send_to_fits: false, ..folder() },
             "folder",
         );
+    }
+
+    #[test]
+    fn multi_selection_menu_is_as_recorded() {
+        assert_eq!(cases("three").len() + cases("two").len(), 3);
+        let multi = |count| MenuContext { target: Target::Multi, count, ..file() };
+        check("three files", multi(3), "three");
+        check(
+            "two archives, dual pane, copy path and tags switched off",
+            MenuContext {
+                dual: true,
+                extractable: true,
+                prefs: MenuPrefs { copy_path: false, tags: false, ..Default::default() },
+                ..multi(2)
+            },
+            "two",
+        );
+        check("two fonts in search results", MenuContext { in_search: true, fonts: true, ..multi(2) }, "two");
+    }
+
+    #[test]
+    fn the_switches_are_the_ones_settings_had() {
+        let keys: Vec<&str> = switches().iter().map(|s| s.key).collect();
+        assert_eq!(keys, ["open_in_new_tab", "open_in_new_window", "copy_path", "create_shortcut", "pin", "compress", "tags", "shelf", "terminal", "send_to"]);
+        for k in &keys {
+            assert!(MenuPrefs::default().get(k), "{k} is on by default");
+        }
     }
 }
