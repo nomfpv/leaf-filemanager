@@ -528,7 +528,10 @@ impl Fs for SftpFs {
             return Err(FsError::Denied);
         }
         let c = self.conn_of(p)?;
-        if spath(&c, p).trim_end_matches('/').is_empty() {
+        // never the root, the home folder (by any address of it) or a folder the home folder is in
+        let sp = spath(&c, p);
+        let (norm, home) = (sp.trim_end_matches('/'), c.home.trim_end_matches('/'));
+        if norm.is_empty() || norm == home || home.starts_with(&format!("{norm}/")) {
             return Err(FsError::Denied);
         }
         let m = lstat_on(&c, &spath(&c, p), self.cfg.op_timeout)?.ok_or(FsError::NotFound)?;
