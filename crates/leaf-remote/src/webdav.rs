@@ -515,6 +515,10 @@ const QUOTA: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d
 struct Res {
     /// The path the server named (percent-decoded, without the server's name).
     path: String,
+    /// The host the href named (`None`: a path only).
+    host: Option<String>,
+    /// A segment of the href holds `/` or `\` once decoded (`a%2Fb`): it is no name in this folder.
+    slash_in_name: bool,
     is_dir: bool,
     size: u64,
     modified_ms: i64,
@@ -594,8 +598,20 @@ fn parse_multistatus(xml: &str) -> Result<Vec<Res>, FsError> {
                     "href" if path.last().is_some_and(|p| p == "response") => {
                         if let Some(c) = cur.as_mut() {
                             if c.path.is_empty() {
-                                let p = value.split_once("://").map_or(value.as_str(), |(_, r)| r.find('/').map_or("/", |i| &r[i..]));
-                                c.path = unenc(p.split(['?', '#']).next().unwrap_or(""));
+                                let (host, p) = match value.split_once("://") {
+                                    Some((_, r)) => {
+                                        let i = r.find('/').unwrap_or(r.len());
+                                        let auth = r[..i].rsplit('@').next().unwrap_or("");
+                                        let h = if let Some(v6) = auth.strip_prefix('[') { v6.split(']').next().unwrap_or("") } else { auth.split(':').next().unwrap_or("") };
+                                        (Some(h.to_ascii_lowercase()), if i < r.len() { &r[i..] } else { "/" })
+                                    }
+                                    None => (None, value.as_str()),
+                                };
+                                // (split first, decode after: `a%2Fb` stays one name)
+                                let segs: Vec<String> = p.split(['?', '#']).next().unwrap_or("").split('/').map(unenc).collect();
+                                c.slash_in_name = segs.iter().any(|s| s.contains(['/', '\\']));
+                                c.host = host;
+                                c.path = segs.join("/");
                             }
                         }
                     }
@@ -674,8 +690,11 @@ impl Fs for WebDavFs {
             if Some(i) == own {
                 continue;
             }
+            // (only the folder's own children: a href that points elsewhere, or names another host, is not an entry here)
+            let parent = trim_slash(&r.path).rsplit_once('/').map_or("", |(a, _)| a);
+            let elsewhere = r.slash_in_name || trim_slash(parent) != me || r.host.as_deref().is_some_and(|h| !h.eq_ignore_ascii_case(t.host.trim_matches(['[', ']'])));
             let name = r.name();
-            if leaf_vfs::names::address_problem(&name).is_some() {
+            if elsewhere || leaf_vfs::names::address_problem(&name).is_some() {
                 left_out += 1;
                 continue;
             }
