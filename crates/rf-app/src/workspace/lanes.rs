@@ -476,6 +476,10 @@ fn discard_dialog(lane: Lane, info: leaf_dev::lanes::EndInfo, window: &mut Windo
             format!("{} {}", t!("Discarding lane:"), lane.name),
             move |t| {
                 let put_away = |p: &Path| -> Result<(), String> {
+                    // a drive without a Recycle Bin, or with it off: the shell would ask about deleting for good; refused instead
+                    if !crate::sync_ui::bin_takes(p) {
+                        return Err(t!("the Trash of this drive cannot take it (none there, or switched off); nothing was deleted").to_string());
+                    }
                     match leaf_sys::fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()) {
                         Ok(true) => Ok(()),
                         Ok(false) => Err(t!("stopped").to_string()),

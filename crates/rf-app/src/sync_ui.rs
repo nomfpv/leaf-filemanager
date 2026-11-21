@@ -377,7 +377,7 @@ fn start_run(plan: Plan, cx: &mut App) {
 /// Will the Trash take `p` by a move? Not on a network drive or a stick without a Recycle Bin, not when the drive's bin is off or
 /// too small for it (Windows), not on a mount without a usable trash (Linux): the shell would delete for good there, or ask
 /// whether to in the middle of the run. The run then keeps the file in `.leaf-sync-trash` in the job's folder.
-fn bin_takes(p: &Path) -> bool {
+pub(crate) fn bin_takes(p: &Path) -> bool {
     use leaf_sys::organize::Recycler as _;
     let tracker = Arc::new(leaf_sys::fileops::Tracker::new(Box::new(|_, _, _| {}), Arc::new(AtomicBool::new(false))));
     let bin = leaf_sys::organize::ShellRecycler { tracker };
