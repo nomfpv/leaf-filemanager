@@ -199,7 +199,7 @@ pub fn recent(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
     }
     let p = &w.p;
     // narrow: the name takes the room and the folder it is in is left out
-    let roomy = w.size == Size::Wide && w.width >= 560.;
+    let roomy = matches!(w.size, Size::Wide | Size::Large) && w.width >= 560.;
     let mut list = v_flex().gap_0p5();
     for (i, r) in recent.into_iter().enumerate() {
         let e = rf_core::Entry::new(&r.name, if r.is_dir { rf_core::EntryKind::Dir } else { rf_core::EntryKind::File }, 0, 0, 0, 0);

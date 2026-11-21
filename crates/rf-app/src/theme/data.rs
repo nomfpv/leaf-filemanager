@@ -133,6 +133,7 @@ tokens! {
     date_style: Text = "The dates of the details list while Settings > Date style is the application's own: empty for Today, 10:05 and 18 Nov 2026; iso for 2026-11-18 10:05.",
     tile_width: Number = "Smallest width of a card in the grid (Tiles) view, in pixels; 0 means the view's own size.",
     tile_radius: Number = "Corner radius of the cards and pictures in the grid view.",
+    home_row: Number = "Height of one row of the Home grid, in pixels; a large widget spans two rows, content that does not fit scrolls.",
     section_rule: Bool = "true/false: a sidebar section label is followed by a line to the edge.",
     square_marks: Bool = "true/false: tag marks in the sidebar and the type bar's swatches are squares instead of dots.",
     mono_chrome: Bool = "true/false: the address path, the pane headers' counts and the status line use font_mono.",

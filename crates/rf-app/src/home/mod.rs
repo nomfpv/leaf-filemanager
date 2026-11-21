@@ -30,16 +30,19 @@ pub enum Size {
     Medium,
     /// The whole row.
     Wide,
+    /// Two columns and two rows (the mockups' large tile).
+    Large,
 }
 
 impl Size {
-    pub const ALL: [Size; 3] = [Size::Small, Size::Medium, Size::Wide];
+    pub const ALL: [Size; 4] = [Size::Small, Size::Medium, Size::Wide, Size::Large];
 
     pub fn key(self) -> &'static str {
         match self {
             Size::Small => "small",
             Size::Medium => "medium",
             Size::Wide => "wide",
+            Size::Large => "large",
         }
     }
 
@@ -53,6 +56,7 @@ impl Size {
             Size::Small => "S",
             Size::Medium => "M",
             Size::Wide => "W",
+            Size::Large => "L",
         }
     }
 
@@ -61,6 +65,7 @@ impl Size {
             Size::Small => "Small",
             Size::Medium => "Medium",
             Size::Wide => "Wide",
+            Size::Large => "Large",
         }
     }
 
@@ -68,10 +73,18 @@ impl Size {
     pub fn span(self, cols: u16) -> u16 {
         match self {
             Size::Small => 1,
-            Size::Medium => 2.min(cols),
+            Size::Medium | Size::Large => 2.min(cols),
             Size::Wide => cols,
         }
         .max(1)
+    }
+
+    /// The rows it spans on the grid, for a widget whose own height is `base` rows: Large is at least two.
+    pub fn rows(self, base: u16) -> u16 {
+        match self {
+            Size::Large => base.max(2),
+            _ => base.max(1),
+        }
     }
 }
 
@@ -107,6 +120,8 @@ pub struct Widget {
     /// The sizes it can take; the first one it is added with is `default_size`.
     pub sizes: &'static [Size],
     pub default_size: Size,
+    /// Rows of the grid it takes in the sizes S, M and W (a fixed row unit, theme key `home_row`); content that does not fit scrolls.
+    pub rows: u16,
     pub render: RenderFn,
     pub header: Option<HeaderFn>,
     /// The leaf version it came with.
@@ -115,24 +130,26 @@ pub struct Widget {
 }
 
 const ANY: &[Size] = &[Size::Small, Size::Medium, Size::Wide];
+const ANY_LARGE: &[Size] = &[Size::Small, Size::Medium, Size::Wide, Size::Large];
 
 /// Every widget there is.
 pub static WIDGETS: &[Widget] = &[
-    Widget { id: "pinned", title: "Quick access", icon: L::Pin, sizes: ANY, default_size: Size::Wide, render: widgets::pinned, header: None, since: "0.9.5" },
-    Widget { id: "drives", title: "Drives", icon: L::HardDrive, sizes: ANY, default_size: Size::Wide, render: widgets::drives, header: None, since: "0.9.5" },
-    Widget { id: "devices", title: "Devices", icon: L::Usb, sizes: ANY, default_size: Size::Medium, render: widgets::devices, header: None, since: "0.9.5" },
-    Widget { id: "network", title: "Network locations", icon: L::Network, sizes: ANY, default_size: Size::Medium, render: widgets::network, header: None, since: "0.9.5" },
+    Widget { id: "pinned", title: "Quick access", icon: L::Pin, sizes: ANY, default_size: Size::Wide, rows: 1, render: widgets::pinned, header: None, since: "0.9.5" },
+    Widget { id: "drives", title: "Drives", icon: L::HardDrive, sizes: ANY_LARGE, default_size: Size::Wide, rows: 1, render: widgets::drives, header: None, since: "0.9.5" },
+    Widget { id: "devices", title: "Devices", icon: L::Usb, sizes: ANY, default_size: Size::Medium, rows: 1, render: widgets::devices, header: None, since: "0.9.5" },
+    Widget { id: "network", title: "Network locations", icon: L::Network, sizes: ANY, default_size: Size::Medium, rows: 1, render: widgets::network, header: None, since: "0.9.5" },
     Widget {
         id: "recent",
         title: "Recent",
         icon: L::Clock,
-        sizes: &[Size::Medium, Size::Wide],
+        sizes: &[Size::Medium, Size::Wide, Size::Large],
         default_size: Size::Wide,
+        rows: 2,
         render: widgets::recent,
         header: Some(widgets::recent_clear),
         since: "0.9.5",
     },
-    Widget { id: "tags", title: "Tags", icon: L::Tag, sizes: ANY, default_size: Size::Medium, render: widgets::tags, header: None, since: "0.9.5" },
+    Widget { id: "tags", title: "Tags", icon: L::Tag, sizes: ANY, default_size: Size::Medium, rows: 1, render: widgets::tags, header: None, since: "0.9.5" },
 ];
 
 /// The default set, in order. Devices and network locations show themselves only while there are any.
@@ -237,6 +254,8 @@ pub fn columns(avail: f32, gap: f32) -> u16 {
 
 const PAD: f32 = 24.;
 const W_PAD: f32 = 16.;
+/// The heading row of a widget.
+const HEAD_H: f32 = 24.;
 
 /// The Home page.
 pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
@@ -257,6 +276,8 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
         let w = &WIDGETS[i];
         let span = size.span(cols);
         let width = col_w * f32::from(span) + gap * f32::from(span - 1) - 2. * W_PAD;
+        let rows = size.rows(w.rows);
+        let card_h = f32::from(rows) * p.home_row + f32::from(rows - 1) * gap;
         let body = (w.render)(v, &WidgetCx { p, size, width }, cx);
         if body.is_none() && !editing {
             continue;
@@ -266,12 +287,13 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
         let head = h_flex()
             .gap_2()
             .items_center()
-            .min_h(px(24.))
+            .h(px(HEAD_H)).flex_shrink_0()
             .child(Icon::new(w.icon).size(px(14.)).text_color(p.text_tertiary))
             .child(div().flex_1().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(crate::i18n::t(w.title)))
             .when_some(w.header.filter(|_| !editing), |d, h| d.child(h(&p, cx)))
             .when(editing, |d| d.child(edit_controls(pos, placed.len(), i, size, &p, cx)));
-        let mut card = v_flex().id(("home-w", i)).col_span(span).min_w_0().p(px(W_PAD)).gap_3().child(head).child(body);
+        let body = div().id(("home-body", i)).flex_1().min_h_0().w_full().overflow_y_scroll().child(body);
+        let mut card = v_flex().id(("home-w", i)).col_span(span).row_span(rows).h(px(card_h)).min_w_0().p(px(W_PAD)).gap_3().child(head).child(body);
         card = if ruled {
             card.border_r_1().border_b_1().border_color(p.border).bg(p.content_bg)
         } else if p.gap > 0. {
@@ -506,6 +528,22 @@ mod tests {
         assert_eq!(layout(&back), layout(&s));
         assert_eq!(ids(&layout(&back))[0], ("drives", "medium"));
         assert_eq!(ids(&layout(&back)).last().unwrap().0, "network");
+
+        // the size Large: kept where the widget can take it, the default where it cannot, and an older layout reads as before
+        let s = Settings::parse_migrated("[[home_layout]]
+id = \"drives\"
+size = \"large\"
+[[home_layout]]
+id = \"tags\"
+size = \"large\"
+[[home_layout]]
+id = \"recent\"
+size = \"wide\"
+").unwrap();
+        assert_eq!(ids(&layout(&s)), vec![("drives", "large"), ("tags", "medium"), ("recent", "wide")]);
+        let back = Settings::parse_migrated(&toml::to_string(&s).unwrap()).unwrap();
+        assert_eq!(layout(&back), layout(&s));
+        assert_eq!((Size::Large.span(4), Size::Large.rows(1), Size::Wide.rows(1), Size::Small.span(4)), (2, 2, 1, 1));
 
         // every widget removed stays empty
         let mut s = Settings::parse_migrated("").unwrap();

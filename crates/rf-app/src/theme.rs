@@ -127,6 +127,8 @@ pub struct Palette {
     pub tile_w: f32,
     pub tile_radius: f32,
     pub section_rule: bool,
+    /// The Home grid's row unit in px.
+    pub home_row: f32,
     pub square_marks: bool,
     pub mono_chrome: bool,
     /// The controls of this window are drawn the liquid way (the window shows glass, or it is a popup opened from one): see `liquid`.
@@ -336,6 +338,7 @@ impl Palette {
             tile_w: num("tile_width", 0.0).clamp(0.0, 400.0),
             tile_radius: num("tile_radius", 12.0).clamp(0.0, 24.0),
             section_rule: flag("section_rule"),
+            home_row: num("home_row", 156.0).clamp(80.0, 400.0),
             square_marks: flag("square_marks"),
             mono_chrome: flag("mono_chrome"),
             liquid: false,
