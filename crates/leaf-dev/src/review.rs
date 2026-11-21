@@ -433,6 +433,26 @@ pub fn reverted_bytes(bytes: &[u8], hunk: &RHunk) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A new file beside `path` for its reverted content, `.<name>.<pid><n>.leaf-review`, made with `create_new` (a name that exists
+/// is never removed or reused: two reverts never share one).
+pub fn temp_beside(path: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut last = None;
+    for _ in 0..64 {
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut name = std::ffi::OsString::from(".");
+        name.push(path.file_name().unwrap_or_default());
+        name.push(format!(".{}{n}.leaf-review", std::process::id()));
+        let tmp = path.with_file_name(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(f) => return Ok((tmp, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free name for the temporary file")))
+}
+
 /// Takes one hunk back in the work file `path`. Refused when the file is not as `stamp` saw it. The new content is written beside
 /// the file; then `put_away` keeps the current file (leaf: moves it to the Trash) and the new one is renamed in.
 pub fn revert_hunk(path: &Path, stamp: Stamp, hunk: &RHunk, put_away: &dyn Fn(&Path) -> Result<(), String>) -> Result<(), String> {
@@ -448,12 +468,11 @@ pub fn revert_hunk(path: &Path, stamp: Stamp, hunk: &RHunk, put_away: &dyn Fn(&P
         return Err("The file changed after the difference was shown. Look at it again first".into());
     }
     let new = reverted_bytes(&bytes, hunk).ok_or("The file does not match the difference shown. Look at it again first")?;
-    let mut tmp_name = std::ffi::OsString::from(".");
-    tmp_name.push(path.file_name().unwrap_or_default());
-    tmp_name.push(".leaf-review");
-    let tmp: PathBuf = path.with_file_name(tmp_name);
-    let _ = std::fs::remove_file(&tmp);
-    let written = std::fs::write(&tmp, &new).and_then(|_| std::fs::set_permissions(&tmp, meta.permissions()));
+    let (tmp, mut file) = temp_beside(path).map_err(|e| e.to_string())?;
+    let written = file.write_all(&new).and_then(|_| file.sync_all()).and_then(|_| {
+        drop(file);
+        std::fs::set_permissions(&tmp, meta.permissions())
+    });
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.to_string());
@@ -534,6 +553,27 @@ mod tests {
         assert_eq!(std::fs::read(&f).unwrap(), b"a\nX\nc\n");
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(left, vec![std::ffi::OsString::from("f.txt")], "no temp file is left and nothing was renamed in");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_reverts_use_their_own_temp_and_the_second_is_refused() {
+        let dir = temp("twice");
+        let f = dir.join("f.txt");
+        let (a, _fa) = temp_beside(&f).unwrap();
+        let (b, _fb) = temp_beside(&f).unwrap();
+        assert_ne!(a, b);
+        drop((_fa, _fb));
+        std::fs::remove_file(&a).unwrap();
+        std::fs::remove_file(&b).unwrap();
+        // two hunks of one diff, both taken back with the stamp of the same look
+        let d = diff_of("1\n2\n3\n4\n5\n6\n7\n", "1\nX\n3\n4\n5\nY\n7\n");
+        std::fs::write(&f, "1\nX\n3\n4\n5\nY\n7\n").unwrap();
+        let stamp = Stamp::of_file(&f).unwrap();
+        let trash = trash_into(&dir);
+        revert_hunk(&f, stamp, &d.hunks[0], &trash).unwrap();
+        assert!(revert_hunk(&f, stamp, &d.hunks[1], &trash).is_err(), "the file changed since the second hunk was shown");
+        assert_eq!(std::fs::read(&f).unwrap(), b"1\n2\n3\n4\n5\nY\n7\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

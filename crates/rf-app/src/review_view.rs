@@ -515,6 +515,19 @@ impl ReviewView {
         cx.notify();
     }
 
+    /// A revert job starts: busy until it is over, and the difference shown (with its stamp) is dropped, so a second key press
+    /// cannot act on the same look. `false` when something already runs.
+    fn hold(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.busy {
+            return false;
+        }
+        self.busy = true;
+        self.shown = None;
+        self.rebuild();
+        cx.notify();
+        true
+    }
+
     fn current_item(&self) -> Option<FileItem> {
         let s = self.selected.as_ref()?;
         self.files.iter().find(|f| &f.rel == s).cloned()
@@ -603,8 +616,14 @@ impl ReviewView {
                     format!("\"{name}\" {}", t!("goes back to how the checkpoint saw it. Your current version is moved to the Trash first.")),
                     Box::new(move |cx: &mut App| {
                         let (store, plan, rel, me) = (store.clone(), plan.clone(), rel.clone(), me.clone());
+                        if me.update(cx, |v, cx| v.hold(cx)).ok() != Some(true) {
+                            return;
+                        }
                         let done: crate::status_center::OnDone = Box::new(move |_, cx| {
-                            let _ = me.update(cx, |v, cx| v.refresh(cx));
+                            let _ = me.update(cx, |v, cx| {
+                                v.busy = false;
+                                v.refresh(cx);
+                            });
                         });
                         crate::status_center::revert_with_trash(
                             cx,
@@ -638,6 +657,9 @@ impl ReviewView {
 
     /// Revert the hunk `hi` (`r`): asked the first time in a session.
     fn ask_revert_hunk(&mut self, hi: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
         let (Some(it), Some(s)) = (self.current_item(), self.shown.as_ref()) else { return };
         if s.staged_view || s.diff.binary {
             return;
@@ -651,8 +673,15 @@ impl ReviewView {
         let path = it.path.clone();
         let run = move |cx: &mut App| {
             let me = me.clone();
+            // (from now until the job is over and the diff is read again, nothing else is reverted or accepted with this look)
+            if me.update(cx, |v, cx| v.hold(cx)).ok() != Some(true) {
+                return;
+            }
             let done: crate::status_center::OnDone = Box::new(move |_, cx| {
-                let _ = me.update(cx, |v, cx| v.refresh(cx));
+                let _ = me.update(cx, |v, cx| {
+                    v.busy = false;
+                    v.refresh(cx);
+                });
             });
             let (p2, h) = (path.clone(), h.clone());
             crate::status_center::revert_with_trash(cx, path.clone(), move |put_away| review::revert_hunk(&p2, stamp, &h, put_away), Some(done));
