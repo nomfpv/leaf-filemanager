@@ -70,6 +70,13 @@ impl Viewer for TextViewer {
         self.view.as_ref().map_or_else(|| div().into_any_element(), |v| v.clone().into_any_element())
     }
     fn on_key(&mut self, key: &str, mods: &Modifiers, _window: &mut Window, cx: &mut App) -> bool {
+        // Alt+F: follow mode, the end of a growing log stays in view
+        if mods.alt && !mods.control && !mods.shift && key == "f" {
+            if let Some(v) = &self.view {
+                v.update(cx, |v, cx| v.toggle_follow(cx));
+            }
+            return true;
+        }
         if !mods.alt || mods.control || mods.shift {
             return false;
         }
@@ -98,6 +105,11 @@ pub struct TextView {
     list: ListState,
     spans: Arc<RwLock<Option<Spans>>>,
     _tasks: Vec<Task<()>>,
+    /// Follow mode (Alt+F): the file is looked at again every moment, appended lines are added and the list stays at the end.
+    follow: bool,
+    _follow_task: Option<Task<()>>,
+    /// The listener of the indexing run an append started (the one before it is done by then).
+    _follow_index: Option<Task<()>>,
     /// Horizontal scroll (px) when lines don't wrap.
     hoff: f32,
     /// Longest line drawn so far (characters) and the view's width: the horizontal range.
@@ -142,7 +154,7 @@ fn syntax_highlight(path: &Path, text: &str, dark: bool) -> Option<Spans> {
 impl TextView {
     fn new(path: &Path, cx: &mut Context<Self>) -> Self {
         let list = ListState::new(0, ListAlignment::Top, px(400.));
-        let mut v = Self { file: None, error: None, list, spans: Default::default(), _tasks: Vec::new(), hoff: 0., cols: Default::default(), view_w: Default::default() };
+        let mut v = Self { file: None, error: None, list, spans: Default::default(), _tasks: Vec::new(), follow: false, _follow_task: None, _follow_index: None, hoff: 0., cols: Default::default(), view_w: Default::default() };
         match TextFile::open(path) {
             Ok(f) => {
                 let f = Arc::new(f);
@@ -201,7 +213,82 @@ impl TextView {
         let old = self.list.item_count();
         if n > old {
             self.list.splice(old..old, n - old);
+            if self.follow {
+                self.list.scroll_to(ListOffset { item_ix: n - 1, offset_in_item: px(0.) });
+            }
         }
+    }
+
+    /// Alt+F. Only local files are followed (this viewer opens local paths); the watching is a look at the size twice a second and
+    /// runs only while the mode is on. Appended bytes are indexed on, nothing is read again; a file that got smaller was truncated
+    /// or replaced: following stops and the file is read afresh.
+    fn toggle_follow(&mut self, cx: &mut Context<Self>) {
+        self.follow = !self.follow && self.file.is_some();
+        if !self.follow {
+            self._follow_task = None;
+            return cx.notify();
+        }
+        if let Some(f) = &self.file {
+            self.list.scroll_to(ListOffset { item_ix: f.line_count().saturating_sub(1), offset_in_item: px(0.) });
+        }
+        self._follow_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let alive = this.update(cx, |v, cx| v.follow_step(cx));
+                if !matches!(alive, Ok(true)) {
+                    return;
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    /// One look at the file; false ends the loop.
+    fn follow_step(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(f) = self.file.clone() else { return false };
+        if !self.follow {
+            return false;
+        }
+        let was_done = f.is_indexed();
+        match f.grow() {
+            rf_core::textload::Grown::Same => {}
+            // (while the first indexing is still running it goes on to the new end by itself)
+            rf_core::textload::Grown::Appended => {
+                if was_done {
+                    self.index(f, cx);
+                    self._follow_index = self._tasks.pop();
+                }
+            }
+            rf_core::textload::Grown::Truncated => {
+                self.follow = false;
+                let path = f.path().to_path_buf();
+                self.reload(&path, cx);
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reads the file afresh (after a truncate): the list starts over.
+    fn reload(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self._tasks.clear();
+        *self.spans.write() = None;
+        self.list.reset(0);
+        self.hoff = 0.;
+        self.file = None;
+        match TextFile::open(path) {
+            Ok(f) => {
+                let f = Arc::new(f);
+                self.file = Some(f.clone());
+                self.error = None;
+                self.index(f.clone(), cx);
+                if f.len() <= HIGHLIGHT_MAX {
+                    self.highlight(path, cx);
+                }
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        cx.notify();
     }
 
     fn highlight(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -291,6 +378,9 @@ impl Render for TextView {
                     cx.stop_propagation();
                 }
             }))
+            .when(self.follow, |d| {
+                d.child(div().absolute().top(px(4.)).right(px(12.)).px_2().rounded_full().bg(p.accent).text_color(p.content_bg).text_size(px(11.)).child(crate::t!("Following (Alt+F)")))
+            })
             .child(canvas(move |b, _, _| vw.set(f32::from(b.size.width)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
             .font_family(font)
             .text_size(px(font_size))

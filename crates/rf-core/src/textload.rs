@@ -61,6 +61,14 @@ pub fn detect_and_decode(bytes: &[u8]) -> (String, &'static str) {
     (s.into_owned(), enc.name())
 }
 
+/// What [`TextFile::grow`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grown {
+    Same,
+    Appended,
+    Truncated,
+}
+
 /// Satır satır okunan metin dosyası. Satır başları arka planda dizinlenir; dizinlenmiş her
 /// satır hemen okunabilir.
 pub struct TextFile {
@@ -71,7 +79,8 @@ pub struct TextFile {
     cache: Mutex<std::collections::HashMap<usize, String>>,
     enc: &'static Encoding,
     start: u64,
-    len: u64,
+    /// Grows when the file is appended to ([`TextFile::grow`]).
+    len: AtomicU64,
     /// Satır başlarının bayt konumları (ilk öğe veri başlangıcı).
     starts: RwLock<Vec<u64>>,
     scanned: AtomicU64,
@@ -91,7 +100,7 @@ impl TextFile {
             cache: Mutex::new(std::collections::HashMap::new()),
             enc,
             start: bom as u64,
-            len,
+            len: AtomicU64::new(len),
             starts: RwLock::new(vec![bom as u64]),
             scanned: AtomicU64::new(bom as u64),
             done: AtomicBool::new(len <= bom as u64),
@@ -107,11 +116,11 @@ impl TextFile {
     }
 
     pub fn len(&self) -> u64 {
-        self.len
+        self.len.load(Ordering::Acquire)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len <= self.start
+        self.len() <= self.start
     }
 
     pub fn is_indexed(&self) -> bool {
@@ -134,7 +143,7 @@ impl TextFile {
             return false;
         }
         let from = self.scanned.load(Ordering::Acquire);
-        let mut buf = vec![0u8; CHUNK.min((self.len - from) as usize)];
+        let mut buf = vec![0u8; CHUNK.min((self.len() - from) as usize)];
         if read_at(&self.file, &mut buf, from).is_err() {
             self.done.store(true, Ordering::Release);
             return false;
@@ -156,11 +165,28 @@ impl TextFile {
         let next = from + buf.len() as u64;
         self.starts.write().extend(found);
         self.scanned.store(next, Ordering::Release);
-        if next >= self.len {
+        if next >= self.len() {
             self.done.store(true, Ordering::Release);
             return false;
         }
         true
+    }
+
+    /// Follow mode: looks at the file's size again. Appended bytes are taken in (indexing goes on from where it ended, so only
+    /// the new part is read); a smaller file means it was truncated or replaced and the caller must open it anew.
+    pub fn grow(&self) -> Grown {
+        let Ok(now) = self.file.metadata().map(|m| m.len()) else { return Grown::Truncated };
+        let old = self.len();
+        if now < old {
+            return Grown::Truncated;
+        }
+        if now == old {
+            return Grown::Same;
+        }
+        self.cache.lock().clear(); // (the last line may have been half written)
+        self.len.store(now, Ordering::Release);
+        self.done.store(false, Ordering::Release);
+        Grown::Appended
     }
 
     pub fn index_all(&self) {
@@ -171,7 +197,7 @@ impl TextFile {
     pub fn line_count(&self) -> usize {
         let s = self.starts.read();
         let n = s.len();
-        if self.is_indexed() && n > 1 && *s.last().unwrap() >= self.len { n - 1 } else { n }
+        if self.is_indexed() && n > 1 && *s.last().unwrap() >= self.len() { n - 1 } else { n }
     }
 
     /// `i`. satır (satır sonu olmadan); dizinlenmemişse None.
@@ -184,7 +210,7 @@ impl TextFile {
             let a = *s.get(i)?;
             let b = match s.get(i + 1) {
                 Some(b) => *b,
-                None if self.is_indexed() => self.len,
+                None if self.is_indexed() => self.len(),
                 None => return None,
             };
             (a, b)
