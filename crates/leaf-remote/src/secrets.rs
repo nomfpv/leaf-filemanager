@@ -36,6 +36,9 @@ pub enum SecretId {
     /// The sign-in a web server asked for (HTTP Basic or Digest) with this realm on `host:port` over `scheme` (`http`, `https`); the
     /// saved text is `user:password`. A password saved for `https` is never sent over plain `http`.
     Web { scheme: String, host: String, port: u16, realm: String },
+    /// leaf's VPN (`mullvad-account`, `mullvad-device`): kept here like a password, but not in the hosts' list of saved
+    /// passwords (Settings > VPN signs in and out; "Forget all" there never removes it).
+    Vpn { item: String },
 }
 
 impl SecretId {
@@ -60,6 +63,10 @@ impl SecretId {
         SecretId::Passphrase { fingerprint, file_name }
     }
 
+    pub fn vpn(item: &str) -> SecretId {
+        SecretId::Vpn { item: item.to_string() }
+    }
+
     /// The name of the keyring entry (`sftp://user@host:22`, `smb://user@host/share`, `key:<sha-256>:<file name>`); [`SecretId::from_account`]
     /// reads it back.
     fn account(&self) -> String {
@@ -68,10 +75,12 @@ impl SecretId {
             SecretId::Passphrase { fingerprint, file_name } => format!("key:{fingerprint}:{file_name}"),
             SecretId::Share { user, host, share } => format!("smb://{user}@{host}/{share}"),
             SecretId::Web { scheme, host, port, realm } => format!("web:{scheme}://{host}:{port}|{realm}"),
+            SecretId::Vpn { item } => format!("vpn:{item}"),
         }
     }
 
-    /// The id of a keyring entry's name; `None` for a name leaf did not make.
+    /// The id of a keyring entry's name; `None` for a name leaf did not make (and for the VPN's entries, which the list of
+    /// saved passwords does not show).
     fn from_account(account: &str) -> Option<SecretId> {
         if let Some(rest) = account.strip_prefix("key:") {
             let (fingerprint, file_name) = rest.split_once(':')?;
@@ -109,6 +118,7 @@ impl SecretId {
             SecretId::Share { user, host, share } if share == "ipc$" => format!("{user}@{host} (SMB)"),
             SecretId::Share { user, host, share } => format!("{user}@{host}/{share} (SMB)"),
             SecretId::Web { scheme, host, port, realm } => format!("{host}:{port} \"{realm}\" ({})", scheme.to_ascii_uppercase()),
+            SecretId::Vpn { item } => format!("VPN ({item})"),
         }
     }
 
@@ -122,7 +132,7 @@ impl SecretId {
             }
             // (SMB has no port of its own in leaf: every share of the server counts)
             SecretId::Share { user: u, host: h, .. } => scheme.eq_ignore_ascii_case("smb") && h.eq_ignore_ascii_case(host) && user.is_none_or(|w| w == u),
-            SecretId::Passphrase { .. } | SecretId::Web { .. } => false,
+            SecretId::Passphrase { .. } | SecretId::Web { .. } | SecretId::Vpn { .. } => false,
         }
     }
 }
@@ -222,6 +232,15 @@ impl Vault {
                 log::warn!("remote: {e}");
             }
         }
+    }
+
+    /// Saves `secret` under `id` now (no "Remember" tick: for what leaf itself keeps, as the VPN's sign-in).
+    pub fn keep(&self, id: &SecretId, secret: &Secret) -> Result<(), String> {
+        let s = self.0.as_ref().ok_or_else(|| NOT_SAVED.to_string())?;
+        s.available()?;
+        let r = s.set(id, secret);
+        changed();
+        r
     }
 
     /// Forgets a saved secret (the user said "Forget").

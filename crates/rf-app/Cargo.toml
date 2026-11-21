@@ -22,6 +22,10 @@ leaf-vfs.workspace = true
 # sftp:// (russh, pure Rust; its runtime starts with the first connection)
 leaf-remote.workspace = true
 leaf-download.workspace = true
+# leaf's VPN (leaf's own connections only; the tunnel runs on leaf-remote's runtime)
+leaf-vpn.workspace = true
+# the VPN's sign-in text is wiped when dropped
+zeroize = "1"
 leaf-sync.workspace = true
 leaf-agents.workspace = true
 # cache file names of fetched server files (a hash of the address)

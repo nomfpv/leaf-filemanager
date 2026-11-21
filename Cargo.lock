@@ -7683,6 +7683,7 @@ dependencies = [
  "leaf-sync",
  "leaf-sys",
  "leaf-vfs",
+ "leaf-vpn",
  "log",
  "mail-parser",
  "parking_lot",
@@ -7703,6 +7704,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-segmentation",
  "velopack",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,0 +1,449 @@
+//! leaf's VPN, leaf's face for it: the Mullvad sign-in dialog, the account and this PC's key in the system keyring (never in
+//! settings, logs or error text), connect / disconnect from the settings, the title bar and the commands, the state the
+//! windows show. The engine is `leaf_vpn` (the tunnel inside leaf: only leaf's own connections, nothing else on the PC).
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use gpui_kit::*;
+use leaf_remote::{Secret, SecretId, Vault};
+use leaf_vpn::account::{self, AccountNumber};
+use leaf_vpn::mullvad::{self, Device, DnsBlocking, Mullvad, Place, Relay};
+
+use crate::prompt::{self, Button, Kind};
+use crate::settings::Settings;
+use crate::t;
+
+/// The keyring entries (service `leaf`): the account number, and this PC's device (its key, id, name and address).
+const ACCOUNT: &str = "mullvad-account";
+const DEVICE: &str = "mullvad-device";
+
+/// What the settings page and the title bar show about the account (no secret in it: the last four digits only).
+#[derive(Clone, Debug, Default)]
+pub struct AccountView {
+    pub signed_in: bool,
+    /// "…1234"
+    pub hint: String,
+    /// Mullvad's name for this PC's device.
+    pub device: String,
+    pub days_left: Option<i64>,
+    /// The device was removed from the account (on the website).
+    pub device_gone: bool,
+}
+
+#[derive(Default)]
+struct Ui {
+    account: AccountView,
+    /// A sign-in, sign-out or check is running.
+    busy: bool,
+    /// The last thing to tell (an error of a sign-in, the API's refusal), shown on the page.
+    message: Option<String>,
+    relays: Vec<Relay>,
+    relays_asked: bool,
+    account_asked: bool,
+}
+
+static UI: Mutex<Option<Ui>> = Mutex::new(None);
+static UI_CHANGES: AtomicU64 = AtomicU64::new(0);
+
+fn with_ui<T>(f: impl FnOnce(&mut Ui) -> T) -> T {
+    let mut g = UI.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(Ui::default))
+}
+
+fn ui_changed() {
+    UI_CHANGES.fetch_add(1, Ordering::AcqRel);
+}
+
+pub fn account_view() -> AccountView {
+    with_ui(|u| u.account.clone())
+}
+
+pub fn busy() -> bool {
+    with_ui(|u| u.busy)
+}
+
+pub fn message() -> Option<String> {
+    with_ui(|u| u.message.clone())
+}
+
+pub fn relays() -> Vec<Relay> {
+    with_ui(|u| u.relays.clone())
+}
+
+fn set_message(m: Option<String>) {
+    with_ui(|u| u.message = m);
+    ui_changed();
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+// ------------------------------------------------------------------------------------------------ the keyring
+
+fn vault() -> Vault {
+    leaf_remote::vault()
+}
+
+/// The account and the device from the keyring (blocking: never on the UI thread).
+fn kept(v: &Vault) -> Option<(AccountNumber, Device)> {
+    let acc = v.get(&SecretId::vpn(ACCOUNT)).and_then(|s| AccountNumber::parse(s.as_str()))?;
+    let dev = v.get(&SecretId::vpn(DEVICE)).and_then(|s| Device::from_kept(s.as_str()))?;
+    Some((acc, dev))
+}
+
+/// Keeps a sign-in in the keyring, and only there.
+pub(crate) fn keep_sign_in(v: &Vault, acc: &AccountNumber, dev: &Device) -> Result<(), String> {
+    v.keep(&SecretId::vpn(ACCOUNT), &Secret::new(acc.expose().to_string()))?;
+    v.keep(&SecretId::vpn(DEVICE), &Secret::new(dev.to_kept().to_string()))
+}
+
+fn forget_sign_in(v: &Vault) {
+    for item in [DEVICE, ACCOUNT] {
+        if let Err(e) = v.forget(&SecretId::vpn(item)) {
+            log::warn!("vpn: {e}");
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ start
+
+/// At start: the runtime for the tunnel, the kill switch from the settings, the account's state (in the background), the
+/// windows redrawn when the VPN's state changes, and the tunnel brought up when "Connect when leaf starts" is on.
+pub fn init(cx: &mut App) {
+    leaf_vpn::init(leaf_remote::runtime_handle);
+    let s = cx.global::<Settings>();
+    leaf_vpn::set_kill_switch(s.vpn_kill_switch);
+    // (the keyring is opened at start only when there is a sign-in in it)
+    if s.vpn_signed_in {
+        let connect_now = s.vpn_connect_on_start && std::env::var_os("LEAF_MULTI_INSTANCE").is_none();
+        refresh_account(cx, connect_now);
+    }
+    cx.spawn(async move |cx| {
+        let (mut seen_vpn, mut seen_ui) = (leaf_vpn::changes(), UI_CHANGES.load(Ordering::Acquire));
+        loop {
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            let (v, u) = (leaf_vpn::changes(), UI_CHANGES.load(Ordering::Acquire));
+            if (v, u) != (seen_vpn, seen_ui) {
+                (seen_vpn, seen_ui) = (v, u);
+                cx.update(|cx| cx.refresh_windows());
+            }
+        }
+    })
+    .detach();
+}
+
+/// The settings page is open: the account is read once (when the settings say there is one).
+pub fn want_account(cx: &mut App) {
+    let first = with_ui(|u| !std::mem::replace(&mut u.account_asked, true));
+    if first && cx.global::<Settings>().vpn_signed_in && !account_view().signed_in && !busy() {
+        refresh_account(cx, false);
+    }
+}
+
+/// Reads the account from the keyring and asks Mullvad for the days left (and whether this device is still on the account).
+fn refresh_account(cx: &mut App, then_connect: bool) {
+    with_ui(|u| {
+        u.busy = true;
+        u.account_asked = true;
+    });
+    ui_changed();
+    let work = cx.background_executor().spawn(async move {
+        let v = vault();
+        let Some((acc, dev)) = kept(&v) else {
+            // (an empty keyring that works: the sign-in is gone; one that does not open says nothing about it)
+            let gone = matches!(v.state(), leaf_remote::Keyring::Ready);
+            return (AccountView::default(), gone.then(String::new));
+        };
+        let mut view = AccountView { signed_in: true, hint: acc.hint(), device: dev.name.clone(), ..AccountView::default() };
+        let rt = leaf_remote::runtime_handle();
+        let status = rt.block_on(account::status(&acc, &dev.id));
+        match status {
+            Ok((expiry, present)) => {
+                view.days_left = account::days_left(&expiry, now_unix());
+                view.device_gone = !present;
+            }
+            Err(e) => log::info!("vpn: the account could not be checked: {e}"),
+        }
+        (view, None)
+    });
+    cx.spawn(async move |cx| {
+        let (view, gone) = work.await;
+        let signed_in = view.signed_in && !view.device_gone;
+        with_ui(|u| {
+            u.account = view;
+            u.busy = false;
+        });
+        ui_changed();
+        if gone.is_some() {
+            let _ = cx.update(|cx| crate::settings::update(cx, |s| s.vpn_signed_in = false));
+        }
+        if then_connect && signed_in {
+            let _ = cx.update(connect);
+        }
+    })
+    .detach();
+}
+
+/// The relay list for the page's country list (asked once per run; it is public).
+pub fn want_relays(cx: &mut App) {
+    if with_ui(|u| std::mem::replace(&mut u.relays_asked, true)) {
+        return;
+    }
+    let work = cx.background_executor().spawn(async move { leaf_remote::runtime_handle().block_on(mullvad::relays()) });
+    cx.spawn(async move |_| {
+        match work.await {
+            Ok(list) => with_ui(|u| u.relays = list),
+            Err(e) => {
+                log::info!("vpn: no relay list: {e}");
+                with_ui(|u| u.relays_asked = false);
+            }
+        }
+        ui_changed();
+    })
+    .detach();
+}
+
+// ------------------------------------------------------------------------------------------------ sign in / out
+
+/// "Sign in": the account number, once. It goes to Mullvad (a new key for this PC is registered) and into the keyring.
+pub fn sign_in_dialog(window: &mut Window, cx: &mut App) {
+    let go = Button::new(t!("Sign in"), Kind::Primary, |text, _, cx| {
+        let text = zeroize::Zeroizing::new(text.unwrap_or_default());
+        let Some(acc) = AccountNumber::parse(&text) else {
+            return Err(t!("Enter the 16 digits of your Mullvad account number").to_string());
+        };
+        sign_in(acc, cx);
+        Ok(())
+    });
+    prompt::show_secret(
+        t!("Sign in to Mullvad"),
+        Some(t!("Your account number is kept in the system keyring only. leaf registers this PC as one of the account's devices; only leaf's own connections use the VPN.").to_string()),
+        "1234 5678 9012 3456".to_string(),
+        vec![go, Button::cancel()],
+        window,
+        cx,
+    );
+}
+
+fn sign_in(acc: AccountNumber, cx: &mut App) {
+    with_ui(|u| {
+        u.busy = true;
+        u.message = None;
+    });
+    ui_changed();
+    let work = cx.background_executor().spawn(async move {
+        let v = vault();
+        // (no keyring: nothing is registered, or the device would be left on the account with its key lost)
+        if let leaf_remote::Keyring::Missing(why) = v.state() {
+            return Err(format!("{}\n{why}", t!("leaf keeps the Mullvad account only in the system keyring, and it cannot be used")));
+        }
+        let rt = leaf_remote::runtime_handle();
+        let signed = rt.block_on(account::sign_in(&acc)).map_err(|e| e.to_string())?;
+        if let Err(e) = keep_sign_in(&v, &acc, &signed.device) {
+            let _ = rt.block_on(account::sign_out(&acc, &signed.device.id));
+            forget_sign_in(&v);
+            return Err(format!("{}\n{e}", t!("The sign-in could not be kept in the system keyring")));
+        }
+        log::info!("vpn: signed in to Mullvad as device \"{}\"", signed.device.name);
+        Ok(AccountView {
+            signed_in: true,
+            hint: acc.hint(),
+            device: signed.device.name.clone(),
+            days_left: signed.expiry.as_deref().and_then(|e| account::days_left(e, now_unix())),
+            device_gone: false,
+        })
+    });
+    cx.spawn(async move |cx| {
+        let r = work.await;
+        let ok = r.is_ok();
+        with_ui(|u| {
+            u.busy = false;
+            match r {
+                Ok(view) => u.account = view,
+                Err(e) => u.message = Some(e),
+            }
+        });
+        ui_changed();
+        if ok {
+            let _ = cx.update(|cx| crate::settings::update(cx, |s| s.vpn_signed_in = true));
+        }
+    })
+    .detach();
+}
+
+/// "Sign out": the tunnel goes down, this PC's device is removed from the account, the keyring entries are deleted.
+pub fn sign_out(cx: &mut App) {
+    leaf_vpn::disconnect();
+    with_ui(|u| u.busy = true);
+    ui_changed();
+    let work = cx.background_executor().spawn(async move {
+        let v = vault();
+        let note = match kept(&v) {
+            Some((acc, dev)) => match leaf_remote::runtime_handle().block_on(account::sign_out(&acc, &dev.id)) {
+                Ok(()) => None,
+                Err(e) => Some(format!("{}\n{e}", t!("Signed out here, but Mullvad was not told: remove this device on mullvad.net (Account > Devices)."))),
+            },
+            None => None,
+        };
+        forget_sign_in(&v);
+        note
+    });
+    cx.spawn(async move |cx| {
+        let note = work.await;
+        with_ui(|u| {
+            u.busy = false;
+            u.account = AccountView::default();
+            u.message = note;
+        });
+        ui_changed();
+        let _ = cx.update(|cx| crate::settings::update(cx, |s| s.vpn_signed_in = false));
+    })
+    .detach();
+}
+
+// ------------------------------------------------------------------------------------------------ connect
+
+fn dns_of(s: &Settings) -> DnsBlocking {
+    DnsBlocking { ads: s.vpn_block_ads, trackers: s.vpn_block_trackers, malware: s.vpn_block_malware, adult: s.vpn_block_adult, gambling: s.vpn_block_gambling, social: s.vpn_block_social }
+}
+
+fn place_of(s: &Settings) -> Place {
+    let some = |v: &str| Some(v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty());
+    Place { country: some(&s.vpn_country), city: some(&s.vpn_country).and(some(&s.vpn_city)), fastest: s.vpn_fastest }
+}
+
+/// Brings the tunnel up with the settings' place and DNS choice (the key is read from the keyring off the UI thread).
+pub fn connect(cx: &mut App) {
+    let s = cx.global::<Settings>();
+    let (place, dns) = (place_of(s), dns_of(s));
+    let view = account_view();
+    if !view.signed_in && s.vpn_signed_in && !busy() {
+        // (not read from the keyring yet in this run: read it, then connect)
+        refresh_account(cx, true);
+        return;
+    }
+    if !view.signed_in {
+        set_message(Some(t!("Sign in to Mullvad first (Settings > VPN).").to_string()));
+        return;
+    }
+    if view.days_left.is_some_and(|d| d < 0) {
+        set_message(Some(mullvad::ApiError::Expired.to_string()));
+        return;
+    }
+    set_message(None);
+    let work = cx.background_executor().spawn(async move { kept(&vault()) });
+    cx.spawn(async move |_| match work.await {
+        Some((_, device)) => leaf_vpn::connect(Arc::new(Mullvad { device, place, dns })),
+        None => set_message(Some(t!("The Mullvad sign-in is no longer in the system keyring. Sign in again.").to_string())),
+    })
+    .detach();
+}
+
+pub fn disconnect(_cx: &mut App) {
+    leaf_vpn::disconnect();
+}
+
+/// A setting of the page changed: the kill switch takes it at once; a new DNS choice goes to the running tunnel; a new place
+/// reconnects a running tunnel.
+pub fn settings_changed(before: &Settings, cx: &mut App) {
+    let s = cx.global::<Settings>();
+    leaf_vpn::set_kill_switch(s.vpn_kill_switch);
+    if let Some(t) = leaf_vpn::tunnel()
+        && dns_of(before) != dns_of(s)
+    {
+        t.set_dns(dns_of(s).resolver());
+    }
+    let moved = place_of(before) != place_of(s);
+    if moved && !matches!(leaf_vpn::state(), leaf_vpn::State::Off | leaf_vpn::State::Failed(_)) {
+        connect(cx);
+    }
+}
+
+/// The state in a word and a line for the title bar's tooltip and the page.
+pub fn describe(state: &leaf_vpn::State) -> (SharedString, Option<String>) {
+    match state {
+        leaf_vpn::State::Off => (t!("VPN off").into(), None),
+        leaf_vpn::State::Connecting { place } if place.is_empty() => (t!("VPN connecting").into(), None),
+        leaf_vpn::State::Connecting { place } => (t!("VPN connecting").into(), Some(place.clone())),
+        leaf_vpn::State::On { country, city, exit_ip, .. } => {
+            let ip = exit_ip.map(|i| i.to_string()).unwrap_or_default();
+            (t!("VPN on").into(), Some(format!("{country}, {city}{}", if ip.is_empty() { String::new() } else { format!(" · {ip}") })))
+        }
+        leaf_vpn::State::Failed(why) => (t!("VPN not connected").into(), Some(why.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A keyring in memory: the sign-in goes there, and only there.
+    #[derive(Default)]
+    struct Memory(Mutex<std::collections::HashMap<String, String>>);
+
+    impl leaf_remote::SecretStore for Memory {
+        fn available(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn get(&self, id: &SecretId) -> Result<Option<Secret>, String> {
+            Ok(self.0.lock().unwrap().get(&format!("{id:?}")).cloned().map(Secret::new))
+        }
+        fn set(&self, id: &SecretId, s: &Secret) -> Result<(), String> {
+            self.0.lock().unwrap().insert(format!("{id:?}"), s.as_str().to_string());
+            Ok(())
+        }
+        fn delete(&self, id: &SecretId) -> Result<(), String> {
+            self.0.lock().unwrap().remove(&format!("{id:?}"));
+            Ok(())
+        }
+        fn list(&self) -> Result<Vec<SecretId>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn vpn_account_and_key_stay_out_of_settings_and_debug() {
+        let acc = AccountNumber::parse("1234 5678 9012 3456").unwrap();
+        let key = leaf_vpn::PrivateKey::generate();
+        let key_text = key.to_base64().to_string();
+        let dev = Device { id: "0f1e2d3c-aaaa-bbbb-cccc-000000000001".into(), name: "happy seal".into(), ipv4: "10.64.1.2".parse().unwrap(), key };
+
+        // kept: in the keyring, readable back
+        let store = Arc::new(Memory::default());
+        let v = Vault::new(store.clone());
+        keep_sign_in(&v, &acc, &dev).unwrap();
+        let (acc2, dev2) = kept(&v).unwrap();
+        assert_eq!(acc2.expose(), "1234567890123456");
+        assert_eq!(dev2.key.to_base64().as_str(), key_text);
+
+        // never in the settings file (with every VPN setting changed) nor in anything's Debug or an error's text
+        let mut s = Settings::default();
+        s.vpn_country = "se".into();
+        s.vpn_kill_switch = true;
+        s.vpn_downloads = true;
+        let file = toml::to_string(&s).unwrap() + &serde_json::to_string(&s).unwrap();
+        let shown = [
+            format!("{acc:?}"),
+            format!("{dev:?}"),
+            format!("{:?}", dev.key),
+            format!("{s:?}"),
+            format!("{:?}", account_view()),
+            format!("{:?}", leaf_vpn::account::SignedIn { device: dev.clone(), expiry: None }),
+            mullvad::ApiError::InvalidAccount.to_string(),
+            mullvad::ApiError::MaxDevices.to_string(),
+        ];
+        for text in std::iter::once(&file).chain(shown.iter()) {
+            assert!(!text.contains("1234567890123456") && !text.contains("1234 5678"), "account number in: {text}");
+            assert!(!text.contains(&key_text), "private key in: {text}");
+        }
+        assert_eq!(acc.hint(), "…3456");
+
+        // signing out removes both entries
+        forget_sign_in(&v);
+        assert!(kept(&v).is_none());
+        assert!(store.0.lock().unwrap().is_empty());
+    }
+}

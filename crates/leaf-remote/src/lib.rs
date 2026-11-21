@@ -1,4 +1,4 @@
-﻿//! leaf-remote: places on other machines behind the `leaf-vfs` interface (PLAN 2.2, W1a, W1c). Today: SFTP and FTP/FTPS (read
+//! leaf-remote: places on other machines behind the `leaf-vfs` interface (PLAN 2.2, W1a, W1c). Today: SFTP and FTP/FTPS (read
 //! and write), editing a file on a server (`edit`, H10), Docker and rclone views.
 //!
 //! - `SftpFs` serves `sftp://user@host:port/path` over `russh` + `russh-sftp` (pure Rust).
@@ -121,8 +121,14 @@ pub fn forget_saved(id: &SecretId) -> Result<(), String> {
         // (Windows keeps an SMB session itself: the host's Disconnect ends it)
         SecretId::Share { .. } => {}
         SecretId::Web { .. } => {}
+        SecretId::Vpn { .. } => {}
     }
     vault().forget(id)
+}
+
+/// The runtime leaf's remote connections run on (started here when nothing started it yet): leaf's VPN tunnel runs on it too.
+pub fn runtime_handle() -> tokio::runtime::Handle {
+    conn::rt().handle().clone()
 }
 
 /// The home folder the server logs the user into (for an address that names only the server).

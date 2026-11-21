@@ -768,6 +768,26 @@ pub struct Settings {
     pub download_schedule_days: u8,
     /// What leaf does when the queue is done.
     pub download_when_done: WhenDone,
+    /// leaf's VPN (Settings > VPN): only leaf's own connections, never the PC's. The account number and this PC's key are in the
+    /// system keyring only, never here; this only says that there is one (so the keyring is not opened at start without need).
+    pub vpn_signed_in: bool,
+    /// The country code (`se`) and city code (`got`); empty: anywhere.
+    pub vpn_country: String,
+    pub vpn_city: String,
+    /// The fastest server of the place (a WireGuard handshake to a few of them, at each connect).
+    pub vpn_fastest: bool,
+    pub vpn_connect_on_start: bool,
+    /// While the VPN is not connected, what is set to use it waits instead of going out directly.
+    pub vpn_kill_switch: bool,
+    /// Downloads go through the VPN (each download can still say otherwise).
+    pub vpn_downloads: bool,
+    /// Mullvad's DNS blocking lists.
+    pub vpn_block_ads: bool,
+    pub vpn_block_trackers: bool,
+    pub vpn_block_malware: bool,
+    pub vpn_block_adult: bool,
+    pub vpn_block_gambling: bool,
+    pub vpn_block_social: bool,
     /// Downloads the browser starts are taken over by leaf (through the leaf extension and `leaf-nmhost`).
     pub capture_browser: bool,
     /// Below this many MB (when the browser knows the size) the browser keeps the download.
@@ -1028,6 +1048,19 @@ impl Default for Settings {
             download_schedule_days: 0x7f,
             download_when_done: WhenDone::Nothing,
             download_categories: DownloadCategory::defaults(),
+            vpn_signed_in: false,
+            vpn_country: String::new(),
+            vpn_city: String::new(),
+            vpn_fastest: true,
+            vpn_connect_on_start: false,
+            vpn_kill_switch: true,
+            vpn_downloads: false,
+            vpn_block_ads: false,
+            vpn_block_trackers: false,
+            vpn_block_malware: false,
+            vpn_block_adult: false,
+            vpn_block_gambling: false,
+            vpn_block_social: false,
             capture_browser: true,
             capture_min_mb: 1,
             transfer_progress: TransferProgress::StatusBar,

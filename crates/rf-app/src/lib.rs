@@ -84,6 +84,7 @@ mod capture;
 mod space_check;
 mod download_schedule;
 mod downloads;
+mod vpn;
 mod transfer_view;
 mod tags;
 mod terminal;
@@ -709,6 +710,8 @@ pub fn main() {
         actions::bind_user(cx);
         features_page::init(cx);
         custom_actions::init(cx);
+        // leaf's VPN: the kill switch, the state the windows show, "Connect when leaf starts"
+        vpn::init(cx);
         home::init(cx);
         keymap_editor::init(cx);
         if let Some(page) = &settings_arg {
