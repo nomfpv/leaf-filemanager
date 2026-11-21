@@ -364,3 +364,72 @@ fn proxy_password_is_sent_to_the_proxy_and_never_reaches_a_file() {
     assert!(sent.contains("proxy-authorization: basic"), "the proxy was not signed in to: {sent}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A server that wants `Authorization: Basic` (the header's exact value) for everything; without it: 401 and a challenge.
+fn serve_basic(body: Vec<u8>, want: String) -> Server {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let cut_after = Arc::new(AtomicUsize::new(usize::MAX));
+    let cut = cut_after.clone();
+    let body = Arc::new(body);
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let (body, cut, want) = (body.clone(), cut.clone(), want.clone());
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                let mut s = s;
+                if !head.to_ascii_lowercase().contains(&format!("authorization: {}", want.to_ascii_lowercase())) {
+                    let _ = s.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"Private area\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    return;
+                }
+                let (from, to) = head
+                    .to_ascii_lowercase()
+                    .lines()
+                    .find_map(|l| l.strip_prefix("range: bytes=").map(str::to_string))
+                    .and_then(|v| v.trim().split_once('-').map(|(a, b)| (a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap().min(body.len() - 1))))
+                    .unwrap_or((0, body.len() - 1));
+                let slice = &body[from..=to];
+                let _ = write!(s, "HTTP/1.1 206 Partial Content\r\nETag: \"v1\"\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {from}-{to}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len(), slice.len());
+                let limit = cut.load(Ordering::SeqCst);
+                let _ = s.write_all(&slice[..if slice.len() > 16 { limit.min(slice.len()) } else { slice.len() }]);
+            });
+        }
+    });
+    Server { port, cut_after }
+}
+
+#[test]
+fn web_sign_in_is_asked_for_and_never_reaches_a_file() {
+    const USER: &str = "alice";
+    const PASSWORD: &str = "web-secret-c41f";
+    // Basic: base64 of "alice:web-secret-c41f"
+    let sent = WebAuth::new(&Challenge::parse(&["Basic realm=\"x\"".to_string()]).unwrap(), USER, PASSWORD).header("http://h/f");
+    let srv = serve_basic(data(3 << 20), sent.clone());
+    let dir = tmp("web-secret");
+    let u = url(&srv, "/w.bin");
+    // without a sign-in the answer is the challenge, with its realm
+    let Err(Error::Auth(ch)) = download(&u, &dir, &opts(0), &Control::default(), &host(Resolve::KeepBoth)) else { panic!("expected a challenge") };
+    assert_eq!((ch.scheme, ch.realm.as_str()), (AuthScheme::Basic, "Private area"));
+    // signed in, then cut part-way: the part state stays behind, as after a crash
+    let mut o = opts(0);
+    o.headers.set_web_auth(WebAuth::new(&ch, USER, PASSWORD));
+    srv.cut_after.store(100 << 10, Ordering::SeqCst);
+    assert!(matches!(download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)), Err(e) if !matches!(e, Error::Auth(_))), "the server took the sign-in");
+    let state = std::fs::read_to_string(dir.join("w.bin.leaf-part.state")).expect("the part state is written");
+    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: false, sort: false }], history: Vec::new() };
+    let saved = serde_json::to_string(&saved).unwrap();
+    let b64 = sent.trim_start_matches("Basic ");
+    let shown = format!("{:?} {} {:?} {:?}", o.headers, o.headers, WebAuth::new(&ch, USER, PASSWORD), Error::Auth(ch.clone()));
+    for text in [&state, &saved, &shown] {
+        assert!(!text.contains(PASSWORD) && !text.contains(b64) && !text.contains(USER), "the sign-in leaked into: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

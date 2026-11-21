@@ -3,11 +3,35 @@
 //! the saved list by accident.
 
 use std::fmt;
+use std::sync::Arc;
 
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct Headers(Vec<(String, String)>);
+use crate::auth::WebAuth;
+
+#[derive(Clone, Default)]
+pub struct Headers(Vec<(String, String)>, Option<Arc<WebAuth>>);
+
+impl PartialEq for Headers {
+    fn eq(&self, o: &Self) -> bool {
+        self.0 == o.0 && match (&self.1, &o.1) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Headers {}
 
 impl Headers {
+    /// The sign-in the user gave for this download (see [`WebAuth`]): sent as `Authorization`, to the address's own origin only.
+    pub fn set_web_auth(&mut self, auth: WebAuth) {
+        self.1 = Some(Arc::new(auth));
+    }
+
+    pub(crate) fn web_auth(&self) -> Option<&WebAuth> {
+        self.1.as_deref()
+    }
+
     /// Adds a header (a second one of the same name replaces the first). Names or values with a line break are dropped.
     pub fn set(&mut self, name: &str, value: &str) {
         let (name, value) = (name.trim(), value.trim());
@@ -23,7 +47,7 @@ impl Headers {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.is_empty() && self.1.is_none()
     }
 
     pub fn len(&self) -> usize {
@@ -41,12 +65,12 @@ impl Headers {
 
     /// Holds a Cookie or an Authorization.
     pub fn has_credentials(&self) -> bool {
-        self.names().any(Self::is_credential)
+        self.1.is_some() || self.names().any(Self::is_credential)
     }
 
     /// The same without Cookie and Authorization (for a redirect to another origin: scheme, host or port).
     pub fn without_credentials(&self) -> Headers {
-        Headers(self.0.iter().filter(|(n, _)| !Self::is_credential(n)).cloned().collect())
+        Headers(self.0.iter().filter(|(n, _)| !Self::is_credential(n)).cloned().collect(), None)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -60,12 +84,15 @@ impl fmt::Debug for Headers {
         for (i, n) in self.names().enumerate() {
             write!(f, "{}{n}", if i > 0 { ", " } else { "" })?;
         }
+        if self.1.is_some() {
+            write!(f, "{}Authorization", if self.0.is_empty() { "" } else { ", " })?;
+        }
         write!(f, "]")
     }
 }
 
 impl fmt::Display for Headers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "headers: {} (names only)", self.len())
+        write!(f, "headers: {} (names only)", self.len() + usize::from(self.1.is_some()))
     }
 }

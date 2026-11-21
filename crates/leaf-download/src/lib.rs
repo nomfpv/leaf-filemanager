@@ -3,6 +3,7 @@
 //! retries with backoff, a speed limit, a queue, and a final rename only when the file is complete. Blocking threads only: no
 //! async runtime. The caller (leaf's Status Center) supplies the progress sink and the answer to "that name exists".
 
+mod auth;
 mod headers;
 mod host;
 mod http;
@@ -23,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+pub use auth::{AuthScheme, Challenge, WebAuth};
 pub use headers::Headers;
 pub use host::{host_matches, host_name, set_host_cap, set_host_caps};
 pub use name::{file_name, percent_decode, sanitize};
@@ -150,6 +152,8 @@ pub trait Host {
     fn room(&self, _need: u64, _dir: &Path) -> bool {
         true
     }
+    /// The server took the sign-in this download carries (its first answer was not a 401).
+    fn signed_in(&self) {}
 }
 
 #[derive(Debug)]
@@ -177,6 +181,8 @@ pub enum Error {
     Busy(u16),
     /// The server stopped answering byte ranges part-way.
     NoRanges,
+    /// The server asks for a sign-in (401 with a Basic or Digest challenge).
+    Auth(Challenge),
     /// The finished file is not the one the checksum names.
     Checksum { expected: String, got: String },
     Io(std::io::Error),
@@ -198,6 +204,7 @@ impl std::fmt::Display for Error {
             Error::NoRoom(n) => write!(f, "{n} bytes do not fit"),
             Error::Busy(s) => write!(f, "HTTP {s}"),
             Error::NoRanges => write!(f, "the server stopped answering byte ranges"),
+            Error::Auth(_) => write!(f, "HTTP 401"),
             Error::Checksum { expected, got } => write!(f, "SHA-256 is {got}, expected {expected}"),
             Error::Io(e) => write!(f, "{e}"),
         }
@@ -258,6 +265,11 @@ fn sha256_of(path: &Path, cancel: &AtomicBool) -> Result<String, Error> {
         h.update(&buf[..n]);
     }
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Scheme, host and port of an address (the default port filled in), in lower case.
+pub fn origin(url: &str) -> (String, String, u16) {
+    http::origin_of(url)
 }
 
 pub fn is_http_url(url: &str) -> bool {
@@ -427,6 +439,9 @@ fn category_dir(dir: &Path, name: &str, categories: &[(String, Vec<String>)]) ->
 
 fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn Host) -> Result<Outcome, Error> {
     let probe = with_retries(opts, ctl, || http::probe(agent, url, &opts.headers))?;
+    if opts.headers.web_auth().is_some() {
+        host.signed_in();
+    }
     let mut name = name::file_name(probe.disposition.as_deref(), url);
     if name == "download" && probe.disposition.is_none() {
         name = name::file_name(None, &probe.uri);

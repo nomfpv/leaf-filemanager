@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use ureq::ResponseExt;
 
+use crate::auth::Challenge;
 use crate::{Error, Headers, Options, ProxyKind, ProxyMode};
 
 /// Redirects followed by hand (with headers of the caller's own).
@@ -50,7 +51,10 @@ pub fn agent(o: &Options) -> Result<ureq::Agent, Error> {
     Ok(b.build().into())
 }
 
-fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers) -> ureq::RequestBuilder<B> {
+fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers, uri: &str) -> ureq::RequestBuilder<B> {
+    if let Some(a) = h.web_auth() {
+        req = req.header("Authorization", a.header(uri));
+    }
     for (n, v) in h.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("user-agent")) {
         req = req.header(n, v);
     }
@@ -156,7 +160,7 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
     let mut at = url.to_string();
     let mut hops = 0;
     let resp = loop {
-        let resp = with_headers(agent.get(&at), &send).header("Range", "bytes=0-0").call().map_err(map_err)?;
+        let resp = with_headers(agent.get(&at), &send, &at).header("Range", "bytes=0-0").call().map_err(map_err)?;
         let s = resp.status().as_u16();
         // (only with headers of the caller's own: otherwise the agent followed the redirects itself)
         if headers.is_empty() || !matches!(s, 301 | 302 | 303 | 307 | 308) {
@@ -191,6 +195,10 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
         416 => {
             p.len = header(&resp, "content-range").as_deref().and_then(total_of).or(Some(0));
         }
+        401 => {
+            let lines: Vec<String> = resp.headers().get_all("www-authenticate").iter().filter_map(|v| v.to_str().ok()).map(str::to_string).collect();
+            return Err(Challenge::parse(&lines).map_or(Error::Http(401), Error::Auth));
+        }
         s if retriable_status(s) => return Err(status_error(s)),
         s => return Err(Error::Http(s)),
     }
@@ -201,7 +209,7 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
 /// The body of `bytes=start-(end-1)` of `uri`, or of the whole thing (`whole`). `Err(Changed)` when the server no longer has what
 /// the probe saw.
 pub fn open_range(agent: &ureq::Agent, uri: &str, start: u64, end: u64, whole: bool, p: &Probe) -> Result<Box<dyn Read + Send>, Error> {
-    let mut req = with_headers(agent.get(uri), &p.send);
+    let mut req = with_headers(agent.get(uri), &p.send, uri);
     if !whole {
         req = req.header("Range", format!("bytes={start}-{}", end - 1));
         // (a file that changed meanwhile answers with the whole new file: the validator turns that into a 200)

@@ -515,7 +515,7 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
         return Err(anyhow::anyhow!("{}", t!("This download came from the browser with your sign-in, which leaf does not keep after a restart. Start it again from the browser: leaf carries on from the part already downloaded.")));
     }
     (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
-    let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false) };
+    let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false), keep: Mutex::new(None) };
     let ctl = dl::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
     let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), categories: categories.clone(), ..dl::Options::default() };
     if let Some(ua) = agent {
@@ -535,7 +535,8 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
             }
         }
     }
-    match dl::download(&req.url, &req.dest, &opts, &ctl, &link) {
+    let result = loop_sign_in(tr, req, &mut opts, &ctl, &link);
+    match result {
         Ok(dl::Outcome::Saved(p)) => {
             arrived.lock().unwrap_or_else(|e| e.into_inner()).push(p);
             Ok(true)
@@ -567,6 +568,7 @@ fn fail_text(e: &dl::Error) -> String {
         dl::Error::Io(d) => (t!("The file could not be written in this folder").to_string(), Some(d.to_string())),
         dl::Error::Busy(c) => (format!("{} (HTTP {c})", t!("The server is busy and kept refusing, even with fewer connections")), None),
         dl::Error::NoRanges => (t!("The server stopped sending parts of the file").to_string(), None),
+        dl::Error::Auth(_) => (t!("The server did not accept the sign-in").to_string(), None),
         dl::Error::Checksum { expected, got } => (
             t!("The downloaded file does not match its checksum. It is kept as a partial file; it may be damaged.").to_string(),
             Some(format!("SHA-256 {got}
@@ -587,6 +589,8 @@ struct Link<'a> {
     label: Mutex<String>,
     /// The conflict dialog went away without an answer: the job is cancelled.
     asked_cancel: AtomicBool,
+    /// A sign-in the user asked to remember: kept in the keyring once the server has taken it.
+    keep: Mutex<Option<(leaf_remote::SecretId, leaf_remote::Secret)>>,
 }
 
 impl dl::Host for Link<'_> {
@@ -631,8 +635,189 @@ impl dl::Host for Link<'_> {
         }
     }
 
+    fn signed_in(&self) {
+        if let Some((id, secret)) = self.keep.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            leaf_remote::vault().keep_if_asked(&id, &secret);
+        }
+    }
+
     fn room(&self, need: u64, dir: &Path) -> bool {
         let free = leaf_sys::fileattr::free_space(dir);
         free == 0 || need <= free.saturating_sub(leaf_vfs::copy::KEEP_FREE)
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// HTTP sign-in (a 401 with a Basic or Digest challenge)
+
+/// Runs the download; when the server asks for a sign-in, asks the user (or takes the one saved in the keyring for this server and
+/// realm) and tries again, up to four times. A sign-in is never taken from the address (`user:password@` is refused), Basic over plain
+/// http is sent only after the user confirmed it in the dialog, and a saved one is not used for it.
+fn loop_sign_in(tr: &Tracker, req: &Request, opts: &mut dl::Options, ctl: &dl::Control, link: &Link) -> Result<dl::Outcome, dl::Error> {
+    let mut used_saved: Option<(leaf_remote::SecretId, leaf_remote::Secret)> = None;
+    for round in 0..4 {
+        let ch = match dl::download(&req.url, &req.dest, opts, ctl, link) {
+            Err(dl::Error::Auth(ch)) => ch,
+            other => return other,
+        };
+        let (scheme, host, port) = dl::origin(&req.url);
+        let id = leaf_remote::SecretId::web(&scheme, &host, port, &ch.realm);
+        let plain_basic = scheme == "http" && ch.scheme == dl::AuthScheme::Basic;
+        // the saved one was just refused: forgotten, so the dialog is next
+        if let Some((saved_id, secret)) = used_saved.take() {
+            leaf_remote::vault().refused(&saved_id, &secret);
+        }
+        let saved = (round == 0 && !plain_basic).then(|| leaf_remote::vault().get(&id)).flatten().filter(|s| s.as_str().contains(':'));
+        let (user, password, remember) = match saved {
+            Some(s) => {
+                let (u, p) = s.as_str().split_once(':').unwrap_or_default();
+                used_saved = Some((id.clone(), s.clone()));
+                (u.to_string(), p.to_string(), false)
+            }
+            None => {
+                (tr.on_progress)(0, 0, Some(t!("Waiting for your sign-in").to_string()));
+                let Some(answer) = ask_sign_in(tr, &host, &ch.realm, plain_basic, round > 0) else { return Err(dl::Error::Cancelled) };
+                answer
+            }
+        };
+        *link.keep.lock().unwrap_or_else(|e| e.into_inner()) = (remember && !plain_basic).then(|| (id, leaf_remote::Secret::new(format!("{user}:{password}")).remembered(true)));
+        opts.headers.set_web_auth(dl::WebAuth::new(&ch, &user, &password));
+        (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
+    }
+    Err(dl::Error::Http(401))
+}
+
+/// A question for the user, shown in the main window (one dialog at a time).
+struct SignIn {
+    host: String,
+    realm: String,
+    plain_basic: bool,
+    retry: bool,
+    keyring: leaf_remote::Keyring,
+    reply: std::sync::mpsc::Sender<Option<(String, String, bool)>>,
+}
+
+static SIGN_INS: LazyLock<(futures::channel::mpsc::UnboundedSender<SignIn>, Mutex<Option<futures::channel::mpsc::UnboundedReceiver<SignIn>>>)> = LazyLock::new(|| {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    (tx, Mutex::new(Some(rx)))
+});
+
+/// Asks on the download's own thread and waits for the dialog: `(user, password, remember)`; `None` when it was cancelled.
+fn ask_sign_in(tr: &Tracker, host: &str, realm: &str, plain_basic: bool, retry: bool) -> Option<(String, String, bool)> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let keyring = leaf_remote::vault().state();
+    SIGN_INS.0.unbounded_send(SignIn { host: host.to_string(), realm: realm.to_string(), plain_basic, retry, keyring, reply: tx }).ok()?;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(answer) => return answer,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !tr.cancel.load(Ordering::Relaxed) => {}
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Shows the sign-in questions as dialogs in the main window, one at a time (started once with the window).
+pub fn init_ui(cx: &mut App) {
+    use futures::StreamExt as _;
+    let Some(mut rx) = SIGN_INS.1.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    cx.spawn(async move |cx| {
+        while let Some(q) = rx.next().await {
+            let mut pending = Some(q);
+            loop {
+                let _ = cx.update(|cx| try_show_sign_in(&mut pending, cx));
+                if pending.is_none() {
+                    break;
+                }
+                // another dialog is open there: this one waits its turn
+                cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+            }
+        }
+    })
+    .detach();
+}
+
+fn try_show_sign_in(pending: &mut Option<SignIn>, cx: &mut App) {
+    let mains = crate::workspace::main_windows(cx);
+    // no window to ask in: no (the question is dropped, which the download reads as "cancelled")
+    let Some(w) = cx.active_window().filter(|a| mains.contains(a)).or_else(|| mains.first().copied()) else {
+        pending.take();
+        return;
+    };
+    if w.update(cx, |_, window, cx| prompt::current(window, cx).is_some()).unwrap_or(false) {
+        return;
+    }
+    let mut q = pending.take();
+    let _ = w.update(cx, |_, window, cx| {
+        if let Some(q) = q.take() {
+            window.activate_window();
+            show_sign_in(q, window, cx);
+        }
+    });
+}
+
+/// Two dialogs, since a dialog holds one box: the user name, then the password (with "Remember" where the keyring is there).
+fn show_sign_in(q: SignIn, window: &mut Window, cx: &mut App) {
+    let SignIn { host, realm, plain_basic, retry, keyring, reply } = q;
+    let reply = Rc::new(Cell::new(Some(reply)));
+    let first = if retry { t!("The sign-in was not accepted. Try again.") } else { t!("The server asks you to sign in to download this file.") };
+    let realm_line = if realm.is_empty() { String::new() } else { format!("\n{} {realm}", t!("Area:")) };
+    let warn = if plain_basic { format!("\n\n{}", t!("Not encrypted: this address starts with http://, so the password is sent as it is. Continue only if you trust the network.")) } else { String::new() };
+    let message = format!("{first}\n{host}{realm_line}{warn}");
+    let title = format!("{} {host}", t!("Sign in to"));
+    let next = {
+        let (reply, title, host) = (reply.clone(), title.clone(), host.clone());
+        Button::new(t!("Next"), Kind::Primary, move |user, _, cx| {
+            let user = user.unwrap_or_default().trim().to_string();
+            if user.is_empty() || user.contains(':') {
+                return Err(t!("Enter the user name (without a colon)").to_string());
+            }
+            let (reply, title, host, keyring) = (reply.clone(), title.clone(), host.clone(), keyring.clone());
+            // (a dialog started from a button is closed with it: this one comes after)
+            cx.defer({
+                let w = cx.active_window();
+                move |cx| {
+                    let Some(w) = w else { return };
+                    let _ = w.update(cx, move |_, window, cx| show_password(title, host, user, plain_basic, keyring, reply, window, cx));
+                }
+            });
+            Ok(())
+        })
+    };
+    let cancel = {
+        let reply = reply.clone();
+        Button::new(t!("Cancel"), Kind::Normal, move |_, _, _| {
+            if let Some(r) = reply.take() {
+                let _ = r.send(None);
+            }
+            Ok(())
+        })
+    };
+    prompt::show(title, Some(message), Some((String::new(), t!("User name").to_string())), vec![next, cancel], window, cx);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn show_password(title: String, host: String, user: String, plain_basic: bool, keyring: leaf_remote::Keyring, reply: Rc<Cell<Option<std::sync::mpsc::Sender<Option<(String, String, bool)>>>>>, window: &mut Window, cx: &mut App) {
+    let remember = Rc::new(Cell::new(false));
+    let (enabled, line) = match (&keyring, plain_basic) {
+        (_, true) => (false, t!("A password sent without encryption is never kept.").to_string()),
+        (leaf_remote::Keyring::Ready, _) => (true, t!("Tick Remember to keep it in the system's keyring for this server; leaf deletes it there when the server refuses it.").to_string()),
+        (leaf_remote::Keyring::Missing(why), _) => (false, format!("{}\n{}", t!("Used for this download only."), crate::i18n::td(why))),
+    };
+    let checks = vec![prompt::Check { label: t!("Remember").into(), note: "".into(), on: remember.clone(), enabled }];
+    let go = {
+        let (reply, user) = (reply.clone(), user.clone());
+        Button::new(if plain_basic { t!("Sign in anyway") } else { t!("Sign in") }, Kind::Primary, move |password, _, _| {
+            if let Some(r) = reply.take() {
+                let _ = r.send(Some((user.clone(), password.unwrap_or_default(), remember.get())));
+            }
+            Ok(())
+        })
+    };
+    let cancel = Button::new(t!("Cancel"), Kind::Normal, move |_, _, _| {
+        if let Some(r) = reply.take() {
+            let _ = r.send(None);
+        }
+        Ok(())
+    });
+    prompt::show_secret_with(title, Some(format!("{host}\n{user}\n\n{line}")), t!("Password").to_string(), checks, vec![go, cancel], window, cx);
 }

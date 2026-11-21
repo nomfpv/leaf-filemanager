@@ -748,6 +748,7 @@ pub fn main() {
             // downloads that were not finished last time: back in the Status Center, resuming from their part files
             downloads::restore(cx);
             download_schedule::start(cx);
+            downloads::init_ui(cx);
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);
         }

@@ -5043,6 +5043,7 @@ name = "leaf-download"
 version = "0.9.4"
 dependencies = [
  "log",
+ "md-5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
