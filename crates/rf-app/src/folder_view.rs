@@ -2050,15 +2050,16 @@ impl FolderView {
                     self.entries_gen += 1;
                 }
                 Msg::Hits(mut es, mut ps) => {
-                    // a search with "modified:..." keeps the hits of those days
-                    if let Location::Search { query, .. } = self.location()
-                        && let Some(days) = rf_core::search_date::split(query, chrono::Local::now().date_naive()).modified
-                    {
-                        let keep: Vec<bool> = es.iter().map(|e| days.contains_ms(e.modified_ms)).collect();
-                        let mut k = keep.iter();
-                        es.retain(|_| *k.next().unwrap_or(&true));
-                        let mut k = keep.iter();
-                        ps.retain(|_| *k.next().unwrap_or(&true));
+                    // a search with "modified:..." keeps the hits of those days; "kind:pictures" keeps pictures only
+                    if let Location::Search { query, .. } = self.location() {
+                        let split = rf_core::search_date::split(query, chrono::Local::now().date_naive());
+                        if split.modified.is_some() || split.pictures {
+                            let keep: Vec<bool> = es.iter().map(|e| split.modified.is_none_or(|d| d.contains_ms(e.modified_ms)) && (!split.pictures || rf_core::search_date::is_picture(&e.name))).collect();
+                            let mut k = keep.iter();
+                            es.retain(|_| *k.next().unwrap_or(&true));
+                            let mut k = keep.iter();
+                            ps.retain(|_| *k.next().unwrap_or(&true));
+                        }
                     }
                     self.entries.extend(es);
                     self.entries_gen += 1;

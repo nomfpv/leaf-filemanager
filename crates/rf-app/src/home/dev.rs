@@ -1087,7 +1087,7 @@ pub fn growth_line(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView
 // Photo timeline
 // ---------------------------------------------------------------------------------------------------------------------
 
-const PHOTO_EXTS: [&str; 10] = ["jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tif", "tiff", "dng"];
+const PHOTO_EXTS: [&str; 10] = rf_core::search_date::PICTURE_EXTS;
 /// A walk looks at this many pictures at most.
 const PHOTO_CAP: usize = 20_000;
 
@@ -1183,7 +1183,7 @@ pub fn photo_timeline(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderV
         let entry = rf_core::Entry::new(&name, rf_core::EntryKind::File, size, modified, 0, 0);
         let thumb = v.images.update(cx, |c, cx| c.thumbnail(&dir, &entry, 96, cx));
         let label = chrono::NaiveDate::parse_from_str(&format!("{}-01", m.key), "%Y-%m-%d").map(|d| d.format("%B %Y").to_string()).unwrap_or_else(|_| m.key.clone());
-        let (root, query) = (folder.clone(), format!("modified:{}", m.key));
+        let (root, query) = (folder.clone(), format!("kind:pictures modified:{}", m.key));
         list = list.child(
             h_flex()
                 .id(("photo-month", i))
@@ -1193,7 +1193,7 @@ pub fn photo_timeline(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderV
                 .rounded(theme::RADIUS_SM)
                 .cursor_pointer()
                 .hover(|s| s.bg(p.hover))
-                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Open this month as a search (by modified date)").build(w, cx))
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Open this month's pictures as a search (by modified date)").build(w, cx))
                 .child(div().size(px(36.)).flex_shrink_0().rounded(px(3.)).overflow_hidden().bg(p.pressed).when_some(thumb, |d, im| d.child(img(im).size_full().object_fit(ObjectFit::Cover))))
                 .child(div().flex_1().min_w_0().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(label))
                 .child(div().text_xs().text_color(p.text_secondary).child(m.count.to_string()))

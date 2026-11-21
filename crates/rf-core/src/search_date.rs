@@ -30,6 +30,16 @@ pub struct Split {
     /// The query without its `modified:` word.
     pub text: String,
     pub modified: Option<DayRange>,
+    /// A `kind:pictures` word was there: only pictures (by extension, see [`PICTURE_EXTS`]) are hits.
+    pub pictures: bool,
+}
+
+/// The extensions the `kind:pictures` filter and the home page's photo timeline count as pictures.
+pub const PICTURE_EXTS: [&str; 10] = ["jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tif", "tiff", "dng"];
+
+/// Whether a file name has a picture extension.
+pub fn is_picture(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, e)| PICTURE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
 /// What a value after `modified:` means on `today`: a date, `today`, `yesterday`, `week` (this week, from Monday) or
@@ -54,15 +64,20 @@ pub fn range_of(value: &str, today: NaiveDate) -> Option<DayRange> {
 /// Takes the first `modified:<value>` word out of `query`. A word with a value that means nothing stays in the text.
 pub fn split(query: &str, today: NaiveDate) -> Split {
     let mut modified = None;
+    let mut pictures = false;
     let mut kept: Vec<&str> = Vec::new();
     for word in query.split_whitespace() {
+        if word.eq_ignore_ascii_case("kind:pictures") {
+            pictures = true;
+            continue;
+        }
         let range = (modified.is_none()).then(|| word.get(..9).filter(|k| k.eq_ignore_ascii_case("modified:")).and_then(|_| range_of(&word[9..], today))).flatten();
         match range {
             Some(r) => modified = Some(r),
             None => kept.push(word),
         }
     }
-    Split { text: kept.join(" "), modified }
+    Split { text: kept.join(" "), modified, pictures }
 }
 
 /// The query with its `modified:` word replaced by `value` (`None`: taken out): what the "Modified" chips write.
@@ -122,10 +137,13 @@ mod tests {
             ("modified:soon report", "modified:soon report", None),
             ("modified:", "modified:", None),
             ("a  b", "a b", None),
+            ("kind:pictures modified:today", "", day),
         ];
         for (query, text, modified) in table {
-            assert_eq!(split(query, today), Split { text: text.to_string(), modified: *modified }, "{query}");
+            let want = Split { text: text.to_string(), modified: *modified, pictures: query.starts_with("kind:") };
+            assert_eq!(split(query, today), want, "{query}");
         }
+        assert!(is_picture("a.JPG") && !is_picture("a.txt") && !is_picture("jpg"));
     }
 
     #[test]
