@@ -636,6 +636,10 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
     crate::status_center::start_with(cx, t!("Undoing: file organizing").to_string(), move |_| {
         let u = leaf_sys::organize::undo_moves(&rec);
         *moved_out.lock().unwrap() = crate::tags::settled(back);
+        // what was put back, with its size and time: a redo touches only these files (on the stack
+        // at once, before anything below can fail)
+        let mut put_back = u.put_back.clone();
+        crate::undo::update_organized(rec.token, |r| r.put_back = put_back.clone());
         let mut problems = u.failed.len();
         for f in &u.failed {
             log::warn!("organizer undo: {}: {}", f.path.display(), f.message);
@@ -650,7 +654,17 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
                 problems += rec.recycled.len();
             } else {
                 problems += rec.recycled.len().saturating_sub(items.len());
+                // (only a path that was free before the restore: whatever sits there afterwards is the
+                // restored file, not somebody else's that a redo would then send to the bin)
+                let restoring: Vec<PathBuf> = rec
+                    .recycled
+                    .iter()
+                    .filter(|(orig, bin)| !leaf_sys::organize::exists(orig) && items.iter().any(|it| leaf_sys::recycle::same_key(&bin.to_string_lossy(), &it.parsing_path)))
+                    .map(|(orig, _)| orig.clone())
+                    .collect();
                 leaf_sys::recycle::restore(&items)?;
+                put_back.extend(restoring.into_iter().filter_map(|p| leaf_sys::organize::stamp(&p).map(|s| (p, s))));
+                crate::undo::update_organized(rec.token, |r| r.put_back = put_back);
             }
         }
         anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 file could not be put back"), t!("{n} files could not be put back")));
@@ -658,30 +672,38 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
     }, on_done);
 }
 
-/// Redo of a run (after an undo): the same moves, the same files to the Recycle Bin.
+/// Redo of a run (after an undo): the same moves, the same files to the Recycle Bin, but only the
+/// files the undo put back (a file that appeared at such a path since is left alone), and only
+/// ever to the bin (a drive without one: skipped, never the question to delete for good). The
+/// record on the stack then holds what was done again, so the next undo restores exactly that.
 pub fn redo_run(rec: Record, cx: &mut App) {
     UNDONE.lock().unwrap().retain(|t| *t != rec.token);
-    let again: Vec<(PathBuf, PathBuf)> = rec.moves.clone();
     let moved = Arc::new(Mutex::new(Vec::new()));
     let moved_out = moved.clone();
-    #[cfg(not(windows))]
-    let ask = crate::status_center::no_trash_asker(cx);
     crate::status_center::start_with(cx, t!("Redoing: file organizing").to_string(), move |tracker| {
-        let r = leaf_sys::organize::redo_moves(&rec);
-        *moved_out.lock().unwrap() = crate::tags::settled(again);
-        let mut problems = r.failed.len();
-        let present: Vec<PathBuf> = rec.recycled.iter().map(|(orig, _)| orig.clone()).filter(|p| leaf_sys::organize::exists(p)).collect();
-        problems += rec.recycled.len() - present.len();
-        if !present.is_empty() {
-            // (`false`: to the Recycle Bin)
-            #[cfg(windows)]
-            leaf_sys::fileops::delete_tracked(&present, false, tracker)?;
-            // (a drive without a trash: asked, as a delete does)
-            #[cfg(not(windows))]
-            crate::status_center::trash_asking(&present, tracker, &ask)?;
+        let recycler = leaf_sys::organize::ShellRecycler { tracker };
+        let r = leaf_sys::organize::redo(&rec, &recycler);
+        crate::undo::update_organized(rec.token, |stored| *stored = r.record.clone());
+        *moved_out.lock().unwrap() = crate::tags::settled(r.record.moves.clone());
+        for f in &r.failed {
+            log::warn!("organizer redo: {}: {}", f.path.display(), f.message);
         }
-        anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 file could not be moved"), t!("{n} files could not be moved")));
-        Ok(true)
+        for s in &r.skipped {
+            log::info!("organizer redo: {}: {}", s.path.display(), s.why.text());
+        }
+        if r.failed.is_empty() && r.skipped.is_empty() {
+            return Ok(true);
+        }
+        let mut parts = Vec::new();
+        if !r.failed.is_empty() {
+            parts.push(plural(r.failed.len(), t!("1 file could not be moved"), t!("{n} files could not be moved")));
+        }
+        if !r.skipped.is_empty() {
+            parts.push(plural(r.skipped.len(), t!("1 file skipped"), t!("{n} files skipped")));
+        }
+        let mut lines: Vec<String> = r.failed.iter().take(3).map(|f| format!("{}: {}", f.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), crate::i18n::td(&f.message))).collect();
+        lines.extend(skipped_lines(&r.skipped));
+        anyhow::bail!("{} · {}", parts.join(" · "), lines.join("; "))
     }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *moved.lock().unwrap())))));
 }
 

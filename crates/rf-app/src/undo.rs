@@ -117,6 +117,19 @@ pub fn forget_organized(token: u64) -> bool {
     }
 }
 
+/// Changes the record of one folder organizer run where it waits now, on the Ctrl+Z or the Ctrl+Y
+/// stack (an undo learns what it put back, a redo where the files went this time), so the next
+/// undo or redo works on what really happened. Nothing when the run is on neither.
+pub fn update_organized(token: u64, change: impl FnOnce(&mut crate::organizer::Record)) {
+    for stack in [&STACK, &REDO] {
+        let mut s = stack.lock();
+        if let Some(UndoOp::Organized { rec }) = s.iter_mut().rev().find(|op| matches!(op, UndoOp::Organized { rec } if rec.token == token)) {
+            change(rec);
+            return;
+        }
+    }
+}
+
 fn undo_op(op: UndoOp, cx: &mut App) {
     // creating an item can't be replayed (its contents may have changed), everything else can
     if !matches!(op, UndoOp::Created { .. }) {

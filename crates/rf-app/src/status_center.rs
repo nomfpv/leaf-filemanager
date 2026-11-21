@@ -1317,18 +1317,6 @@ pub fn no_trash_asker(cx: &mut App) -> NoTrashTx {
     qtx
 }
 
-/// Moves `paths` to the trash inside a job; items on a drive without a trash are asked about, as a delete does.
-#[cfg(not(windows))]
-pub fn trash_asking(paths: &[std::path::PathBuf], t: Arc<Tracker>, ask: &NoTrashTx) -> anyhow::Result<bool> {
-    match fileops::delete_tracked(paths, false, t.clone()) {
-        Err(e) => match e.downcast::<leaf_sys::recycle::NoTrash>() {
-            Ok(no) => resolve_no_trash(no.paths, paths, &t, ask),
-            Err(e) => Err(e),
-        },
-        ok => ok,
-    }
-}
-
 pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, record: bool) {
     // a pinned folder that is deleted leaves the sidebar (its question was answered before this)
     for p in &paths {
