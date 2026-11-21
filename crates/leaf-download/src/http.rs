@@ -18,7 +18,7 @@ pub fn agent(o: &Options) -> ureq::Agent {
         .timeout_per_read(Some(o.read_timeout))
         .http_status_as_error(false)
         .max_idle_connections_per_host(32);
-    // headers of the caller's own: redirects are followed in `probe`, which drops Cookie and Authorization when one leaves the host
+    // headers of the caller's own: redirects are followed in `probe`, which drops Cookie and Authorization when one leaves the origin (scheme, host, port)
     if !o.headers.is_empty() {
         b = b.max_redirects(0);
     }
@@ -32,8 +32,8 @@ fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers) -> ureq::Reque
     req
 }
 
-/// `location` (a redirect's target) made absolute against `base`.
-fn resolve(base: &str, location: &str) -> String {
+/// `location` (a redirect's target) made absolute against `base` (RFC 3986 reference resolution, without dot segments).
+pub(crate) fn resolve(base: &str, location: &str) -> String {
     let loc = location.trim();
     let lower = loc.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -48,11 +48,36 @@ fn resolve(base: &str, location: &str) -> String {
     if loc.starts_with('/') {
         return format!("{origin}{loc}");
     }
-    let path = &rest[auth_end..];
-    let path = &path[..path.find(['?', '#']).unwrap_or(path.len())];
+    let after = &rest[auth_end..];
+    let path = &after[..after.find(['?', '#']).unwrap_or(after.len())];
+    let path = if path.is_empty() { "/" } else { path };
+    // only a fragment: the same address; only a query: the same path with it
+    if loc.is_empty() || loc.starts_with('#') {
+        let no_frag = &after[..after.find('#').unwrap_or(after.len())];
+        return format!("{origin}{}{loc}", if no_frag.is_empty() { "/" } else { no_frag });
+    }
+    if loc.starts_with('?') {
+        return format!("{origin}{path}{loc}");
+    }
     let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     let dir = if dir.is_empty() { "/" } else { dir };
     format!("{origin}{dir}{loc}")
+}
+
+/// Scheme, host and port of an address (the port filled in for http and https), in lower case: Cookie and Authorization go only
+/// where this is the same as the first address's (a redirect from https to http on the same host would send them in clear text).
+pub(crate) fn origin_of(url: &str) -> (String, String, u16) {
+    let (scheme, rest) = url.trim().split_once("://").unwrap_or(("", url));
+    let scheme = scheme.to_ascii_lowercase();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("").to_ascii_lowercase();
+    // ([v6]:port, host:port, host)
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) if !p.contains(']') && p.bytes().all(|b| b.is_ascii_digit()) && !p.is_empty() => (h.to_string(), p.parse().ok()),
+        _ => (hostport.clone(), None),
+    };
+    let port = port.unwrap_or(if scheme == "https" { 443 } else { 80 });
+    (scheme, host, port)
 }
 
 /// What the server told about the file.
@@ -101,7 +126,7 @@ pub fn map_err(e: ureq::Error) -> Error {
 /// One request for the size, the range support and the validators: a range of the first byte, so a server that ignores ranges is
 /// told apart from one that honours them.
 pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe, Error> {
-    let first_host = crate::host::host_of(url);
+    let first = origin_of(url);
     let mut send = headers.clone();
     let mut at = url.to_string();
     let mut hops = 0;
@@ -121,7 +146,7 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
         if !crate::is_http_url(&at) {
             return Err(Error::BadUrl("a redirect to an address that is not http(s)".into()));
         }
-        if crate::host::host_of(&at) != first_host {
+        if origin_of(&at) != first {
             send = send.without_credentials();
         }
     };

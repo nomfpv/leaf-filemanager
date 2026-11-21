@@ -63,7 +63,7 @@ pub struct Options {
     pub sha256: Option<String>,
     /// Request headers for this download only (a browser's Cookie, Authorization, Referer, User-Agent). Memory only: never in the
     /// part state or any file, never logged (the type shows only the names). Cookie and Authorization are dropped when a redirect
-    /// leaves the address's host.
+    /// leaves the address's origin (scheme, host or port: https to http on the same host too).
     pub headers: Headers,
 }
 

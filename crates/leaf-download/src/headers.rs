@@ -44,7 +44,7 @@ impl Headers {
         self.names().any(Self::is_credential)
     }
 
-    /// The same without Cookie and Authorization (for a redirect to another host).
+    /// The same without Cookie and Authorization (for a redirect to another origin: scheme, host or port).
     pub fn without_credentials(&self) -> Headers {
         Headers(self.0.iter().filter(|(n, _)| !Self::is_credential(n)).cloned().collect())
     }

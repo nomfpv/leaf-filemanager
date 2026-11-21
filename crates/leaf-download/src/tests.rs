@@ -280,3 +280,19 @@ fn browser_credentials_never_reach_a_file() {
     assert!(shown.contains("Cookie") && shown.contains("Authorization"), "the names are still shown");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn credentials_stay_on_the_first_origin() {
+    let first = http::origin_of("https://files.example.com/dl/a.zip");
+    // https to http on the same host: Cookie and Authorization would go out in clear text
+    assert_ne!(first, http::origin_of("http://files.example.com/dl/a.zip"));
+    assert_ne!(first, http::origin_of("https://files.example.com:8443/a.zip"));
+    assert_ne!(first, http::origin_of("https://cdn.example.com/a.zip"));
+    assert_eq!(first, http::origin_of("HTTPS://Files.Example.com:443/other?x=1"));
+    // a redirect's target resolved against the address it came from
+    assert_eq!(http::resolve("https://h/dir/file?a=1", "?x=1"), "https://h/dir/file?x=1");
+    assert_eq!(http::resolve("https://h/dir/file", "other"), "https://h/dir/other");
+    assert_eq!(http::resolve("https://h/dir/file", "/root"), "https://h/root");
+    assert_eq!(http::resolve("https://h/dir/file", "//g/x"), "https://g/x");
+    assert_eq!(http::resolve("https://h", "?x=1"), "https://h/?x=1");
+}
