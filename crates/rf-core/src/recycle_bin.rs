@@ -6,10 +6,11 @@
 
 use std::collections::HashSet;
 
-/// How an item of the bin is told apart from the others: its path inside the bin's storage, lower-cased
-/// (the same key `rf_win::recycle` uses to find an item again).
+/// How an item of the bin is told apart from the others: its path inside the bin's storage, lower-cased on Windows (the same key
+/// `rf_win::recycle` uses to find an item again), exactly as it is elsewhere (Linux tells `a.txt` and `A.txt` apart: the same rule
+/// as `recycle::same_key` of the platform backends, so "delete for good" finds the trashed item and never another one).
 pub fn key_of(parsing_path: &str) -> String {
-    parsing_path.to_lowercase()
+    if cfg!(windows) { parsing_path.to_lowercase() } else { parsing_path.to_string() }
 }
 
 /// The rows a command (restore, delete for good) applies to: the selected ones that are shown, in the order they are shown.
@@ -456,7 +457,8 @@ mod tests {
     #[test]
     fn exactly_the_asked_items_are_deleted() {
         let bin = FakeBin::new(&["a", "b", "c", "d"]);
-        let r = delete_through(&bin, &s(&["B", "c"]));
+        // (case is not told apart on Windows only)
+        let r = delete_through(&bin, &s(&[if cfg!(windows) { "B" } else { "b" }, "c"]));
         assert_eq!(r, DeleteReport { requested: 2, deleted: 2, left: 0, collateral: 0, error: None, unknown: false });
         assert!(r.all_done());
         assert_eq!(*bin.items.borrow(), s(&["a", "d"]));
