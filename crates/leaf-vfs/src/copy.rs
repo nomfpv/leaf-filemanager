@@ -5,11 +5,14 @@
 //!   never carries the real name; on cancel or error the partial file is removed;
 //! - a name that is there already asks the conflict callback (skip, replace, keep both, cancel);
 //! - the modification time is kept when the target can set it;
-//! - links are never followed (a link in the tree is skipped and reported), so a copy cannot wander out of the tree.
+//! - links are never followed (a link in the tree is skipped and reported);
+//! - every name read from the source is checked before it becomes part of a target path (`names::vchild`: no `..`, no
+//!   separators, no drive letters or streams, no device names...), and the target's parent must be the folder it goes into; a
+//!   bad name is left out and reported in `CopyReport::refused`. With both, a copy cannot wander out of the target folder.
 
 use std::io::{Read, Write};
 
-use crate::{Fs, FsError, Kind, Meta, MetaChange, VPath, WriteOpts};
+use crate::{Fs, FsError, Kind, Meta, MetaChange, VPath, WriteOpts, names};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Conflict {
@@ -51,6 +54,9 @@ pub struct CopyReport {
     pub bytes: u64,
     /// What was left out, with the reason ("link", "skipped": the conflict answer).
     pub skipped: Vec<(VPath, &'static str)>,
+    /// Names in the source that cannot be a local name or lead out of the folder: (the source folder, the name, why). Never
+    /// written anywhere.
+    pub refused: Vec<(VPath, String, &'static str)>,
 }
 
 pub struct Copy<'a> {
@@ -130,9 +136,16 @@ impl<'a> Copy<'a> {
         let mut children = Vec::new();
         self.from_fs.list(from, 1024, self.cancelled, &mut |b| children.extend(b))?;
         for e in children {
-            let src = from.join(&e.name);
+            // the source's names are not trusted: checked before they become part of a target path
+            let (src, dst) = match (names::vchild(from, &e.name), names::vchild(&to, &e.name)) {
+                (Ok(s), Ok(d)) => (s, d),
+                (Err(why), _) | (_, Err(why)) => {
+                    self.report.refused.push((from.clone(), e.name.to_string(), why));
+                    continue;
+                }
+            };
             let meta = Meta::from_entry(&e);
-            self.item(&src, &meta, &to.join(&e.name))?;
+            self.item(&src, &meta, &dst)?;
         }
         if self.opts.keep_mtime && self.to_fs.caps().set_times && m.modified_ms > 0 {
             let _ = self.to_fs.set_meta(&to, &MetaChange { modified_ms: Some(m.modified_ms), mode: None });
@@ -216,4 +229,93 @@ impl<'a> Copy<'a> {
         }
         Err(FsError::Exists)
     }
+}
+
+/// Disk space a fetch or a download leaves free at least.
+pub const KEEP_FREE: u64 = 64 << 20;
+
+/// Fetches ONE file of `fs` into the local file `dest` (a cache copy that is opened next): refused unless the source is a
+/// regular file when it is looked at here, never a folder or a link, so no tree is ever copied and no name of the source is
+/// used for a local path. At most `max` bytes are taken, counted as they arrive (not the size the source claims), and no
+/// more than the disk can hold with `KEEP_FREE` left. Written under a part name first, marked as downloaded (`mark_from`: the
+/// address shown in the mark) and then moved over an older copy at `dest` (which may be read-only: it is the cache's own).
+pub fn fetch_file(
+    fs: &dyn Fs,
+    from: &VPath,
+    dest: &std::path::Path,
+    max: u64,
+    mark_from: Option<&str>,
+    cancelled: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Meta, FsError> {
+    let m = fs.stat(from)?;
+    if m.kind != Kind::File {
+        return Err(FsError::Other("This is not a regular file on the server (it is a folder or a link now)".into()));
+    }
+    if m.size > max {
+        return Err(FsError::Other(format!("The file is bigger than {} MB", max >> 20)));
+    }
+    let dir = dest.parent().ok_or(FsError::Denied)?;
+    let name = dest.file_name().and_then(|n| n.to_str()).ok_or(FsError::Denied)?;
+    let free = leaf_sys::fileattr::free_space(dir);
+    let room = if free == 0 { max } else { free.saturating_sub(KEEP_FREE) };
+    if m.size > room {
+        return Err(FsError::Other("There is not enough free space on this PC for the file".into()));
+    }
+    let budget = max.min(room);
+    let part = dir.join(part_name(name));
+    let r = (|| -> Result<(), FsError> {
+        let mut src = fs.open_read(from, 0)?;
+        let mut out = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&part)?;
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut done = 0u64;
+        loop {
+            if cancelled() {
+                return Err(FsError::Cancelled);
+            }
+            let n = match src.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            };
+            done = done.saturating_add(n as u64);
+            if done > budget {
+                return Err(FsError::Other(if done > max {
+                    format!("The server sent more than {} MB for this file; leaf stopped", max >> 20)
+                } else {
+                    "There is not enough free space on this PC for the file".into()
+                }));
+            }
+            out.write_all(&buf[..n])?;
+            progress(done, m.size.max(done));
+        }
+        out.flush()?;
+        drop(out);
+        if m.modified_ms > 0
+            && let Ok(f) = std::fs::OpenOptions::new().write(true).open(&part)
+        {
+            let _ = f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(m.modified_ms as u64));
+        }
+        if let Some(from) = mark_from
+            && let Err(e) = leaf_sys::fileinfo::mark_downloaded(&part, from)
+        {
+            log::debug!("fetch: no download mark on {}: {e}", part.display());
+        }
+        if let Ok(old) = std::fs::symlink_metadata(dest) {
+            if !old.is_file() {
+                return Err(FsError::Exists);
+            }
+            let mut perm = old.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = std::fs::set_permissions(dest, perm);
+        }
+        std::fs::rename(&part, dest)?;
+        Ok(())
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    r.map(|_| m)
 }

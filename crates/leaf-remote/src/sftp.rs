@@ -146,6 +146,7 @@ impl Fs for SftpFs {
         let t = self.target(dir)?;
         let mut sent = 0;
         let mut pending: Vec<Entry> = Vec::new();
+        let mut left_out = 0usize;
         let r = (|| {
             loop {
                 if cancelled() {
@@ -158,7 +159,18 @@ impl Fs for SftpFs {
                     Err(e) => Err(e),
                 })?;
                 let Some(files) = part else { break };
-                pending.extend(files.iter().filter(|f| f.filename != "." && f.filename != "..").map(|f| entry_of(&f.filename, &f.attrs)));
+                // a name that cannot be one part of an address (empty, `.`, `..`, a `/` or `\`, NUL) is left out and counted:
+                // joined to the folder's address it would name another place
+                for f in &files {
+                    match leaf_vfs::names::address_problem(&f.filename) {
+                        None => pending.push(entry_of(&f.filename, &f.attrs)),
+                        Some(_) if f.filename == "." || f.filename == ".." => {}
+                        Some(why) => {
+                            left_out += 1;
+                            log::debug!("remote: a name in the listing left out: {why}");
+                        }
+                    }
+                }
                 while pending.len() >= batch.max(1) {
                     let rest = pending.split_off(batch.max(1));
                     sent += pending.len();
@@ -168,6 +180,9 @@ impl Fs for SftpFs {
             if !pending.is_empty() {
                 sent += pending.len();
                 on_batch(std::mem::take(&mut pending));
+            }
+            if left_out > 0 {
+                log::warn!("remote: {left_out} names in a listing of {} cannot be used (empty, . or .., / or \\, NUL) and are left out", dir.host());
             }
             Ok(sent)
         })();

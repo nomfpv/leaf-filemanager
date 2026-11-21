@@ -256,38 +256,69 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
 
 // ------------------------------------------------------------------------------------------------ copies of files
 
-/// The folder fetched copies live in (per server and path, so the same file is fetched once).
+/// The cache file of a server's file: `<temp>/leaf-remote/<hash of the whole address>/<the name, made safe>`. The hash keeps
+/// two addresses apart however alike their safe names are; the server's names never become folders here, so nothing can
+/// lead out of the cache. On Unix the cache folder is the user's own (mode 0700).
 fn cache_path(v: &VPath) -> PathBuf {
-    let safe = |s: &str| s.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@' | ' ') { c } else { '_' }).collect::<String>();
-    let mut p = std::env::temp_dir().join("leaf-remote").join(safe(&format!("{}-{}", v.scheme(), v.authority())));
-    for seg in v.segments() {
-        p.push(safe(seg));
-    }
-    p
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(v.to_string().as_bytes());
+    let hash: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    let root = cache_root();
+    root.join(hash).join(leaf_vfs::names::safe_local_name(v.name()))
 }
 
-/// A copy of the server's file in the cache folder, fetched unless a copy of the same size and time is there. Read-only on
-/// purpose: changes to it would not go back to the server (editing on a server comes later).
-fn fetch(v: &VPath, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf, FsError> {
+fn cache_root() -> PathBuf {
+    #[cfg(unix)]
+    {
+        let user = std::env::var("USER").unwrap_or_default();
+        std::env::temp_dir().join(format!("leaf-remote-{}", leaf_vfs::names::safe_local_name(&user)))
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::temp_dir().join("leaf-remote")
+    }
+}
+
+/// Makes the cache folder of `local` (on Unix the top one only for this user: another user cannot plant files there).
+fn make_cache_dir(local: &Path) -> Result<(), FsError> {
+    let root = cache_root();
+    std::fs::create_dir_all(&root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // a link is refused; only the folder's owner can change its mode, so a folder another user made fails here
+        if !std::fs::symlink_metadata(&root)?.is_dir() {
+            return Err(FsError::Denied);
+        }
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+    }
+    if let Some(dir) = local.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(())
+}
+
+/// A copy of the server's file in the cache folder, fetched unless a copy of the same size and time is there. Only a regular
+/// file is fetched (`fetch_file` refuses a folder or a link at fetch time), at most `max` bytes as they arrive, marked as
+/// downloaded. Read-only on purpose: changes to it would not go back to the server (editing on a server comes later).
+fn fetch(v: &VPath, max: u64, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf, FsError> {
     let fs = leaf_vfs::fs_for(v.scheme())?;
     let m = fs.stat(v)?;
+    if m.kind != leaf_vfs::Kind::File {
+        return Err(FsError::Other("This is not a regular file on the server".into()));
+    }
     let local = cache_path(v);
-    if let Ok(lm) = std::fs::metadata(&local) {
+    if let Ok(lm) = std::fs::symlink_metadata(&local)
+        && lm.is_file()
+    {
         let same_time = lm.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|d| d.as_millis() as i64 / 1000 == m.modified_ms / 1000);
         if lm.len() == m.size && same_time {
             return Ok(local);
         }
-        let mut perm = lm.permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perm.set_readonly(false);
-        let _ = std::fs::set_permissions(&local, perm);
     }
-    let dir = local.parent().ok_or(FsError::Denied)?;
-    std::fs::create_dir_all(dir)?;
-    let size = m.size;
-    let mut on_progress = |p: &leaf_vfs::copy::Progress| progress(p.bytes_done, size);
-    let mut conflict = |_: &VPath, _: &leaf_vfs::Meta| leaf_vfs::copy::Conflict::Replace;
-    leaf_vfs::copy::Copy::new(&*fs, &LocalFs, cancelled, &mut on_progress, &mut conflict).run(v, &LocalFs::address(&local))?;
+    make_cache_dir(&local)?;
+    let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(22)));
+    leaf_vfs::copy::fetch_file(&*fs, v, &local, max, Some(&from), cancelled, progress)?;
     if let Ok(lm) = std::fs::metadata(&local) {
         let mut perm = lm.permissions();
         perm.set_readonly(true);
@@ -315,7 +346,7 @@ pub fn open_file(cx: &mut App, v: VPath, size: u64) {
             tr.bytes.set(d, total);
             (tr.on_progress)(total.max(1) as u32, d.min(u32::MAX as u64) as u32, None);
         };
-        let local = match fetch(&v, &|| cancel.load(Ordering::Relaxed), &mut progress) {
+        let local = match fetch(&v, OPEN_MAX, &|| cancel.load(Ordering::Relaxed), &mut progress) {
             Ok(l) => l,
             Err(FsError::Cancelled) => return Ok(false),
             Err(e) => return Err(anyhow_of(e)),
@@ -333,7 +364,8 @@ pub fn look(v: VPath, size: u64) {
         log::info!("remote: {} is too big to fetch for leaf-look", v);
         return;
     }
-    std::thread::spawn(move || match fetch(&v, &|| false, &mut |_, _| {}) {
+    // (no cancel here: the fetch stops at LOOK_MAX bytes received, whatever size the server claimed)
+    std::thread::spawn(move || match fetch(&v, LOOK_MAX, &|| false, &mut |_, _| {}) {
         Ok(local) => crate::look::ipc::send(crate::look::ipc::Msg::Toggle(local), true),
         Err(e) => log::warn!("remote: could not fetch {v} for leaf-look: {e}"),
     });
@@ -410,6 +442,8 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
     use leaf_vfs::copy::{Conflict, Copy, Progress};
     let cancelled = || tr.cancel.load(Ordering::Relaxed);
     let fs = leaf_vfs::fs_for(items[0].0.scheme()).map_err(anyhow_of)?;
+    let mut refused = 0usize;
+    let targets: Vec<PathBuf> = items.iter().map(|(v, _)| dest.join(v.name())).collect();
     // the sizes first (folders walked), for the progress bar
     (tr.on_progress)(0, 0, Some(t!("Counting what is on the server").to_string()));
     let (mut total_files, mut total_bytes) = (0u64, 0u64);
@@ -424,9 +458,8 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
     // names that are here already: asked once, for the items themselves
     let mut asked = Vec::new();
     let mut at = Vec::new();
-    for (v, is_dir) in items {
-        let target = dest.join(v.name());
-        if let Ok(m) = std::fs::symlink_metadata(&target) {
+    for ((v, is_dir), target) in items.iter().zip(&targets) {
+        if let Ok(m) = std::fs::symlink_metadata(target) {
             let src = fs.stat(v).map_err(anyhow_of)?;
             at.push(asked.len());
             asked.push(Asked {
@@ -461,7 +494,7 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
         if answer == Some(Resolve::Skip) {
             continue;
         }
-        let mut target = dest.join(v.name());
+        let mut target = targets[i].clone();
         if answer == Some(Resolve::KeepBoth) {
             let name = v.name();
             let (stem, ext) = match name.rfind('.') {
@@ -490,10 +523,14 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
                 if !rep.skipped.is_empty() {
                     log::info!("download: left out {} links", rep.skipped.len());
                 }
+                refused += rep.refused.len();
             }
             Err(FsError::Cancelled) => return Ok(false),
             Err(e) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
         }
+    }
+    if refused > 0 {
+        return Err(anyhow::anyhow!("{} {refused}", t!("Everything else arrived. Left out, because their names cannot be used on this PC:")));
     }
     Ok(true)
 }

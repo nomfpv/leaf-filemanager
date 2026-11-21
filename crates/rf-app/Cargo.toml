@@ -21,6 +21,8 @@ leaf-dev.workspace = true
 leaf-vfs.workspace = true
 # sftp:// (russh, pure Rust; its runtime starts with the first connection)
 leaf-remote.workspace = true
+# cache file names of fetched server files (a hash of the address)
+sha2.workspace = true
 # installer and auto-update (GitHub Releases)
 velopack = "=1.2.161"
 rf-archive.workspace = true

@@ -27,6 +27,8 @@ struct ServerSide {
     password: Arc<String>,
     client_key: PublicKey,
     logins: Arc<AtomicUsize>,
+    /// The server lies (see `Disk::hostile`).
+    hostile: bool,
 }
 
 struct Sess {
@@ -74,7 +76,7 @@ impl russh::server::Handler for Sess {
         match (name, self.channels.remove(&id)) {
             ("sftp", Some(ch)) => {
                 session.channel_success(id)?;
-                russh_sftp::server::run(ch.into_stream(), Disk { root: self.s.root.clone(), handles: HashMap::new(), next: 0 }).await;
+                russh_sftp::server::run(ch.into_stream(), Disk { root: self.s.root.clone(), handles: HashMap::new(), next: 0, hostile: self.s.hostile }).await;
             }
             _ => session.channel_failure(id)?,
         }
@@ -92,6 +94,28 @@ struct Disk {
     root: PathBuf,
     handles: HashMap<String, Open>,
     next: u64,
+    /// `/pics` lists names that try to leave the folder (and `invoice.pdf`, listed as a file, is a folder to `lstat`); every
+    /// file in it reads as `<root>/payload`.
+    hostile: bool,
+}
+
+/// What the hostile `/pics` lists: (name, is a folder).
+const HOSTILE_PICS: &[(&str, bool)] = &[
+    ("../../evil.txt", false),
+    ("..\\..\\evil2.txt", false),
+    ("a/b.txt", false),
+    ("", true),
+    ("..", true),
+    ("CON", false),
+    ("x:y.txt", false),
+    ("D:evil.txt", false),
+    ("trailing.", false),
+    ("invoice.pdf", false),
+    ("ok.txt", false),
+];
+
+fn hostile_attrs(dir: bool, size: u64) -> FileAttributes {
+    FileAttributes { size: Some(size), permissions: Some(if dir { 0o040755 } else { 0o100644 }), mtime: Some(1_700_000_000), ..FileAttributes::default() }
 }
 
 fn attrs_of(m: &std::fs::Metadata) -> FileAttributes {
@@ -155,6 +179,10 @@ impl russh_sftp::server::Handler for Disk {
     }
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+        if self.hostile && path == "/pics" {
+            let files = HOSTILE_PICS.iter().map(|&(n, d)| File::new(n, hostile_attrs(d, 5))).collect();
+            return Ok(Handle { id, handle: self.handle(Open::Dir(files)) });
+        }
         let dir = self.local(&path);
         let mut files = Vec::new();
         for e in std::fs::read_dir(&dir).map_err(io_status)? {
@@ -181,7 +209,8 @@ impl russh_sftp::server::Handler for Disk {
         if pflags.intersects(OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::APPEND) {
             return Err(StatusCode::PermissionDenied);
         }
-        let f = std::fs::File::open(self.local(&filename)).map_err(io_status)?;
+        let real = if self.hostile && filename.starts_with("/pics/") { self.root.join("payload") } else { self.local(&filename) };
+        let f = std::fs::File::open(real).map_err(io_status)?;
         Ok(Handle { id, handle: self.handle(Open::File(f)) })
     }
 
@@ -205,6 +234,11 @@ impl russh_sftp::server::Handler for Disk {
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+        if self.hostile && (path == "/pics" || path.starts_with("/pics/")) {
+            // listed as a file, a folder now: the fetch must refuse it
+            let dir = path == "/pics" || path == "/pics/invoice.pdf";
+            return Ok(Attrs { id, attrs: hostile_attrs(dir, 5) });
+        }
         let m = std::fs::symlink_metadata(self.local(&path)).map_err(io_status)?;
         Ok(Attrs { id, attrs: attrs_of(&m) })
     }
@@ -219,20 +253,31 @@ struct TestServer {
     port: u16,
     host_key: PrivateKey,
     logins: Arc<AtomicUsize>,
+    /// The host keys the next connection is served with.
+    keys: Arc<Mutex<Vec<PrivateKey>>>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl TestServer {
     fn start(root: &Path, password: &str, client_key: PublicKey, host_key: PrivateKey) -> TestServer {
-        let side = ServerSide { root: root.to_path_buf(), password: Arc::new(password.into()), client_key, logins: Arc::default() };
+        TestServer::start_with(root, password, client_key, vec![host_key], false)
+    }
+
+    fn start_with(root: &Path, password: &str, client_key: PublicKey, host_keys: Vec<PrivateKey>, hostile: bool) -> TestServer {
+        let side = ServerSide { root: root.to_path_buf(), password: Arc::new(password.into()), client_key, logins: Arc::default(), hostile };
         let logins = side.logins.clone();
-        let cfg = Arc::new(russh::server::Config {
-            auth_rejection_time: Duration::from_millis(5),
-            auth_rejection_time_initial: Some(Duration::ZERO),
-            keys: vec![host_key.clone()],
-            ..Default::default()
-        });
+        let host_key = host_keys[0].clone();
+        let keys = Arc::new(Mutex::new(host_keys));
+        let served_keys = keys.clone();
+        let make_cfg = move || {
+            Arc::new(russh::server::Config {
+                auth_rejection_time: Duration::from_millis(5),
+                auth_rejection_time_initial: Some(Duration::ZERO),
+                keys: served_keys.lock().unwrap().clone(),
+                ..Default::default()
+            })
+        };
         let (port_tx, port_rx) = std::sync::mpsc::channel();
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
         let thread = std::thread::spawn(move || {
@@ -246,7 +291,7 @@ impl TestServer {
                         acc = listener.accept() => {
                             let Ok((sock, _)) = acc else { continue };
                             let h = Sess { s: side.clone(), channels: HashMap::new() };
-                            let cfg = cfg.clone();
+                            let cfg = make_cfg();
                             tokio::spawn(async move {
                                 if let Ok(s) = russh::server::run_stream(cfg, sock, h).await {
                                     let _ = s.await;
@@ -258,7 +303,7 @@ impl TestServer {
             });
         });
         let port = port_rx.recv_timeout(Duration::from_secs(10)).expect("the test server started");
-        TestServer { port, host_key, logins, stop: Some(stop), thread: Some(thread) }
+        TestServer { port, host_key, logins, keys, stop: Some(stop), thread: Some(thread) }
     }
 
     fn addr(&self, path: &str) -> VPath {
@@ -288,7 +333,7 @@ struct Answers {
 
 impl Prompter for Answers {
     fn host_key(&self, q: HostKeyQuestion, reply: Box<dyn FnOnce(HostKeyAnswer) + Send>) {
-        assert!(q.fingerprint.starts_with("SHA256:") && q.key_type == "ssh-ed25519", "{q:?}");
+        assert!(q.fingerprint.starts_with("SHA256:"), "{q:?}");
         self.asked.lock().unwrap().push(format!("host key {}", q.host));
         let a = self.host_key.lock().unwrap().pop().unwrap_or(HostKeyAnswer::Cancel);
         // answered from another thread, as a dialog would
@@ -489,4 +534,78 @@ fn login_suite_and_download() {
     // the server goes away: Offline, not a hang
     drop(server);
     assert!(matches!(fs.stat(&no_user), Err(FsError::Offline(_))), "{:?}", fs.stat(&no_user));
+}
+
+/// A logged-in `SftpFs` on a server whose key is in known_hosts (the password is answered).
+fn trusted_fs(tmp: &Path, server: &TestServer, password: &str) -> (SftpFs, Arc<Answers>) {
+    let line = crate::known_hosts::line_for("127.0.0.1", server.port, server.host_key.public_key()).unwrap();
+    std::fs::write(tmp.join("known_hosts"), format!("{line}\n")).unwrap();
+    let ans = Answers::with(&[], &[Some(password)]);
+    (SftpFs::new(config(tmp), ans.clone()), ans)
+}
+
+/// Must-fix 1: a server's names never leave the target folder. The listing leaves out `../..`, `..\..`, `a/b`, `""` and
+/// `..`; the copy refuses `CON`, `x:y`, `D:evil.txt`, `trailing.` (reported, never written) and writes only what is safe, all
+/// inside the target; the fetch refuses an item listed as a file that is a folder when it is fetched.
+#[test]
+fn hostile_names_stay_inside() {
+    let tmp = Temp::new("names");
+    let served = Temp::new("names-served");
+    std::fs::write(served.0.join("payload"), b"bytes").unwrap();
+    let password = format!("pw-{}-names", std::process::id());
+    let server = TestServer::start_with(&served.0, &password, new_key().public_key().clone(), vec![new_key()], true);
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    let pics = server.addr("/pics");
+
+    let mut listed = Vec::new();
+    fs.list(&pics, 100, &|| false, &mut |b| listed.extend(b.into_iter().map(|e| e.name.to_string()))).unwrap();
+    listed.sort();
+    let mut want = vec!["CON", "D:evil.txt", "invoice.pdf", "ok.txt", "trailing.", "x:y.txt"];
+    want.sort();
+    assert_eq!(listed, want, "names that are not one part of an address are left out");
+
+    // the download goes into dest/sub/pics; nothing may appear anywhere else under dest
+    let dest = Temp::new("names-dest");
+    let sub = dest.0.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let mut progress = |_: &leaf_vfs::copy::Progress| {};
+    let mut conflict = |_: &VPath, _: &leaf_vfs::Meta| Conflict::Replace;
+    let r = Copy::new(&fs, &LocalFs, &|| false, &mut progress, &mut conflict).run(&pics, &LocalFs::address(&sub.join("pics"))).unwrap();
+    let mut refused: Vec<&str> = r.refused.iter().map(|(_, n, _)| n.as_str()).collect();
+    refused.sort();
+    let mut want_refused = vec!["D:evil.txt", "x:y.txt"];
+    if cfg!(windows) {
+        want_refused.extend(["CON", "trailing."]);
+    }
+    want_refused.sort();
+    assert_eq!(refused, want_refused);
+    let mut all = Vec::new();
+    let mut stack = vec![dest.0.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            all.push(p.strip_prefix(&dest.0).unwrap().to_string_lossy().replace('\\', "/"));
+            if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    all.sort();
+    let mut want_files = vec!["sub".to_string(), "sub/pics".into(), "sub/pics/invoice.pdf".into(), "sub/pics/ok.txt".into()];
+    if !cfg!(windows) {
+        want_files.extend(["sub/pics/CON".to_string(), "sub/pics/trailing.".into()]);
+    }
+    want_files.sort();
+    assert_eq!(all, want_files, "only the safe names arrive, all inside the target");
+    assert_eq!(std::fs::read(sub.join("pics").join("ok.txt")).unwrap(), b"bytes");
+
+    // the fetch (open, leaf-look) takes one regular file only: a "file" that is a folder now is refused, nothing is written
+    let cache = tmp.0.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let e = leaf_vfs::copy::fetch_file(&fs, &pics.join("invoice.pdf"), &cache.join("invoice.pdf"), 1 << 20, None, &|| false, &mut |_, _| {}).unwrap_err();
+    assert!(matches!(&e, FsError::Other(m) if m.contains("not a regular file")), "{e:?}");
+    assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
+    // a real file is fetched, and the cap counts the bytes that arrive
+    leaf_vfs::copy::fetch_file(&fs, &pics.join("ok.txt"), &cache.join("ok.txt"), 1 << 20, None, &|| false, &mut |_, _| {}).unwrap();
+    assert_eq!(std::fs::read(cache.join("ok.txt")).unwrap(), b"bytes");
 }
