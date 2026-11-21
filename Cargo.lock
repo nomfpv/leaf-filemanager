@@ -7470,6 +7470,9 @@ version = "0.9.4"
 dependencies = [
  "anyhow",
  "blake3",
+ "httparse",
+ "if-addrs",
+ "leaf-download",
  "log",
  "mdns-sd",
  "quinn",
@@ -7478,9 +7481,11 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "socket2 0.5.10",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "unicode-normalization",
 ]
 

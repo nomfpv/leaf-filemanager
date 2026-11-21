@@ -11,6 +11,7 @@
 //! device that is not trusted is always asked; with the visibility "trusted devices only", such offers are refused outright.
 
 mod discovery;
+mod localsend;
 mod identity;
 mod proto;
 mod tls;
@@ -25,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::oneshot;
 
+pub use localsend::{LocalSend, LsConfig, LsDevice, LsError, LsFile, LsListener, LsRequest, LsResult};
 pub use transfer::PART;
 
 /// A speed estimated from the two devices' links is shown this much of what the links' rates give (15% less).

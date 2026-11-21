@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub use name::{file_name, sanitize};
+pub use name::{file_name, percent_decode, sanitize};
 
 /// A segment is not split into pieces smaller than this.
 const MIN_SEG: u64 = 1 << 20;
