@@ -5,6 +5,11 @@ description = "Calm and solid: the frame one step darker than the content, a thi
 
 backdrop = false
 sheet_opacity = 1
+sheet_opacity_guard = 1
+wash_1 = "#00000000"
+wash_2 = "#00000000"
+wash_3 = "#00000000"
+wash_strength = 0
 radius = 10
 control_radius = 6
 row_radius = 4

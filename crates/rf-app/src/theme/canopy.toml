@@ -60,6 +60,12 @@ square_marks = false
 mono_chrome = false
 
 [dark]
+# the colour wash behind the sheets: the mockup's wall (green, teal, amber glows)
+wash_1 = "#1e6a4e"
+wash_2 = "#1a5c72"
+wash_3 = "#7a5422"
+wash_strength = 0.55
+sheet_opacity_guard = 0.84
 compare_only = "#6ab7ff"
 compare_newer = "#7fdc9b"
 compare_older = "#f2c066"
@@ -80,7 +86,8 @@ selection_inactive = "#ffffff1a"
 header_fill = "#ffffff0f"
 seg_on = "#ffffff1f"
 place_text = "#eef5f0"
-window = "#060c0a61"
+# (the mockup's veil is .38 over its wall; Windows' Acrylic already lifts the dark parts, so the veil is thicker to land on the same tone)
+window = "#04090880"
 content = "#101916"
 tab_active = "#101916"
 sheet_opacity = 0.62
@@ -117,6 +124,11 @@ solid_sheet = "#16201c"
 solid_raised = "#1e2a25"
 
 [light]
+wash_1 = "#9fd9bc"
+wash_2 = "#a6d0ea"
+wash_3 = "#f1cd9c"
+wash_strength = 0.6
+sheet_opacity_guard = 0.86
 compare_only = "#1a6fc2"
 compare_newer = "#23753f"
 compare_older = "#875800"
@@ -190,6 +202,7 @@ window = "#060c0a8c"
 content = "#0e1613"
 tab_active = "#0e1613"
 sheet_opacity = 0.88
+sheet_opacity_guard = 0.94
 raised = "#16201c"
 field = "#00000059"
 field_border = "#ffffff38"
@@ -242,6 +255,7 @@ window = "#ffffff73"
 content = "#fcfdfc"
 tab_active = "#fcfdfc"
 sheet_opacity = 0.90
+sheet_opacity_guard = 0.95
 raised = "#ffffff"
 field = "#ffffffe6"
 field_border = "#142d2052"

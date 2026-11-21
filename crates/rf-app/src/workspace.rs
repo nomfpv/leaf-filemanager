@@ -142,6 +142,8 @@ pub struct Workspace {
     glass_hwnd: isize,
     glass_dark: Option<bool>,
     glass_failed: bool,
+    /// The newest asked-for measure of what is behind the sheets (a move or resize asks many times; only the last one runs).
+    behind_gen: u64,
     /// The engine has drawn this window's glass and the window is see-through now. Until then it keeps its Mica: a transparent window
     /// with nothing behind it shows the desktop through the palette's translucent layers.
     glass_shown: bool,
@@ -853,7 +855,15 @@ impl Workspace {
         cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
             remember_placement(window, cx);
             this.preview.update(cx, |pv, _| pv.invalidate_host());
+            this.schedule_behind_sample(window, cx);
             cx.notify();
+        })
+        .detach();
+        // the system backdrop shows only while the window is active: measure what is behind the sheets when it becomes so
+        cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            if window.is_window_active() {
+                this.schedule_behind_sample(window, cx);
+            }
         })
         .detach();
         let ws = cx.entity().downgrade();
@@ -895,6 +905,7 @@ impl Workspace {
             glass_hwnd: 0,
             glass_dark: None,
             glass_failed: false,
+            behind_gen: 0,
             glass_shown: false,
             glass_capture: leaf_sys::glass::CaptureMode::Off,
             glass_gen: 0,
@@ -2612,7 +2623,11 @@ impl Workspace {
                                 .hover(|s| s.bg(p.hover))
                                 .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Tab actions")).build(w, cx)))
                                 // the leaf: the app's mark, as in the mockups (it opens the window menu)
-                                .child(Icon::new(if self.compact.is_some() { L::PictureInPicture2 } else { L::Leaf }).size(px(16.)).text_color(p.accent))
+                                // (the app's own icon at 16 px, as the mockups' brand button; the compact overlay keeps its line icon)
+                                .map(|d| match self.compact {
+                                    Some(_) => d.child(Icon::new(L::PictureInPicture2).size(px(16.)).text_color(p.accent)),
+                                    None => d.child(img(leaf_mark()).w(px(16.)).h(px(16.))),
+                                })
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(|this, _, window, cx| this.tab_actions_menu(window, cx))),
                         ),
@@ -3332,6 +3347,7 @@ impl Workspace {
         let has_sel = sel > 0;
         // a phone's folder is read-only here: changing commands are greyed out, not refused later
         let writable_sel = has_sel && !matches!(tab.location(), Location::Shell { .. });
+        let split = self.tabs.get(self.active).is_some_and(|t| t.right.is_some());
         let mode = tab.view_mode;
         let sort_asc = tab.sort.dir == rf_core::SortDir::Asc;
         let sort_label: &'static str = match tab.sort.key {
@@ -3526,8 +3542,14 @@ impl Workspace {
             }))
             // Move (the mockups' name for cut): the items wait greyed until they are pasted where they go; Paste is under "More"
             .children(on("cut").then(|| {
-                cmd("cb-cut", L::MoveRight, Some("Move"), "Move: cut, then paste where it goes  (Ctrl+X)", writable_sel, cx, |this, w, cx| {
+                cmd("cb-cut", L::Scissors, Some("Move"), "Move: cut, then paste where it goes  (Ctrl+X)", writable_sel, cx, |this, w, cx| {
                     this.with_tab(cx, |v, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))
+                })
+            }))
+            // the mockups' "Move": straight into the other pane's folder; only while the tab is split
+            .children((on("cut") && split).then(|| {
+                cmd("cb-to-pane", L::MoveRight, Some("To other pane"), "Move to other pane  (Shift+F6)", writable_sel, cx, |_, w, cx| {
+                    w.dispatch_action(Box::new(crate::actions::MoveToOtherPane), cx)
                 })
             }))
             .children(on("rename").then(|| {
@@ -4126,7 +4148,7 @@ impl Workspace {
             "sb-recycle".into(),
             L::Trash,
             p.text_secondary,
-            t!("Recycle Bin").into(),
+            t!("Trash").into(),
             Location::RecycleBin,
             cur == Location::RecycleBin,
             None,
@@ -5077,6 +5099,53 @@ impl Workspace {
         cx.notify();
     }
 
+}
+
+/// The leaf mark of the tab strip: the app's icon, drawn at 32 px for a 16 px place (sharp at 200 %).
+fn leaf_mark() -> std::sync::Arc<Image> {
+    static MARK: std::sync::OnceLock<std::sync::Arc<Image>> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, include_bytes!("../assets/leaf-32.png").to_vec()))).clone()
+}
+
+impl Workspace {
+    /// Measures, a moment after a move, resize, activation or material change, how light the screen is in the tab strip's empty part
+    /// (backdrop, veil and wash as the user sees them), so that `Palette::for_window` can thicken the sheets where the text would lose
+    /// its contrast. One screen read of a short column per event; nothing runs while the window is left alone.
+    fn schedule_behind_sample(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let p = Palette::for_window(window);
+        let hwnd = crate::look::window::hwnd_of(window);
+        if !p.backdrop || (self.glass_shown && self.glass_hwnd != 0) {
+            if theme::note_behind(hwnd, None) {
+                cx.refresh_windows();
+            }
+            return;
+        }
+        self.behind_gen += 1;
+        let generation = self.behind_gen;
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+            let _ = this.update_in(cx, |ws, window, cx| {
+                if ws.behind_gen != generation || !window.is_window_active() {
+                    return;
+                }
+                let s = window.scale_factor();
+                let vs = window.viewport_size();
+                let p = Palette::for_window(window);
+                // (right of the tabs, left of the caption buttons: the strip's own see-through part)
+                let x = ((f32::from(vs.width) - 170.).max(0.) * s) as i32;
+                let (y0, y1) = ((6. * s) as i32, ((p.titlebar_h - 6.) * s) as i32);
+                if let Some([r, g, b]) = leaf_sys::window::screen_color(hwnd, x, y0, y1) {
+                    let luma = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.;
+                    log::debug!("behind the sheets: {luma:.2}");
+                    if theme::note_behind(hwnd, Some(luma)) {
+                        cx.refresh_windows();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Takes the glass off (the backdrop changed). Safe to call without glass.
     fn stop_glass(&mut self, window: &mut Window) {
         self.glass_gen = self.glass_gen.wrapping_add(1);
@@ -5169,7 +5238,15 @@ impl Render for Workspace {
                 // The glass is a second DirectComposition target behind the scene, so the scene must become see-through, but only once the
                 // engine has drawn (`check_glass` does that): until then, and for good if the engine gives up, the window has Mica.
                 BackdropPref::Glass => WindowBackgroundAppearance::MicaBackdrop,
+                // (resolved by `backdrop_in_use`; never reaches here)
+                BackdropPref::Theme => WindowBackgroundAppearance::MicaBackdrop,
             }));
+            // Acrylic is the popups' material and asks Windows for their small corners: a main window keeps its own
+            if backdrop == BackdropPref::Acrylic {
+                leaf_sys::window::set_round_corners(crate::look::window::hwnd_of(window));
+            }
+            // a new material: what is behind the sheets looks different, measure again
+            self.schedule_behind_sample(window, cx);
             if backdrop == BackdropPref::Glass {
                 self.start_glass(p.dark, window, cx);
             }
@@ -5181,6 +5258,11 @@ impl Render for Workspace {
         }
         // background color tint and picture (under everything)
         let mut backdrop_layers: Vec<AnyElement> = Vec::new();
+        // the theme's colour wash (Canopy's glows), under the tint and the picture; the glass has washes of its own
+        if !(self.glass_shown && self.glass_hwnd != 0) {
+            let vs = window.viewport_size();
+            backdrop_layers.extend(theme::wash_layers(&p, f32::from(vs.width), f32::from(vs.height)));
+        }
         if let Some(c) = tint {
             let mut h: Hsla = rgb(c).into();
             h.a = if p.dark { 0.22 } else { 0.16 };

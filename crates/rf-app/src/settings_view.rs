@@ -1206,12 +1206,22 @@ fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
 fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
     // On a Windows without materials (before Windows 11 22H2, issue 24) the windows are "Solid" whatever was chosen, and that is the
     // one choice shown: a list of four materials that all look the same would be a lie.
-    let choices = if crate::settings::materials_available() {
+    let materials = crate::settings::materials_available();
+    let choices = if materials {
+        // the first choice names what the theme in use is made for (Canopy: Acrylic)
+        let theme_own: String = match crate::theme::material_pref() {
+            BackdropPref::Acrylic => t!("Theme default: Acrylic (blurs what is behind the window)").into(),
+            BackdropPref::MicaAlt => t!("Theme default: Mica Alt").into(),
+            BackdropPref::Solid => t!("Theme default: Solid").into(),
+            BackdropPref::Glass => t!("Theme default: HyperGlass").into(),
+            _ => t!("Theme default: Mica").into(),
+        };
         vec![
+            (BackdropPref::Theme, theme_own),
             (BackdropPref::Mica, "Mica".into()),
             (BackdropPref::MicaAlt, "Mica Alt".into()),
             (BackdropPref::Acrylic, t!("Acrylic").into()),
-            (BackdropPref::Solid, t!("Solid").into()),
+            (BackdropPref::Solid, t!("Solid (no see-through)").into()),
             // a product name: only the "(experimental)" is translated
             (BackdropPref::Glass, t!("HyperGlass (experimental)").into()),
         ]
@@ -1223,7 +1233,9 @@ fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
             (BackdropPref::Glass, t!("HyperGlass (experimental)").into()),
         ]
     };
-    let control = dropdown("backdrop", p, s.backdrop_in_use(), choices, |s, v| s.backdrop = v);
+    // (with materials the list shows the setting itself, "Theme default" included; without, the one material in use)
+    let shown = if materials { s.backdrop } else { s.backdrop_in_use() };
+    let control = dropdown("backdrop", p, shown, choices, |s, v| s.backdrop = v);
     let mut notes: Vec<String> = Vec::new();
     if !crate::settings::materials_available() && s.backdrop_in_use() != BackdropPref::Solid {
         notes.push(t!("On this system the material is for the main window only; menus and pop-ups stay plain.").to_string());
@@ -1246,7 +1258,9 @@ fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
             p,
             L::Layers,
             t!("Background material").into(),
-            crate::settings::materials_available().then(|| t!("Mica takes a tint from the desktop color; Mica Alt is more colorful.").into()),
+            crate::settings::materials_available().then(|| {
+                t!("What shows through the window. Acrylic blurs the desktop behind it (Canopy's glass); Mica takes a tint from the desktop color; Mica Alt is more colorful; Solid shows nothing through.").into()
+            }),
             Some(control),
         ))
         .children(notes.into_iter().map(|n| div().pl(px(56.)).pr_4().pb_3().text_xs().text_color(p.text_secondary).child(n)))

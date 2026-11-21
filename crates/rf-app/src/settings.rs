@@ -139,8 +139,11 @@ pub enum AnimPref {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BackdropPref {
-    /// Default, like Explorer: a quiet desktop tint.
+    /// Default: the material the theme in use is made for (its `material` key: Canopy Acrylic, Stem and Index Mica under their
+    /// opaque surfaces). An older version does not know this value and reads it as Mica (see `parse_lenient`).
     #[default]
+    Theme,
+    /// Like Explorer: a quiet desktop tint.
     Mica,
     /// Files' default: a more colorful variant of Mica.
     MicaAlt,
@@ -504,6 +507,8 @@ pub struct Settings {
     pub notify_long_ops: bool,
     /// The one-time move from "details" to "adaptive" (0.3.3) has been made.
     pub adaptive_offered: bool,
+    /// The one-time move from Mica (the old default, written into every settings file) to the theme's own material has been made.
+    pub backdrop_theme_offered: bool,
     pub show_extensions: bool,
     /// File icons from Windows (the colourful system icons, a program's own picture). Off (the default, the mockups' look): quiet line
     /// icons in the theme's kind colours.
@@ -783,6 +788,7 @@ impl Default for Settings {
             show_perf_info: false,
             notify_long_ops: true,
             adaptive_offered: false,
+            backdrop_theme_offered: false,
             show_extensions: true,
             system_icons: false,
             icon_pack: String::new(),
@@ -803,7 +809,7 @@ impl Default for Settings {
             smooth_scroll: true,
             show_scrollbar: true,
             animations: AnimPref::System,
-            backdrop: BackdropPref::Mica,
+            backdrop: BackdropPref::Theme,
             tint: None,
             background_image: None,
             background_opacity: 0.2,
@@ -1038,7 +1044,18 @@ impl Settings {
     /// The material the windows really have: the chosen one, or "Solid" on a Windows without materials. The setting itself is left
     /// as it is (the same file may be read on a Windows 11 later).
     pub fn backdrop_in_use(&self) -> BackdropPref {
-        if materials_available() || main_window_only(self.backdrop) { self.backdrop } else { BackdropPref::Solid }
+        let b = self.backdrop_chosen();
+        if materials_available() || main_window_only(b) { b } else { BackdropPref::Solid }
+    }
+
+    /// The setting with "the theme's" replaced by the theme's own material. On a Windows without materials the theme's choice is
+    /// Solid: Acrylic there is the old blur, which the user may pick but which is not made the default.
+    fn backdrop_chosen(&self) -> BackdropPref {
+        match self.backdrop {
+            BackdropPref::Theme if materials_available() => crate::theme::material_pref(),
+            BackdropPref::Theme => BackdropPref::Solid,
+            b => b,
+        }
     }
 
     /// Brings settings written by older versions up to date.
@@ -1055,6 +1072,14 @@ impl Settings {
                 self.default_view = DefaultView::Adaptive;
             }
             self.adaptive_offered = true;
+        }
+        // Mica was the default and every save wrote it, so it says nothing about a choice: move it once to the theme's material
+        // (Canopy is made for Acrylic: on Mica it read as solid black). A material picked afterwards stays.
+        if !self.backdrop_theme_offered {
+            if self.backdrop == BackdropPref::Mica {
+                self.backdrop = BackdropPref::Theme;
+            }
+            self.backdrop_theme_offered = true;
         }
         // the Home page's old hide list becomes its widget layout
         crate::home::migrate(self);
@@ -1139,8 +1164,10 @@ impl Settings {
             DatePref::Universal => rf_core::format::DateStyle::Universal,
         });
         rf_core::format::set_decimal_sizes(self.decimal_sizes);
-        SOLID.store(self.backdrop == BackdropPref::Solid, Ordering::Relaxed);
-        MAIN_ONLY.store(main_window_only(self.backdrop), Ordering::Relaxed);
+        // (after `theme::select`: "the theme's" material is read from the theme just chosen)
+        let chosen = self.backdrop_chosen();
+        SOLID.store(chosen == BackdropPref::Solid, Ordering::Relaxed);
+        MAIN_ONLY.store(main_window_only(chosen), Ordering::Relaxed);
         ANIM.store(self.animations as u8, Ordering::Relaxed);
         // HyperGlass: the engine redraws every glass window once when the look changes, and does nothing for the same look again
         HG_SURFACE.store(self.hg_surface.min(100), Ordering::Relaxed);
@@ -1418,8 +1445,24 @@ yeni_alan = 3").unwrap();
         assert_eq!(back.backdrop, BackdropPref::Glass);
         // through the loader the app uses
         assert_eq!(Settings::parse_lenient(&text).unwrap().backdrop, BackdropPref::Glass);
-        // the default stays Mica
-        assert_eq!(Settings::default().backdrop, BackdropPref::Mica);
+        // the default is the theme's own material
+        assert_eq!(Settings::default().backdrop, BackdropPref::Theme);
+    }
+
+    #[test]
+    fn the_old_default_mica_moves_once_to_the_themes_material() {
+        use super::BackdropPref;
+        let mut s = Settings::parse_lenient("backdrop = \"mica\"\n").unwrap();
+        s.migrate();
+        assert_eq!(s.backdrop, BackdropPref::Theme);
+        assert!(s.backdrop_theme_offered);
+        // chosen afterwards: stays
+        let mut s = Settings::parse_lenient("backdrop = \"mica\"\nbackdrop_theme_offered = true\n").unwrap();
+        s.migrate();
+        assert_eq!(s.backdrop, BackdropPref::Mica);
+        let mut s = Settings::parse_lenient("backdrop = \"solid\"\n").unwrap();
+        s.migrate();
+        assert_eq!(s.backdrop, BackdropPref::Solid);
     }
 
     #[test]
@@ -1487,13 +1530,13 @@ hg_tint = 101
     #[test]
     fn unknown_backdrop_value_costs_only_that_field() {
         // what a version without Glass meets after the user picked it and went back: the value
-        // is dropped (Mica), every other setting of the file survives
+        // is dropped (the default: the theme's), every other setting of the file survives
         use super::BackdropPref;
         let s = Settings::parse_lenient("backdrop = \"cam\"
 show_hidden = true
 theme = \"dark\"
 ").unwrap();
-        assert_eq!(s.backdrop, BackdropPref::Mica);
+        assert_eq!(s.backdrop, BackdropPref::Theme);
         assert!(s.show_hidden);
         assert_eq!(s.theme, super::ThemePref::Dark);
     }

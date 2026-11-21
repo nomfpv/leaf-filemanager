@@ -71,6 +71,11 @@ pub struct Palette {
     /// The theme lets the window backdrop show through (Canopy). Off: every surface is opaque.
     pub backdrop: bool,
     pub sheet_opacity: f32,
+    /// The sheet opacity over a backdrop that would cost the text its contrast (bright behind a dark theme, dark behind a light one).
+    pub sheet_opacity_guard: f32,
+    /// The theme's soft colour wash behind the sheets: three glows (top left, top right, bottom right), each at `wash_strength`.
+    pub wash: [Hsla; 3],
+    pub wash_strength: f32,
     pub solid_window: Hsla,
     pub solid_sheet: Hsla,
     pub solid_raised: Hsla,
@@ -291,6 +296,9 @@ impl Palette {
             kinds: ["kind_folder", "kind_image", "kind_video", "kind_document", "kind_code", "kind_text", "kind_archive", "kind_app"].map(col),
             backdrop,
             sheet_opacity,
+            sheet_opacity_guard: num("sheet_opacity_guard", 1.0).clamp(sheet_opacity, 1.0),
+            wash: ["wash_1", "wash_2", "wash_3"].map(col),
+            wash_strength: num("wash_strength", 0.0).clamp(0.0, 1.0),
             solid_window: col("solid_window"),
             solid_sheet: col("solid_sheet"),
             solid_raised: col("solid_raised"),
@@ -412,6 +420,7 @@ impl Palette {
         }
         self.card_bg = self.solid_raised;
         self.backdrop = false;
+        self.wash_strength = 0.0;
         // (the mockup's no-blur fallback: the gaps and edges stay, the sheets only cast a faint contact shadow)
         if self.sheet_shadow.a > 0.0 {
             self.sheet_shadow.a = self.sheet_shadow.a.min(0.12);
@@ -503,6 +512,7 @@ impl Palette {
             solid_sheet: hex(0x000000),
             solid_raised: hex(0x0A0A0A),
             backdrop: false,
+            wash_strength: 0.0,
             ..dark
         }
     }
@@ -535,7 +545,14 @@ impl Palette {
         let hwnd = crate::look::window::hwnd_of(window);
         // one place decides the look of the controls: every control asks the palette
         p.liquid = crate::glass::liquid(hwnd);
-        if crate::glass::shown(hwnd) {
+        let glass = crate::glass::shown(hwnd);
+        if p.backdrop && !glass {
+            // the contrast guard: over a backdrop that fights the text the sheets thicken (see `note_behind`)
+            if let Some(luma) = behind_luma(hwnd) {
+                p.guard_sheets(luma);
+            }
+        }
+        if glass {
             // Over the glass the two washes are the veil: Mica is already a quiet, nearly opaque tone, the glass is the live screen.
             // At the strength made for Mica they hid two thirds of it in the dark theme (the user: too black), so the default is half
             // of that; the HyperGlass "surface wash" setting moves it either way. A solid theme's frame surfaces thin out with it.
@@ -545,6 +562,18 @@ impl Palette {
             p.bar_bg = Hsla { a: glass_bar_wash(crate::settings::hg_surface()), ..p.card_bg };
         }
         p
+    }
+
+    /// The sheets' opacity for what is behind the window, `luma` 0..1 as measured in a gap between the sheets: from the theme's
+    /// `sheet_opacity` over a quiet backdrop up to `sheet_opacity_guard` over one that fights the text (bright behind a dark theme,
+    /// dark behind a light one). A sheet the file made fully clear stays clear.
+    pub fn guard_sheets(&mut self, luma: f32) {
+        let floor = sheet_floor(self.dark, luma, self.sheet_opacity, self.sheet_opacity_guard);
+        for c in [&mut self.content_bg, &mut self.tab_active, &mut self.sidebar_bg, &mut self.toolbar_bg, &mut self.status_bg] {
+            if c.a > 0.0 {
+                c.a = c.a.max(floor);
+            }
+        }
     }
 
     /// The palette of the status line: its own text colours (Index: an inverted readout).
@@ -569,6 +598,88 @@ impl Palette {
     pub fn mark_on_row(&self, selected: bool, c: Hsla) -> Hsla {
         if selected && self.row_selection.a >= 1. { self.row_selection_text } else { c }
     }
+}
+
+/// The sheet opacity for a backdrop of lightness `luma` (0..1, measured in a gap: backdrop, veil and wash together). A dark theme
+/// starts thickening at 0.20 and is at `guard` from 0.42 on; a light theme the other way round, from 0.86 down to 0.62.
+pub fn sheet_floor(dark: bool, luma: f32, base: f32, guard: f32) -> f32 {
+    let (from, to) = if dark { (0.20, 0.42) } else { (0.86, 0.62) };
+    let t = ((luma - from) / (to - from)).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    base + (guard - base) * t
+}
+
+/// What each main window last measured behind its sheets (hwnd, lightness 0..1).
+static BEHIND: parking_lot::Mutex<Vec<(isize, f32)>> = parking_lot::Mutex::new(Vec::new());
+
+fn behind_luma(hwnd: isize) -> Option<f32> {
+    BEHIND.lock().iter().find(|(h, _)| *h == hwnd).map(|(_, l)| *l)
+}
+
+/// Keeps the lightness measured behind `hwnd`'s sheets; `None` forgets the window. True when the sheets change with it (the
+/// caller then redraws the windows).
+pub fn note_behind(hwnd: isize, luma: Option<f32>) -> bool {
+    let mut v = BEHIND.lock();
+    let old = v.iter().position(|(h, _)| *h == hwnd);
+    match (old, luma) {
+        (Some(i), None) => {
+            v.swap_remove(i);
+            true
+        }
+        // (small changes, a cursor or a clock crossing the column, are not worth a redraw)
+        (Some(i), Some(l)) if (v[i].1 - l).abs() < 0.03 => false,
+        (Some(i), Some(l)) => {
+            v[i].1 = l;
+            true
+        }
+        (None, Some(l)) => {
+            v.push((hwnd, l));
+            true
+        }
+        (None, None) => false,
+    }
+}
+
+/// The material "the theme's" stands for: the theme's `material` key (Canopy: Acrylic). An unknown word is Mica.
+pub fn material_pref() -> crate::settings::BackdropPref {
+    use crate::settings::BackdropPref as B;
+    match current().dark.material {
+        "acrylic" => B::Acrylic,
+        "mica_alt" => B::MicaAlt,
+        "solid" => B::Solid,
+        "glass" => B::Glass,
+        _ => B::Mica,
+    }
+}
+
+/// The theme's colour wash: three soft glows behind the sheets, placed as the mockup's wall (a green one top left, a teal one top
+/// right, an amber one bottom right), for a window of `w` x `h`. Nothing when the theme has none or the backdrop is off. Static: it
+/// costs nothing while the window is idle, and three blurred quads while it draws.
+pub fn wash_layers(p: &Palette, w: f32, h: f32) -> Vec<AnyElement> {
+    if !p.backdrop || p.wash_strength <= 0.0 || w <= 0.0 || h <= 0.0 {
+        return Vec::new();
+    }
+    // centre and size as fractions of the window
+    const GLOWS: [(f32, f32, f32, f32); 3] = [(0.12, 0.24, 0.62, 0.80), (0.90, 0.10, 0.52, 0.72), (0.76, 0.94, 0.46, 0.60)];
+    p.wash
+        .iter()
+        .zip(GLOWS)
+        .filter(|(c, _)| c.a > 0.0)
+        .map(|(c, (cx, cy, fw, fh))| {
+            let (gw, gh) = (fw * w, fh * h);
+            let blur = 0.45 * gw.min(gh);
+            let color = Hsla { a: c.a * p.wash_strength, ..*c };
+            div()
+                .absolute()
+                .left(px(cx * w - gw / 2.))
+                .top(px(cy * h - gh / 2.))
+                .w(px(gw))
+                .h(px(gh))
+                .rounded(px(gw.min(gh) / 2.))
+                .shadow(vec![BoxShadow::new(px(0.), px(0.), color).blur_radius(px(blur))])
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// The resolved palettes of the theme in use, rebuilt by [`select`].

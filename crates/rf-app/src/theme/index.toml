@@ -5,6 +5,11 @@ description = "Dense and technical: ruled rows, zebra stripes, solid selection, 
 
 backdrop = false
 sheet_opacity = 1
+sheet_opacity_guard = 1
+wash_1 = "#00000000"
+wash_2 = "#00000000"
+wash_3 = "#00000000"
+wash_strength = 0
 radius = 3
 control_radius = 2
 row_radius = 0

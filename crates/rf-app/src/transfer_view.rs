@@ -227,7 +227,15 @@ fn bar(p: &Palette, frac: Option<f32>, color: Hsla, w: Option<f32>) -> Div {
         .flex_shrink_0()
         .rounded_full()
         .bg(p.pressed)
-        .child(div().h_full().rounded_full().bg(color).w(relative(f)))
+        .child(
+            div()
+                .h_full()
+                .rounded_full()
+                .bg(color)
+                .w(relative(f))
+                // (Canopy, as the mockup's transfer bar: a soft glow of its own colour)
+                .when(p.backdrop, |d| d.shadow(vec![BoxShadow::new(px(0.), px(0.), color.opacity(0.6)).blur_radius(px(8.))])),
+        )
 }
 
 fn icon_button(id: impl Into<ElementId>, p: &Palette, icon: L, tip: &'static str, on_click: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {

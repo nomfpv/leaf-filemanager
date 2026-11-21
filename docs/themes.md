@@ -105,6 +105,11 @@ followed by `/alpha` (`"accent/0.3"`, `"#ffffff/0.1"`). Numbers are pixels unles
 | `kind_app` | Programs and spreadsheets. |
 | `backdrop` | true/false: the theme lets the window backdrop (Mica, Acrylic, glass) show through its surfaces. |
 | `sheet_opacity` | With a backdrop: how opaque the panel surfaces are, 0 to 1. |
+| `sheet_opacity_guard` | With a backdrop: how opaque the panel surfaces become when what is behind the window would cost the text its contrast (bright behind a dark theme, dark behind a light one), 0 to 1, at least sheet_opacity. |
+| `wash_1` | The theme's colour wash behind the sheets: the soft glow at the top left; fully transparent means none. |
+| `wash_2` | The colour wash: the glow at the top right. |
+| `wash_3` | The colour wash: the glow at the bottom right. |
+| `wash_strength` | How strong the colour wash is, 0 (none) to 1; only with a backdrop. |
 | `solid_window` | The window colour when the backdrop is off or not available. |
 | `solid_sheet` | The panel colour when the backdrop is off or not available. |
 | `solid_raised` | The menu and dialog colour when the backdrop is off or not available. |
@@ -120,7 +125,7 @@ followed by `/alpha` (`"accent/0.3"`, `"#ffffff/0.1"`). Numbers are pixels unles
 | `font_ui` | The interface font; empty means the system font. A font that is not installed is ignored. |
 | `font_mono` | The font of number columns when mono_numbers is on. |
 | `mono_numbers` | true/false: sizes and dates in the details list use font_mono. |
-| `material` | The window backdrop the theme asks for while Settings > Background material is Automatic: acrylic, mica, mica_alt, solid or glass. |
+| `material` | The window backdrop the theme asks for while Settings > Background material is the theme's (the default): acrylic, mica, mica_alt, solid or glass. |
 | `gap` | Space between the sheets of the window (address row, sidebar, tool bar, each pane, status line) and to the window edge; 0 joins them, split by lines. |
 | `sheet_border` | The soft outline of a sheet; with gap 0 the line between two regions. |
 | `sheet_edge` | The lit top edge of a sheet; fully transparent means none. |
