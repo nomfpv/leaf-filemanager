@@ -105,6 +105,8 @@ async function quietly(p) {
 async function takeOver(item) {
   const cfg = await config();
   if (!cfg.enabled) return;
+  // a private / incognito window's download stays with the browser: leaf would keep its address in its download history
+  if (item.incognito) return;
   const url = item.finalUrl || item.url;
   // blob:, data:, file: and the like stay with the browser
   if (!/^https?:\/\//i.test(url)) return;
