@@ -430,6 +430,8 @@ struct Answers {
     host_key: Mutex<Vec<HostKeyAnswer>>,
     secrets: Mutex<Vec<Option<String>>>,
     asked: Mutex<Vec<String>>,
+    /// The "Remember" tick of the secrets typed.
+    remember: std::sync::atomic::AtomicBool,
 }
 
 impl Prompter for Answers {
@@ -446,7 +448,8 @@ impl Prompter for Answers {
             SecretQuestion::Password { account, retry, .. } => format!("password {account} retry={retry}"),
             SecretQuestion::Server { prompt, .. } => format!("server {prompt}"),
         });
-        let a = self.secrets.lock().unwrap().pop().flatten().map(Secret::new);
+        let remember = self.remember.load(Ordering::Relaxed);
+        let a = self.secrets.lock().unwrap().pop().flatten().map(|s| Secret::new(s).remembered(remember));
         reply(a)
     }
 }
@@ -491,6 +494,7 @@ fn config(dir: &Path) -> Config {
         op_timeout: Duration::from_secs(10),
         connect_timeout: Duration::from_secs(5),
         idle_after: Duration::from_secs(600),
+        vault: crate::secrets::Vault::none(),
     }
 }
 
@@ -957,4 +961,45 @@ fn two_writers_never_share_a_part_file() {
     assert_eq!(std::fs::read(served.0.join(b.name())).unwrap(), vec![2u8; 70_000]);
     assert!(matches!(fs.open_write(&a, leaf_vfs::WriteOpts::REPLACE), Err(FsError::Exists)), "an existing part file is not reused");
     assert_eq!(std::fs::read(served.0.join(a.name())).unwrap(), vec![1u8; 100_000], "and not truncated");
+}
+
+/// A saved password the server refuses is deleted from the keyring and asked again (a fake keyring in memory: the real
+/// one is never touched); one typed with "Remember" is saved after the login worked and used without a question next time.
+#[test]
+fn a_refused_saved_password_is_deleted_and_asked_again() {
+    use crate::secrets::{MemoryStore, SecretId, Vault};
+    let tmp = Temp::new("saved");
+    let served = Temp::new("saved-served");
+    let password = format!("pw-{}-saved", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let line = crate::known_hosts::line_for("127.0.0.1", server.port, server.host_key.public_key()).unwrap();
+    std::fs::write(tmp.0.join("known_hosts"), format!("{line}
+")).unwrap();
+    let store = Arc::new(MemoryStore::default());
+    let id = SecretId::password("sftp", USER, "127.0.0.1", server.port);
+    store.saved.lock().unwrap().insert(id.clone(), "an-old-password".into());
+    let mut cfg = config(&tmp.0);
+    cfg.vault = Vault::new(store.clone());
+    let saved = || store.saved.lock().unwrap().get(&id).cloned();
+
+    // the saved one is tried first (no question), refused, deleted; then asked; typed without "Remember": nothing saved
+    let ans = Answers::with(&[], &[Some(&password)]);
+    let fs = SftpFs::new(cfg.clone(), ans.clone());
+    assert!(fs.stat(&server.addr("/")).unwrap().is_dir());
+    assert_eq!(ans.asked(), [format!("password {USER}@127.0.0.1 retry=true")]);
+    assert_eq!(saved(), None, "the refused password is gone from the keyring");
+
+    // typed with "Remember": saved once the server took it
+    let ans = Answers::with(&[], &[Some(&password)]);
+    ans.remember.store(true, Ordering::Relaxed);
+    let fs = SftpFs::new(cfg.clone(), ans.clone());
+    fs.stat(&server.addr("/")).unwrap();
+    assert_eq!(ans.asked(), [format!("password {USER}@127.0.0.1 retry=false")]);
+    assert_eq!(saved().as_deref(), Some(password.as_str()));
+
+    // a new run of leaf: used without asking
+    let ans = Answers::with(&[], &[]);
+    let fs = SftpFs::new(cfg, ans.clone());
+    fs.stat(&server.addr("/")).unwrap();
+    assert!(ans.asked().is_empty(), "{:?}", ans.asked());
 }

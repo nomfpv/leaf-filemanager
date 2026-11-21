@@ -25,18 +25,58 @@ pub enum HostKeyAnswer {
     Cancel,
 }
 
-/// A secret the login needs. It stays in memory for this run of leaf only.
+/// A secret the login needs. It stays in memory for this run of leaf, and in the system's keyring when the user ticks
+/// "Remember" (`keyring` says whether that can be offered).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretQuestion {
     /// The passphrase of an encrypted key file.
-    Passphrase { key_file: String, retry: bool },
+    Passphrase { key_file: String, retry: bool, keyring: Keyring },
     /// The password of `user@host`. `unencrypted`: it will cross the network as plain text (plain `ftp://`).
-    Password { account: String, retry: bool, unencrypted: bool },
-    /// A question of the server's (keyboard-interactive login), with the server's own text.
+    Password { account: String, retry: bool, unencrypted: bool, keyring: Keyring },
+    /// A question of the server's (keyboard-interactive login), with the server's own text. Never remembered.
     Server { account: String, prompt: String, echo: bool },
 }
 
-pub type Secret = Zeroizing<String>;
+/// Whether the dialog can offer "Remember" for this secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Keyring {
+    /// The system's keyring is there: the tick is offered (off by default).
+    Ready,
+    /// It is not (no Secret Service running, say): the tick is shown disabled with this line saying why.
+    Missing(String),
+}
+
+/// A password or passphrase as typed. Wiped from memory when dropped; its `Debug` prints `***`, so it cannot reach a log
+/// line, a panic message or a crash report by way of `{:?}`. `remember`: the user ticked "Remember" (keep it in the keyring).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret {
+    text: Zeroizing<String>,
+    remember: bool,
+}
+
+impl Secret {
+    pub fn new(text: String) -> Secret {
+        Secret { text: Zeroizing::new(text), remember: false }
+    }
+    /// The same secret, to be kept in the keyring after a login it worked for.
+    pub fn remembered(mut self, remember: bool) -> Secret {
+        self.remember = remember;
+        self
+    }
+    pub fn as_str(&self) -> &str {
+        self.text.as_str()
+    }
+    /// The user ticked "Remember".
+    pub fn wants_remember(&self) -> bool {
+        self.remember
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
+}
 
 /// An FTPS server whose certificate the system does not trust (self-signed, another name, expired...).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,4 +159,22 @@ pub(crate) fn ask_certificate_blocking(p: &dyn Prompter, q: CertQuestion) -> Hos
         }),
     );
     rx.recv().unwrap_or(HostKeyAnswer::Cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Secret;
+
+    /// A secret never shows in `Debug` (a log line or panic message made with `{:?}`), also inside other values.
+    #[test]
+    fn secret_debug_does_not_print_it() {
+        let s = Secret::new("hunter2-very-secret".into()).remembered(true);
+        assert_eq!(format!("{s:?}"), "***");
+        assert_eq!(format!("{:?}", Some(&s)), "Some(***)");
+        assert_eq!(format!("{:#?}", vec![s.clone()]), "[
+    ***,
+]");
+        assert!(!format!("{:?}", (1, &s)).contains("hunter2"));
+        assert_eq!(s.as_str(), "hunter2-very-secret");
+    }
 }

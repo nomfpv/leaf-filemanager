@@ -6,7 +6,8 @@
 //! - One connection per server, shared by every pane; it is opened again when it broke, and closed after a while unused.
 //! - The async runtime lives in this crate (one worker thread) and starts with the first connection, never at app start.
 //! - Host keys are checked against `~/.ssh/known_hosts`; an unknown key is asked about, a changed or revoked one refused.
-//! - Login: the running agent, the key files, then a password; secrets stay in memory for this run of leaf only.
+//! - Login: the running agent, the key files, then a password; secrets stay in memory for this run of leaf, and in the
+//!   system's keyring when the user ticked "Remember" (`secrets`).
 //!
 //! The app calls [`register`] once at start (cheap: nothing connects, no thread starts) with its dialogs as the [`Prompter`].
 
@@ -22,6 +23,7 @@ mod ftp_tests;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
+pub mod secrets;
 mod sftp;
 #[cfg(test)]
 mod tests;
@@ -31,7 +33,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub use conn::{Config, ExecOut};
 pub use leaf_vfs::{FsError, VPath};
 pub use ftp::{FtpFs, QUIET_LOG_TARGETS, TRUSTED_CERTS_FILE, is_quiet};
-pub use prompt::{CertQuestion, HostKeyAnswer, HostKeyQuestion, NoPrompter, Prompter, Secret, SecretQuestion};
+pub use prompt::{CertQuestion, HostKeyAnswer, HostKeyQuestion, Keyring, NoPrompter, Prompter, Secret, SecretQuestion};
+pub use secrets::{SecretId, SecretStore, Vault};
 pub use sftp::SftpFs;
 
 fn setup() -> &'static Mutex<Option<(Config, Arc<dyn Prompter>)>> {
@@ -90,6 +93,28 @@ pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
             None => Arc::new(NoRclone),
         });
     }
+}
+
+/// Where the app's connections keep the secrets the user asked to remember (none before [`register`]).
+pub fn vault() -> Vault {
+    setup().lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(c, _)| c.vault.clone()).unwrap_or_default()
+}
+
+/// What is saved in the keyring (ids only; the secrets are never read for this).
+pub fn saved_secrets() -> Result<Vec<SecretId>, String> {
+    vault().list()
+}
+
+/// "Forget saved password": deletes it from the keyring and, for a password, from this run's memory (asked next time).
+pub fn forget_saved(id: &SecretId) -> Result<(), String> {
+    if let SecretId::Password { scheme, host, port, .. } = id {
+        match scheme.as_str() {
+            "sftp" => sftp_backend().forget_passwords(host, *port),
+            "ftp" | "ftps" => ftp_backend().forget_passwords(host, *port),
+            _ => {}
+        }
+    }
+    vault().forget(id)
 }
 
 /// The home folder the server logs the user into (for an address that names only the server).

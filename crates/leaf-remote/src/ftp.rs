@@ -39,10 +39,10 @@ use std::time::{Duration, Instant};
 use leaf_vfs::{Caps, Details, Entry, EntryKind, Fs, FsError, Kind, Meta, MetaChange, VPath, WriteMode, WriteOpts, WriteSink};
 use suppaftp::types::FileType as TransferType;
 use suppaftp::{FtpError, Mode, RustlsConnector, RustlsFtpStream, Status, TlsStream, TransferStream};
-use zeroize::Zeroizing;
 
 use crate::conn::Config;
-use crate::prompt::{CertQuestion, HostKeyAnswer, Prompter, SecretQuestion};
+use crate::prompt::{CertQuestion, HostKeyAnswer, Prompter, Secret, SecretQuestion};
+use crate::secrets::SecretId;
 
 /// Log targets that write secrets at their most detailed level (suppaftp logs the `PASS` line at trace). The app drops every
 /// record of these (and of their modules) above `warn`, whatever `RUST_LOG` says: see [`is_quiet`]. (Nothing up to `debug`
@@ -239,7 +239,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 struct Shared {
     servers: Mutex<HashMap<String, Arc<Server>>>,
     /// `scheme://user@host:port` -> the password.
-    passwords: Mutex<HashMap<String, Zeroizing<String>>>,
+    passwords: Mutex<HashMap<String, Secret>>,
     /// `(host:port, fingerprint)` of certificates trusted for this run.
     trusted_once: Mutex<HashSet<(String, String)>>,
 }
@@ -263,6 +263,12 @@ impl FtpFs {
     pub fn home(&self, v: &VPath) -> Result<VPath, FsError> {
         let home = self.inner.op(v, &|| false, |l| Ok(l.home().to_string()))?;
         Ok(v.with_path(&home))
+    }
+
+    /// Forgets the passwords this run keeps in memory for the server `host:port` (both schemes, any user).
+    pub fn forget_passwords(&self, host: &str, port: u16) {
+        let suffix = format!("@{}:{port}", host.to_ascii_lowercase());
+        lock(&self.inner.shared.passwords).retain(|k, _| !k.ends_with(&suffix));
     }
 
     /// Whether a connection to the server of `v` is open now (never connects).
@@ -489,27 +495,36 @@ impl Inner {
 
     fn login(&self, t: &Target, mut s: RustlsFtpStream) -> Result<Session, FsError> {
         let anonymous = t.user.eq_ignore_ascii_case("anonymous") || t.user.eq_ignore_ascii_case("ftp");
+        // a password saved for ftps is never sent over plain ftp: the scheme is part of the keyring's name for it
+        let id = SecretId::password(if t.tls == Tls::None { "ftp" } else { "ftps" }, &t.user, &t.host, t.port);
+        let vault = &self.cfg.vault;
         let mut retry = false;
         let mut tries = 0;
         loop {
             tries += 1;
-            let pw: Zeroizing<String> = if anonymous {
-                Zeroizing::new("anonymous@".into())
-            } else if let Some(p) = lock(&self.shared.passwords).get(&t.key).cloned() {
+            let known = if anonymous || retry { None } else { lock(&self.shared.passwords).get(&t.key).cloned().or_else(|| vault.get(&id)) };
+            let pw: Secret = if anonymous {
+                Secret::new("anonymous@".into())
+            } else if let Some(p) = known {
                 p
             } else {
-                let q = SecretQuestion::Password { account: t.account(), retry, unencrypted: t.tls == Tls::None };
+                let q = SecretQuestion::Password { account: t.account(), retry, unencrypted: t.tls == Tls::None, keyring: vault.state() };
                 crate::prompt::ask_secret_blocking(&*self.prompter, q).ok_or(FsError::Cancelled)?
             };
             match s.login(t.user.as_str(), pw.as_str()) {
                 Ok(()) => {
                     if !anonymous {
-                        lock(&self.shared.passwords).insert(t.key.clone(), pw);
+                        vault.keep_if_asked(&id, &pw);
+                        lock(&self.shared.passwords).insert(t.key.clone(), pw.remembered(false));
                     }
                     break;
                 }
                 Err(FtpError::UnexpectedResponse(r)) if matches!(r.status.code(), 530 | 331 | 332) => {
                     lock(&self.shared.passwords).remove(&t.key);
+                    if !anonymous {
+                        // a saved password the server refuses is deleted from the keyring (then asked)
+                        vault.refused(&id, &pw);
+                    }
                     log::info!("ftp: {} refused the login of {}", t.host, t.user);
                     if anonymous {
                         return Err(FsError::Auth("the server does not take anonymous logins; put the user name in the address (ftp://user@host)".into()));

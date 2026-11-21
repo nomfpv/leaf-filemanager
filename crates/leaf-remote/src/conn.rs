@@ -16,7 +16,8 @@ use russh_sftp::client::RawSftpSession;
 use zeroize::Zeroizing;
 
 use crate::known_hosts::{self, Verdict};
-use crate::prompt::{self, HostKeyAnswer, HostKeyQuestion, Prompter, SecretQuestion};
+use crate::prompt::{self, HostKeyAnswer, HostKeyQuestion, Prompter, Secret, SecretQuestion};
+use crate::secrets::SecretId;
 
 /// Where leaf looks for keys and hosts, and how long it waits.
 #[derive(Debug, Clone)]
@@ -36,6 +37,8 @@ pub struct Config {
     pub connect_timeout: Duration,
     /// A connection nothing used for this long is closed.
     pub idle_after: Duration,
+    /// Where passwords and passphrases the user asked to remember are kept (none: nothing is saved).
+    pub vault: crate::secrets::Vault,
 }
 
 impl Config {
@@ -51,6 +54,7 @@ impl Config {
             op_timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(15),
             idle_after: Duration::from_secs(10 * 60),
+            vault: crate::secrets::Vault::none(),
         }
     }
 }
@@ -161,7 +165,7 @@ pub(crate) struct Shared {
     keys: Mutex<HashMap<PathBuf, Arc<PrivateKey>>>,
     /// `user@host:port` -> (the fingerprint of the host key the password was typed for, the password): used again only on a
     /// connection that shows that same key.
-    passwords: Mutex<HashMap<String, (String, Zeroizing<String>)>>,
+    passwords: Mutex<HashMap<String, (String, Secret)>>,
     idle_watch: OnceLock<()>,
 }
 
@@ -228,6 +232,12 @@ impl Shared {
         let suffix = format!("@{name}");
         lock(&self.passwords).retain(|k, _| !k.ends_with(&suffix));
         lock(&self.keys).clear();
+    }
+
+    /// Forgets the passwords kept in memory for the server `host:port` (any user): "Forget saved password".
+    pub fn forget_passwords_of(&self, host: &str, port: u16) {
+        let suffix = format!("@{}", known_hosts::host_name(host, port)).to_ascii_lowercase();
+        lock(&self.passwords).retain(|k, _| !k.to_ascii_lowercase().ends_with(&suffix));
     }
 
     /// Closes every connection (the tests' "the line dropped").
@@ -550,7 +560,7 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
             if !seen.insert(f.clone()) || !f.is_file() {
                 continue;
             }
-            let Some(key) = load_key(&f, prompter, shared).await? else { continue };
+            let Some(key) = load_key(&f, cfg, prompter, shared).await? else { continue };
             let k = PrivateKeyWithHashAlg::new(key, rsa_hash);
             match step(limit, h.authenticate_publickey(user, k)).await? {
                 russh::client::AuthResult::Success => {
@@ -562,24 +572,34 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
         }
     }
 
-    // 3. a password (asked; kept in memory for this run), or the server's questions
+    // 3. a password (kept in memory for this run; saved in the keyring when asked; else asked), or the server's questions
     if allows(&methods, MethodKind::Password) {
+        // (the keyring calls are short and local: made right here)
+        let id = SecretId::password("sftp", user, &t.host, t.port);
         let mut retry = false;
         for _ in 0..3 {
-            // a remembered password only goes to the host key it was typed for
+            // a password in memory only goes to the host key it was typed for
             let cached = lock(&shared.passwords).get(&t.key).filter(|(fp, _)| fp == host_fp).map(|(_, p)| p.clone());
-            let pw = match cached {
-                Some(p) if !retry => p,
-                _ => prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry, unencrypted: false }).await.ok_or(FsError::Cancelled)?,
+            // (a saved one: the host key was checked against known_hosts before this)
+            let known = if retry { None } else { cached.or_else(|| cfg.vault.get(&id)) };
+            let pw = match known {
+                Some(p) => p,
+                None => {
+                    let keyring = cfg.vault.state();
+                    prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry, unencrypted: false, keyring }).await.ok_or(FsError::Cancelled)?
+                }
             };
             match step(limit, h.authenticate_password(user, pw.as_str())).await? {
                 russh::client::AuthResult::Success => {
-                    lock(&shared.passwords).insert(t.key.clone(), (host_fp.to_string(), pw));
+                    cfg.vault.keep_if_asked(&id, &pw);
+                    lock(&shared.passwords).insert(t.key.clone(), (host_fp.to_string(), pw.remembered(false)));
                     log::info!("remote: logged in with a password");
                     return Ok(());
                 }
                 russh::client::AuthResult::Failure { .. } => {
                     lock(&shared.passwords).remove(&t.key);
+                    // a saved password the server refuses is deleted from the keyring (then asked)
+                    cfg.vault.refused(&id, &pw);
                     retry = true;
                 }
             }
@@ -621,7 +641,7 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
 
 /// A key file, unlocked with its passphrase when it has one (asked; the unlocked key is kept for this run).
 /// `None`: not readable, or the user cancelled the passphrase.
-async fn load_key(f: &Path, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>) -> Result<Option<Arc<PrivateKey>>, FsError> {
+async fn load_key(f: &Path, cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>) -> Result<Option<Arc<PrivateKey>>, FsError> {
     if let Some(k) = lock(&shared.keys).get(f) {
         return Ok(Some(k.clone()));
     }
@@ -640,12 +660,24 @@ async fn load_key(f: &Path, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>) 
             return Ok(None);
         }
     }
+    // a passphrase saved in the keyring first; a wrong one is deleted there and asked
+    let id = SecretId::passphrase(f);
+    if let Some(pass) = cfg.vault.get(&id) {
+        if let Ok(k) = russh::keys::decode_secret_key(&text, Some(pass.as_str())) {
+            let k = Arc::new(k);
+            lock(&shared.keys).insert(f.to_path_buf(), k.clone());
+            return Ok(Some(k));
+        }
+        cfg.vault.refused(&id, &pass);
+    }
     let mut retry = false;
     for _ in 0..3 {
-        let q = SecretQuestion::Passphrase { key_file: f.display().to_string(), retry };
+        let keyring = cfg.vault.state();
+        let q = SecretQuestion::Passphrase { key_file: f.display().to_string(), retry, keyring };
         let Some(pass) = prompt::ask_secret(&**prompter, q).await else { return Ok(None) };
         match russh::keys::decode_secret_key(&text, Some(pass.as_str())) {
             Ok(k) => {
+                cfg.vault.keep_if_asked(&id, &pass);
                 let k = Arc::new(k);
                 lock(&shared.keys).insert(f.to_path_buf(), k.clone());
                 return Ok(Some(k));

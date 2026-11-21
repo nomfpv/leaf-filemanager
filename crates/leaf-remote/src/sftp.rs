@@ -35,6 +35,11 @@ impl SftpFs {
         SftpFs { cfg, prompter, shared: Arc::default() }
     }
 
+    /// Forgets the passwords this run keeps in memory for the server `host:port`.
+    pub fn forget_passwords(&self, host: &str, port: u16) {
+        self.shared.forget_passwords_of(host, port);
+    }
+
     /// Runs `op` on the server's connection (connecting first when needed). A connection that broke is dropped and the
     /// operation tried once more on a new one; every request has the per-operation timeout.
     fn with<T>(

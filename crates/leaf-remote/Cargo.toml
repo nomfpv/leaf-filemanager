@@ -31,6 +31,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # FTPS certificates are checked against the system's store (Windows: CryptoAPI)
 rustls-platform-verifier = "0.7"
 sha2.workspace = true
+# saved passwords and passphrases (W1b): the system's keyring behind leaf's own seam (`secrets.rs`)
+keyring-core = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Windows Credential Manager
+windows-native-keyring-store = "1"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# Secret Service over zbus (zbus is in the tree already; the D-Bus C library is not needed)
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
 [dev-dependencies]
 leaf-vfs = { workspace = true, features = ["suite"] }
