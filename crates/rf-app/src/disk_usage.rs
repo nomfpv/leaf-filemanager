@@ -10,7 +10,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rf_core::format;
-use rf_core::treemap::{Rect, squarify};
+use rf_core::treemap::{Arc, Rect, RingNode, ring_bounds, skyline, squarify, sunburst, sunburst_hit};
 use leaf_sys::diskusage::{DiskScan, DiskTree, Metric};
 
 use crate::fluent_menu::{self, Item, Menu, MenuIcon};
@@ -42,6 +42,34 @@ pub enum DiskEvent {
 
 impl EventEmitter<DiskEvent> for DiskUsageView {}
 
+/// How the current level is drawn (same data, colours, hover text and menu in each).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    Treemap,
+    Sunburst,
+    Skyline,
+}
+
+/// Rings around the centre of the sunburst, and how many children each ring keeps.
+const RINGS: u8 = 3;
+const RING_KIDS: usize = 40;
+
+/// Centre, hole radius and outer radius of the sunburst inside a `w` x `h` area.
+fn sun_geom(w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let outer = (w.min(h) / 2. - 4.).max(10.);
+    (w / 2., h / 2., outer * 0.24, outer)
+}
+
+fn ring_nodes(t: &DiskTree, m: Metric, ids: &[u32], depth: u8) -> Vec<RingNode> {
+    ids.iter()
+        .take(RING_KIDS)
+        .map(|&id| {
+            let children = if depth + 1 < RINGS && t.is_dir(id) { ring_nodes(t, m, &t.sorted_children(id, m), depth + 1) } else { Vec::new() };
+            RingNode { id, weight: t.weight(id, m), children }
+        })
+        .collect()
+}
+
 /// One drawn rectangle of the treemap.
 struct Cell {
     id: u32,
@@ -65,7 +93,12 @@ pub struct DiskUsageView {
     hover: Option<u32>,
     /// Size of the treemap area, measured while drawing.
     area: Size<Pixels>,
-    cells: Option<((u32, Metric, i32, i32), Vec<Cell>)>,
+    cells: Option<((u32, Metric, Mode, i32, i32), Vec<Cell>)>,
+    mode: Mode,
+    /// Top left of the drawing area in the window, measured while drawing (the sunburst needs it for the pointer).
+    origin: Point<Pixels>,
+    /// Sunburst segments of `cur`, built when first needed.
+    arcs: Option<Vec<Arc>>,
     started: std::time::Instant,
     _poll: Option<Task<()>>,
 }
@@ -84,6 +117,9 @@ impl DiskUsageView {
             hover: None,
             area: size(px(600.), px(400.)),
             cells: None,
+            mode: Mode::Treemap,
+            origin: point(px(0.), px(0.)),
+            arcs: None,
             started: std::time::Instant::now(),
             _poll: None,
         };
@@ -125,6 +161,7 @@ impl DiskUsageView {
 
     fn refresh_kids(&mut self) {
         self.cells = None;
+        self.arcs = None;
         self.kids = self.tree.as_ref().map(|t| t.sorted_children(self.cur, self.metric)).unwrap_or_default();
     }
 
@@ -140,6 +177,42 @@ impl DiskUsageView {
             let from = self.cur;
             self.go(p, cx);
             self.selected = Some(from);
+        }
+    }
+
+    fn set_mode(&mut self, m: Mode, cx: &mut Context<Self>) {
+        if self.mode != m {
+            self.mode = m;
+            cx.notify();
+        }
+    }
+
+    fn set_hover(&mut self, want: Option<u32>, cx: &mut Context<Self>) {
+        if self.hover != want {
+            self.hover = want;
+            cx.notify();
+        }
+    }
+
+    fn ensure_arcs(&mut self) {
+        if self.arcs.is_none()
+            && let Some(t) = &self.tree
+        {
+            self.arcs = Some(sunburst(&ring_nodes(t, self.metric, &self.kids, 0)));
+        }
+    }
+
+    /// The sunburst segment under a window position: Some(Some(id)) a segment, Some(None) the centre, None nothing.
+    fn sun_hit(&mut self, pos: Point<Pixels>) -> Option<Option<u32>> {
+        self.ensure_arcs();
+        let (w, h) = (f32::from(self.area.width), f32::from(self.area.height));
+        let (cx, cy, hole, outer) = sun_geom(w, h);
+        let (dx, dy) = (f32::from(pos.x - self.origin.x) - cx, f32::from(pos.y - self.origin.y) - cy);
+        let arcs = self.arcs.as_ref()?;
+        match sunburst_hit(arcs, dx, dy, hole, outer, RINGS) {
+            Some(i) => Some(Some(arcs[i].id)),
+            None if dx.hypot(dy) < hole => Some(None),
+            None => None,
         }
     }
 
@@ -211,13 +284,24 @@ impl DiskUsageView {
 
     /// Rectangles for the current folder inside `w` x `h`.
     fn layout(&mut self, w: f32, h: f32) -> &[Cell] {
-        let key = (self.cur, self.metric, w as i32, h as i32);
+        let key = (self.cur, self.metric, self.mode, w as i32, h as i32);
         if self.cells.as_ref().is_none_or(|(k, _)| *k != key) {
-            let cells = self.tree.as_ref().map(|t| build_cells(t, self.metric, &self.kids, w, h)).unwrap_or_default();
+            let cells = self.tree.as_ref().map(|t| if self.mode == Mode::Skyline { build_bars(t, self.metric, &self.kids, w, h) } else { build_cells(t, self.metric, &self.kids, w, h) }).unwrap_or_default();
             self.cells = Some((key, cells));
         }
         self.cells.as_ref().map(|(_, c)| c.as_slice()).unwrap_or(&[])
     }
+}
+
+fn build_bars(t: &DiskTree, m: Metric, kids: &[u32], w: f32, h: f32) -> Vec<Cell> {
+    let weights: Vec<u64> = kids.iter().map(|&k| t.weight(k, m)).collect();
+    // room under the bars for nothing: they stand on the bottom edge
+    skyline(&weights, Rect::new(0., 0., w, h), 3., 14., 96.)
+        .into_iter()
+        .zip(kids)
+        .filter(|(r, _)| r.h >= 1.)
+        .map(|(rect, &id)| Cell { id, rect, head: false, nested: false })
+        .collect()
 }
 
 fn build_cells(t: &DiskTree, m: Metric, kids: &[u32], w: f32, h: f32) -> Vec<Cell> {
@@ -245,6 +329,15 @@ fn build_cells(t: &DiskTree, m: Metric, kids: &[u32], w: f32, h: f32) -> Vec<Cel
         }
     }
     out
+}
+
+fn root_label(t: &DiskTree, cur: u32, root: &std::path::Path) -> String {
+    if t.parent(cur).is_none() {
+        let n = rf_core::history::display_name(root);
+        if n.is_empty() { root.to_string_lossy().into_owned() } else { n }
+    } else {
+        t.name(cur).to_string()
+    }
 }
 
 fn category_of(t: &DiskTree, id: u32) -> icons::Category {
@@ -328,6 +421,21 @@ impl Render for DiskUsageView {
                 .on_click(cx.listener(move |v, _, _, cx| v.set_metric(m, cx)))
                 .child(label)
         };
+        let mode = self.mode;
+        let vseg = |id: &'static str, label: &'static str, m: Mode| {
+            let on = mode == m;
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded(theme::RADIUS_SM)
+                .text_xs()
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.selection).text_color(p.text))
+                .when(!on, |d| d.text_color(p.text_secondary).hover(|s| s.bg(p.hover)))
+                .on_click(cx.listener(move |v, _, _, cx| v.set_mode(m, cx)))
+                .child(label)
+        };
         let summary = format!(
             "{} · {}",
             format::size(t.weight(cur, metric)),
@@ -343,6 +451,16 @@ impl Render for DiskUsageView {
             .child(up_btn)
             .child(div().flex_1().min_w_0().child(path_row))
             .child(div().text_xs().text_color(p.text_secondary).whitespace_nowrap().child(summary))
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .p_0p5()
+                    .rounded(theme::RADIUS_SM)
+                    .bg(p.pressed)
+                    .child(vseg("v-tree", t!("Treemap"), Mode::Treemap))
+                    .child(vseg("v-sun", t!("Sunburst"), Mode::Sunburst))
+                    .child(vseg("v-sky", t!("Skyline"), Mode::Skyline)),
+            )
             .child(
                 h_flex()
                     .gap_0p5()
@@ -417,14 +535,25 @@ impl Render for DiskUsageView {
         let dark = p.dark;
         let folder_bg = if dark { hsla(0., 0., 1., 0.07) } else { hsla(0., 0., 0., 0.06) };
         let folder_head = if dark { hsla(0., 0., 1., 0.12) } else { hsla(0., 0., 0., 0.10) };
-        let cells: Vec<(u32, Rect, bool, bool)> = self.layout(aw, ah).iter().map(|c| (c.id, c.rect, c.head, c.nested)).collect();
+        let sun = if mode == Mode::Sunburst {
+            self.ensure_arcs();
+            self.arcs.clone().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let flat = mode == Mode::Skyline;
+        let cells: Vec<(u32, Rect, bool, bool)> = if mode == Mode::Sunburst { Vec::new() } else { self.layout(aw, ah).iter().map(|c| (c.id, c.rect, c.head, c.nested)).collect() };
         let t = self.tree.as_ref().expect("tree");
         let mut map = div().relative().size_full().overflow_hidden();
         for (i, &(id, r, head, nested)) in cells.iter().enumerate() {
             let is_dir = t.is_dir(id);
             let cat = category_of(t, id);
             let lit = hover == Some(id) || selected == Some(id);
-            let base = if is_dir {
+            let base = if is_dir && flat {
+                let mut c = theme::kind_color(cat, dark);
+                c.a = if lit { 1.0 } else { 0.82 };
+                c
+            } else if is_dir {
                 if head { folder_head } else { folder_bg }
             } else {
                 let mut c = theme::kind_color(cat, dark);
@@ -441,7 +570,7 @@ impl Render for DiskUsageView {
                 .rounded(px(if r.w > 14. && r.h > 14. { 4. } else { 1.5 }))
                 .overflow_hidden()
                 .bg(base)
-                .when(is_dir && !head && !nested, |d| d.border_1().border_color(p.border))
+                .when(is_dir && !head && !nested && !flat, |d| d.border_1().border_color(p.border))
                 .when(lit && !head, |d| d.border_1().border_color(p.text_secondary))
                 .cursor_pointer()
                 .on_hover(cx.listener(move |v, on: &bool, _, cx| {
@@ -456,7 +585,7 @@ impl Render for DiskUsageView {
                 .on_mouse_down(MouseButton::Middle, cx.listener(move |v, _, _, cx| v.open_in_new_tab(id, cx)));
             // a folder's body sits behind its children: only its strip and the empty part take
             // clicks, which is the same folder either way
-            let label_color = if is_dir { p.text } else { gpui::white() };
+            let label_color = if is_dir && !flat { p.text } else { gpui::white() };
             if head {
                 cell = cell.px_1p5().flex().items_center().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(label_color).whitespace_nowrap().child(div().overflow_hidden().text_ellipsis().child(format!("{}  {}", t.name(id), format::size(t.weight(id, metric)))));
             } else if !is_dir && r.w > 44. && r.h > 20. {
@@ -474,6 +603,7 @@ impl Render for DiskUsageView {
         let probe = canvas(
             move |bounds, window, cx| {
                 let changed = this.update(cx, |v, cx| {
+                    v.origin = bounds.origin;
                     let ch = v.area != bounds.size;
                     if ch {
                         v.area = bounds.size;
@@ -489,6 +619,90 @@ impl Render for DiskUsageView {
         )
         .absolute()
         .size_full();
+
+        if mode == Mode::Sunburst {
+            let colors: Vec<(Arc, Hsla)> = sun
+                .iter()
+                .map(|a| {
+                    let mut c = theme::kind_color(category_of(t, a.id), dark);
+                    let lit = hover == Some(a.id) || selected == Some(a.id);
+                    // folders stay quieter than the files, so the files show up against them
+                    c.a = if lit { 1.0 } else if t.is_dir(a.id) { 0.5 - 0.08 * a.depth as f32 } else { 0.92 - 0.08 * a.depth as f32 };
+                    (*a, c)
+                })
+                .collect();
+            let (cx0, cy0, hole, outer) = sun_geom(aw, ah);
+            let paint = canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    for (a, color) in &colors {
+                        let (r0, r1) = ring_bounds(a.depth, hole, outer, RINGS);
+                        let (r0, r1) = (r0 + 0.5, r1 - 0.5);
+                        // half a pixel of gap on both sides of the segment
+                        let (p0, p1) = (0.5 / r1, 0.5 / r1);
+                        let (s, e) = (a.a0 + p0, (a.a1 - p1).max(a.a0 + p0));
+                        let steps = (((e - s) / 0.05).ceil() as usize).max(1);
+                        let at = |r: f32, ang: f32| point(bounds.origin.x + px(cx0 + r * ang.sin()), bounds.origin.y + px(cy0 - r * ang.cos()));
+                        let mut pts = Vec::with_capacity(2 * steps + 2);
+                        for i in 0..=steps {
+                            pts.push(at(r1, s + (e - s) * i as f32 / steps as f32));
+                        }
+                        for i in (0..=steps).rev() {
+                            pts.push(at(r0, s + (e - s) * i as f32 / steps as f32));
+                        }
+                        let mut b = PathBuilder::fill();
+                        b.add_polygon(&pts, true);
+                        if let Ok(path) = b.build() {
+                            window.paint_path(path, *color);
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .size_full();
+            let focus = hover.or(selected).filter(|&f| f != cur);
+            let centre_name = focus.map_or_else(|| root_label(t, cur, &self.root), |f| t.name(f).to_string());
+            let centre_size = format::size(t.weight(focus.unwrap_or(cur), metric));
+            let can_up = t.parent(cur).is_some();
+            let centre = v_flex()
+                .absolute()
+                .left(px(cx0 - hole))
+                .top(px(cy0 - hole))
+                .size(px(hole * 2.))
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(if can_up && focus.is_none() && hover.is_none() { p.hover } else { hsla(0., 0., 0., 0.) })
+                .px_2()
+                .child(div().max_w_full().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(centre_name))
+                .child(div().text_xs().text_color(p.text_secondary).child(centre_size))
+                .when(can_up, |d| d.child(Icon::new(L::ArrowUp).size(px(14.)).text_color(p.text_tertiary)));
+            let events = div()
+                .id("du-sun")
+                .absolute()
+                .size_full()
+                .cursor_pointer()
+                .on_mouse_move(cx.listener(|v, ev: &MouseMoveEvent, _, cx| {
+                    let h = v.sun_hit(ev.position).flatten();
+                    v.set_hover(h, cx);
+                }))
+                .on_mouse_down(MouseButton::Left, cx.listener(|v, ev: &MouseDownEvent, _, cx| match v.sun_hit(ev.position) {
+                    Some(Some(id)) => v.activate(id, ev.click_count, cx),
+                    Some(None) => v.up(cx),
+                    None => {}
+                }))
+                .on_mouse_down(MouseButton::Right, cx.listener(|v, ev: &MouseDownEvent, window, cx| {
+                    if let Some(Some(id)) = v.sun_hit(ev.position) {
+                        v.context_menu(id, window, cx);
+                    }
+                }))
+                .on_mouse_down(MouseButton::Middle, cx.listener(|v, ev: &MouseDownEvent, _, cx| {
+                    if let Some(Some(id)) = v.sun_hit(ev.position) {
+                        v.open_in_new_tab(id, cx);
+                    }
+                }));
+            map = map.child(paint).child(centre).child(events);
+        }
 
         // ---- footer: what is under the pointer
         let focus = hover.or(selected).unwrap_or(cur);
