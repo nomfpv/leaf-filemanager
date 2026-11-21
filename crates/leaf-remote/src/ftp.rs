@@ -148,6 +148,10 @@ struct ServerState {
     idle: Vec<Session>,
     /// Connections open now (idle or lent out).
     open: usize,
+    /// Of those, lent to a reader (`open_read`): at most `MAX_CONNS - 1`, so one is always left for a write, a listing or a
+    /// command. (A copy from this server to itself holds a read while it writes: three of them at once would otherwise hold
+    /// every connection and each wait for one more.)
+    reading: usize,
     home: Option<String>,
 }
 
@@ -164,6 +168,8 @@ struct Lease {
     server: Arc<Server>,
     sess: Option<Session>,
     broken: bool,
+    /// Counted in `ServerState::reading`.
+    reading: bool,
 }
 
 impl Lease {
@@ -189,6 +195,9 @@ impl Drop for Lease {
     fn drop(&mut self) {
         let Some(mut sess) = self.sess.take() else { return };
         let mut st = lock(&self.server.state);
+        if self.reading {
+            st.reading = st.reading.saturating_sub(1);
+        }
         if self.broken {
             st.open = st.open.saturating_sub(1);
         } else {
@@ -196,7 +205,7 @@ impl Drop for Lease {
             st.idle.push(sess);
         }
         drop(st);
-        self.server.freed.notify_one();
+        self.server.freed.notify_all();
     }
 }
 
@@ -276,25 +285,36 @@ impl Inner {
     /// A connection to the server of `t`: an idle one, or a new one while there are fewer than `MAX_CONNS`; otherwise it
     /// waits for one to come back (polling `cancelled`).
     fn lease(&self, t: &Target, cancelled: &dyn Fn() -> bool) -> Result<Lease, FsError> {
+        self.lease_for(t, cancelled, false)
+    }
+
+    /// `lease` for a reader: never the last connection that is not reading (see `ServerState::reading`).
+    fn lease_for(&self, t: &Target, cancelled: &dyn Fn() -> bool, reading: bool) -> Result<Lease, FsError> {
         let server = self.server(t);
         loop {
             if cancelled() {
                 return Err(FsError::Cancelled);
             }
             let mut st = lock(&server.state);
+            if reading && st.reading >= MAX_CONNS - 1 {
+                let _ = server.freed.wait_timeout(st, Duration::from_millis(50));
+                continue;
+            }
             // connections unused for long are closed (the server has likely dropped them anyway)
             let (fresh, stale): (Vec<Session>, Vec<Session>) = std::mem::take(&mut st.idle).into_iter().partition(|s| s.last_used.elapsed() < IDLE_AFTER);
             st.idle = fresh;
             st.open = st.open.saturating_sub(stale.len());
             if let Some(sess) = st.idle.pop() {
+                st.reading += reading as usize;
                 drop(st);
                 for s in stale {
                     s.quit();
                 }
-                return Ok(Lease { server, sess: Some(sess), broken: false });
+                return Ok(Lease { server, sess: Some(sess), broken: false, reading });
             }
             if st.open < MAX_CONNS {
                 st.open += 1;
+                st.reading += reading as usize;
                 drop(st);
                 for s in stale {
                     s.quit();
@@ -306,11 +326,14 @@ impl Inner {
                 return match made {
                     Ok(sess) => {
                         lock(&server.state).home = Some(sess.home.clone());
-                        Ok(Lease { server, sess: Some(sess), broken: false })
+                        Ok(Lease { server, sess: Some(sess), broken: false, reading })
                     }
                     Err(e) => {
-                        lock(&server.state).open -= 1;
-                        server.freed.notify_one();
+                        let mut st = lock(&server.state);
+                        st.open -= 1;
+                        st.reading -= reading as usize;
+                        drop(st);
+                        server.freed.notify_all();
                         Err(e)
                     }
                 };
@@ -1182,7 +1205,7 @@ impl Fs for FtpFs {
         let mut tries = 0;
         loop {
             tries += 1;
-            let mut l = self.inner.lease(&t, &|| false)?;
+            let mut l = self.inner.lease_for(&t, &|| false, true)?;
             let sp = spath(l.home(), p);
             let r = (|| {
                 if offset > 0 {
