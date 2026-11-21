@@ -51,6 +51,18 @@ struct RawLocation {
 #[derive(Deserialize)]
 struct RawWireguard {
     relays: Vec<serde_json::Value>,
+    #[serde(default)]
+    port_ranges: Vec<(u16, u16)>,
+}
+
+/// The UDP ports tried after 51820 when a server does not answer there, in this order: DNS's and NTP's (open on most
+/// networks), then IPsec NAT-T's; each only when the relay list's port ranges have it.
+const FALLBACK_PORTS: [u16; 3] = [53, 123, 4500];
+static PORT_RANGES: Mutex<Vec<(u16, u16)>> = Mutex::new(Vec::new());
+
+fn fallback_ports() -> Vec<u16> {
+    let ranges = PORT_RANGES.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    FALLBACK_PORTS.into_iter().filter(|p| ranges.is_empty() || ranges.iter().any(|(a, b)| (*a..=*b).contains(p))).collect()
 }
 
 #[derive(Deserialize)]
@@ -70,6 +82,9 @@ struct RawRelay {
 /// The active relays of a relay list (`/app/v1/relays`); a malformed entry is left out, not the whole list.
 pub fn parse_relays(json: &[u8]) -> Result<Vec<Relay>, String> {
     let raw: RawList = serde_json::from_slice(json).map_err(|e| format!("Mullvad's server list could not be read ({e})"))?;
+    if !raw.wireguard.port_ranges.is_empty() {
+        *PORT_RANGES.lock().unwrap_or_else(|e| e.into_inner()) = raw.wireguard.port_ranges.clone();
+    }
     let mut out = Vec::new();
     for v in raw.wireguard.relays {
         let Ok(r) = serde_json::from_value::<RawRelay>(v) else { continue };
@@ -292,6 +307,7 @@ impl Provider for Mullvad {
                 city: relay.city,
                 server: relay.hostname,
                 handshake_wait: if self.fresh { FRESH_KEY_WAIT } else { crate::tunnel::HANDSHAKE_WAIT },
+                fallback_ports: fallback_ports(),
             })
         })
     }

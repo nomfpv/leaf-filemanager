@@ -54,6 +54,9 @@ pub struct Prepared {
     pub server: String,
     /// How long the first handshake may take (longer right after a new key was registered: the servers learn it within a minute).
     pub handshake_wait: Duration,
+    /// Other ports of the same server to try in this order when the first gets no answer (UDP 51820 is blocked on some
+    /// networks).
+    pub fallback_ports: Vec<u16>,
 }
 
 /// Where the traffic left the tunnel, as the provider's own check saw it.
@@ -228,8 +231,30 @@ enum Refusal {
 async fn up_once(provider: &dyn Provider, generation: u64) -> Result<Option<Arc<Tunnel>>, Refusal> {
     let prepared = provider.prepare().await.map_err(Refusal::Provider)?;
     set_state(generation, State::Connecting { place: format!("{}, {}", prepared.country, prepared.city) });
-    let Prepared { config, country, city, server, handshake_wait } = prepared;
-    let t = Arc::new(Tunnel::start(config, handshake_wait).await.map_err(|e| Refusal::Tunnel(e.to_string()))?);
+    let Prepared { config, country, city, server, handshake_wait, fallback_ports } = prepared;
+    let first_port = config.endpoint.port();
+    let mut tried = Vec::new();
+    let mut started = None;
+    for (i, port) in std::iter::once(first_port).chain(fallback_ports.into_iter().filter(|p| *p != first_port)).enumerate() {
+        if manager().generation != generation {
+            return Ok(None);
+        }
+        let mut c = config.clone();
+        c.endpoint.set_port(port);
+        tried.push(port.to_string());
+        match Tunnel::start(c, if i == 0 { handshake_wait } else { tunnel::HANDSHAKE_WAIT }).await {
+            Ok(t) => {
+                if i > 0 {
+                    log::info!("vpn: the server answered on UDP port {port}");
+                }
+                started = Some(t);
+                break;
+            }
+            Err(e @ TunnelError::Socket(_)) => return Err(Refusal::Tunnel(e.to_string())),
+            Err(TunnelError::NoAnswer) => log::info!("vpn: no answer on UDP port {port}"),
+        }
+    }
+    let t = Arc::new(started.ok_or_else(|| Refusal::Tunnel(format!("{}\n{} {}", TunnelError::NoAnswer, "UDP ports tried:", tried.join(", "))))?);
     {
         let mut m = manager();
         if m.generation != generation {
