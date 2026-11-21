@@ -27,6 +27,8 @@ pub enum HotkeyError {
     Invalid,
     /// Another app (or Windows) has it.
     Taken,
+    /// The system offers no global shortcut (never here: Windows always does).
+    Unavailable,
 }
 
 struct Hotkey {
