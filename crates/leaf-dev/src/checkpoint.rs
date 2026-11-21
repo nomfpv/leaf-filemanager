@@ -745,6 +745,37 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
 
 // ---------------------------------------------------------------------------------------------------------------- restore
 
+/// Is this a link of any kind (a symbolic link; on Windows also a junction or another reparse point)?
+fn is_link(m: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if m.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    m.file_type().is_symlink()
+}
+
+/// Every folder from `folder` down to the parent of `rel` that exists must be a real folder: a link there would carry the write
+/// out of the folder.
+fn no_link_on_the_way(folder: &Path, rel: &str) -> Result<(), String> {
+    let mut cur = folder.to_path_buf();
+    let parts: Vec<&str> = rel.split('/').collect();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        if part.is_empty() || *part == "." || *part == ".." {
+            return Err("the path is not valid".into());
+        }
+        cur.push(part);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if is_link(&m) => return Err(format!("{} is a link now: nothing is written through it", cur.display())),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 /// Writes `bytes` to `path` through a file beside it and a rename, so an interrupted write never leaves half a file.
 fn put(path: &Path, fill: impl FnOnce(&Path) -> std::io::Result<()>) -> Result<(), String> {
     if path.is_dir() {
@@ -818,6 +849,10 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
     let mut done = Restored { auto, written: Vec::new(), back: Vec::new(), trashed: Vec::new(), failed: Vec::new() };
     for it in plan.items.iter().filter(|i| i.change != Change::Added) {
         let path = folder.join(&it.rel);
+        if let Err(e) = no_link_on_the_way(&folder, &it.rel) {
+            done.failed.push((it.rel.clone(), e));
+            continue;
+        }
         // "comes back" yet something is there: a file git ignores now, or a link the copy store does not list. The automatic
         // checkpoint does not hold it, so it is never overwritten: it goes to the Trash first, or the file is left as it is.
         if it.change == Change::Back
@@ -1028,6 +1063,29 @@ mod tests {
         assert_eq!(std::fs::read(bin.join("build.out")).unwrap(), b"only copy of this");
         assert_eq!(std::fs::read(d.join("build.out")).unwrap(), b"from then");
         assert!(done.trashed.contains(&"build.out".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_restore_never_writes_through_a_folder_that_is_a_link_now() {
+        let d = temp("link-on-way");
+        write(&d, "sub/a.txt", b"inside");
+        let store = Store::Copy { folder: d.clone(), base: temp("link-on-way-data").join("checkpoints").join("k") };
+        let cp = create(&store, "", false, None).unwrap();
+        // later `sub` is a link to a folder outside
+        let outside = temp("link-on-way-outside");
+        std::fs::remove_dir_all(d.join("sub")).unwrap();
+        #[cfg(windows)]
+        {
+            let ok = Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(d.join("sub")).arg(&outside).stdout(Stdio::null()).status().unwrap();
+            assert!(ok.success());
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, d.join("sub")).unwrap();
+        let done = restore(&store, &cp, None, &|_: &[PathBuf]| Ok(())).unwrap();
+        assert_eq!(done.failed.len(), 1, "{:?}", done.failed);
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none(), "nothing was written outside the folder");
+        let _ = std::fs::remove_dir(d.join("sub"));
         let _ = std::fs::remove_dir_all(&d);
     }
 
