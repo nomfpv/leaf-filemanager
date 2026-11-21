@@ -2606,8 +2606,52 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 .child(button("ide-reset", p, t!("Automatic"), |_, cx| settings::update(cx, |s| s.ide_path.clear())))
                 .into_any_element(),
         ),
+        card(
+            p,
+            L::Lock,
+            t!("Lock mark on secret files"),
+            Some(t!("A small lock after the name of a file that looks like it holds a secret: .env, private keys, credentials, password stores. Copy as context never takes these in.")),
+            sw("secret-marks", p, s.secret_marks, |s, v| s.secret_marks = v),
+        ),
+        card(
+            p,
+            L::Hash,
+            t!("Show token estimate"),
+            Some(t!("The status line shows about how many tokens the selected files are (bytes / 4), for pasting into a chat.")),
+            sw("token-estimate", p, s.show_token_estimate, |s, v| s.show_token_estimate = v),
+        ),
+        card(
+            p,
+            L::FileText,
+            t!("Copy as context: biggest file"),
+            Some(t!("Files above this size are listed as left out.")),
+            dropdown(
+                "context-file-kb",
+                p,
+                s.context_max_file_kb,
+                [64u32, 128, 256, 512, 1024].into_iter().map(|k| (k, kb_text(k))).collect(),
+                |s, v| s.context_max_file_kb = v,
+            ),
+        ),
+        card(
+            p,
+            L::FileText,
+            t!("Copy as context: most text"),
+            Some(t!("The copy stops with a message when the text would pass this.")),
+            dropdown(
+                "context-total-kb",
+                p,
+                s.context_max_total_kb,
+                [512u32, 1024, 2048, 4096, 8192].into_iter().map(|k| (k, kb_text(k))).collect(),
+                |s, v| s.context_max_total_kb = v,
+            ),
+        ),
     ]);
     cards
+}
+
+fn kb_text(k: u32) -> String {
+    if k >= 1024 { format!("{} MB", k / 1024) } else { format!("{k} KB") }
 }
 
 /// leaf-look ayarı anahtarı (ayrı dosya `leaf-look.toml`; değişince leaf-look'a haber verilir).

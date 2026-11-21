@@ -70,6 +70,7 @@ tokens! {
     compare_newer: Color = "Folder compare: the mark and tint of an item newer than its twin in the other pane.",
     compare_older: Color = "Folder compare: the mark and tint of an item older than its twin in the other pane.",
     compare_different: Color = "Folder compare: the mark and tint of an item that has the same time as its twin but another size.",
+    secret_mark: Color = "The small lock after the name of a file that looks like it holds a secret (.env, a private key, credentials).",
     kind_folder: Color = "Folder icons.",
     kind_image: Color = "Picture icons.",
     kind_video: Color = "Video and audio icons.",

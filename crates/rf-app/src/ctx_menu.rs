@@ -238,6 +238,9 @@ impl FolderView {
             v.push(Item::sub(t!("Copy path as"), icon(L::ClipboardCopy), copy_path_items(me, items)));
         }
         if !in_archive {
+            v.push(Item::action(t!("Copy as context"), icon(L::FileText), act(me, |v, w, cx| v.copy_as_context(w, cx))));
+        }
+        if !in_archive {
             v.push(Item::action(t!("Duplicate"), icon(L::CopyPlus), act(me, |v, _, cx| v.duplicate_selected(cx))).hint("Ctrl+Alt+D"));
         }
         if mp.create_shortcut && !in_archive {
@@ -467,6 +470,9 @@ impl FolderView {
         let d = dir.to_path_buf();
         v.push(Item::action(t!("Pin to sidebar"), icon(L::Pin), act(me, move |v, _, cx| v.pin(d.clone(), cx))));
         v.push(Item::action(t!("Copy path"), icon(L::ClipboardCopy), act(me, |v, _, cx| v.copy_path(cx))));
+        if !in_archive {
+            v.push(Item::action(t!("Copy as context"), icon(L::FileText), act(me, |v, w, cx| v.copy_as_context(w, cx))));
+        }
         if !self.is_search() && !crate::archive_view::is_browsable_path(dir) && !leaf_sys::ftp::is_ftp(dir) {
             let d = dir.to_path_buf();
             v.push(Item::action(t!("Show disk usage"), icon(L::ChartPie), act(me, move |_, _, cx| {

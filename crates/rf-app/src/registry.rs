@@ -335,6 +335,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CopyPathAt, CopyPath, "Copy path as @path", "Copies the paths with an @ in front, as coding assistants take them.", Link, [], keywords: &["ai", "agent"], since: "0.9.4"),
     c!(CopyPathWsl, CopyPath, "Copy path as WSL path", "Copies the paths as Linux under WSL sees them (/mnt/c/...).", Link, [], keywords: &["linux"], since: "0.9.4", platforms: Platforms::WINDOWS),
     c!(CopyPathUrl, CopyPath, "Copy path as file URL", "Copies the paths as file:/// addresses.", Link, [], keywords: &["uri", "link"], since: "0.9.4"),
+    c!(CopyAsContext, CopyPath, "Copy as context", "Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files.", FileText, [], keywords: &["ai", "llm", "prompt", "claude", "chatgpt", "tokens", "agent"], since: "0.9.5"),
     c!(OpenWith, Files, "Open with…", "Opens the selected file in a program you choose.", AppWindow, []),
     c!(Properties, Files, "Properties", "Shows the details of the selected items.", Info, [f("alt-enter")], keywords: &["info", "size", "attributes"]),
     c!(ShowContextMenu, Files, "Context menu", "Opens the right-click menu for the selected items.", Menu, [f("shift-f10"), f("menu")], keywords: &["right click"]),

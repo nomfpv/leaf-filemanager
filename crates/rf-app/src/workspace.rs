@@ -4277,6 +4277,11 @@ impl Workspace {
                 );
                 if sel_size > 0 {
                     left = left.child(dot()).child(if has_dir { format!("{} + {}", format::size(sel_size), t!("folders")) } else { format::size(sel_size) });
+                    // Settings > Developer tools > "Show token estimate": what pasting the selected files into a chat would cost
+                    if cx.global::<crate::settings::Settings>().show_token_estimate {
+                        let phrase = leaf_dev::context::tokens_phrase(leaf_dev::context::estimate_tokens(sel_size));
+                        left = left.child(dot()).child(if has_dir { format!("{phrase} + {}", t!("folders")) } else { phrase });
+                    }
                 }
             } else {
                 left = left.child(crate::i18n::items(count));

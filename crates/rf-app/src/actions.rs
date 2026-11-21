@@ -111,6 +111,7 @@ gpui_kit::actions!(
         ShowFeatures,
         CustomizeHome,
         ResetHome,
+        CopyAsContext,
     ]
 );
 

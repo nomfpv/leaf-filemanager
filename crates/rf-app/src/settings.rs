@@ -614,6 +614,14 @@ pub struct Settings {
     pub terminal: rf_core::terminal::Terminal,
     /// The command line of the custom terminal; `{path}` is the folder.
     pub terminal_custom: String,
+    /// A small lock after the name of a file the secret guard flags by its name (.env, private keys ...).
+    pub secret_marks: bool,
+    /// The biggest file "Copy as context" takes in, in KB (larger ones are listed as left out).
+    pub context_max_file_kb: u32,
+    /// The most text "Copy as context" builds, in KB; it stops with a message past this.
+    pub context_max_total_kb: u32,
+    /// The status line shows the token estimate (bytes / 4) of the selected files.
+    pub show_token_estimate: bool,
 
     // ---- Advanced
     pub show_flatten: bool,
@@ -795,6 +803,10 @@ impl Default for Settings {
             ide_path: String::new(),
             terminal: rf_core::terminal::Terminal::Auto,
             terminal_custom: String::new(),
+            secret_marks: true,
+            context_max_file_kb: 256,
+            context_max_total_kb: 2048,
+            show_token_estimate: false,
             show_flatten: false,
             space_quicklook: false,
             look_enabled: true,

@@ -61,6 +61,8 @@ pub struct DialogView {
     input: Option<Entity<InputState>>,
     choices: Vec<Choice>,
     checks: Vec<Check>,
+    /// A message made again at every draw (it reads what the check boxes say): Copy as context's counts.
+    live: Option<Rc<dyn Fn() -> String>>,
     buttons: Vec<Button>,
     focus: FocusHandle,
     /// The button the keyboard is on: it carries a ring, Enter and Space press it, Tab, Shift+Tab and the arrows move it (the
@@ -129,6 +131,14 @@ pub fn ask(title: impl Into<SharedString>, message: String, window: &mut Window,
     rx
 }
 
+/// A dialog with check boxes whose message live makes again at every draw.
+pub fn show_live(title: impl Into<SharedString>, live: Rc<dyn Fn() -> String>, checks: Vec<Check>, buttons: Vec<Button>, window: &mut Window, cx: &mut App) {
+    show_inner(title, None, None, false, Vec::new(), checks, buttons, window, cx);
+    if let Some(v) = current(window, cx) {
+        v.update(cx, |d, _| d.live = Some(live));
+    }
+}
+
 /// A dialog whose text box hides what is typed (passwords).
 pub fn show_secret(title: impl Into<SharedString>, message: Option<String>, placeholder: String, buttons: Vec<Button>, window: &mut Window, cx: &mut App) {
     show_inner(title, message, Some((String::new(), placeholder)), true, Vec::new(), Vec::new(), buttons, window, cx)
@@ -176,6 +186,7 @@ fn show_inner(
             input,
             choices,
             checks,
+            live: None,
             buttons,
             focus: cx.focus_handle(),
             keyed,
@@ -435,7 +446,7 @@ impl Render for DialogView {
                             .p_6()
                             .gap_3()
                             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(self.title.clone()))
-                            .children(self.message.clone().map(|m| div().text_sm().text_color(p.text_secondary).child(m)))
+                            .children(self.message.clone().or_else(|| self.live.as_ref().map(|f| SharedString::from(f()))).map(|m| div().text_sm().text_color(p.text_secondary).child(m)))
                             .children(self.input.as_ref().map(|i| {
                                 div()
                                     .h(px(34.))

@@ -227,6 +227,16 @@ impl FolderView {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
+    /// "Copy as context": the selected files and folders (this folder when nothing is selected) as one text block, after a dialog.
+    pub fn copy_as_context(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut roots = self.selection_paths();
+        if roots.is_empty() {
+            roots.extend(self.current_dir());
+        }
+        let Some(base) = roots.first().and_then(|p| p.parent().map(std::path::Path::to_path_buf).or_else(|| Some(p.clone()))) else { return };
+        crate::context_copy::start(base, roots, window, cx);
+    }
+
     /// "Copy path as": one variant of the selected items' paths (the folder's when nothing is selected), one per line.
     pub fn copy_path_as(&mut self, kind: CopyPathKind, cx: &mut Context<Self>) {
         let mut paths = self.selection_paths();

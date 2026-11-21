@@ -95,6 +95,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Copy path as @path | Copies the paths with an @ in front, as coding assistants take them. |  |
 | Copy path as WSL path | Copies the paths as Linux under WSL sees them (/mnt/c/...). (Windows only) |  |
 | Copy path as file URL | Copies the paths as file:/// addresses. |  |
+| Copy as context | Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files. |  |
 
 ## View
 

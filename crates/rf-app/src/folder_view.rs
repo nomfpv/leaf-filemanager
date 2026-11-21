@@ -2769,6 +2769,7 @@ impl FolderView {
             GridStyle::List => px(20.),
         };
         let show_ext = cx.global::<crate::settings::Settings>().show_extensions;
+        let secret_marks = cx.global::<crate::settings::Settings>().secret_marks;
         let system_icons = cx.global::<crate::settings::Settings>().system_icons;
         let any_cut = crate::cut_marks::any();
         let renamed = self.renamed.clone();
@@ -2973,7 +2974,8 @@ impl FolderView {
                         .gap_2()
                         .items_center()
                         .child(div().size(visual_px).flex_shrink_0().flex().items_center().justify_center().child(visual))
-                        .child(div().flex_1().min_w_0().text_sm().whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone())),
+                        .child(div().flex_1().min_w_0().text_sm().whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
+                        .children(secret_marks.then(|| secret_lock(e, &p)).flatten()),
                 };
                 let renaming_here = self.renaming.as_ref().is_some_and(|(i, _)| *i == ei);
                 let base = if style != GridStyle::Tiles && renaming_here {
@@ -4234,6 +4236,7 @@ impl FolderView {
         let search_mode = self.is_search();
         let prefs = cx.global::<crate::settings::Settings>();
         let show_ext = prefs.show_extensions;
+        let secret_marks = prefs.secret_marks;
         let system_icons = prefs.system_icons;
         let any_cut = crate::cut_marks::any();
         let renamed = self.renamed.clone();
@@ -4656,6 +4659,7 @@ impl FolderView {
                         .child(name_el)
                         // encrypted: an archive member that needs a password, or an EFS file
                         .children((e.attrs & rf_core::attrs::ENCRYPTED != 0).then(|| Icon::new(L::Lock).size(px(12.)).flex_shrink_0().text_color(p.text_secondary)))
+                        .children(secret_marks.then(|| secret_lock(e, &p)).flatten())
                         .children(tag_dots)
                         .children(cut_mark)
                         .children(cmp_mark)
@@ -5079,6 +5083,11 @@ fn shown_new_name(name: &str, is_dir: bool, show_ext: bool) -> String {
 }
 
 /// The name a row shows: the entry's own, or the name it is getting while its rename is under way (`FolderView::renamed`).
+/// The lock after the name of a file the secret guard flags by its name (leaf_dev::secrets).
+fn secret_lock(e: &Entry, p: &Palette) -> Option<Icon> {
+    (e.kind == rf_core::EntryKind::File && leaf_dev::secrets::looks_secret(&e.name).is_some()).then(|| Icon::new(L::Lock).size(px(12.)).flex_shrink_0().text_color(p.secret_mark))
+}
+
 fn row_name(e: &Entry, show_ext: bool, renamed: Option<&(Arc<str>, Arc<str>)>) -> String {
     match renamed {
         Some((old, new)) if *e.name == **old => shown_new_name(new, e.is_dir(), show_ext),

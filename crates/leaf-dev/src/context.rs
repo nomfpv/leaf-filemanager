@@ -179,102 +179,153 @@ fn size_text(b: u64) -> String {
     }
 }
 
-/// Builds the block. `base` is the folder the paths are shown relative to. Returns `None` when cancelled.
-pub fn build(base: &Path, roots: &[PathBuf], opt: &Options, cancel: &AtomicBool) -> Option<Built> {
+/// One readable text file that passed the name, size and binary checks.
+pub struct PFile {
+    pub rel: String,
+    pub size: u64,
+    pub text: String,
+    /// A content finding (kind label, line, redacted excerpt): the file is out unless "include anyway".
+    pub flagged: Option<(String, usize, String)>,
+}
+
+/// What was read from the disk: independent of the display toggles, so a dialog can change them without reading again.
+#[derive(Default)]
+pub struct Prepared {
+    pub files: Vec<PFile>,
+    /// Left out whatever the toggles say (secret by name, too large, binary, unreadable).
+    pub fixed_out: Vec<LeftOut>,
+    pub capped: Option<String>,
+}
+
+/// Reads the candidates. `base` is the folder the paths are shown relative to. Returns `None` when cancelled.
+pub fn prepare(base: &Path, roots: &[PathBuf], max_file_bytes: u64, max_total_bytes: usize, cancel: &AtomicBool) -> Option<Prepared> {
     let cands = collect(base, roots, cancel)?;
-    let mut b = Built::default();
-    let mut bodies: Vec<(String, String)> = Vec::new();
-    let mut body_bytes = 0usize;
+    let mut p = Prepared::default();
+    let mut total = 0usize;
     for c in &cands {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
         let size = std::fs::metadata(&c.abs).map(|m| m.len()).unwrap_or(0);
         let name = c.rel.rsplit('/').next().unwrap_or(&c.rel);
-        let mut left = |reason: String, overridable: bool| {
-            b.left_out.push(LeftOut { rel: c.rel.clone(), size, reason, overridable });
-        };
+        let mut out = |reason: String| p.fixed_out.push(LeftOut { rel: c.rel.clone(), size, reason, overridable: false });
         if let Some(k) = secrets::looks_secret(name) {
-            left(format!("secret by name ({})", k.label()), false);
+            out(format!("secret by name ({})", k.label()));
             continue;
         }
-        if size > opt.max_file_bytes {
-            left(format!("over the size limit ({})", size_text(opt.max_file_bytes)), false);
+        if size > max_file_bytes {
+            out(format!("over the size limit ({})", size_text(max_file_bytes)));
             continue;
         }
         let Ok(bytes) = std::fs::read(&c.abs) else {
-            left("could not be read".into(), false);
+            out("could not be read".into());
             continue;
         };
         let binary = bytes[..bytes.len().min(8192)].contains(&0);
         let Ok(text) = (if binary { Err(()) } else { String::from_utf8(bytes).map_err(|_| ()) }) else {
-            left("binary".into(), false);
+            out("binary".into());
             continue;
         };
-        if !opt.include_anyway {
-            if let Some(f) = secrets::scan(&text).into_iter().next() {
-                left(format!("possible {} on line {} ({})", f.kind.label(), f.line, f.excerpt), true);
-                continue;
-            }
-        }
         let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
-        if body_bytes + text.len() > opt.max_total_bytes {
-            b.capped = Some(format!(
+        if total + text.len() > max_total_bytes {
+            p.capped = Some(format!(
                 "Stopped at {}: the text would pass the cap of {}. Select fewer files or raise the cap in Settings.",
                 c.rel,
-                size_text(opt.max_total_bytes as u64)
+                size_text(max_total_bytes as u64)
             ));
             break;
         }
-        body_bytes += text.len();
-        b.included += 1;
-        b.included_bytes += size;
-        bodies.push((c.rel.clone(), text));
+        total += text.len();
+        let flagged = secrets::scan(&text).into_iter().next().map(|f| (f.kind.label().to_string(), f.line, f.excerpt));
+        p.files.push(PFile { rel: c.rel.clone(), size, text, flagged });
     }
-    let mut out = String::new();
-    if opt.tree && !bodies.is_empty() {
-        let paths: Vec<&str> = bodies.iter().map(|(r, _)| r.as_str()).collect();
-        out.push_str("Files:\n");
-        out.push_str(&tree_text(&paths));
-        out.push('\n');
-    }
-    for (rel, text) in &bodies {
-        let mut run = 0usize;
-        let mut longest = 0usize;
-        for ch in text.chars() {
-            if ch == '`' {
-                run += 1;
-                longest = longest.max(run);
-            } else {
-                run = 0;
-            }
-        }
-        let fence = "`".repeat((longest + 1).max(3));
-        out.push_str(&format!("{rel}\n{fence}{}\n", lang_of(rel)));
-        if opt.line_numbers {
-            let width = text.lines().count().to_string().len();
-            for (i, l) in text.lines().enumerate() {
-                out.push_str(&format!("{:>w$} | {l}\n", i + 1, w = width));
-            }
-        } else {
-            out.push_str(text);
-            if !text.ends_with('\n') {
-                out.push('\n');
-            }
-        }
-        out.push_str(&fence);
-        out.push_str("\n\n");
-    }
-    if !b.left_out.is_empty() {
-        out.push_str("Left out:\n");
-        for l in &b.left_out {
-            out.push_str(&format!("- {} ({}): {}\n", l.rel, size_text(l.size), l.reason));
-        }
-    }
-    b.text = out;
-    Some(b)
+    Some(p)
 }
 
+impl Prepared {
+    /// The files and the left-out list for these toggles.
+    fn split(&self, opt: &Options) -> (Vec<&PFile>, Vec<LeftOut>) {
+        let mut left = self.fixed_out.clone();
+        let mut inc = Vec::new();
+        for f in &self.files {
+            match &f.flagged {
+                Some((kind, line, ex)) if !opt.include_anyway => {
+                    left.push(LeftOut { rel: f.rel.clone(), size: f.size, reason: format!("possible {kind} on line {line} ({ex})"), overridable: true })
+                }
+                _ => inc.push(f),
+            }
+        }
+        (inc, left)
+    }
+
+    /// Counts for the dialog, without the text.
+    pub fn summary(&self, opt: &Options) -> (usize, u64, Vec<LeftOut>) {
+        let (inc, left) = self.split(opt);
+        (inc.len(), inc.iter().map(|f| f.size).sum(), left)
+    }
+
+    /// Whether any file is held back by a content finding (the "include anyway" toggle matters).
+    pub fn has_flagged(&self) -> bool {
+        self.files.iter().any(|f| f.flagged.is_some())
+    }
+
+    /// The text block for these toggles.
+    pub fn assemble(&self, opt: &Options) -> Built {
+        let (inc, left) = self.split(opt);
+        let mut b = Built { included: inc.len(), included_bytes: inc.iter().map(|f| f.size).sum(), left_out: left, capped: self.capped.clone(), ..Built::default() };
+        let mut out = String::new();
+        if opt.tree && !inc.is_empty() {
+            let paths: Vec<&str> = inc.iter().map(|f| f.rel.as_str()).collect();
+            out.push_str("Files:\n");
+            out.push_str(&tree_text(&paths));
+            out.push('\n');
+        }
+        for f in &inc {
+            let (rel, text) = (&f.rel, &f.text);
+            let mut run = 0usize;
+            let mut longest = 0usize;
+            for ch in text.chars() {
+                if ch == '`' {
+                    run += 1;
+                    longest = longest.max(run);
+                } else {
+                    run = 0;
+                }
+            }
+            let fence = "`".repeat((longest + 1).max(3));
+            out.push_str(&format!("{rel}\n{fence}{}\n", lang_of(rel)));
+            if opt.line_numbers {
+                let width = text.lines().count().to_string().len();
+                for (i, l) in text.lines().enumerate() {
+                    out.push_str(&format!("{:>w$} | {l}\n", i + 1, w = width));
+                }
+            } else {
+                out.push_str(text);
+                if !text.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            out.push_str(&fence);
+            out.push_str("\n\n");
+        }
+        if !b.left_out.is_empty() {
+            out.push_str("Left out:\n");
+            for l in &b.left_out {
+                out.push_str(&format!("- {} ({}): {}\n", l.rel, size_text(l.size), l.reason));
+            }
+        }
+        if let Some(c) = &b.capped {
+            out.push_str(&format!("\n{c}\n"));
+        }
+        b.text = out;
+        b
+    }
+}
+
+/// Builds the block in one go. Returns `None` when cancelled.
+pub fn build(base: &Path, roots: &[PathBuf], opt: &Options, cancel: &AtomicBool) -> Option<Built> {
+    Some(prepare(base, roots, opt.max_file_bytes, opt.max_total_bytes, cancel)?.assemble(opt))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
