@@ -1,0 +1,26 @@
+[package]
+name = "leaf-share"
+description = "leaf: shared folders between two leafs (one folder kept the same on two PCs), on rf-nearby's identity and QUIC and leaf-sync's two-way planner"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# the same versions and features rf-nearby already brings (no second runtime kind, no second TLS stack)
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "fs", "io-util", "macros", "net"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+ring = "0.17"
+if-addrs = "0.13"
+rf-nearby.workspace = true
+leaf-sync.workspace = true
+leaf-vfs.workspace = true
+# the folder watch (recursive)
+leaf-sys.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

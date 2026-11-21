@@ -77,23 +77,32 @@ fn transport() -> Arc<quinn::TransportConfig> {
 }
 
 pub fn server_config(me: &Identity) -> anyhow::Result<quinn::ServerConfig> {
+    server_config_for(me, ALPN)
+}
+
+pub fn client_config(me: &Identity) -> anyhow::Result<quinn::ClientConfig> {
+    client_config_for(me, ALPN)
+}
+
+/// The same server side for another protocol on this identity (leaf's shared folders: their own ALPN and port).
+pub fn server_config_for(me: &Identity, alpn: &[u8]) -> anyhow::Result<quinn::ServerConfig> {
     let mut tls = rustls::ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_client_cert_verifier(Arc::new(AnyCert::new()))
         .with_single_cert(vec![me.cert.clone()], me.key())?;
-    tls.alpn_protocols = vec![ALPN.to_vec()];
+    tls.alpn_protocols = vec![alpn.to_vec()];
     let mut cfg = quinn::ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(tls)?));
     cfg.transport_config(transport());
     Ok(cfg)
 }
 
-pub fn client_config(me: &Identity) -> anyhow::Result<quinn::ClientConfig> {
+pub fn client_config_for(me: &Identity, alpn: &[u8]) -> anyhow::Result<quinn::ClientConfig> {
     let mut tls = rustls::ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(AnyCert::new()))
         .with_client_auth_cert(vec![me.cert.clone()], me.key())?;
-    tls.alpn_protocols = vec![ALPN.to_vec()];
+    tls.alpn_protocols = vec![alpn.to_vec()];
     let mut cfg = quinn::ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(tls)?));
     cfg.transport_config(transport());
     Ok(cfg)

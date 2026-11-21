@@ -29,6 +29,25 @@ use tokio::sync::oneshot;
 pub use localsend::{ID_BASE as LS_ID_BASE, LocalSend, PORT as LS_PORT, LsConfig, LsDevice, LsError, LsFile, LsListener, LsRequest, LsResult};
 pub use transfer::PART;
 
+/// The pieces other leaf protocols build on (leaf's shared folders, `leaf-share`): this device's identity (the same certificate
+/// and id Nearby uses), TLS 1.3 with both certificates proved, the pairing code drawn from the TLS session, and the trusted
+/// devices as Nearby keeps them (read only).
+pub mod kit {
+    pub use crate::identity::{Identity, fingerprint, id_of};
+    pub use crate::proto::safe_parts;
+    pub use crate::tls::{client_config_for, pairing_code, peer_fingerprint, server_config_for};
+
+    /// Whether Nearby has paired with the device that proved `fingerprint` (its trust store in `state_dir`, read now).
+    pub fn is_paired(state_dir: &std::path::Path, fingerprint: &str) -> bool {
+        crate::trust::TrustStore::load(state_dir).trusts(fingerprint)
+    }
+
+    /// The name Nearby knows a paired device by.
+    pub fn paired_name(state_dir: &std::path::Path, fingerprint: &str) -> Option<String> {
+        crate::trust::TrustStore::load(state_dir).devices().iter().find(|d| d.fingerprint == fingerprint).map(|d| d.name.clone())
+    }
+}
+
 /// A speed estimated from the two devices' links is shown this much of what the links' rates give (15% less).
 const LINK_MARGIN: f64 = 0.85;
 

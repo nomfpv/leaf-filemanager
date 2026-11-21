@@ -5211,6 +5211,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-share"
+version = "0.9.4"
+dependencies = [
+ "anyhow",
+ "if-addrs",
+ "leaf-sync",
+ "leaf-sys",
+ "leaf-vfs",
+ "log",
+ "quinn",
+ "rf-nearby",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "leaf-sync"
 version = "0.9.4"
 dependencies = [
