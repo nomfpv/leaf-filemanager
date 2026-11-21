@@ -546,6 +546,8 @@ pub struct Settings {
     /// Names starting with "." count as hidden when off.
     pub show_dot_files: bool,
     pub show_thumbnails: bool,
+    /// The Changes tab wraps long lines instead of scrolling sideways.
+    pub diff_wrap_lines: bool,
     /// The marks sync and version-control programs put on icons in Explorer (Google Drive, OneDrive, TortoiseGit, Dropbox), drawn
     /// over ours. A user on Discord, 2026-11-20.
     pub show_overlays: bool,
@@ -776,6 +778,7 @@ impl Default for Settings {
             show_system_files: false,
             show_dot_files: true,
             show_thumbnails: true,
+            diff_wrap_lines: false,
             show_overlays: true,
             show_checkboxes: false,
             single_click: ClickPref::Never,
