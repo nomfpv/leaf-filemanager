@@ -437,6 +437,43 @@ pub fn current_branch(root: &Path) -> Option<String> {
     run_text(root, &["symbolic-ref", "--short", "-q", "HEAD"]).filter(|b| !b.is_empty())
 }
 
+/// One commit of the log: when (unix seconds) and its subject line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commit {
+    pub unix: i64,
+    pub subject: String,
+}
+
+/// The last `n` commits of HEAD, newest first (`git log -n`). `None` when git cannot answer (no commit yet, not a repository).
+pub fn log(root: &Path, n: usize) -> Option<Vec<Commit>> {
+    let count = format!("-n{n}");
+    let (raw, _) = run(root, &["log", &count, "--no-color", "--format=%ct%x09%s"], Duration::from_secs(5), 64 * 1024)?;
+    Some(parse_log(&String::from_utf8_lossy(&raw)))
+}
+
+/// Parses `git log --format=%ct%x09%s`: a line is the commit time, a tab and the subject. Lines it does not understand are skipped.
+pub fn parse_log(text: &str) -> Vec<Commit> {
+    text.lines()
+        .filter_map(|l| {
+            let (t, s) = l.split_once('\t')?;
+            Some(Commit { unix: t.trim().parse().ok()?, subject: s.trim().to_string() })
+        })
+        .collect()
+}
+
+/// Commits ahead of and behind the upstream branch, `(ahead, behind)`; `None` without an upstream or when git is slow (5 s limit).
+pub fn ahead_behind(root: &Path) -> Option<(u32, u32)> {
+    let (raw, _) = run(root, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], Duration::from_secs(5), 4096)?;
+    parse_counts(&String::from_utf8_lossy(&raw))
+}
+
+/// Parses the `--left-right --count` answer of `@{upstream}...HEAD`: "behind<TAB>ahead"; returns `(ahead, behind)`.
+pub fn parse_counts(text: &str) -> Option<(u32, u32)> {
+    let mut it = text.split_whitespace();
+    let behind = it.next()?.parse().ok()?;
+    let ahead = it.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
 /// THE ONE GIT COMMAND OF LEAF THAT WRITES: `git worktree add`. With `new_branch` the branch is created from the current HEAD,
 /// otherwise the existing local branch is checked out. `folder` must not exist or be empty (git checks it too). It adds a folder
 /// and a branch entry; it never touches existing files, and there is no force, remove or prune. Blocks: off the UI thread.
@@ -569,4 +606,13 @@ mod tests {
         assert_eq!((a.added, a.hunks[0].lines[1].new_no), (2, Some(2)));
         assert!(all_added(b"ab\0cd", 10).binary);
     }
-}
+
+    #[test]
+    fn log_and_counts_parse() {
+        let got = parse_log("1700000000\tFix the thing\nnot a line\n1699990000\tTab\tinside subject\n");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], Commit { unix: 1700000000, subject: "Fix the thing".into() });
+        assert_eq!(got[1].subject, "Tab\tinside subject");
+        assert_eq!(parse_counts("2\t5\n"), Some((5, 2)));
+        assert_eq!(parse_counts("x"), None);
+    }}

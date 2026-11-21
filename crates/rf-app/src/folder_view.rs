@@ -547,6 +547,8 @@ pub struct FolderView {
     pub(crate) home_press: Option<(PathBuf, Point<Pixels>)>,
     /// The Home page is in Customize mode (its widgets show size, move and remove buttons).
     pub(crate) home_edit: bool,
+    /// What the optional Home widgets computed (kept in memory until their refresh button).
+    pub(crate) home_data: crate::home::Data,
     /// Ctrl and the wheel turned so far toward the next size step (a touchpad turns in small pixel steps).
     zoom_acc: f32,
     /// The mouse went down on an item's name (set by the name label, read by the row).
@@ -769,6 +771,7 @@ impl FolderView {
             pending_rename: false,
             home_press: None,
             home_edit: false,
+            home_data: Default::default(),
             zoom_acc: 0.0,
             name_hit: false,
             slow_click: None,

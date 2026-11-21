@@ -8,7 +8,10 @@
 //! Nothing of a widget runs while Home is not shown: a widget is only its render function, which reads what it needs (places, tags)
 //! when the page is drawn. A widget that is not in the layout is never called.
 
+mod dev;
 mod widgets;
+
+pub use dev::Data;
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::component::{Icon, h_flex, v_flex};
@@ -95,6 +98,9 @@ pub struct Slot {
     pub id: String,
     #[serde(default)]
     pub size: String,
+    /// The folder a widget that works on one was pointed at in Customize mode (empty: the first pinned folder).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
 }
 
 /// What a widget is drawn with.
@@ -122,6 +128,8 @@ pub struct Widget {
     pub default_size: Size,
     /// Rows of the grid it takes in the sizes S, M and W (a fixed row unit, theme key `home_row`); content that does not fit scrolls.
     pub rows: u16,
+    /// It works on one folder, chosen in Customize mode ([`folder_of`]).
+    pub folder: bool,
     pub render: RenderFn,
     pub header: Option<HeaderFn>,
     /// The leaf version it came with.
@@ -134,10 +142,10 @@ const ANY_LARGE: &[Size] = &[Size::Small, Size::Medium, Size::Wide, Size::Large]
 
 /// Every widget there is.
 pub static WIDGETS: &[Widget] = &[
-    Widget { id: "pinned", title: "Quick access", icon: L::Pin, sizes: ANY, default_size: Size::Wide, rows: 1, render: widgets::pinned, header: None, since: "0.9.5" },
-    Widget { id: "drives", title: "Drives", icon: L::HardDrive, sizes: ANY_LARGE, default_size: Size::Wide, rows: 1, render: widgets::drives, header: None, since: "0.9.5" },
-    Widget { id: "devices", title: "Devices", icon: L::Usb, sizes: ANY, default_size: Size::Medium, rows: 1, render: widgets::devices, header: None, since: "0.9.5" },
-    Widget { id: "network", title: "Network locations", icon: L::Network, sizes: ANY, default_size: Size::Medium, rows: 1, render: widgets::network, header: None, since: "0.9.5" },
+    Widget { id: "pinned", title: "Quick access", icon: L::Pin, sizes: ANY, default_size: Size::Wide, rows: 1, folder: false, render: widgets::pinned, header: None, since: "0.9.5" },
+    Widget { id: "drives", title: "Drives", icon: L::HardDrive, sizes: ANY_LARGE, default_size: Size::Wide, rows: 1, folder: false, render: widgets::drives, header: None, since: "0.9.5" },
+    Widget { id: "devices", title: "Devices", icon: L::Usb, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: widgets::devices, header: None, since: "0.9.5" },
+    Widget { id: "network", title: "Network locations", icon: L::Network, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: widgets::network, header: None, since: "0.9.5" },
     Widget {
         id: "recent",
         title: "Recent",
@@ -145,11 +153,61 @@ pub static WIDGETS: &[Widget] = &[
         sizes: &[Size::Medium, Size::Wide, Size::Large],
         default_size: Size::Wide,
         rows: 2,
+        folder: false,
         render: widgets::recent,
         header: Some(widgets::recent_clear),
         since: "0.9.5",
     },
-    Widget { id: "tags", title: "Tags", icon: L::Tag, sizes: ANY, default_size: Size::Medium, rows: 1, render: widgets::tags, header: None, since: "0.9.5" },
+    Widget { id: "tags", title: "Tags", icon: L::Tag, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: widgets::tags, header: None, since: "0.9.5" },
+    // the optional ones: none is in the default set, and none computes anything unless it is on the page
+    Widget {
+        id: "pulse",
+        title: "Git pulse",
+        icon: L::GitBranch,
+        sizes: ANY_LARGE,
+        default_size: Size::Medium,
+        rows: 2,
+        folder: true,
+        render: dev::pulse,
+        header: Some(dev::pulse_header),
+        since: "0.9.6",
+    },
+    Widget {
+        id: "codestats",
+        title: "Code stats",
+        icon: L::FileCode,
+        sizes: ANY_LARGE,
+        default_size: Size::Medium,
+        rows: 2,
+        folder: true,
+        render: dev::stats,
+        header: Some(dev::stats_header),
+        since: "0.9.6",
+    },
+    Widget {
+        id: "activity",
+        title: "Activity calendar",
+        icon: L::Calendar,
+        sizes: ANY_LARGE,
+        default_size: Size::Medium,
+        rows: 2,
+        folder: true,
+        render: dev::activity,
+        header: Some(dev::activity_header),
+        since: "0.9.6",
+    },
+    Widget {
+        id: "reclaim",
+        title: "Reclaimable space",
+        icon: L::Eraser,
+        sizes: ANY,
+        default_size: Size::Medium,
+        rows: 2,
+        folder: true,
+        render: dev::reclaim,
+        header: Some(dev::reclaim_header),
+        since: "0.9.6",
+    },
 ];
 
 /// The default set, in order. Devices and network locations show themselves only while there are any.
@@ -191,7 +249,7 @@ pub fn resolve(saved: Option<&[Slot]>) -> Vec<Placed> {
 }
 
 fn to_slots(layout: &[Placed]) -> Vec<Slot> {
-    layout.iter().map(|&(i, z)| Slot { id: WIDGETS[i].id.to_string(), size: z.key().to_string() }).collect()
+    layout.iter().map(|&(i, z)| Slot { id: WIDGETS[i].id.to_string(), size: z.key().to_string(), folder: String::new() }).collect()
 }
 
 /// The layout the old hide list described: the default set without the hidden sections.
@@ -220,7 +278,32 @@ pub fn layout(s: &Settings) -> Vec<Placed> {
 pub fn edit(s: &mut Settings, f: impl FnOnce(&mut Vec<Placed>)) {
     let mut l = layout(s);
     f(&mut l);
-    s.home_layout = Some(to_slots(&l));
+    let old = s.home_layout.take().unwrap_or_default();
+    let mut slots = to_slots(&l);
+    // the folders the widgets were pointed at stay with them
+    for sl in &mut slots {
+        if let Some(o) = old.iter().find(|o| o.id == sl.id) {
+            sl.folder = o.folder.clone();
+        }
+    }
+    s.home_layout = Some(slots);
+}
+
+/// Points a widget (on the page) at a folder.
+pub fn set_folder(s: &mut Settings, id: &str, folder: &str) {
+    edit(s, |_| {});
+    if let Some(sl) = s.home_layout.as_mut().and_then(|l| l.iter_mut().find(|sl| sl.id == id)) {
+        sl.folder = folder.to_string();
+    }
+}
+
+/// The folder a widget works on: the one chosen in Customize mode, else the first pinned folder, else none.
+pub fn folder_of(v: &FolderView, id: &str, cx: &App) -> Option<std::path::PathBuf> {
+    let chosen = cx.global::<Settings>().home_layout.as_ref().and_then(|l| l.iter().find(|sl| sl.id == id)).map(|sl| sl.folder.trim().to_string());
+    match chosen {
+        Some(c) if !c.is_empty() => Some(c.into()),
+        _ => v.places.read(cx).pinned.first().map(|f| f.path.clone()),
+    }
 }
 
 /// Adds the widget (at the end, in its default size) or takes it out.
@@ -432,6 +515,29 @@ fn edit_controls(pos: usize, len: usize, i: usize, size: Size, p: &Palette, cx: 
             .tooltip(move |win, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::t(tip)).build(win, cx))
             .child(Icon::new(icon).size(px(14.)).text_color(if enabled { p.text_secondary } else { p.text_disabled }))
     };
+    let pick_folder = w.folder.then(|| {
+        let id = w.id;
+        let chosen = cx.global::<Settings>().home_layout.as_ref().and_then(|l| l.iter().find(|sl| sl.id == id)).map(|sl| sl.folder.clone()).filter(|f| !f.is_empty());
+        let tip = match chosen {
+            Some(f) => format!("Folder: {f}. Click to choose another."),
+            None => "Folder: the first pinned one. Click to choose another.".to_string(),
+        };
+        icon_btn("folder", L::FolderOpen, "Choose the folder", true)
+            .tooltip(move |win, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(win, cx))
+            .on_click(cx.listener(move |_, _, _, cx| {
+                let (tx, rx) = futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
+                let title = t!("Choose the folder for this widget");
+                leaf_sys::sta::run(move |owner| {
+                    let _ = tx.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::Folder));
+                });
+                cx.spawn(async move |_this, cx| {
+                    if let Ok(Some(path)) = rx.await {
+                        let _ = cx.update(|cx| crate::settings::update(cx, |s| set_folder(s, id, &path.to_string_lossy())));
+                    }
+                })
+                .detach();
+            }))
+    });
     let shift = move |by: isize| {
         move |_: &mut FolderView, _: &ClickEvent, _: &mut Window, cx: &mut Context<FolderView>| {
             crate::settings::update(cx, |s| edit(s, |l| move_by(l, i, by)));
@@ -450,7 +556,8 @@ fn edit_controls(pos: usize, len: usize, i: usize, size: Size, p: &Palette, cx: 
         cx.stop_propagation();
         crate::settings::update(cx, |s| edit(s, |l| move_by(l, i, by)));
     });
-    row.id(SharedString::from(format!("home-controls-{}", w.id)))
+    row.children(pick_folder)
+        .id(SharedString::from(format!("home-controls-{}", w.id)))
         .focusable()
         .tab_stop(true)
         .on_key_down(keys)
