@@ -59,9 +59,10 @@ fn off_notice(window: &mut Window, cx: &mut App) {
 }
 
 impl Workspace {
-    /// Review a lane's work. Review mode (F3) hooks in here; until it is there, the lane folder's Changes page in a new tab.
-    pub(super) fn open_review(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_tab(Location::Changes(dir), window, cx);
+    /// Review a lane's work: the Review side (F3) of the lane folder's change feed page, in a new tab.
+    pub(super) fn open_review(&mut self, dir: PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab().downgrade();
+        crate::review_view::show(dir, tab, cx);
     }
 
     /// The command "New lane…".
