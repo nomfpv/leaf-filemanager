@@ -128,7 +128,7 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
     // "Through VPN": its connections go through leaf's VPN (Settings > VPN); never for an address on the local network
     let vpn_check = crate::prompt::Check {
         label: t!("Through VPN").into(),
-        note: t!("leaf's VPN, Settings > VPN").into(),
+        note: t!("SFTP, FTP and FTPS hosts; Settings > VPN").into(),
         on: vpn,
         enabled: true,
     };
@@ -142,6 +142,11 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
             Button::new(t!("Save"), Kind::Primary, move |text, _, cx| {
                 let mut h = Host::from_line(text.as_deref().unwrap_or_default()).map_err(|e| crate::i18n::td(&e))?;
                 h.vpn = vpn_on.get();
+                // (only these connections are made by leaf itself and can go through its VPN; a docker, smb, nfs or rclone host
+                // would go direct with the tick on)
+                if h.vpn && !matches!(h.scheme.to_ascii_lowercase().as_str(), "sftp" | "ftp" | "ftps") {
+                    return Err(t!("Through VPN works for SFTP, FTP and FTPS hosts only. Untick it for this host.").to_string());
+                }
                 h.kind = match selected.get() {
                     0 => HostKind::guess(&h),
                     i => HostKind::ALL.get(i - 1).copied().unwrap_or_default(),
