@@ -2,6 +2,7 @@
 
 use crate::Owner;
 use leaf_common::stub;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -21,9 +22,43 @@ pub fn pick(_owner: Owner, _title: &str, _kind: Pick<'_>) -> Option<PathBuf> {
     stub!("dialogs::pick")
 }
 
-/// Several files to choose (rf-win's `pick_many`): no dialog on this system yet, so nothing is chosen.
-pub fn pick_many(_owner: Owner, _title: &str) -> Vec<PathBuf> {
-    Vec::new()
+/// Several files to choose (rf-win's `pick_many`): kdialog, else zenity (argument lists, no shell); with neither, nothing is chosen.
+pub fn pick_many(_owner: Owner, title: &str) -> Vec<PathBuf> {
+    let (exe, args) = if let Some(k) = crate::shell::which("kdialog") {
+        (k, pick_many_args_kdialog(title))
+    } else if let Some(z) = crate::shell::which("zenity") {
+        (z, pick_many_args_zenity(title))
+    } else {
+        log::info!("dialogs::pick_many: neither kdialog nor zenity is installed, nothing chosen");
+        return Vec::new();
+    };
+    let out = match std::process::Command::new(exe).args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() {
+        Ok(o) => o,
+        Err(e) => {
+            log::info!("dialogs::pick_many: the dialog did not start: {e}");
+            return Vec::new();
+        }
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    parse_picked(&out.stdout)
+}
+
+fn pick_many_args_kdialog(title: &str) -> Vec<OsString> {
+    ["--title", title, "--getopenfilename", ".", "--multiple", "--separate-output"].iter().map(OsString::from).collect()
+}
+
+fn pick_many_args_zenity(title: &str) -> Vec<OsString> {
+    ["--file-selection", "--multiple", "--separator=
+", "--title", title].iter().map(OsString::from).collect()
+}
+
+/// One path per line (kdialog `--separate-output`, zenity with a newline separator).
+fn parse_picked(stdout: &[u8]) -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    stdout.split(|b| *b == b'
+').filter(|l| !l.is_empty()).map(|l| PathBuf::from(std::ffi::OsStr::from_bytes(l))).collect()
 }
 
 /// Autostart on Linux is a desktop entry in `$XDG_CONFIG_HOME/autostart/` (the XDG autostart rule: the session starts every entry
@@ -78,6 +113,15 @@ X-GNOME-Autostart-enabled=true
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picked_paths_split_on_newlines() {
+        assert_eq!(parse_picked(b"/a/b
+/c d
+"), vec![PathBuf::from("/a/b"), PathBuf::from("/c d")]);
+        assert!(parse_picked(b"
+").is_empty());
+    }
 
     #[test]
     fn autostart_entry_is_written_read_and_removed_in_a_temp_config_folder() {
