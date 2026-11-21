@@ -122,6 +122,8 @@ pub struct ReviewView {
     hunk: usize,
     side_by_side: bool,
     show_all: bool,
+    /// A partly staged file: its staged part is shown instead of what is not staged yet.
+    view_staged: bool,
     /// Checkpoint mode: files and hunks (file, hunk header) marked reviewed.
     reviewed: HashSet<String>,
     reviewed_hunks: HashSet<(String, String)>,
@@ -223,6 +225,7 @@ impl ReviewView {
             hunk: 0,
             side_by_side: true,
             show_all: false,
+            view_staged: false,
             reviewed: HashSet::new(),
             reviewed_hunks: HashSet::new(),
             message,
@@ -324,6 +327,18 @@ impl ReviewView {
             self.selected = Some(rel);
             self.hunk = 0;
             self.show_all = false;
+            self.view_staged = false;
+            self.load_diff(cx);
+        }
+        cx.notify();
+    }
+
+    fn set_view_staged(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.view_staged != on {
+            self.view_staged = on;
+            self.hunk = 0;
+            self.shown = None;
+            self.rebuild();
             self.load_diff(cx);
         }
         cx.notify();
@@ -345,6 +360,8 @@ impl ReviewView {
             Source::Cp { store, plan, .. } => How::Cp(store.clone(), plan.clone()),
             _ => return,
         };
+        // (a fully accepted file shows its staged diff anyway; a partly staged one when asked)
+        let view_staged = self.view_staged && !item.accepted;
         let work = cx.background_spawn(async move {
             let stamp = Stamp::of_file(&item.path);
             let pic = is_picture(&rel);
@@ -352,6 +369,8 @@ impl ReviewView {
                 How::Git(root) => {
                     let (diff, staged_view) = if item.untracked {
                         (review::untracked(&item.path).unwrap_or_default(), false)
+                    } else if view_staged && item.staged {
+                        (review::staged(&root, &rel, item.from.as_deref()).unwrap_or_default(), true)
                     } else {
                         let un = review::unstaged(&root, &rel).unwrap_or_default();
                         if un.hunks.is_empty() && !un.binary && item.staged {
@@ -968,7 +987,10 @@ impl ReviewView {
                     .flex_1()
                     .min_w_0()
                     .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().text_color(p.text).child(crate::rtl::display_text(&name)))
-                    .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().text_xs().text_color(p.text_tertiary).child(if dir.is_empty() { crate::i18n::t(f.kind.label()).to_string() } else { dir })),
+                    .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().text_xs().text_color(p.text_tertiary).child({
+                        let place = if dir.is_empty() { crate::i18n::t(f.kind.label()).to_string() } else { dir };
+                        if f.staged && !f.accepted && !f.untracked && self.root().is_some() { format!("{place} \u{00b7} {}", t!("partly staged")) } else { place }
+                    })),
             )
             .when_some(f.counts, |d, (a, r)| {
                 d.child(
@@ -996,8 +1018,11 @@ impl ReviewView {
             (false, true) => t!("Not reviewed"),
             (false, false) => t!("Mark reviewed"),
         };
+        let partly = git && it.staged && !it.accepted && !it.untracked;
         let state = if it.accepted {
             if git { t!("Accepted: staged for the commit") } else { t!("Reviewed") }
+        } else if partly {
+            t!("Partly staged: the staged part goes into the commit")
         } else {
             crate::i18n::t(it.kind.label())
         };
@@ -1013,6 +1038,15 @@ impl ReviewView {
             .child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(it.rel.replace('/', "\\")))
             .child(div().flex_shrink_0().text_xs().text_color(if it.accepted { p.success } else { kind_color(it.kind, p) }).child(state))
             .child(div().flex_1())
+            .when(partly, |d| {
+                d.child(
+                    h_flex()
+                        .gap_0p5()
+                        .flex_shrink_0()
+                        .child(seg("review-unstaged", t!("Not staged"), !self.view_staged, p).on_click(cx.listener(|v, _, _, cx| v.set_view_staged(false, cx))))
+                        .child(seg("review-staged", t!("Staged"), self.view_staged, p).on_click(cx.listener(|v, _, _, cx| v.set_view_staged(true, cx)))),
+                )
+            })
             .child(
                 h_flex()
                     .gap_0p5()
@@ -1201,11 +1235,12 @@ impl ReviewView {
     }
 
     fn render_commit(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let staged = self.files.iter().filter(|f| f.staged).count();
+        let names: Vec<&str> = self.files.iter().filter(|f| f.staged).map(|f| f.rel.rsplit('/').next().unwrap_or(&f.rel)).collect();
+        let staged = names.len();
         let line = match staged {
             0 => t!("Nothing staged yet").to_string(),
-            1 => t!("1 file staged").to_string(),
-            n => format!("{n} {}", t!("files staged")),
+            n if n <= 3 => format!("{} {}", t!("Staged:"), names.join(", ")),
+            n => format!("{} {} {} {}", t!("Staged:"), names[..2].join(", "), t!("and"), format!("{} {}", n - 2, t!("more"))),
         };
         h_flex()
             .px_3()
@@ -1214,7 +1249,7 @@ impl ReviewView {
             .items_center()
             .border_t_1()
             .border_color(p.divider)
-            .child(div().flex_shrink_0().text_xs().text_color(p.text_secondary).child(line))
+            .child(div().flex_shrink_0().max_w(px(320.)).overflow_hidden().text_ellipsis().whitespace_nowrap().text_xs().text_color(p.text_secondary).child(line))
             .child(div().flex_1().min_w_0().child(Input::new(&self.message)))
             .child(
                 button("review-commit", t!("Commit"), p)
