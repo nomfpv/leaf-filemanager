@@ -26,6 +26,8 @@ pub enum LaneError {
     BaseUncommitted(Vec<String>),
     /// Submodules of the lane (paths) with commits that no remote has: their repositories live in git's record of the lane.
     SubmoduleWork(Vec<String>),
+    /// Files the lane adds that the base folder already has, untracked or ignored (a merge would overwrite them).
+    WouldOverwrite(Vec<String>),
     /// Another worktree of the repository lies inside the lane folder (its path).
     HoldsWorktree(String),
     /// Ignored files and folders in the lane (`git worktree remove` would delete them for good; Discard keeps them in the Trash).
@@ -49,6 +51,7 @@ impl fmt::Display for LaneError {
             LaneError::BaseUncommitted(v) => write!(f, "{} uncommitted files in the base worktree", v.len()),
             LaneError::Ignored(v) => write!(f, "{} ignored entries in the lane", v.len()),
             LaneError::SubmoduleWork(v) => write!(f, "{} submodules with commits no remote has", v.len()),
+            LaneError::WouldOverwrite(v) => write!(f, "the merge would overwrite {} files of the base folder", v.len()),
             LaneError::HoldsWorktree(p) => write!(f, "another worktree lies inside the lane: {p}"),
             LaneError::Unmerged(v) => write!(f, "{} commits not in the base branch", v.len()),
             LaneError::Conflicts(v) => write!(f, "the merge would conflict in {} files", v.len()),
@@ -309,6 +312,15 @@ pub fn merge(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<Merged
         return Err(failed("the lane's head could not be read", &head));
     }
     let head = head.stdout.trim().to_string();
+    // a file the lane adds where the base folder has an untracked or ignored one of its own: git would overwrite it without asking
+    let added = exec(&base_dir, ["diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", "HEAD", &head])?;
+    if !added.ok {
+        return Err(failed("git could not list what the lane adds", &added));
+    }
+    let taken: Vec<String> = added.stdout.split('\0').filter(|p| !p.is_empty() && std::fs::symlink_metadata(base_dir.join(p)).is_ok()).map(String::from).collect();
+    if !taken.is_empty() {
+        return Err(LaneError::WouldOverwrite(taken));
+    }
     let ff = exec(&base_dir, ["merge-base", "--is-ancestor", "HEAD", &head])?;
     if ff.ok {
         let o = exec(&base_dir, ["merge", "--ff-only", &head])?;
