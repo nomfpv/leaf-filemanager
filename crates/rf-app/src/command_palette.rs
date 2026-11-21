@@ -10,125 +10,16 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::actions::*;
 use crate::theme::{self, Palette};
 
-struct Cmd {
-    label: &'static str,
-    keys: &'static str,
-    icon: L,
-    action: fn() -> Box<dyn Action>,
-}
+use crate::registry::CommandSpec;
 
-macro_rules! cmd {
-    ($label:expr, $keys:expr, $icon:expr, $act:expr) => {
-        Cmd { label: crate::i18n::t($label), keys: $keys, icon: $icon, action: || Box::new($act) }
-    };
-}
+type Cmd = &'static CommandSpec;
 
+/// The palette's commands, from the registry (its order).
 fn commands() -> Vec<Cmd> {
-    vec![
-        cmd!("New tab", "Ctrl+T", L::Plus, NewTab),
-        cmd!("New window", "Ctrl+N", L::AppWindow, NewWindow),
-        cmd!("Close tab", "Ctrl+W", L::X, CloseTab),
-        cmd!("Duplicate tab", "Ctrl+Shift+K", L::Copy, DuplicateTab),
-        cmd!("Close other tabs", "", L::X, CloseOtherTabs),
-        cmd!("Close all tabs", "", L::X, CloseAllTabs),
-        cmd!("Reopen closed tab", "Ctrl+Shift+T", L::RotateCcw, ReopenClosedTab),
-        cmd!("New folder", "Ctrl+Shift+N", L::FolderPlus, NewFolder),
-        cmd!("New text document", "", L::FilePlus, NewTextFile),
-        cmd!("Refresh", "F5", L::RotateCw, Refresh),
-        cmd!("Map network drive…", "", L::Network, MapNetworkDrive),
-        cmd!("Restart leaf", "Ctrl+Alt+Shift+R", L::RotateCw, RestartApp),
-        cmd!("Save session…", "", L::Save, SaveSession),
-        cmd!("Disconnect network drive…", "", L::Network, DisconnectNetworkDrive),
-        cmd!("Back", "Alt+←", L::ArrowLeft, GoBack),
-        cmd!("Forward", "Alt+→", L::ArrowRight, GoForward),
-        cmd!("Up one level", "Alt+↑", L::ArrowUp, GoUp),
-        cmd!("Home", "Alt+Home", L::House, GoHome),
-        cmd!("Settings", "Ctrl+,", L::Settings, GoSettings),
-        cmd!("Recycle Bin", "", L::Trash, GoRecycleBin),
-        cmd!("Focus address bar", "Ctrl+L", L::TextCursorInput, FocusAddress),
-        cmd!("Search", "Ctrl+F", L::Search, FocusSearch),
-        cmd!("Show/hide hidden items", "Ctrl+H", L::Eye, ToggleHidden),
-        cmd!("Details view", "Ctrl+Shift+1", L::List, ViewDetails),
-        cmd!("Grid view", "Ctrl+Shift+2", L::LayoutGrid, ViewGrid),
-        cmd!("Columns view", "Ctrl+Shift+3", L::Columns3, ViewColumns),
-        cmd!("Cards view", "Ctrl+Shift+4", L::LayoutList, ViewCards),
-        cmd!("List view", "Ctrl+Shift+5", L::TextAlignJustify, ViewList),
-        cmd!("Zoom in", "Ctrl+=", L::ZoomIn, ZoomIn),
-        cmd!("Add to shelf", "Ctrl+Shift+S", L::Inbox, AddToShelf),
-        cmd!("Show/hide shelf", "", L::Inbox, ToggleShelf),
-        cmd!("Full screen", "F11", L::Maximize, ToggleFullscreen),
-        cmd!("Always on top", "", L::Pin, ToggleAlwaysOnTop),
-        cmd!("Compact overlay", "", L::PictureInPicture2, ToggleCompactOverlay),
-        cmd!("Show full path in address bar", "", L::TextCursorInput, ToggleAddressFullPath),
-        cmd!("Go to folder alias", "@", L::AtSign, GoToFolderAlias),
-        cmd!("Search past folders", "Ctrl+P", L::Clock, SearchFolderHistory),
-        cmd!("Search tabs", "Ctrl+Shift+A", L::PanelTop, SearchTabs),
-        cmd!("Rotate right", "", L::RotateCw, RotateRight),
-        cmd!("Rotate left", "", L::RotateCcw, RotateLeft),
-        cmd!("Zoom out", "Ctrl+-", L::ZoomOut, ZoomOut),
-        cmd!("Toggle dual pane", "Ctrl+Shift+D", L::Columns2, ToggleDualPane),
-        cmd!("Switch pane", "F6", L::ArrowLeftRight, SwitchPane),
-        cmd!("Split pane side by side", "", L::Columns2, SplitPaneSideBySide),
-        cmd!("Split pane top and bottom", "", L::Rows2, SplitPaneStacked),
-        cmd!("Close active pane", "Ctrl+Shift+W", L::X, CloseActivePane),
-        cmd!("Preview pane", "Alt+P", L::PanelRight, TogglePreview),
-        cmd!("Sidebar", "Ctrl+B", L::PanelLeft, ToggleSidebar),
-        cmd!("Open in terminal", "Ctrl+Shift+`", L::SquareTerminal, OpenTerminal),
-        cmd!("Open in Terminal as administrator", "", L::ShieldCheck, OpenTerminalAdmin),
-        cmd!("Open in editor", "", L::Code, OpenInIde),
-        cmd!("Organize folder", "", L::WandSparkles, OrganizeFolder),
-        cmd!("Light / dark theme", "Ctrl+Alt+T", L::SunMoon, ToggleTheme),
-        cmd!("Open in new window", "Ctrl+Alt+Enter", L::AppWindow, OpenInNewWindow),
-        cmd!("Select all", "Ctrl+A", L::SquareCheck, SelectAll),
-        cmd!("Invert selection", "", L::ArrowLeftRight, InvertSelection),
-        cmd!("Toggle item selection", "Ctrl+Space", L::SquareCheck, ToggleSelection),
-        cmd!("Copy", "Ctrl+C", L::Copy, CopyItems),
-        cmd!("Cut", "Ctrl+X", L::Scissors, CutItems),
-        cmd!("Paste", "Ctrl+V", L::ClipboardPaste, PasteItems),
-        cmd!("Paste into selected folder", "Ctrl+Shift+V", L::ClipboardPaste, PasteIntoSelected),
-        cmd!("Paste as shortcut", "", L::Link, PasteShortcut),
-        cmd!("Move to Recycle Bin", "Del", L::Trash, DeleteItems),
-        cmd!("Delete permanently", "Shift+Del", L::TrashOff, DeletePermanently),
-        cmd!("Rename", "F2", L::Pencil, RenameItem),
-        cmd!("Duplicate", "Ctrl+Alt+D", L::CopyPlus, DuplicateItems),
-        cmd!("Copy to other pane", "Shift+F5", L::CopyPlus, CopyToOtherPane),
-        cmd!("Move to other pane", "Shift+F6", L::MoveRight, MoveToOtherPane),
-        cmd!("Undo", "Ctrl+Z", L::Undo2, Undo),
-        cmd!("Copy path", "Ctrl+Shift+C", L::Link, CopyPath),
-        cmd!("Copy path as quoted", "Ctrl+Alt+C", L::Link, CopyPathQuoted),
-        cmd!("Copy path as name only", "", L::Link, CopyPathName),
-        cmd!("Copy path as folder path", "", L::Link, CopyPathFolder),
-        cmd!("Copy path with forward slashes", "", L::Link, CopyPathSlashes),
-        cmd!("Copy path relative to repository", "", L::Link, CopyPathRelative),
-        cmd!("Copy path as @path", "", L::Link, CopyPathAt),
-        cmd!("Copy path as WSL path", "", L::Link, CopyPathWsl),
-        cmd!("Copy path as file URL", "", L::Link, CopyPathUrl),
-        cmd!("Open with…", "", L::AppWindow, OpenWith),
-        cmd!("Properties", "Alt+Enter", L::Info, Properties),
-        cmd!("Context menu", "Shift+F10", L::Menu, ShowContextMenu),
-    ]
+    crate::registry::palette().collect()
 }
-
-/// (label, shortcut) for every command that has one (shown in Settings).
-/// Every command for the shortcut editor: (label, default keys, action short name).
-pub fn shortcut_entries() -> Vec<(&'static str, &'static str, String)> {
-    commands()
-        .into_iter()
-        .map(|c| {
-            let name = (c.action)().name().rsplit("::").next().unwrap_or_default().to_string();
-            (c.label, c.keys, name)
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-pub fn shortcut_list() -> Vec<(&'static str, &'static str)> {
-    commands().into_iter().filter(|c| !c.keys.is_empty()).map(|c| (c.label, c.keys)).collect()
-}
-
 pub enum PaletteEvent {
     Dismiss,
     Run(Box<dyn Action>),
@@ -243,7 +134,7 @@ fn filter_tabs(tabs: &[TabEntry], q: &str) -> Vec<Row> {
 fn filter(mode: PaletteMode, cmds: &[Cmd], folders: &[crate::folder_history::Visit], query: &str) -> Vec<Row> {
     let q = query.trim().to_lowercase();
     let cmds = if matches!(mode, PaletteMode::Folders | PaletteMode::Tabs) { &[][..] } else { cmds };
-    let mut by_cmd: Vec<(i32, usize)> = cmds.iter().enumerate().filter_map(|(i, c)| score(c.label, &q).map(|s| (s, i))).collect();
+    let mut by_cmd: Vec<(i32, usize)> = cmds.iter().enumerate().filter_map(|(i, c)| score(crate::i18n::t(c.title), &q).map(|s| (s, i))).collect();
     by_cmd.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     let by_folder: Vec<(i32, PathBuf)> = match mode {
         PaletteMode::Commands { with_folders: true } if !q.is_empty() => {
@@ -287,7 +178,7 @@ impl CommandPalette {
             _ => {}
         });
         input.update(cx, |s, cx| s.focus(window, cx));
-        let cmds = if matches!(mode, PaletteMode::Folders | PaletteMode::Tabs) { Vec::new() } else { commands() };
+        let cmds = if matches!(mode, PaletteMode::Folders | PaletteMode::Tabs) { Vec::new() } else { commands().into_iter().filter(|c| c.available(cx)).collect() };
         let mut this = Self { input, mode, cmds, folders, tabs, filtered: Vec::new(), path: None, selected: 0, _sub: sub };
         this.refilter(cx);
         this
@@ -377,7 +268,7 @@ impl Render for CommandPalette {
             let (icon, label, keys): (L, String, SharedString) = match r {
                 Row::Cmd(ci) => {
                     let c = &self.cmds[ci];
-                    (c.icon, c.label.to_string(), c.keys.into())
+                    (c.icon, crate::i18n::t(c.title).to_string(), c.shown_keys().into())
                 }
                 Row::Folder(path) => (
                     L::Folder,

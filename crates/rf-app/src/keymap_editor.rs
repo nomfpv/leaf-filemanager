@@ -172,7 +172,7 @@ pub fn canon(shown: &str) -> String {
 /// Commands whose keys another command has too: action name → the other command's label.
 /// `entries` is (label, built-in keys as shown, action name); a custom shortcut replaces the
 /// built-in one in the comparison.
-pub fn conflicts(entries: &[(&'static str, &'static str, String)], custom: &dyn Fn(&str) -> Option<String>) -> std::collections::HashMap<String, &'static str> {
+pub fn conflicts(entries: &[(&'static str, String, String)], custom: &dyn Fn(&str) -> Option<String>) -> std::collections::HashMap<String, &'static str> {
     let keys: Vec<Option<String>> = entries
         .iter()
         .map(|(_, built_in, action)| match custom(action) {
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn a_custom_shortcut_on_another_commands_keys_is_reported() {
-        let entries = [("New tab", "Ctrl+T", "NewTab".to_string()), ("Back", "Alt+←", "GoBack".to_string()), ("Show/hide shelf", "", "ToggleShelf".to_string())];
+        let entries = [("New tab", "Ctrl+T".to_string(), "NewTab".to_string()), ("Back", "Alt+←".to_string(), "GoBack".to_string()), ("Show/hide shelf", String::new(), "ToggleShelf".to_string())];
         let none = |_: &str| None;
         assert!(super::conflicts(&entries, &none).is_empty());
         // the shelf gets Ctrl+T: both commands are marked, each naming the other

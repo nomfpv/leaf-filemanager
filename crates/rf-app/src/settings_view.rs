@@ -2282,7 +2282,7 @@ fn files(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
 fn actions(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     let mut grid = div().px_4().py_3().flex().flex_wrap().gap_x_6().gap_y_0p5();
     let capturing = crate::keymap_editor::capturing(cx);
-    let entries = crate::command_palette::shortcut_entries();
+    let entries = crate::registry::shortcut_entries();
     let conflicts = crate::keymap_editor::conflicts(&entries, &|a| crate::keymap_editor::custom_keys(a, cx));
     for (i, (label, keys, action)) in entries.into_iter().enumerate() {
         let custom = crate::keymap_editor::custom_keys(&action, cx);

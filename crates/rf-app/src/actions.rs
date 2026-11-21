@@ -137,101 +137,12 @@ pub fn bind_user(cx: &mut App) {
     cx.bind_keys(bindings);
 }
 
+/// The default key bindings: every registry row's `default_keys` (`registry.rs`). Tab is bound in the tree's, the list's and the
+/// dialog's own contexts there (issue 38): a binding in a context nearer to the focus wins over the component library's root Tab.
 pub fn bind(cx: &mut App) {
-    let f = Some(FOLDER_CTX);
-    cx.bind_keys([KeyBinding::new("tab", LeaveTree, Some(TREE_CTX))]);
-    // Tab and Shift+Tab walk the window's panes: the address bar, the folder tree, the file list (issue 38: "TAB does not work
-    // anywhere"). In the list's own context, nearer than the root's Tab; the tree's Shift+Tab goes up to the window's handler.
-    cx.bind_keys([
-        KeyBinding::new("tab", FocusNextPane, Some(FOLDER_CTX)),
-        KeyBinding::new("shift-tab", FocusPrevPane, Some(FOLDER_CTX)),
-        KeyBinding::new("shift-tab", FocusPrevPane, Some(TREE_CTX)),
-    ]);
-    cx.bind_keys([KeyBinding::new("tab", DialogNext, Some(DIALOG_CTX)), KeyBinding::new("shift-tab", DialogPrev, Some(DIALOG_CTX))]);
-    cx.bind_keys([
-        KeyBinding::new("alt-left", GoBack, None),
-        KeyBinding::new("alt-right", GoForward, None),
-        KeyBinding::new("alt-up", GoUp, None),
-        KeyBinding::new("alt-home", GoHome, None),
-        KeyBinding::new("backspace", GoBack, f),
-        KeyBinding::new("f5", Refresh, None),
-        KeyBinding::new("ctrl-r", Refresh, None),
-        KeyBinding::new("enter", OpenSelected, f),
-        KeyBinding::new("down", SelectNext, f),
-        KeyBinding::new("up", SelectPrev, f),
-        KeyBinding::new("home", SelectFirst, f),
-        KeyBinding::new("end", SelectLast, f),
-        KeyBinding::new("ctrl-a", SelectAll, f),
-        KeyBinding::new("shift-down", ExtendNext, f),
-        KeyBinding::new("shift-up", ExtendPrev, f),
-        KeyBinding::new("pagedown", PageDown, f),
-        KeyBinding::new("pageup", PageUp, f),
-        KeyBinding::new("escape", ClearSelection, f),
-        KeyBinding::new("alt-enter", Properties, f),
-        KeyBinding::new("ctrl-c", CopyItems, f),
-        KeyBinding::new("ctrl-x", CutItems, f),
-        KeyBinding::new("ctrl-v", PasteItems, f),
-        KeyBinding::new("ctrl-shift-v", PasteIntoSelected, f),
-        KeyBinding::new("delete", DeleteItems, f),
-        KeyBinding::new("ctrl-d", DeleteItems, f),
-        // (Ctrl+D deletes, as in Explorer; a copy beside the item has its own chord, issue 161)
-        KeyBinding::new("ctrl-alt-d", DuplicateItems, f),
-        // the selection into the other pane of a split tab (issue 152; F5 and F6 are Refresh and the pane switch here)
-        KeyBinding::new("shift-f5", CopyToOtherPane, f),
-        KeyBinding::new("shift-f6", MoveToOtherPane, f),
-        KeyBinding::new("shift-delete", DeletePermanently, f),
-        KeyBinding::new("f2", RenameItem, f),
-        KeyBinding::new("ctrl-shift-n", NewFolder, f),
-        KeyBinding::new("shift-f10", ShowContextMenu, f),
-        KeyBinding::new("menu", ShowContextMenu, f),
-        KeyBinding::new("ctrl-shift-c", CopyPath, f),
-        KeyBinding::new("left", SelectLeft, f),
-        KeyBinding::new("right", SelectRight, f),
-        KeyBinding::new("ctrl-shift-1", ViewDetails, None),
-        KeyBinding::new("ctrl-shift-2", ViewGrid, None),
-        KeyBinding::new("ctrl-shift-3", ViewColumns, None),
-        KeyBinding::new("ctrl-shift-4", ViewCards, None),
-        KeyBinding::new("ctrl-shift-5", ViewList, None),
-        KeyBinding::new("ctrl-z", Undo, f),
-        KeyBinding::new("alt-p", TogglePreview, None),
-        KeyBinding::new("ctrl-b", ToggleSidebar, None),
-        KeyBinding::new("ctrl-shift-b", ToggleToolbar, None),
-        KeyBinding::new("ctrl-y", Redo, f),
-        KeyBinding::new("ctrl-shift-k", DuplicateTab, None),
-        KeyBinding::new("ctrl-alt-c", CopyPathQuoted, f),
-        KeyBinding::new("ctrl-alt-t", ToggleTheme, None),
-        KeyBinding::new("ctrl-shift-d", ToggleDualPane, None),
-        KeyBinding::new("f6", SwitchPane, None),
-        KeyBinding::new("ctrl-shift-p", ToggleCommandPalette, None),
-        KeyBinding::new("ctrl-alt-shift-r", RestartApp, None),
-        KeyBinding::new("f1", ToggleCommandPalette, None),
-        KeyBinding::new("ctrl-p", SearchFolderHistory, None),
-        KeyBinding::new("ctrl-shift-a", SearchTabs, None),
-        KeyBinding::new("ctrl-,", GoSettings, None),
-        KeyBinding::new("ctrl-t", NewTab, None),
-        KeyBinding::new("ctrl-n", NewWindow, None),
-        KeyBinding::new("ctrl-shift-s", AddToShelf, f),
-        KeyBinding::new("ctrl-space", ToggleSelection, f),
-        KeyBinding::new("f11", ToggleFullscreen, None),
-        KeyBinding::new("ctrl-=", ZoomIn, f),
-        KeyBinding::new("ctrl-+", ZoomIn, f),
-        KeyBinding::new("ctrl--", ZoomOut, f),
-        KeyBinding::new("ctrl-w", CloseTab, None),
-        KeyBinding::new("ctrl-shift-w", CloseActivePane, None),
-        KeyBinding::new("ctrl-alt-enter", OpenInNewWindow, f),
-        KeyBinding::new("ctrl-tab", NextTab, None),
-        KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-        KeyBinding::new("ctrl-shift-t", ReopenClosedTab, None),
-        KeyBinding::new("ctrl-l", FocusAddress, None),
-        KeyBinding::new("alt-d", FocusAddress, None),
-        KeyBinding::new("ctrl-f", FocusSearch, None),
-        KeyBinding::new("ctrl-e", FocusSearch, None),
-        KeyBinding::new("ctrl-h", ToggleHidden, None),
-        KeyBinding::new("ctrl-shift-`", OpenTerminal, None),
-    ]);
+    cx.bind_keys(crate::registry::default_bindings());
     bind_layout_shifted(cx);
 }
-
 /// GPUI reports Shift+digit as the layout's shifted character without Shift (Turkish Q:
 /// Ctrl+Shift+2 arrives as `ctrl-'`), so `ctrl-shift-2` alone never fires. Bind the
 /// layout-specific form too.
