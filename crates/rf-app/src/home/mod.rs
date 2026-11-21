@@ -232,6 +232,18 @@ pub static WIDGETS: &[Widget] = &[
         header: Some(dev::growth_header),
         since: "0.9.6",
     },
+    Widget {
+        id: "photos",
+        title: "Photo timeline",
+        icon: L::Image,
+        sizes: ANY,
+        default_size: Size::Medium,
+        rows: 2,
+        folder: true,
+        render: dev::photo_timeline,
+        header: Some(dev::photos_header),
+        since: "0.9.6",
+    },
     Widget { id: "hosts", title: "Hosts", icon: L::Server, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: crate::hosts_ui::widget, header: None, since: "0.9.5" },
 ];
 

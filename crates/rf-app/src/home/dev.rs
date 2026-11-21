@@ -125,6 +125,7 @@ pub struct Data {
     reclaim: Cell<Reclaim>,
     rings: Cell<Rings>,
     growth: Cell<GrowthData>,
+    photos: Cell<Photos>,
     reclaim_progress: Option<Arc<dupes::Progress>>,
 }
 
@@ -1080,4 +1081,124 @@ pub fn growth_line(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView
             .child(div().text_xs().text_color(p.text_secondary).child(sentence))
             .into_any_element(),
     )
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Photo timeline
+// ---------------------------------------------------------------------------------------------------------------------
+
+const PHOTO_EXTS: [&str; 10] = ["jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tif", "tiff", "dng"];
+/// A walk looks at this many pictures at most.
+const PHOTO_CAP: usize = 20_000;
+
+#[derive(Clone)]
+struct Month {
+    /// "2026-11"
+    key: String,
+    count: usize,
+    /// The newest picture of the month: (folder, name, size, modified ms), for its thumbnail.
+    newest: (PathBuf, String, u64, i64),
+    newest_at: i64,
+}
+
+#[derive(Clone)]
+struct Photos {
+    months: Vec<Month>,
+    capped: bool,
+}
+
+fn month_key(ms: i64) -> Option<String> {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_millis_opt(ms).single().map(|d| d.format("%Y-%m").to_string())
+}
+
+/// The pictures under `folder` grouped by the month they were taken in (EXIF date, else the modified date), newest month first.
+fn compute_photos(folder: &Path, stop: &AtomicBool) -> Photos {
+    let mut months: HashMap<String, Month> = HashMap::new();
+    let (mut seen, mut capped) = (0usize, false);
+    let mut todo = vec![folder.to_path_buf()];
+    'walk: while let Some(dir) = todo.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            if stop.load(Ordering::Relaxed) {
+                break 'walk;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            if ft.is_dir() {
+                if !skip_dir(&name) && !name.starts_with('.') {
+                    todo.push(e.path());
+                }
+                continue;
+            }
+            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            if !ft.is_file() || !PHOTO_EXTS.contains(&ext.as_str()) {
+                continue;
+            }
+            if seen >= PHOTO_CAP {
+                capped = true;
+                break 'walk;
+            }
+            seen += 1;
+            let Ok(md) = e.metadata() else { continue };
+            let modified = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64);
+            let taken = leaf_sys::look::decode::exif_taken_ms(&e.path()).filter(|t| *t > 0).unwrap_or(modified);
+            let Some(key) = month_key(taken) else { continue };
+            let m = months.entry(key.clone()).or_insert_with(|| Month { key, count: 0, newest: (dir.clone(), name.clone(), md.len(), modified), newest_at: i64::MIN });
+            m.count += 1;
+            if taken > m.newest_at {
+                m.newest_at = taken;
+                m.newest = (dir.clone(), name, md.len(), modified);
+            }
+        }
+    }
+    let mut months: Vec<Month> = months.into_values().collect();
+    months.sort_by(|a, b| b.key.cmp(&a.key));
+    Photos { months, capped }
+}
+
+pub fn photos_header(p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
+    refresh_btn("photos-refresh", p, cx, |d| d.photos.clear())
+}
+
+pub fn photo_timeline(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
+    let p = &w.p;
+    let Some(folder) = folder_of(v, "photos", cx) else { return Some(hint_no_folder(p)) };
+    let c = &mut v.home_data.photos;
+    c.sync(&folder);
+    c.poll();
+    if c.idle() {
+        let f = folder.clone();
+        c.begin(cx, move |stop| compute_photos(&f, stop));
+    }
+    let Some(got) = c.value.clone() else { return Some(note(p, "Looking at the pictures...")) };
+    if got.months.is_empty() {
+        return Some(note(p, "No pictures in this folder."));
+    }
+    let total: usize = got.months.iter().map(|m| m.count).sum();
+    let extra = format!("{total} picture{}{}", if total == 1 { "" } else { "s" }, if got.capped { ", the first ones" } else { "" });
+    let mut list = v_flex().gap_1().child(folder_line(p, &folder, &extra));
+    for (i, m) in got.months.iter().take(8).enumerate() {
+        let (dir, name, size, modified) = m.newest.clone();
+        let entry = rf_core::Entry::new(&name, rf_core::EntryKind::File, size, modified, 0, 0);
+        let thumb = v.images.update(cx, |c, cx| c.thumbnail(&dir, &entry, 96, cx));
+        let label = chrono::NaiveDate::parse_from_str(&format!("{}-01", m.key), "%Y-%m-%d").map(|d| d.format("%B %Y").to_string()).unwrap_or_else(|_| m.key.clone());
+        let (root, query) = (folder.clone(), format!("modified:{}", m.key));
+        list = list.child(
+            h_flex()
+                .id(("photo-month", i))
+                .gap_2()
+                .items_center()
+                .p_1()
+                .rounded(theme::RADIUS_SM)
+                .cursor_pointer()
+                .hover(|s| s.bg(p.hover))
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Open this month as a search (by modified date)").build(w, cx))
+                .child(div().size(px(36.)).flex_shrink_0().rounded(px(3.)).overflow_hidden().bg(p.pressed).when_some(thumb, |d, im| d.child(img(im).size_full().object_fit(ObjectFit::Cover))))
+                .child(div().flex_1().min_w_0().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(label))
+                .child(div().text_xs().text_color(p.text_secondary).child(m.count.to_string()))
+                .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Search { root: root.clone(), query: query.clone() }, cx))),
+        );
+    }
+    Some(list.into_any_element())
 }

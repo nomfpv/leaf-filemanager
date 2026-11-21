@@ -1,4 +1,4 @@
-//! The modified-date filter of the search in a folder: `modified:2026-11-20`, `modified:today|yesterday|week|month`.
+//! The modified-date filter of the search in a folder: `modified:2026-11-20`, `modified:2026-11` (a month), `modified:today|yesterday|week|month`.
 //! Pure: the day is a parameter, so the table test needs no clock.
 
 use chrono::{Datelike, Duration, NaiveDate, TimeZone};
@@ -41,6 +41,12 @@ pub fn range_of(value: &str, today: NaiveDate) -> Option<DayRange> {
         "yesterday" => one(today - Duration::days(1)),
         "week" => Some(DayRange { first: today - Duration::days(today.weekday().num_days_from_monday() as i64), last: today }),
         "month" => Some(DayRange { first: today.with_day(1)?, last: today }),
+        v if v.len() == 7 => {
+            // a whole month: `2026-11`
+            let first = NaiveDate::parse_from_str(&format!("{v}-01"), "%Y-%m-%d").ok()?;
+            let next = if first.month() == 12 { NaiveDate::from_ymd_opt(first.year() + 1, 1, 1)? } else { first.with_month(first.month() + 1)? };
+            Some(DayRange { first, last: next - Duration::days(1) })
+        }
         v => one(NaiveDate::parse_from_str(v, "%Y-%m-%d").ok()?),
     }
 }
