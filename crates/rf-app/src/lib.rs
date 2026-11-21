@@ -76,6 +76,7 @@ mod shell_view;
 mod select_box;
 mod settings_view;
 mod share;
+mod share_ui;
 mod shelf_view;
 mod status_center;
 mod sync_ui;
@@ -834,6 +835,8 @@ pub fn main() {
             organizer::init(cx);
             // Nearby (off until the user turns it on): only the main process listens
             nearby::init(cx);
+            // shared folders with a friend's leaf: only the main process listens, and only while a folder is shared or joined
+            share_ui::init(cx);
         }
         // "Your numbers": one launch, and the time a window is in front (not in the helper process of quick search)
         if !quick_search {

@@ -117,6 +117,7 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
         Slot::FindBuildJunk => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInNewTab(Location::BuildJunk(d.clone()))))),
         Slot::Checkpoint => Item::action(label, ic, act(me, move |_, w, cx| crate::checkpoint_ui::new_checkpoint(d.clone(), cx.entity().downgrade(), w, cx))),
         Slot::SyncWith => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::SyncWith), cx)),
+        Slot::ShareFolder => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::ShareFolder), cx)),
         Slot::ShowHidden => Item::action(label, ic, act(me, |v, _, cx| v.toggle_hidden(cx))).checked(v.filter.show_hidden),
         Slot::HideIgnored => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::ToggleHideIgnored), cx))
             .checked(cx.global::<crate::settings::Settings>().hide_ignored),

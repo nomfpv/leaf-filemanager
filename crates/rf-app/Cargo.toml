@@ -27,6 +27,8 @@ leaf-vpn.workspace = true
 # the VPN's sign-in text is wiped when dropped
 zeroize = "1"
 leaf-sync.workspace = true
+# shared folders with a friend's leaf (Share with a friend..., Join shared folder...)
+leaf-share.workspace = true
 leaf-agents.workspace = true
 # cache file names of fetched server files (a hash of the address)
 sha2.workspace = true

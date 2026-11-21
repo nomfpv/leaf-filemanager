@@ -904,6 +904,8 @@ pub struct Settings {
     pub nearby_localsend_receive: bool,
     /// The PIN other devices must give before they send here over LocalSend (empty: none).
     pub nearby_localsend_pin: String,
+    /// The UDP port shared folders listen on (only while a folder is shared with a friend or joined).
+    pub share_port: u16,
 }
 
 /// Settings -> General: what a new tab opens.
@@ -1118,6 +1120,7 @@ impl Default for Settings {
             nearby_auto_accept_trusted: true,
             nearby_localsend_receive: false,
             nearby_localsend_pin: String::new(),
+            share_port: leaf_share::DEFAULT_PORT,
         }
     }
 }
@@ -1483,6 +1486,8 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     std::thread::spawn(move || s.save());
     // (Nearby follows its settings: started, stopped, started anew, or shown to others differently)
     crate::nearby::apply(cx);
+    // (shared folders: started anew on another port or device name)
+    crate::share_ui::apply(cx);
     // (the agent layer: started or stopped by its master switch)
     crate::agents::apply(cx);
     // (a changed download limit applies to the downloads that are running)

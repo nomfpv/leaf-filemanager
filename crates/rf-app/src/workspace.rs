@@ -6245,6 +6245,19 @@ impl Render for Workspace {
                 });
                 crate::sync_ui::sync_with(left, right, open, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ShareFolder, window, cx| {
+                // the selected folder when one is, else the folder shown (a folder on this computer only)
+                let folder = {
+                    let v = this.active_view().read(cx);
+                    let sel: Vec<PathBuf> = v.selection_paths().into_iter().filter(|p| p.is_dir()).collect();
+                    if sel.len() == 1 { Some(sel[0].clone()) } else { v.location().path().map(Path::to_path_buf) }
+                };
+                crate::share_ui::share_folder(folder, window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &JoinSharedFolder, window, cx| crate::share_ui::join_dialog(window, cx)))
+            .on_action(cx.listener(|this, _: &SharedFolders, _, cx| {
+                this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::SyncJobs)));
+            }))
             .on_action(cx.listener(|this, _: &ShowWorktrees, window, cx| this.show_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.new_worktree(window, cx)))
             .on_action(cx.listener(|this, _: &NewLane, window, cx| this.new_lane(window, cx)))

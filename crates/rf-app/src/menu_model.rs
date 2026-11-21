@@ -153,6 +153,7 @@ pub enum Slot {
     FindBuildJunk,
     Checkpoint,
     SyncWith,
+    ShareFolder,
     ShowHidden,
     HideIgnored,
     Terminal,

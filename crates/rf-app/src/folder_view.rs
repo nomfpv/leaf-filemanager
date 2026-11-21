@@ -5092,6 +5092,15 @@ impl FolderView {
                         .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
                 })
             };
+            // a folder shared with a friend's leaf
+            let share_badge = e.is_dir().then(|| self.path_of(ei)).flatten().filter(|d| crate::share_ui::is_shared(d, cx)).map(|_| {
+                div()
+                    .id(("shared", vi))
+                    .flex_shrink_0()
+                    .px_1()
+                    .child(Icon::new(L::Users).size(px(14.)).text_color(p.accent))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Shared with a friend")).build(w, cx))
+            });
             let rename_input = self.renaming.as_ref().filter(|(i, _)| *i == ei).map(|(_, inp)| inp.clone());
             let name_el: AnyElement = match rename_input {
                 // the mockups' box: the name column's width, 6 px shorter than the row, the field's colour, an accent edge and a soft
@@ -5317,6 +5326,7 @@ impl FolderView {
                         .children(self.agent_dot(ei, &p, cx))
                         .children(git_badge)
                         .child(div().flex_1())
+                        .children(share_badge)
                         .children(cloud_badge),
                 )
                 .children(tag_cell)

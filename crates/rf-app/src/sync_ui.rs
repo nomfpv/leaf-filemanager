@@ -867,7 +867,7 @@ impl SyncView {
     }
 }
 
-fn small_button(id: impl Into<ElementId>, label: impl Into<SharedString>, p: &Palette) -> Stateful<Div> {
+pub(crate) fn small_button(id: impl Into<ElementId>, label: impl Into<SharedString>, p: &Palette) -> Stateful<Div> {
     div()
         .id(id)
         .px_2()
@@ -976,7 +976,8 @@ impl SyncView {
                     .child(small_button(("sync-delete", i), t!("Delete"), p).on_click(cx.listener(move |v, _, window, cx| v.delete_job(j4.clone(), window, cx)))),
             );
         }
-        v_flex().size_full().child(top).child(rows)
+        // the shared folders (with a friend's leaf) first: they keep themselves the same, the jobs below run when asked or scheduled
+        v_flex().size_full().children(crate::share_ui::section(p, cx)).child(top).child(rows)
     }
 
     fn render_preview(&mut self, p: &Palette, cx: &mut Context<Self>) -> Div {

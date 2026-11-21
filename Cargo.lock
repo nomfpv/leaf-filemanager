@@ -7703,6 +7703,7 @@ dependencies = [
  "leaf-dev",
  "leaf-download",
  "leaf-remote",
+ "leaf-share",
  "leaf-sync",
  "leaf-sys",
  "leaf-vfs",

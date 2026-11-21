@@ -328,6 +328,11 @@ fn stop(cx: &mut App) {
     }
 }
 
+/// The name other devices see this PC by (Settings > Nearby > Device name, else the computer's name); shared folders use it too.
+pub(crate) fn device_name(s: &Settings) -> String {
+    name_of(s)
+}
+
 fn name_of(s: &Settings) -> String {
     let name = s.nearby_name.trim();
     if !name.is_empty() {
@@ -1029,6 +1034,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         switch("nearby-on", p, on, move |_, cx| settings::update(cx, |s| s.nearby_enabled = !on)),
     )];
     v.extend(ls_cards(p, s, cx));
+    v.extend(crate::share_ui::settings_cards(p, s, cx));
     if !on {
         return v;
     }
