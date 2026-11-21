@@ -152,6 +152,9 @@ pub struct FileFact {
     /// Unix milliseconds; 0 = unknown.
     pub modified_ms: i64,
     pub created_ms: i64,
+    /// When a photo was taken (EXIF), Unix milliseconds; 0 = unknown or not read. Only the bulk
+    /// rename's `{taken}` token uses it; the caller fills it when a step asks for it.
+    pub taken_ms: i64,
     pub kind: FileKind,
     /// Hidden or system: never touched.
     pub hidden: bool,
@@ -164,7 +167,7 @@ impl FileFact {
     pub fn new(path: impl Into<PathBuf>, size: u64, modified_ms: i64, created_ms: i64, kind: FileKind) -> Self {
         let path = path.into();
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        Self { path, name, size, modified_ms, created_ms, kind, hidden: false, link_target: None }
+        Self { path, name, size, modified_ms, created_ms, taken_ms: 0, kind, hidden: false, link_target: None }
     }
 }
 
