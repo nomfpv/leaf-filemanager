@@ -378,7 +378,16 @@ impl ImageCache {
             key_of(&[&"extL", &&*e.ext, &size])
         };
         let path = dir.join(&*e.name);
-        let kind = if wants_thumb { Kind::Thumbnail } else { Kind::Icon };
+        // a video's frame or nothing while the list draws its own line icons: a video Windows has no frame for got its player's icon
+        // (VLC's cone), where the line icon belongs
+        let frame_only = !e.is_dir()
+            && crate::icons::category(e) == crate::icons::Category::Video
+            && !cx.global::<crate::settings::Settings>().system_icons;
+        let kind = match (wants_thumb, frame_only) {
+            (true, true) => Kind::ThumbnailOnly,
+            (true, false) => Kind::Thumbnail,
+            _ => Kind::Icon,
+        };
         // every per-file picture (an exe's or a shortcut's icon too) is in the LRU, or browsing
         // folders of programs would keep them all until the app closes
         let r = self.lookup(

@@ -16,6 +16,15 @@ pub enum Kind {
     Icon,
     /// Real thumbnail if the shell has one; otherwise falls back to the icon.
     Thumbnail,
+    /// Real thumbnail or nothing (a video without a frame: the caller draws its own icon, not the player's).
+    ThumbnailOnly,
+}
+
+impl Kind {
+    /// A picture of the file's content is wanted (with or without the icon to fall back to).
+    pub fn wants_picture(self) -> bool {
+        matches!(self, Kind::Thumbnail | Kind::ThumbnailOnly)
+    }
 }
 
 pub struct Request {

@@ -81,7 +81,7 @@ fn design_thumbnail(path: &Path, size: u32) -> Option<Bgra> {
 }
 
 pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
-    if matches!(kind, Kind::Thumbnail) {
+    if kind.wants_picture() {
         if let Some(b) = design_thumbnail(path, size) {
             return Ok(b);
         }
@@ -105,7 +105,7 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
     let sz = SIZE { cx: size as i32, cy: size as i32 };
     let hbmp = match kind {
         Kind::Icon => unsafe { factory.GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)? },
-        Kind::Thumbnail => unsafe {
+        Kind::Thumbnail | Kind::ThumbnailOnly => unsafe {
             match factory.GetImage(sz, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_RESIZETOFIT.0 | SIIGBF_BIGGERSIZEOK.0)) {
                 Ok(h) => h,
                 Err(_) => {
@@ -114,6 +114,9 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
                         if let Some(b) = crate::picture_fallback::thumbnail(path, size) {
                             return Ok(b);
                         }
+                    }
+                    if kind == Kind::ThumbnailOnly {
+                        anyhow::bail!("no thumbnail");
                     }
                     factory.GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)?
                 }
@@ -127,7 +130,7 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
     // A folder's preview is the folder drawn with its first pictures in it, on a transparent ground. For some folders (a hidden one,
     // some with programs' pictures in them) the shell hands it over with no alpha at all, and it came out as a black square with the
     // folder in it: such a folder gets its icon instead.
-    if matches!(kind, Kind::Thumbnail)
+    if kind.wants_picture()
         && r.as_ref().is_ok_and(|b| b.data.chunks_exact(4).all(|p| p[3] == 255))
         && std::fs::metadata(path).is_ok_and(|m| m.is_dir())
     {
@@ -243,11 +246,11 @@ const LANE_THREADS: usize = 2;
 /// at the same moment) and WIC's 12 ms; on an idle machine 23 to 75 ms and 9 ms. Everything else, and a file WIC cannot
 /// read, is the shell's.
 fn urgent_image(path: &Path, size: u32, kind: Kind) -> Option<Bgra> {
-    if matches!(kind, Kind::Thumbnail) && crate::pane_picture::handles(path) {
+    if kind.wants_picture() && crate::pane_picture::handles(path) {
         if let Ok(b) = crate::pane_picture::decode(path, size) {
             return Some(b);
         }
-    } else if matches!(kind, Kind::Thumbnail) && crate::picture_fallback::handles(path) {
+    } else if kind.wants_picture() && crate::picture_fallback::handles(path) {
         // JPEG XL / AVIF: WIC when its extension is installed, else our own decoder
         if let Ok(b) = crate::pane_picture::decode(path, size) {
             return Some(b);
@@ -255,7 +258,7 @@ fn urgent_image(path: &Path, size: u32, kind: Kind) -> Option<Bgra> {
         if let Some(b) = crate::picture_fallback::thumbnail(path, size) {
             return Some(b);
         }
-    } else if matches!(kind, Kind::Thumbnail) && crate::picture_fallback::is_heif(path) {
+    } else if kind.wants_picture() && crate::picture_fallback::is_heif(path) {
         // HEIC: WIC only; no codec = no picture (the pane says why), not the shell's generic icon
         if let Ok(b) = crate::pane_picture::decode(path, size) {
             return Some(b);
