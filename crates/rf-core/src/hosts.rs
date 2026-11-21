@@ -36,6 +36,127 @@ pub struct Host {
     /// Deletes on this host are permanent: leaf's trash on the server (`.leaf-trash` in the login folder) is not used.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_trash: bool,
+    /// What the machine is (a server, a NAS, a router...): picked in the add / edit dialog or guessed from the name and port, for
+    /// the host's icon. A host saved before this field, or with a kind this build does not know, is a server.
+    #[serde(default, skip_serializing_if = "HostKind::is_default", deserialize_with = "HostKind::lenient")]
+    pub kind: HostKind,
+}
+
+/// What kind of machine a saved host is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostKind {
+    #[default]
+    Server,
+    Nas,
+    Router,
+    Switch,
+    Ap,
+    Firewall,
+    Pc,
+    Laptop,
+    Phone,
+    Printer,
+    Vm,
+    Container,
+    Cloud,
+}
+
+impl HostKind {
+    pub const ALL: [HostKind; 13] = [
+        HostKind::Server,
+        HostKind::Nas,
+        HostKind::Router,
+        HostKind::Switch,
+        HostKind::Ap,
+        HostKind::Firewall,
+        HostKind::Pc,
+        HostKind::Laptop,
+        HostKind::Phone,
+        HostKind::Printer,
+        HostKind::Vm,
+        HostKind::Container,
+        HostKind::Cloud,
+    ];
+
+    fn is_default(&self) -> bool {
+        *self == HostKind::Server
+    }
+
+    /// An unknown word in the file (a newer version's kind) reads as a server instead of making the whole list unreadable.
+    fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<HostKind, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(HostKind::ALL.into_iter().find(|k| k.id() == s.to_ascii_lowercase()).unwrap_or_default())
+    }
+
+    /// The word in `hosts.toml`.
+    pub fn id(self) -> &'static str {
+        match self {
+            HostKind::Server => "server",
+            HostKind::Nas => "nas",
+            HostKind::Router => "router",
+            HostKind::Switch => "switch",
+            HostKind::Ap => "ap",
+            HostKind::Firewall => "firewall",
+            HostKind::Pc => "pc",
+            HostKind::Laptop => "laptop",
+            HostKind::Phone => "phone",
+            HostKind::Printer => "printer",
+            HostKind::Vm => "vm",
+            HostKind::Container => "container",
+            HostKind::Cloud => "cloud",
+        }
+    }
+
+    /// The name shown to the user (English; the app translates it where it draws it).
+    pub fn label(self) -> &'static str {
+        match self {
+            HostKind::Server => "Server",
+            HostKind::Nas => "NAS",
+            HostKind::Router => "Router",
+            HostKind::Switch => "Switch",
+            HostKind::Ap => "Access point",
+            HostKind::Firewall => "Firewall",
+            HostKind::Pc => "PC",
+            HostKind::Laptop => "Laptop",
+            HostKind::Phone => "Phone",
+            HostKind::Printer => "Printer",
+            HostKind::Vm => "VM",
+            HostKind::Container => "Container",
+            HostKind::Cloud => "Cloud",
+        }
+    }
+
+    /// The kind where the host's name, address, port or scheme makes it obvious ("nas" in the name, port 9100 = a printer,
+    /// an rclone remote = cloud storage); a server otherwise. Words are matched whole (`nas01` counts, `canvas` does not).
+    pub fn guess(h: &Host) -> HostKind {
+        if h.scheme.eq_ignore_ascii_case("rclone") {
+            return HostKind::Cloud;
+        }
+        match h.port {
+            Some(9100 | 631 | 515) => return HostKind::Printer,
+            Some(8291) => return HostKind::Router,
+            _ => {}
+        }
+        let lower = format!("{} {}", h.name, h.host).to_ascii_lowercase();
+        let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.trim_end_matches(|c: char| c.is_ascii_digit())).collect();
+        let has = |list: &[&str]| words.iter().any(|w| list.contains(w));
+        const RULES: [(&[&str], HostKind); 12] = [
+            (&["nas", "synology", "diskstation", "qnap", "truenas", "unraid", "freenas"], HostKind::Nas),
+            (&["printer", "print", "laserjet", "officejet", "mfp"], HostKind::Printer),
+            (&["firewall", "fw", "pfsense", "opnsense", "fortigate"], HostKind::Firewall),
+            (&["router", "gateway", "gw", "openwrt", "mikrotik", "edgerouter", "fritzbox"], HostKind::Router),
+            (&["switch", "sw"], HostKind::Switch),
+            (&["ap", "wap", "unifi", "accesspoint"], HostKind::Ap),
+            (&["laptop", "notebook", "macbook", "thinkpad"], HostKind::Laptop),
+            (&["phone", "iphone", "android", "pixel"], HostKind::Phone),
+            (&["vm", "virtual"], HostKind::Vm),
+            (&["docker", "container", "lxc", "k8s", "pod"], HostKind::Container),
+            (&["pc", "desktop", "workstation"], HostKind::Pc),
+            (&["cloud", "amazonaws", "s3"], HostKind::Cloud),
+        ];
+        RULES.iter().find(|(list, _)| has(list)).map_or(HostKind::Server, |&(_, k)| k)
+    }
 }
 
 fn default_scheme() -> String {
@@ -44,7 +165,7 @@ fn default_scheme() -> String {
 
 impl Host {
     pub fn new(name: &str, host: &str) -> Host {
-        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false }
+        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false, kind: HostKind::Server }
     }
 
     /// Whether a remote place is on this host (same scheme, server, user and port).

@@ -9,7 +9,8 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rf_core::Location;
-use rf_core::hosts::{Host, Hosts};
+use rf_core::hosts::{Host, HostKind, Hosts};
+use std::rc::Rc;
 use rf_core::vpath::VPath;
 
 use crate::settings_view::{button, card, section};
@@ -93,6 +94,7 @@ const FTP_EXAMPLE: &str = "nas = ftps://user@nas.local/share";
 fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
     use crate::prompt::{Button, Kind};
     let initial = old.as_ref().map(Host::to_line).unwrap_or_default();
+    let old_kind = old.as_ref().map(|h| h.kind);
     let old_name = old.map(|h| h.name);
     let title = if old_name.is_some() { t!("Edit host") } else { t!("Add a host") };
     let message = format!(
@@ -101,13 +103,25 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
         t!("Passwords are never saved in this list."),
         t!("ftp:// is not encrypted (the password crosses the network as it is); use ftps:// where the server has it.")
     );
-    crate::prompt::show(
+    // the kind of machine: "Guess" (from the name and port when it is saved), else one of the kinds; an edited host starts on its own
+    let selected = Rc::new(std::cell::Cell::new(old_kind.map_or(0, |k| 1 + HostKind::ALL.iter().position(|x| *x == k).unwrap_or(0))));
+    let kind_choice = crate::prompt::Choice {
+        label: t!("Kind").into(),
+        options: std::iter::once(SharedString::from(t!("Guess"))).chain(HostKind::ALL.iter().map(|k| SharedString::from(crate::i18n::td(k.label())))).collect(),
+        selected: selected.clone(),
+    };
+    crate::prompt::show_with(
         title,
         Some(message),
         Some((initial, t!("name = sftp://user@host/folder").to_string())),
+        vec![kind_choice],
         vec![
             Button::new(t!("Save"), Kind::Primary, move |text, _, cx| {
-                let h = Host::from_line(text.as_deref().unwrap_or_default()).map_err(|e| crate::i18n::td(&e))?;
+                let mut h = Host::from_line(text.as_deref().unwrap_or_default()).map_err(|e| crate::i18n::td(&e))?;
+                h.kind = match selected.get() {
+                    0 => HostKind::guess(&h),
+                    i => HostKind::ALL.get(i - 1).copied().unwrap_or_default(),
+                };
                 let taken = all(cx).iter().any(|o| o.name.eq_ignore_ascii_case(&h.name) && old_name.as_deref().is_none_or(|n| !n.eq_ignore_ascii_case(&o.name)));
                 if taken {
                     return Err(t!("Another host has this name").to_string());

@@ -374,7 +374,9 @@ impl Render for DialogView {
         }
         let mut choice_rows = Vec::new();
         for (ci, c) in self.choices.iter().enumerate() {
-            let mut seg = h_flex().p(px(2.)).gap(px(2.)).rounded(theme::RADIUS_SM).bg(p.content_bg).border_1().border_color(p.border);
+            // (a long row, a host's 14 kinds, wraps onto more lines instead of squeezing its words)
+            let many = c.options.len() > 6;
+            let mut seg = h_flex().p(px(2.)).gap(px(2.)).when(many, |d| d.flex_wrap()).rounded(theme::RADIUS_SM).bg(p.content_bg).border_1().border_color(p.border);
             let cur = c.selected.get();
             for (oi, o) in c.options.iter().enumerate() {
                 let on = oi == cur;
@@ -383,6 +385,7 @@ impl Render for DialogView {
                     div()
                         .id(SharedString::from(format!("dlg-ch-{ci}-{oi}")))
                         .flex_1()
+                        .when(many, |d| d.min_w(px(84.)))
                         .h(px(28.))
                         .flex()
                         .items_center()
