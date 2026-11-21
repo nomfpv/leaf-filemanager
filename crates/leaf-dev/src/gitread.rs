@@ -1,6 +1,7 @@
 //! Reading a git repository, never changing it: the repository root, `status`, and the `diff` of one file against HEAD.
 //!
-//! Only `rev-parse`, `status`, `diff` and `ls-files` are run (no shell; `GIT_OPTIONAL_LOCKS=0` so even `status` takes no lock and
+//! The one exception is [`add_worktree`], which runs `git worktree add`. Otherwise only `rev-parse`, `status`, `diff`, `ls-files`,
+//! `worktree list` and `for-each-ref` are run (no shell; `GIT_OPTIONAL_LOCKS=0` so even `status` takes no lock and
 //! writes nothing), each with a time limit and a cap on the output. Everything here blocks: call it off the UI thread. The
 //! parsers are plain functions on text so they can be tested without a repository.
 
@@ -362,9 +363,156 @@ pub fn parse_diff(text: &str, max_lines: usize) -> FileDiff {
     d
 }
 
+/// One entry of `git worktree list --porcelain`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    pub path: PathBuf,
+    /// The branch checked out (`main`, without `refs/heads/`); `None` when the head is detached or the entry is bare.
+    pub branch: Option<String>,
+    /// The commit at the head (full hash; empty for a bare entry).
+    pub head: String,
+    pub bare: bool,
+    pub locked: bool,
+    pub prunable: bool,
+}
+
+impl Worktree {
+    /// The name to show: the branch, or `(detached abc1234)`, or the folder name for a bare entry.
+    pub fn label(&self) -> String {
+        match &self.branch {
+            Some(b) => b.clone(),
+            None if self.bare => self.path.file_name().map_or_else(|| "bare".into(), |n| n.to_string_lossy().into_owned()),
+            None => format!("(detached {})", self.head.chars().take(7).collect::<String>()),
+        }
+    }
+}
+
+/// Every worktree of the repository at `root`, the main one first (`git worktree list --porcelain`).
+pub fn worktrees(root: &Path) -> Option<Vec<Worktree>> {
+    let (raw, _) = run(root, &["worktree", "list", "--porcelain", "-z"], TIMEOUT, MAX_OUT)?;
+    Some(parse_worktrees(&raw))
+}
+
+/// Parses `git worktree list --porcelain -z`: attribute records end with NUL, an entry ends with an empty record. Plain
+/// newline-separated output is read as well.
+pub fn parse_worktrees(raw: &[u8]) -> Vec<Worktree> {
+    let text = String::from_utf8_lossy(raw);
+    let sep = if text.contains('\0') { '\0' } else { '\n' };
+    let mut out = Vec::new();
+    let mut cur: Option<Worktree> = None;
+    for rec in text.split(sep) {
+        let rec = rec.trim_end_matches('\r');
+        if rec.is_empty() {
+            out.extend(cur.take());
+            continue;
+        }
+        let (key, val) = rec.split_once(' ').unwrap_or((rec, ""));
+        if key == "worktree" {
+            out.extend(cur.take());
+            cur = Some(Worktree { path: PathBuf::from(val), branch: None, head: String::new(), bare: false, locked: false, prunable: false });
+            continue;
+        }
+        let Some(w) = cur.as_mut() else { continue };
+        match key {
+            "HEAD" => w.head = val.to_string(),
+            "branch" => w.branch = Some(val.strip_prefix("refs/heads/").unwrap_or(val).to_string()),
+            "bare" => w.bare = true,
+            "locked" => w.locked = true,
+            "prunable" => w.prunable = true,
+            _ => {}
+        }
+    }
+    out.extend(cur);
+    out
+}
+
+/// The local branches of the repository, by name.
+pub fn local_branches(root: &Path) -> Option<Vec<String>> {
+    let (raw, _) = run(root, &["for-each-ref", "--format=%(refname:short)", "refs/heads"], Duration::from_secs(5), MAX_OUT)?;
+    Some(String::from_utf8_lossy(&raw).lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+}
+
+/// The branch checked out at `root`, `None` on a detached head.
+pub fn current_branch(root: &Path) -> Option<String> {
+    run_text(root, &["symbolic-ref", "--short", "-q", "HEAD"]).filter(|b| !b.is_empty())
+}
+
+/// THE ONE GIT COMMAND OF LEAF THAT WRITES: `git worktree add`. With `new_branch` the branch is created from the current HEAD,
+/// otherwise the existing local branch is checked out. `folder` must not exist or be empty (git checks it too). It adds a folder
+/// and a branch entry; it never touches existing files, and there is no force, remove or prune. Blocks: off the UI thread.
+/// `Err` carries git's own error text.
+pub fn add_worktree(root: &Path, branch: &str, new_branch: bool, folder: &Path) -> Result<(), String> {
+    if branch.trim().is_empty() || branch.starts_with('-') {
+        return Err("The branch name is not valid".into());
+    }
+    if folder.exists() && folder.read_dir().map(|mut d| d.next().is_some()).unwrap_or(true) {
+        return Err("The folder already exists and is not empty".into());
+    }
+    let mut c = Command::new("git");
+    c.arg("-C").arg(root).args(["--no-pager", "worktree", "add"]);
+    if new_branch {
+        c.arg("-b").arg(branch).arg("--").arg(folder);
+    } else {
+        c.arg("--").arg(folder).arg(branch);
+    }
+    c.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    let mut child = c.spawn().map_err(|e| format!("git could not be started: {e}"))?;
+    let mut err = child.stderr.take();
+    let mut out = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(e) = err.as_mut() {
+            let mut b = Vec::new();
+            let _ = e.take(64 * 1024).read_to_end(&mut b);
+            s = String::from_utf8_lossy(&b).trim().to_string();
+        }
+        if let Some(o) = out.as_mut() {
+            let mut b = Vec::new();
+            let _ = o.take(64 * 1024).read_to_end(&mut b);
+        }
+        s
+    });
+    let start = Instant::now();
+    while !reader.is_finished() {
+        if start.elapsed() > Duration::from_secs(120) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("git took too long".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let text = reader.join().unwrap_or_default();
+    match child.wait() {
+        Ok(st) if st.success() => Ok(()),
+        _ => Err(if text.is_empty() { "git failed".into() } else { text }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_list() {
+        let raw = "worktree C:/demo/app\0HEAD aaaa1111bbbb\0branch refs/heads/main\0\0\
+                   worktree C:/demo/app-feature x\0HEAD cccc2222dddd\0branch refs/heads/feature/x\0locked\0\0\
+                   worktree C:/demo/app-old\0HEAD eeee3333ffff\0detached\0prunable gitdir file points to non-existent location\0\0";
+        let got = parse_worktrees(raw.as_bytes());
+        let flat: Vec<(String, String, bool, bool)> = got.iter().map(|w| (w.path.to_string_lossy().into_owned(), w.label(), w.locked, w.prunable)).collect();
+        assert_eq!(
+            flat,
+            vec![
+                ("C:/demo/app".to_string(), "main".to_string(), false, false),
+                ("C:/demo/app-feature x".to_string(), "feature/x".to_string(), true, false),
+                ("C:/demo/app-old".to_string(), "(detached eeee333)".to_string(), false, true),
+            ]
+        );
+    }
 
     #[test]
     fn status_records() {
