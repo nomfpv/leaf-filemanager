@@ -201,6 +201,11 @@ impl Ops {
         self.ops.iter().find(|o| o.id == id).map(|o| (o.title.clone(), o.phase.clone(), o.started.elapsed()))
     }
 
+    /// What the title bar's status dot shows: the flyout is open, a failure is unseen, the operations running.
+    pub(crate) fn dot_state(&self) -> (bool, bool, usize) {
+        (self.open, self.unseen_failure, self.running())
+    }
+
     pub fn running(&self) -> usize {
         self.ops.iter().filter(|o| o.phase == OpPhase::Running).count()
     }

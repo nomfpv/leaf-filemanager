@@ -52,6 +52,7 @@ pub fn render(p: &Palette, ops: &Entity<crate::status_center::Ops>, popups_open:
             icon_button("tb-theme", p, if p.dark { L::Moon } else { L::Sun }, tip, popups_open)
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::ToggleTheme), cx))
         })
+        .child(status_dot(p, ops, popups_open, cx))
         .into_any_element()
 }
 
@@ -152,5 +153,39 @@ fn visibility_button(p: &Palette, popups_open: bool, cx: &App) -> AnyElement {
         .child(label)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| crate::settings::update(cx, move |s| s.visibility = if high { Visibility::Standard } else { Visibility::High }))
+        .into_any_element()
+}
+
+/// The Status Center's state as a dot: green while nothing runs, the accent while operations run, red while a failure is unseen.
+/// A click opens (or closes) the Status Center, as its button in the address row does.
+fn status_dot(p: &Palette, ops: &Entity<crate::status_center::Ops>, popups_open: bool, cx: &App) -> AnyElement {
+    let (open, unseen, running) = ops.read(cx).dot_state();
+    let (color, tip): (Hsla, SharedString) = if unseen {
+        (p.danger, t!("Status Center: an operation failed").into())
+    } else if running > 0 {
+        (p.accent, t!("Status Center: {n} running").replace("{n}", &running.to_string()).into())
+    } else {
+        (p.success, t!("Status Center: nothing running").into())
+    };
+    let ops = ops.clone();
+    div()
+        .id("tb-status")
+        .flex_shrink_0()
+        .w(px(32.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(theme::RADIUS_SM)
+        .when(open, |d| d.bg(p.pressed))
+        .when(!open, |d| d.hover(|s| s.bg(p.hover)))
+        .when(!popups_open && !open, move |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)))
+        // (the mockup's 14 px dot in a thin ring of the strong line colour)
+        .child(div().size(px(14.)).rounded_full().bg(color).border_1().border_color(p.border_strong))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| {
+            let owner = window.window_handle();
+            ops.update(cx, |o, cx| o.toggle(owner, cx))
+        })
         .into_any_element()
 }
