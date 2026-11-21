@@ -22,7 +22,8 @@ impl Algo {
 
 /// `s` as one word for a POSIX shell: in single quotes, a quote inside as `'\''`.
 pub fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\''"))
+    // (a raw string: in a plain one `\'` is just a quote, and `'''` would leave the word open)
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// The path of an address as a shell word: `/~` and `/~/x` stand for the user's home folder (as the SFTP side takes them).
@@ -93,7 +94,7 @@ mod tests {
 
     #[test]
     fn quoting_and_home() {
-        assert_eq!(quote("a'b"), "'a'\''b'");
+        assert_eq!(quote("a'b"), r"'a'\''b'");
         assert_eq!(command(Algo::Sha256, "/srv/x y"), "sha256sum -- '/srv/x y'");
         assert_eq!(command(Algo::Xxh, "/~/a"), "xxhsum -- \"$HOME\"'/a'");
     }
