@@ -63,6 +63,48 @@ impl Host {
         s.push_str(path);
         s
     }
+
+    /// The host as one line of text, for the edit box: `web = sftp://deploy@www.example.com:2222/srv key="~/.ssh/id" jump=bastion`.
+    pub fn to_line(&self) -> String {
+        let mut s = format!("{} = {}", self.name, self.address());
+        let quote = |v: &str| if v.contains(char::is_whitespace) { format!("\"{v}\"") } else { v.to_string() };
+        if let Some(k) = &self.key_file {
+            s.push_str(&format!(" key={}", quote(k)));
+        }
+        if let Some(j) = &self.jump {
+            s.push_str(&format!(" jump={}", quote(j)));
+        }
+        s
+    }
+
+    /// Reads [`Host::to_line`]'s form back. A bare `user@host` (no scheme) is taken as SFTP; a password in the address is refused.
+    pub fn from_line(line: &str) -> Result<Host, String> {
+        let (name, rest) = line.split_once('=').ok_or("write it as: name = sftp://user@host:port/folder")?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("the host needs a name".into());
+        }
+        let mut parts = words(rest).into_iter();
+        let addr = parts.next().ok_or("the address is missing")?;
+        let addr = if crate::vpath::VPath::looks_like(&addr) { addr } else { format!("sftp://{addr}") };
+        let v = crate::vpath::VPath::parse(&addr).map_err(|e| e.to_string())?;
+        if v.host().is_empty() {
+            return Err("the address has no server name".into());
+        }
+        let mut h = Host::new(name, v.host());
+        h.scheme = v.scheme().to_string();
+        h.user = v.user().map(str::to_string);
+        h.port = v.port();
+        h.start_path = (!v.is_root()).then(|| v.path().to_string());
+        for p in parts {
+            match p.split_once('=') {
+                Some(("key", k)) if !k.is_empty() => h.key_file = Some(k.to_string()),
+                Some(("jump", j)) if !j.is_empty() => h.jump = Some(j.to_string()),
+                _ => return Err(format!("\"{p}\" is not understood (key=... or jump=...)")),
+            }
+        }
+        Ok(h)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,6 +363,14 @@ Host Web
         assert_eq!(Hosts::load(&dir), hs);
         assert_eq!(h.address(), "sftp://deploy@www.example.com:2222/srv/www");
         assert_eq!(Host::new("v6", "::1").address(), "sftp://[::1]/");
+        // the one-line form of the edit box
+        let mut k = h.clone();
+        k.key_file = Some("~/.ssh/id ed25519".into());
+        k.jump = Some("bastion".into());
+        assert_eq!(Host::from_line(&k.to_line()), Ok(k));
+        assert_eq!(Host::from_line("db = admin@db.example.org").unwrap().address(), "sftp://admin@db.example.org/");
+        assert!(Host::from_line("db = sftp://admin:pw@db.example.org/").is_err(), "no passwords");
+        assert!(Host::from_line("no address here").is_err());
         assert_eq!(hs.merge(parse_ssh_config(CONFIG).hosts), 3, "web is there already");
         std::fs::write(dir.join(FILE_NAME), "this is [not toml").unwrap();
         assert_eq!(Hosts::load(&dir), Hosts::default());
