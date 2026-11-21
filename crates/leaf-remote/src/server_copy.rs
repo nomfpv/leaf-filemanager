@@ -9,7 +9,7 @@
 //! - every path in a command is one shell word made by `checksum::shell_path` (single quotes; `/~` is the home folder), after
 //!   `--`;
 //! - the command prints its process id first; Cancel signals that process group (`kill -TERM -- -pid`), then the part is
-//!   removed.
+//!   removed; Pause stops the group (`kill -STOP`) until Resume (`kill -CONT`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -79,7 +79,14 @@ pub fn parse_size(out: &str) -> Option<u64> {
 
 /// The command that stops a copy whose command printed `leaf-pid <pid>` (its whole process group: rsync's helpers too).
 pub fn kill_command(pid: u32) -> String {
-    format!("kill -TERM -- -{pid} 2>/dev/null || kill -TERM {pid}")
+    // (then CONT: a paused group takes the TERM only once it runs again)
+    format!("kill -TERM -- -{pid} 2>/dev/null || kill -TERM {pid}; kill -CONT -- -{pid} 2>/dev/null")
+}
+
+/// The command that pauses (`STOP`) or resumes (`CONT`) a copy's process group, for the job's Pause.
+pub fn pause_command(pid: u32, pause: bool) -> String {
+    let sig = if pause { "STOP" } else { "CONT" };
+    format!("kill -{sig} -- -{pid} 2>/dev/null || kill -{sig} {pid}")
 }
 
 /// The process id a copy command printed (`leaf-pid <pid>`), read from whole lines only (a line still without its `\n` may be

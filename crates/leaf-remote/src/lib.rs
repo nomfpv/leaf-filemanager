@@ -163,13 +163,14 @@ pub fn remote_sum(v: &VPath, algo: checksum::Algo, cancelled: &dyn Fn() -> bool)
 
 /// Copies `from` (a file or a folder) to `to` on the same `sftp://` server, done by the server itself (`server_copy`): nothing
 /// crosses the line. `to` must be free, or (with `replace`, the conflict dialog's answer) a file. `progress` gets the bytes
-/// done of this item. `Unsupported` when the server cannot (another server, no shell, no `cp`; a folder that is merged into):
+/// done of this item; while `paused` the server's copy is stopped there. `Unsupported` when the server cannot (another server, no shell, no `cp`; a folder that is merged into):
 /// nothing was done, copy as before. Blocks: call from a worker thread.
 pub fn copy_on_server(
     from: &VPath,
     to: &VPath,
     replace: bool,
     cancelled: &dyn Fn() -> bool,
+    paused: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<(), FsError> {
     if from.scheme() != "sftp" || to.scheme() != "sftp" || from.authority() != to.authority() {
@@ -194,7 +195,7 @@ pub fn copy_on_server(
             }
         };
         // (a channel the server refuses: nothing started, the copy goes through this PC)
-        let end = match fs.exec_copy(from, command, poll.as_deref(), cancelled, &mut on_text, &mut on_poll) {
+        let end = match fs.exec_copy(from, command, poll.as_deref(), cancelled, paused, &mut on_text, &mut on_poll) {
             Ok(end) => end,
             Err(FsError::Cancelled) => return Err(FsError::Cancelled),
             Err(e) => {

@@ -127,13 +127,14 @@ impl SftpFs {
         command: &str,
         poll: Option<&str>,
         cancelled: &dyn Fn() -> bool,
+        paused: &dyn Fn() -> bool,
         on_text: &mut dyn FnMut(&str),
         on_poll: &mut dyn FnMut(&conn::ExecOut),
     ) -> Result<crate::server_copy::Ended, FsError> {
         let t = self.target(v)?;
         let c = block_on(cancelled, self.shared.conn(&self.cfg, &self.prompter, &t))?;
         c.busy.fetch_add(1, Ordering::Relaxed);
-        let r = conn::rt().block_on(c.exec_watch(command, poll, cancelled, on_text, on_poll));
+        let r = conn::rt().block_on(c.exec_watch(command, poll, cancelled, paused, on_text, on_poll));
         c.busy.fetch_sub(1, Ordering::Relaxed);
         r
     }

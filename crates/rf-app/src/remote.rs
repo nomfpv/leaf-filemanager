@@ -1066,7 +1066,8 @@ fn transfer_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
             let here = Some(format!("{} {}", t!("Copied on the server:"), v.name()));
             (tr.on_progress)(total_files.max(1) as u32, base_files.min(u32::MAX as u64) as u32, here);
             let mut on_progress = |n: u64| tr.bytes.set(base_bytes.saturating_add(n.min(bytes)), total_bytes.max(1));
-            match leaf_remote::copy_on_server(v, &target, answer == Some(Resolve::Replace), &cancelled, &mut on_progress) {
+            let paused = || tr.paused.load(Ordering::Relaxed);
+            match leaf_remote::copy_on_server(v, &target, answer == Some(Resolve::Replace), &cancelled, &paused, &mut on_progress) {
                 Ok(()) => {
                     base_bytes = base_bytes.saturating_add(bytes);
                     base_files += files;

@@ -779,7 +779,7 @@ impl Conn {
 
     /// Runs a copy command (`crate::server_copy::copy_command`) on a new channel and follows it until it ends, with no time
     /// limit: every piece of output goes to `on_text`; with `poll`, that command runs once a second beside it and its output
-    /// goes to `on_poll`. When `cancelled` turns true the process group the command named (`leaf-pid`) is signalled, the end
+    /// goes to `on_poll`. While `paused` the command's process group is stopped (SIGSTOP / SIGCONT). When `cancelled` turns true the process group the command named (`leaf-pid`) is signalled, the end
     /// awaited a few seconds, and `Cancelled` returned. A Cancel before the pid line came waits for it up to `STOP_WAIT`; when
     /// none comes the copy may still run there: `Ended::unstopped` is set (never a clean `Cancelled`).
     pub async fn exec_watch(
@@ -787,10 +787,11 @@ impl Conn {
         command: &str,
         poll: Option<&str>,
         cancelled: &dyn Fn() -> bool,
+        paused: &dyn Fn() -> bool,
         on_text: &mut dyn FnMut(&str),
         on_poll: &mut dyn FnMut(&ExecOut),
     ) -> Result<crate::server_copy::Ended, FsError> {
-        use crate::server_copy::{Ended, kill_command, parse_pid};
+        use crate::server_copy::{Ended, kill_command, parse_pid, pause_command};
         enum Ev {
             Msg(Option<russh::ChannelMsg>),
             Tick,
@@ -804,6 +805,8 @@ impl Conn {
         let mut polled = Instant::now();
         // since when a Cancel waits for the pid line
         let mut stopping: Option<Instant> = None;
+        // the process group is stopped (SIGSTOP) for the job's Pause
+        let mut held = false;
         loop {
             let ev = tokio::select! {
                 m = ch.wait() => Ev::Msg(m),
@@ -861,6 +864,16 @@ impl Conn {
                         })
                         .await;
                         return Err(FsError::Cancelled);
+                    }
+                    // Pause: the copy's process group is stopped there, and continued on Resume
+                    if let Some(p) = pid
+                        && paused() != held
+                        && self.exec(&pause_command(p, !held), Duration::from_secs(15)).await.is_ok_and(|o| o.code == Some(0))
+                    {
+                        held = !held;
+                    }
+                    if held {
+                        continue;
                     }
                     if let Some(p) = poll
                         && end.started
