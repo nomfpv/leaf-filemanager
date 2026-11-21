@@ -1397,6 +1397,21 @@ pub fn no_trash_asker(cx: &mut App) -> NoTrashTx {
     qtx
 }
 
+/// The Trash step of a revert: moves `p` to the Trash and gives the (original, in the Trash) pairs. Anything short of the file
+/// being in the Trash and gone from its place (the job cancelled: `Ok(false)`, nothing recorded, the file still there) is an
+/// `Err`, so the revert never writes over a file whose content was not kept.
+fn trash_for_revert(p: &std::path::Path, t: &Arc<Tracker>) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf)>, String> {
+    match fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()) {
+        Ok(true) => {}
+        Ok(false) => return Err(t!("Moving the current version to the Trash was stopped; nothing was changed").to_string()),
+        Err(e) => return Err(format!("{} ({e:#})", t!("The current version could not be moved to the Trash; nothing was changed"))),
+    }
+    let pairs = t.results.lock().unwrap().clone();
+    if pairs.is_empty() || p.symlink_metadata().is_ok() {
+        return Err(t!("The current version did not reach the Trash; nothing was changed").to_string());
+    }
+    Ok(pairs)
+}
 /// "Revert this file" of the Changes page: the file's current content goes to the Trash (a job like any delete, undoable), then
 /// git puts the HEAD version back.
 pub fn revert_file(cx: &mut App, root: std::path::PathBuf, rel: String) {
@@ -1406,12 +1421,9 @@ pub fn revert_file(cx: &mut App, root: std::path::PathBuf, rel: String) {
     let marker = mark.clone();
     let id = start_with_id(cx, title, move |t| {
         let put_away = |p: &std::path::Path| -> Result<(), String> {
-            fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()).map(|_| ()).map_err(|e| e.to_string())?;
-            let pairs = t.results.lock().unwrap().clone();
-            if !pairs.is_empty() {
-                *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
-                crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
-            }
+            let pairs = trash_for_revert(p, &t)?;
+            *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
+            crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
             Ok(())
         };
         leaf_dev::gitread::revert_file(&root, &rel, &put_away).map_err(|e| anyhow::anyhow!("{}: {e}", t!("The file could not be reverted")))?;
@@ -1434,12 +1446,9 @@ pub fn revert_with_trash(
     let marker = mark.clone();
     let id = start_with_id(cx, title, move |t| {
         let put_away = |p: &std::path::Path| -> Result<(), String> {
-            fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()).map(|_| ()).map_err(|e| e.to_string())?;
-            let pairs = t.results.lock().unwrap().clone();
-            if !pairs.is_empty() {
-                *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
-                crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
-            }
+            let pairs = trash_for_revert(p, &t)?;
+            *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
+            crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
             Ok(())
         };
         what(&put_away).map_err(|e| anyhow::anyhow!("{}: {e}", t!("The change could not be reverted")))?;

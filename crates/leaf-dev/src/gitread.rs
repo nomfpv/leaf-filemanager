@@ -123,6 +123,10 @@ pub fn revert_file(root: &Path, rel: &str, put_away: &dyn Fn(&Path) -> Result<()
     let full = root.join(rel);
     if full.symlink_metadata().is_ok() {
         put_away(&full)?;
+        // (a put-away that kept nothing, e.g. a cancelled Trash step, must never let git write over the file)
+        if full.symlink_metadata().is_ok() {
+            return Err("The current version did not reach the Trash; nothing was changed".into());
+        }
     }
     let mut c = Command::new("git");
     c.arg("-C").arg(root).args(["--no-pager", "restore", "--source=HEAD", "--staged", "--worktree", "--"]).arg(rel);

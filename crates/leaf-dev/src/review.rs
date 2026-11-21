@@ -467,6 +467,12 @@ pub fn revert_hunk(path: &Path, stamp: Stamp, hunk: &RHunk, put_away: &dyn Fn(&P
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
+    // (a put-away that returned without moving the file, e.g. a cancelled Trash step: its content is kept nowhere, so it is
+    // never replaced)
+    if std::fs::symlink_metadata(path).is_ok() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err("The current version did not reach the Trash; nothing was changed".into());
+    }
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("the new content could not be put in place ({e}); the previous one is in the Trash")
@@ -513,6 +519,21 @@ mod tests {
         revert_hunk(&f, stamp, &d.hunks[0], &trash_into(&dir)).unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nNINE\nten\n");
         assert_eq!(std::fs::read(dir.join("trash").join("f.txt")).unwrap(), new.as_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_put_away_that_keeps_nothing_never_replaces_the_file() {
+        let d = diff_of("a\nb\nc\n", "a\nX\nc\n");
+        let dir = temp("cancelled");
+        let f = dir.join("f.txt");
+        std::fs::write(&f, "a\nX\nc\n").unwrap();
+        let stamp = Stamp::of_file(&f).unwrap();
+        // (the Trash step was cancelled: it says Ok and leaves the file where it is)
+        assert!(revert_hunk(&f, stamp, &d.hunks[0], &|_| Ok(())).is_err());
+        assert_eq!(std::fs::read(&f).unwrap(), b"a\nX\nc\n");
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("f.txt")], "no temp file is left and nothing was renamed in");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
