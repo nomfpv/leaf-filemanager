@@ -153,7 +153,8 @@ pub struct CommandSpec {
     pub action: fn() -> Box<dyn Action>,
     /// Makes one of its key bindings (`KeyBinding::new` wants the action's own type).
     pub bind: fn(&'static str, Option<&'static str>) -> KeyBinding,
-    /// The leaf version it came with.
+    /// The leaf version it came with (for a later "What's new" page).
+    #[allow(dead_code)]
     pub since: &'static str,
     pub platforms: Platforms,
 }
@@ -366,6 +367,7 @@ pub fn shortcut_entries() -> Vec<(&'static str, String, String)> {
 }
 
 /// `FEATURES.md`: the listed commands grouped as on the page.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn features_markdown() -> String {
     let mut s = String::from(
         "# What leaf can do\n\n\
@@ -380,7 +382,9 @@ pub fn features_markdown() -> String {
         }
         s.push_str(&format!("\n## {}\n\n| Command | What it does | Shortcut |\n|---|---|---|\n", cat.title()));
         for c in rows {
-            let keys = c.default_keys.iter().map(|k| format!("`{}`", shown(k.keys))).chain((!c.hint.is_empty()).then(|| format!("`{}`", c.hint))).collect::<Vec<_>>().join(", ");
+            // (a key that is itself a backtick needs a doubled one around it)
+            let code = |k: String| if k.contains('`') { format!("`` {k} ``") } else { format!("`{k}`") };
+            let keys = c.default_keys.iter().map(|k| code(shown(k.keys))).chain((!c.hint.is_empty()).then(|| code(c.hint.to_string()))).collect::<Vec<_>>().join(", ");
             let only = c.platforms.label();
             let desc = if only.is_empty() { c.description.to_string() } else { format!("{} ({only} only)", c.description) };
             s.push_str(&format!("| {} | {} | {} |\n", c.title.trim_end_matches('…'), desc.replace('|', "\\|"), keys));
