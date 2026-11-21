@@ -658,7 +658,13 @@ impl FolderView {
             BarMenu::More => {
                 let (undo, redo) = crate::undo::next_labels();
                 let none = self.selected.is_empty();
+                // (the commands the tool bar leaves out to stay as short as the mockups': paste, cut by its own name, share)
+                let paste_ok = self.location().path().is_some() && leaf_sys::clipboard::can_paste();
                 vec![
+                    Item::action(t!("Paste"), icon(L::ClipboardPaste), act(&me, |v, w, cx| v.paste(w, cx))).hint("Ctrl+V").enabled(paste_ok),
+                    Item::action(t!("Cut"), icon(L::Scissors), act(&me, |v, w, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))).hint("Ctrl+X").enabled(!none),
+                    Item::action(t!("Share"), icon(L::Share2), act(&me, |v, w, cx| v.share(w, cx))).enabled(!none),
+                    Item::Separator,
                     Item::action(undo_text(undo), icon(L::Undo2), move |_, cx| crate::undo::undo(cx)).hint("Ctrl+Z").enabled(undo.is_some()),
                     Item::action(redo_text(redo), icon(L::Redo2), move |_, cx| crate::undo::redo(cx)).hint("Ctrl+Y").enabled(redo.is_some()),
                     Item::Separator,

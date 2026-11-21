@@ -3153,7 +3153,6 @@ impl Workspace {
         let folder_name = tab.title(cx);
         let preview_open = self.preview_open;
         let filter_on = self.filter_bar;
-        let paste_ok = in_folder && leaf_sys::clipboard::can_paste();
 
         // a command: its icon and, as in the mockups, its name (Share, Properties and the like stay icons)
         let cmd = |id: &'static str, icon: L, label: Option<&'static str>, tip: &'static str, enabled: bool, cx: &mut Context<Self>, run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
@@ -3331,12 +3330,12 @@ impl Workspace {
                     this.with_tab(cx, |v, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Copy, w, cx))
                 })
             }))
+            // Move (the mockups' name for cut): the items wait greyed until they are pasted where they go; Paste is under "More"
             .children(on("cut").then(|| {
-                cmd("cb-cut", L::Scissors, Some("Cut"), "Cut  (Ctrl+X)", writable_sel, cx, |this, w, cx| {
+                cmd("cb-cut", L::MoveRight, Some("Move"), "Move: cut, then paste where it goes  (Ctrl+X)", writable_sel, cx, |this, w, cx| {
                     this.with_tab(cx, |v, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))
                 })
             }))
-            .children(on("paste").then(|| cmd("cb-paste", L::ClipboardPaste, Some("Paste"), "Paste  (Ctrl+V)", paste_ok, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.paste(w, cx)))))
             .children(on("rename").then(|| {
                 cmd("cb-rename", L::TextCursorInput, Some("Rename"), "Rename  (F2)", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.rename_selection(w, cx)))
             }))

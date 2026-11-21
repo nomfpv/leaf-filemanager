@@ -12,6 +12,9 @@ $env:LEAF_OFFSCREEN = "1"        # window parked right of every monitor, no focu
 $p = Start-Process target\release\leaf.exe -ArgumentList "C:\some\folder" -PassThru
 ```
 
+For a capture with a selection, `$env:LEAF_CHECK_SELECT = "a.txt|b.txt|c"` selects those names in the first
+folder the window lists (no click needed).
+
 In this mode the window is still shown and rendered (not minimised, not hidden), it is just
 outside the virtual screen. Saved window placement is neither read nor written.
 

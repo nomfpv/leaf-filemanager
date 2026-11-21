@@ -39,8 +39,9 @@ const MEASURED: [bool; 7] = [true, true, true, true, true, true, false];
 
 /// A cell's and a heading's own padding (`px_2` on both sides).
 const PAD: f32 = 16.;
-/// The air between a column's widest text and the next column. With the two paddings that meet there, 30 px from text to text.
-const AIR: f32 = 14.;
+/// The air between a column's widest text and the next column. With the two paddings that meet there, 22 px from text to text
+/// (tight enough that Name, Size, Modified and Type fit in a half-width pane, as in the mockups).
+const AIR: f32 = 6.;
 /// A heading's sort arrow with its gap.
 const ARROW: f32 = 16.;
 const NARROWEST: f32 = 56.;
@@ -165,7 +166,9 @@ impl FolderView {
         if self.auto_key.as_ref() == Some(&key) {
             return;
         }
-        let (sm, xs) = (px(rem * 0.875), px(rem * 0.75));
+        // (the sizes the cells and headings are drawn at: the theme's small and extra-small text)
+        let pal = crate::theme::Palette::for_window(window);
+        let (sm, xs) = (px(pal.fs_small), px(pal.fs_xs));
         let font = style.font();
         let ts = window.text_system();
         let width = |s: &str, size: Pixels| -> f32 {

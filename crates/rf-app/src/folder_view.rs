@@ -743,7 +743,7 @@ impl FolderView {
             reselect: None,
             renamed: None,
             rename_after_load: false,
-            reselect_many: None,
+            reselect_many: check_select(),
             pending_rename: false,
             home_press: None,
             zoom_acc: 0.0,
@@ -3916,7 +3916,8 @@ impl FolderView {
         };
         let w = self.col_widths(cx);
         // the property columns the user added are placed first: the fixed columns share what is left
-        let mut free = f32::from(self.content_width) - self.name_fixed(cx).unwrap_or(180.) - 24. - self.gutter() - self.props_used_width(cx);
+        // (the Name column keeps at least 150 px: with the mockups' tight widths Name, Size, Modified and Type share a half-width pane)
+        let mut free = f32::from(self.content_width) - self.name_fixed(cx).unwrap_or(150.) - 24. - self.gutter() - self.props_used_width(cx);
         let mut take = |want: bool, width: f32| -> bool {
             if want && width <= free {
                 free -= width;
@@ -4585,6 +4586,18 @@ impl FolderView {
                         .child(link_marked(
                             match &shell_icon {
                                 Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().when(is_cut, |d| d.opacity(0.5)).into_any_element(),
+                                // a folder's outline gets a light fill of its colour (the mockups': 26 %), laid under the line
+                                None if cat == Category::Folder => {
+                                    let c = theme::kind_color(cat, p.dark);
+                                    div()
+                                        .relative()
+                                        .size(px(16.))
+                                        .flex_shrink_0()
+                                        .when(is_cut, |d| d.opacity(0.5))
+                                        .child(div().absolute().left(px(1.5)).top(px(3.)).w(px(13.)).h(px(10.)).rounded(px(2.)).bg(c.opacity(0.26)))
+                                        .child(Icon::new(icons::icon_for(cat)).size(px(16.)).text_color(c))
+                                        .into_any_element()
+                                }
                                 None => Icon::new(icons::icon_for(cat))
                                     .size(px(16.))
                                     .flex_shrink_0()
@@ -5776,6 +5789,17 @@ fn rtl_grid_lines(name: &str, avail: Pixels, window: &Window) -> Vec<String> {
 }
 
 /// `text` as it is when it fits in `avail`, else shortened at its end (in reading order) to what fits with "…" after it.
+/// For off-screen checks (tools/TESTING.md): `LEAF_CHECK_SELECT="a|b|c"` selects these names in the first list the process makes,
+/// so a capture shows a selection without a click. Read once; every later list starts with nothing selected.
+fn check_select() -> Option<(Vec<String>, Instant)> {
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    if TAKEN.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+    let names: Vec<String> = std::env::var("LEAF_CHECK_SELECT").ok()?.split('|').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+    (!names.is_empty()).then(|| (names, Instant::now() + Duration::from_secs(20)))
+}
+
 /// Windows' "00:01:08" as the badge's "1:08" (hours only when there are any: "1:02:03").
 fn short_length(s: &str) -> String {
     let s = s.trim();
