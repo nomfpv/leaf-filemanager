@@ -131,6 +131,29 @@ fn linked<'a>(list: &'a [Worktree], dir: &Path) -> Option<&'a Worktree> {
     list.iter().skip(1).find(|w| same_path(&w.path, dir))
 }
 
+/// The repository's common git folder, absolute (`<repo>/.git` for every worktree of it).
+fn common_dir(dir: &Path) -> Option<PathBuf> {
+    let o = exec(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok()?;
+    let t = o.stdout.trim();
+    (o.ok && !t.is_empty()).then(|| PathBuf::from(t))
+}
+
+/// `dir` is, right now, a linked worktree of `repo`: git lists it, its `.git` is a file (a worktree's, not a repository's own
+/// folder), and git asked inside it answers with the repository's common folder and `dir` itself as the top. A lane folder deleted
+/// by hand and made again (a fresh clone, `git init`) is still listed by git, but fails this.
+fn own_worktree(repo: &Path, list: &[Worktree], dir: &Path) -> bool {
+    if linked(list, dir).is_none() || !dir.join(".git").is_file() {
+        return false;
+    }
+    let Some(common) = common_dir(repo) else { return false };
+    let Ok(o) = exec(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"]) else { return false };
+    let mut lines = o.stdout.lines().map(str::trim);
+    match (o.ok, lines.next(), lines.next()) {
+        (true, Some(c), Some(top)) => same_path(Path::new(c), &common) && same_path(Path::new(top), dir),
+        _ => false,
+    }
+}
+
 fn worktrees(repo: &Path) -> Result<Vec<Worktree>, LaneError> {
     gitread::worktrees(repo).filter(|l| !l.is_empty()).ok_or_else(|| LaneError::Git { what: "the worktrees could not be read".into(), detail: String::new() })
 }
@@ -210,7 +233,7 @@ pub struct EndInfo {
 
 pub fn end_info(repo: &Path, dir: &Path, base: &str) -> EndInfo {
     let list = gitread::worktrees(repo).unwrap_or_default();
-    let is_lane = linked(&list, dir).is_some();
+    let is_lane = own_worktree(repo, &list, dir);
     let base_dir = list.iter().find(|w| w.branch.as_deref() == Some(base)).map(|w| w.path.clone());
     let base_dirty = base_dir.as_deref().and_then(|d| changes(d, false).ok()).unwrap_or_default();
     let progress = progress(dir, base).unwrap_or_default();
@@ -242,7 +265,7 @@ pub fn merge(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<Merged
         return Err(LaneError::Git { what: "the lane is on its base branch".into(), detail: branch.into() });
     }
     let list = worktrees(repo)?;
-    if linked(&list, dir).is_none() {
+    if !own_worktree(repo, &list, dir) {
         return Err(LaneError::NotALane(dir.display().to_string()));
     }
     let Some(base_dir) = list.iter().find(|w| w.branch.as_deref() == Some(base)).map(|w| w.path.clone()) else {
@@ -313,7 +336,7 @@ pub fn merge(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<Merged
 /// or commits the base does not have. Then the branch is deleted when it is merged (`git branch -d`); `Ok(true)` when it was.
 pub fn remove(repo: &Path, dir: &Path, branch: &str, base: &str) -> Result<bool, LaneError> {
     let list = worktrees(repo)?;
-    if linked(&list, dir).is_none() {
+    if !own_worktree(repo, &list, dir) {
         return Err(LaneError::NotALane(dir.display().to_string()));
     }
     let dirty = changes(dir, true)?;
@@ -351,7 +374,7 @@ pub fn discard(repo: &Path, dir: &Path, branch: &str, put_away: &dyn Fn(&Path) -
         return Err(LaneError::NotALane(format!("{} holds the main worktree", dir.display())));
     }
     if meta.is_ok() {
-        if linked(&list, dir).is_none() {
+        if !own_worktree(repo, &list, dir) {
             return Err(LaneError::NotALane(dir.display().to_string()));
         }
         if !dir.is_dir() {
@@ -520,5 +543,28 @@ mod tests {
         // pruned, the unmerged branch kept
         assert!(!r.git(&r.main, &["worktree", "list"]).contains("feat"));
         assert!(r.git(&r.main, &["branch", "--list", "feat"]).contains("feat"));
+    }
+
+    #[test]
+    fn lane_discard_refuses_a_repository_made_again_at_the_lane_path() {
+        let r = Repo::new("remade");
+        let dir = r.lane("feat");
+        // deleted by hand (git still lists it), then a repository of its own made at the same place
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        r.git(&dir, &["init", "-q"]);
+        r.git(&dir, &["config", "user.name", "t"]);
+        r.git(&dir, &["config", "user.email", "t@t"]);
+        r.commit(&dir, "own.txt", "mine\n");
+        let handed = std::cell::Cell::new(false);
+        let put_away = |_: &Path| -> Result<(), String> {
+            handed.set(true);
+            Err("must not be called".into())
+        };
+        assert!(matches!(discard(&r.main, &dir, "feat", &put_away), Err(LaneError::NotALane(_))));
+        assert!(!handed.get());
+        assert!(dir.join(".git").is_dir() && dir.join("own.txt").is_file());
+        assert!(matches!(remove(&r.main, &dir, "feat", "main"), Err(LaneError::NotALane(_))));
+        assert!(!end_info(&r.main, &dir, "main").is_lane);
     }
 }
