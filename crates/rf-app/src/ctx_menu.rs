@@ -260,6 +260,10 @@ impl FolderView {
             v.push(Item::action(t!("Find duplicates"), icon(L::Copy), act(me, move |_, _, cx| {
                 cx.emit(FolderEvent::OpenInNewTab(Location::Duplicates(vec![d.clone()])))
             })));
+            let d = target_dir.clone();
+            v.push(Item::action(t!("Find build junk"), icon(L::Eraser), act(me, move |_, _, cx| {
+                cx.emit(FolderEvent::OpenInNewTab(Location::BuildJunk(d.clone())))
+            })));
         }
         if single_dir && mp.pin {
             let d = target_dir.clone();
@@ -482,9 +486,17 @@ impl FolderView {
             v.push(Item::action(t!("Find duplicates"), icon(L::Copy), act(me, move |_, _, cx| {
                 cx.emit(FolderEvent::OpenInNewTab(Location::Duplicates(vec![d.clone()])))
             })));
+            let d = dir.to_path_buf();
+            v.push(Item::action(t!("Find build junk"), icon(L::Eraser), act(me, move |_, _, cx| {
+                cx.emit(FolderEvent::OpenInNewTab(Location::BuildJunk(d.clone())))
+            })));
         }
         let show_hidden = self.filter.show_hidden;
         v.push(Item::action(t!("Show hidden items"), icon(L::Eye), act(me, |v, _, cx| v.toggle_hidden(cx))).checked(show_hidden).hint("Ctrl+H"));
+        v.push(
+            Item::action(t!("Hide git-ignored files"), icon(L::EyeOff), |w, cx| w.dispatch_action(Box::new(crate::actions::ToggleHideIgnored), cx))
+                .checked(cx.global::<crate::settings::Settings>().hide_ignored),
+        );
         v.push(Item::Separator);
         {
             let d = dir.to_path_buf();
@@ -735,6 +747,10 @@ impl FolderView {
                     Item::action(t!("Show hidden items"), icon(L::Eye), act(&me, |v, _, cx| v.toggle_hidden(cx)))
                         .checked(self.filter.show_hidden)
                         .hint("Ctrl+H"),
+                );
+                v.push(
+                    Item::action(t!("Hide git-ignored files"), icon(L::EyeOff), |w, cx| w.dispatch_action(Box::new(crate::actions::ToggleHideIgnored), cx))
+                        .checked(cx.global::<crate::settings::Settings>().hide_ignored),
                 );
                 v.push(
                     Item::action(t!("Dual pane"), icon(L::Columns2), |w, cx| w.dispatch_action(Box::new(crate::actions::ToggleDualPane), cx))

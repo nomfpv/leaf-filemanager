@@ -135,6 +135,7 @@ fn render(v: &Entity<FolderView>, owner: AnyWindowHandle, dual: Rc<Cell<bool>>, 
     };
     let w_hidden = weak.clone();
     let ext = s.show_extensions;
+    let hide_ignored = s.hide_ignored;
     let adaptive = s.default_view == crate::settings::DefaultView::Adaptive;
     let (d, sh) = (dual.get(), shelf.get());
     let dual2 = dual.clone();
@@ -155,6 +156,12 @@ fn render(v: &Entity<FolderView>, owner: AnyWindowHandle, dual: Rc<Cell<bool>>, 
             crate::settings_view::switch("lt-hidden", p, hidden, move |window, cx| {
                 let _ = w_hidden.update(cx, |v, cx| v.toggle_hidden(cx));
                 window.refresh();
+            }),
+        ))
+        .child(row(
+            t!("Hide git-ignored files"),
+            crate::settings_view::switch("lt-ignored", p, hide_ignored, move |window, cx| {
+                window.dispatch_action(Box::new(crate::actions::ToggleHideIgnored), cx);
             }),
         ))
         .child(row(

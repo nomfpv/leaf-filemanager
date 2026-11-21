@@ -20,6 +20,7 @@ mod custom_actions_page;
 mod cut_marks;
 mod disk_usage;
 mod duplicates_view;
+mod junk_view;
 mod fluent_menu;
 mod flyout;
 mod glass;

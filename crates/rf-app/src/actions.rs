@@ -112,6 +112,8 @@ gpui_kit::actions!(
         CustomizeHome,
         ResetHome,
         CopyAsContext,
+        ToggleHideIgnored,
+        FindBuildJunk,
     ]
 );
 
