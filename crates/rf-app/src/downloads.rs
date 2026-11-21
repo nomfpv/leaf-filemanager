@@ -221,6 +221,28 @@ fn server_rule<'a>(s: &'a Settings, url: &str) -> Option<&'a crate::settings::Se
     s.download_servers.iter().filter(|r| dl::host_matches(&r.host, &name)).max_by_key(|r| r.host.len())
 }
 
+/// The proxy of the settings for the engine, without the password, and the keyring entry that has the password (a manual proxy with
+/// a user name).
+fn proxy_of(s: &Settings) -> (dl::ProxyMode, Option<leaf_remote::SecretId>) {
+    use crate::settings::{DownloadProxy, ProxyType};
+    match s.download_proxy {
+        DownloadProxy::None => (dl::ProxyMode::Direct, None),
+        DownloadProxy::System => (dl::ProxyMode::System, None),
+        DownloadProxy::Manual => {
+            let user = s.download_proxy_user.trim().to_string();
+            let host = s.download_proxy_host.trim().to_string();
+            let id = (!user.is_empty()).then(|| proxy_secret_id(&user, &host, s.download_proxy_port));
+            let kind = if s.download_proxy_type == ProxyType::Socks5 { dl::ProxyKind::Socks5 } else { dl::ProxyKind::Http };
+            (dl::ProxyMode::Manual(dl::ProxyServer { kind, host, port: s.download_proxy_port, user: (!user.is_empty()).then_some(user), password: None }), id)
+        }
+    }
+}
+
+/// Where a manual proxy's password is kept.
+pub fn proxy_secret_id(user: &str, host: &str, port: u16) -> leaf_remote::SecretId {
+    leaf_remote::SecretId::password("proxy", user, host, port)
+}
+
 /// The categories a request is sorted by: the settings' list when sorting is on and the request is for the download folder.
 fn categories_for(req: &Request, s: &Settings) -> Vec<(String, Vec<String>)> {
     if req.sort && s.download_sort { s.download_categories.iter().map(|c| (c.folder.clone(), c.exts.clone())).collect() } else { Vec::new() }
@@ -371,7 +393,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     let s = cx.global::<Settings>();
     let rule = server_rule(s, &req.url);
     let limit = limit_for(s, &req.url);
-    let settings = (s.download_segments.clamp(1, 32) as usize, limit, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s), rule.map(|r| r.user_agent.trim().to_string()).filter(|u| !u.is_empty()));
+    let settings = (s.download_segments.clamp(1, 32) as usize, limit, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s), rule.map(|r| r.user_agent.trim().to_string()).filter(|u| !u.is_empty()), proxy_of(s));
     apply_host_caps(s);
     let key = req.key.unwrap_or_else(|| NEXT_KEY.fetch_add(1, Ordering::Relaxed));
     {
@@ -465,7 +487,7 @@ fn ask_limit(limit: Arc<AtomicU64>, own: Arc<AtomicBool>, cx: &mut App) {
     });
 }
 
-fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories, agent): (usize, u64, usize, Vec<(String, Vec<String>)>, Option<String>), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
+fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories, agent, (proxy, proxy_secret)): (usize, u64, usize, Vec<(String, Vec<String>)>, Option<String>, (dl::ProxyMode, Option<leaf_remote::SecretId>)), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
     // (the saved list reads this job's paused flag, the one the card's pause button flips)
     if let Some(l) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|l| l.key == key) {
         l.paused = tr.paused.clone();
@@ -498,6 +520,11 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
     let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), categories: categories.clone(), ..dl::Options::default() };
     if let Some(ua) = agent {
         opts.user_agent = ua;
+    }
+    opts.proxy = proxy;
+    // the proxy's password comes from the keyring now, here on the download's own thread (a keyring can wait for the user)
+    if let (dl::ProxyMode::Manual(m), Some(id)) = (&mut opts.proxy, &proxy_secret) {
+        m.password = leaf_remote::vault().get(id).map(|p| p.as_str().to_string());
     }
     if opts.sha256.is_none() && req.verify {
         match dl::fetch_sidecar(&req.url, &opts) {

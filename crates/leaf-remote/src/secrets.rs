@@ -33,6 +33,9 @@ pub enum SecretId {
     /// The password of `user` (`name`, `DOMAIN\name` or `name@domain`) for the Windows share `share` on `host` (SMB; the
     /// share `IPC$` stands for the server itself, its list of shares).
     Share { user: String, host: String, share: String },
+    /// The sign-in a web server asked for (HTTP Basic or Digest) with this realm on `host:port` over `scheme` (`http`, `https`); the
+    /// saved text is `user:password`. A password saved for `https` is never sent over plain `http`.
+    Web { scheme: String, host: String, port: u16, realm: String },
 }
 
 impl SecretId {
@@ -42,6 +45,12 @@ impl SecretId {
 
     pub fn share(user: &str, host: &str, share: &str) -> SecretId {
         SecretId::Share { user: user.to_string(), host: host.to_ascii_lowercase(), share: share.to_ascii_lowercase() }
+    }
+
+    pub fn web(scheme: &str, host: &str, port: u16, realm: &str) -> SecretId {
+        // (the keyring name is `web:scheme://host:port|realm`: the realm is one line without the bar)
+        let realm: String = realm.chars().map(|c| if c == '|' || c.is_control() { '/' } else { c }).collect();
+        SecretId::Web { scheme: scheme.to_ascii_lowercase(), host: host.to_ascii_lowercase(), port, realm }
     }
 
     pub fn passphrase(key_file: &std::path::Path) -> SecretId {
@@ -58,6 +67,7 @@ impl SecretId {
             SecretId::Password { scheme, user, host, port } => format!("{scheme}://{user}@{host}:{port}"),
             SecretId::Passphrase { fingerprint, file_name } => format!("key:{fingerprint}:{file_name}"),
             SecretId::Share { user, host, share } => format!("smb://{user}@{host}/{share}"),
+            SecretId::Web { scheme, host, port, realm } => format!("web:{scheme}://{host}:{port}|{realm}"),
         }
     }
 
@@ -74,8 +84,15 @@ impl SecretId {
             let ok = !user.is_empty() && !host.is_empty() && !share.is_empty() && !host.contains(['/', '\\']);
             return Some(SecretId::share(user, host, share)).filter(|id| ok && id.account() == account);
         }
+        if let Some(rest) = account.strip_prefix("web:") {
+            let (scheme, rest) = rest.split_once("://")?;
+            let (server, realm) = rest.split_once('|')?;
+            let (host, port) = server.rsplit_once(':')?;
+            let port: u16 = port.parse().ok()?;
+            return Some(SecretId::web(scheme, host, port, realm)).filter(|id| matches!(scheme, "http" | "https") && !host.is_empty() && id.account() == account);
+        }
         let (scheme, rest) = account.split_once("://")?;
-        if !matches!(scheme, "sftp" | "ftp" | "ftps") {
+        if !matches!(scheme, "sftp" | "ftp" | "ftps" | "proxy") {
             return None;
         }
         let (user, server) = rest.rsplit_once('@')?;
@@ -91,6 +108,7 @@ impl SecretId {
             SecretId::Passphrase { file_name, .. } => format!("Key file {file_name}"),
             SecretId::Share { user, host, share } if share == "ipc$" => format!("{user}@{host} (SMB)"),
             SecretId::Share { user, host, share } => format!("{user}@{host}/{share} (SMB)"),
+            SecretId::Web { scheme, host, port, realm } => format!("{host}:{port} \"{realm}\" ({})", scheme.to_ascii_uppercase()),
         }
     }
 
@@ -104,7 +122,7 @@ impl SecretId {
             }
             // (SMB has no port of its own in leaf: every share of the server counts)
             SecretId::Share { user: u, host: h, .. } => scheme.eq_ignore_ascii_case("smb") && h.eq_ignore_ascii_case(host) && user.is_none_or(|w| w == u),
-            SecretId::Passphrase { .. } => false,
+            SecretId::Passphrase { .. } | SecretId::Web { .. } => false,
         }
     }
 }
@@ -386,6 +404,8 @@ fn saved_ids_read_back_from_their_keyring_names() {
         SecretId::password("sftp", "alice", "example.org", 22),
         SecretId::password("ftps", "a@b.c", "192.0.2.1", 990),
         SecretId::password("sftp", "bob", "[::1]", 2222),
+        SecretId::password("proxy", "carol", "proxy.example.org", 3128),
+        SecretId::web("https", "files.example.org", 443, "Private area"),
         SecretId::passphrase(std::path::Path::new("C:/Users/x/.ssh/id_ed25519")),
         SecretId::passphrase(std::path::Path::new("/home/x/keys/a:b.key")),
         SecretId::share("alice", "nas", "photos"),

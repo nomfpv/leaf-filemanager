@@ -3224,6 +3224,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         ),
         download_categories_card(p, s),
         download_servers_card(p, s),
+        download_proxy_card(p, s),
         download_schedule_card(p, s),
         card(
             p,
@@ -4060,4 +4061,146 @@ fn download_servers_card(p: &Palette, s: &Settings) -> AnyElement {
     shell
         .child(card_body(p, L::Plus, t!("Settings for one server").into(), Some(t!("Connections, speed limit and user agent for a server name.").into()), Some(button("download-server-add", p, t!("Add"), move |window, cx| edit(None, window, cx)))))
         .into_any_element()
+}
+
+/// The proxy downloads go through: none, the system's or one of the user's own (HTTP or SOCKS5). Its password goes to the keyring.
+fn download_proxy_card(p: &Palette, s: &Settings) -> AnyElement {
+    use crate::settings::{DownloadProxy, ProxyType};
+    let manual = s.download_proxy == DownloadProxy::Manual;
+    let server = if s.download_proxy_host.trim().is_empty() { t!("Not set").to_string() } else { format!("{}:{}", s.download_proxy_host.trim(), s.download_proxy_port) };
+    let user = if s.download_proxy_user.trim().is_empty() { t!("No sign-in").to_string() } else { s.download_proxy_user.trim().to_string() };
+    let shell = shell(p).child(card_body(
+        p,
+        L::Globe,
+        t!("Proxy for downloads").into(),
+        Some(t!("The system's proxy is the one Windows or the environment names. Your own proxy can be HTTP or SOCKS5.").into()),
+        Some(dropdown(
+            "download-proxy",
+            p,
+            s.download_proxy,
+            vec![(DownloadProxy::System, t!("System").to_string()), (DownloadProxy::None, t!("None").to_string()), (DownloadProxy::Manual, t!("Manual").to_string())],
+            |s, v| s.download_proxy = v,
+        )),
+    ));
+    if !manual {
+        return shell.into_any_element();
+    }
+    shell
+        .child(card_body(
+            p,
+            L::Network,
+            t!("Type").into(),
+            None,
+            Some(dropdown("download-proxy-type", p, s.download_proxy_type, vec![(ProxyType::Http, "HTTP".to_string()), (ProxyType::Socks5, "SOCKS5".to_string())], |s, v| s.download_proxy_type = v)),
+        ))
+        .child(card_body(
+            p,
+            L::Globe,
+            t!("Server").into(),
+            Some(server.into()),
+            Some(button("download-proxy-server", p, t!("Edit"), |window, cx| {
+                let s = cx.global::<Settings>();
+                let initial = if s.download_proxy_host.trim().is_empty() { String::new() } else { format!("{}:{}", s.download_proxy_host.trim(), s.download_proxy_port) };
+                crate::prompt::show(
+                    t!("Proxy server"),
+                    Some(t!("The proxy's name or address and its port, for example proxy.example.com:8080").to_string()),
+                    Some((initial, "proxy.example.com:8080".to_string())),
+                    vec![
+                        crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |value, _, cx| {
+                            let text = value.unwrap_or_default();
+                            let (host, port) = text.trim().rsplit_once(':').ok_or_else(|| t!("Write the name, a colon and the port").to_string())?;
+                            let port: u16 = port.parse().ok().filter(|p| *p > 0).ok_or_else(|| t!("The port is a number from 1 to 65535").to_string())?;
+                            let host = host.trim().to_string();
+                            if host.is_empty() || host.contains(['/', ' ', '@']) {
+                                return Err(t!("Write the proxy's name or address without http:// and without a login").to_string());
+                            }
+                            settings::update(cx, move |s| {
+                                s.download_proxy_host = host;
+                                s.download_proxy_port = port;
+                            });
+                            Ok(())
+                        }),
+                        crate::prompt::Button::cancel(),
+                    ],
+                    window,
+                    cx,
+                );
+            })),
+        ))
+        .child(card_body(
+            p,
+            L::User,
+            t!("Sign-in").into(),
+            Some(user.into()),
+            Some(button("download-proxy-user", p, t!("Edit"), |window, cx| {
+                let initial = cx.global::<Settings>().download_proxy_user.clone();
+                crate::prompt::show(
+                    t!("Proxy user name"),
+                    Some(t!("Leave empty when the proxy takes no sign-in. The password is kept in the system's keyring, not in a file; set it again when the user name changes.").to_string()),
+                    Some((initial, t!("User name").to_string())),
+                    vec![
+                        crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |value, _, cx| {
+                            let user = value.unwrap_or_default().trim().to_string();
+                            settings::update(cx, move |s| s.download_proxy_user = user);
+                            Ok(())
+                        }),
+                        crate::prompt::Button::cancel(),
+                    ],
+                    window,
+                    cx,
+                );
+            })),
+        ))
+        .child(card_body(
+            p,
+            L::KeyRound,
+            t!("Password").into(),
+            Some(t!("Kept in the system's keyring.").into()),
+            Some(
+                h_flex()
+                    .gap_2()
+                    .child(button("download-proxy-forget", p, t!("Forget"), |_, cx| {
+                        if let Some(id) = proxy_id(cx) {
+                            std::thread::spawn(move || {
+                                if let Err(e) = leaf_remote::vault().forget(&id) {
+                                    log::warn!("proxy: {e}");
+                                }
+                            });
+                        }
+                    }))
+                    .child(button("download-proxy-password", p, t!("Set"), |window, cx| {
+                        let Some(id) = proxy_id(cx) else {
+                            return crate::prompt::notice(t!("Proxy password"), t!("Enter the proxy's server and the user name first.").to_string(), window, cx);
+                        };
+                        if let leaf_remote::Keyring::Missing(why) = leaf_remote::vault().state() {
+                            return crate::prompt::notice(t!("Proxy password"), format!("{}\n{why}", t!("leaf cannot keep the password here.")), window, cx);
+                        }
+                        crate::prompt::show_secret(
+                            t!("Proxy password"),
+                            Some(t!("Saved in the system's keyring for this proxy and user name.").to_string()),
+                            t!("Password").to_string(),
+                            vec![
+                                crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, move |value, _, _| {
+                                    let secret = leaf_remote::Secret::new(value.unwrap_or_default()).remembered(true);
+                                    let id = id.clone();
+                                    std::thread::spawn(move || leaf_remote::vault().keep_if_asked(&id, &secret));
+                                    Ok(())
+                                }),
+                                crate::prompt::Button::cancel(),
+                            ],
+                            window,
+                            cx,
+                        );
+                    }))
+                    .into_any_element(),
+            ),
+        ))
+        .into_any_element()
+}
+
+/// The keyring entry of the manual proxy's password (none until the server and the user name are set).
+fn proxy_id(cx: &App) -> Option<leaf_remote::SecretId> {
+    let s = cx.global::<Settings>();
+    let (user, host) = (s.download_proxy_user.trim(), s.download_proxy_host.trim());
+    (!user.is_empty() && !host.is_empty()).then(|| crate::downloads::proxy_secret_id(user, host, s.download_proxy_port))
 }

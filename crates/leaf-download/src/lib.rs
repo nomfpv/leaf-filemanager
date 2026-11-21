@@ -70,11 +70,46 @@ pub struct Options {
     /// Sort by file type: (subfolder of the download folder, extensions without the dot, lower case). A file whose extension is
     /// listed goes into that subfolder (made when needed); the others stay in the folder. Empty: no sorting.
     pub categories: Vec<(String, Vec<String>)>,
+    /// How the requests reach the net.
+    pub proxy: ProxyMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProxyKind {
+    Http,
+    Socks5,
+}
+
+/// A proxy server of the user's choosing. The password is in memory only (the caller reads it from the keyring when a download
+/// starts); `Debug` shows everything but the password.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProxyServer {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    pub user: Option<String>,
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyServer").field("kind", &self.kind).field("host", &self.host).field("port", &self.port).field("user", &self.user).field("password", &self.password.as_ref().map(|_| "***")).finish()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum ProxyMode {
+    /// No proxy, whatever the system says.
+    Direct,
+    /// The system's: the proxy variables of the environment, on Windows the setting of Internet Options.
+    #[default]
+    System,
+    Manual(ProxyServer),
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default(), categories: Vec::new() }
+        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default(), categories: Vec::new(), proxy: ProxyMode::System }
     }
 }
 
@@ -198,7 +233,7 @@ pub fn parse_sha256(text: &str) -> Option<String> {
 
 /// Reads the checksum file beside `url` (`url.sha256`); `None` when there is none or it holds no digest.
 pub fn fetch_sidecar(url: &str, opts: &Options) -> Option<String> {
-    let agent = http::agent(opts);
+    let agent = http::agent(opts).ok()?;
     let mut resp = agent.get(sidecar_url(url)).call().ok()?;
     if !resp.status().is_success() {
         return None;
@@ -363,7 +398,7 @@ pub fn download(url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn
     if !is_http_url(url) {
         return Err(Error::BadUrl(url.to_string()));
     }
-    let agent = http::agent(opts);
+    let agent = http::agent(opts)?;
     for round in 0..2 {
         match run(&agent, url, dir, opts, ctl, host) {
             // the file changed while it was fetched: once more, from the start

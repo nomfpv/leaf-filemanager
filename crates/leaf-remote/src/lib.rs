@@ -120,6 +120,7 @@ pub fn forget_saved(id: &SecretId) -> Result<(), String> {
         SecretId::Passphrase { fingerprint, .. } => sftp_backend().forget_key(fingerprint),
         // (Windows keeps an SMB session itself: the host's Disconnect ends it)
         SecretId::Share { .. } => {}
+        SecretId::Web { .. } => {}
     }
     vault().forget(id)
 }

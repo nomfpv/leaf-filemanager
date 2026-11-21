@@ -296,3 +296,71 @@ fn credentials_stay_on_the_first_origin() {
     assert_eq!(http::resolve("https://h/dir/file", "//g/x"), "https://g/x");
     assert_eq!(http::resolve("https://h", "?x=1"), "https://h/?x=1");
 }
+
+/// A CONNECT proxy on 127.0.0.1: it keeps the request head it was sent and tunnels to the target.
+fn proxy() -> (u16, Arc<std::sync::Mutex<Vec<String>>>) {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let heads: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let seen = heads.clone();
+    std::thread::spawn(move || {
+        for client in l.incoming().flatten() {
+            let seen = seen.clone();
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(client.try_clone().unwrap());
+                let (mut head, mut target) = (String::new(), String::new());
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    if target.is_empty() {
+                        target = line.split_whitespace().nth(1).unwrap_or_default().to_string();
+                    }
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                seen.lock().unwrap().push(head);
+                let Ok(up) = TcpStream::connect(&target) else { return };
+                let mut c = client.try_clone().unwrap();
+                let _ = c.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+                let (mut up2, mut c2) = (up.try_clone().unwrap(), client);
+                let t = std::thread::spawn(move || {
+                    let n = std::io::copy(&mut up2, &mut c2).ok();
+                    let _ = c2.shutdown(std::net::Shutdown::Both);
+                    n
+                });
+                let _ = std::io::copy(&mut r, &mut &up);
+                let _ = t.join();
+            });
+        }
+    });
+    (port, heads)
+}
+
+#[test]
+fn proxy_password_is_sent_to_the_proxy_and_never_reaches_a_file() {
+    const PASSWORD: &str = "proxy-secret-5d2e";
+    let srv = serve(data(3 << 20));
+    let (pport, heads) = proxy();
+    let dir = tmp("proxy-secret");
+    let server = ProxyServer { kind: ProxyKind::Http, host: "127.0.0.1".into(), port: pport, user: Some("alice".into()), password: Some(PASSWORD.into()) };
+    let o = Options { proxy: ProxyMode::Manual(server.clone()), ..opts(0) };
+    // cut part-way: the part state stays behind, as after a crash
+    srv.cut_after.store(100 << 10, Ordering::SeqCst);
+    let u = url(&srv, "/p.bin");
+    assert!(download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)).is_err());
+    let state = std::fs::read_to_string(dir.join("p.bin.leaf-part.state")).expect("the part state is written");
+    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: false, sort: false }], history: Vec::new() };
+    let saved = serde_json::to_string(&saved).unwrap();
+    let shown = format!("{server:?} {:?}", ProxyMode::Manual(server.clone()));
+    for text in [&state, &saved, &shown] {
+        assert!(!text.contains(PASSWORD), "the proxy password leaked into: {text}");
+    }
+    // the proxy itself did get the login (Basic: alice:password)
+    let sent = heads.lock().unwrap().join("\n").to_ascii_lowercase();
+    assert!(sent.contains("proxy-authorization: basic"), "the proxy was not signed in to: {sent}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

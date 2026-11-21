@@ -5,24 +5,49 @@ use std::time::Duration;
 
 use ureq::ResponseExt;
 
-use crate::{Error, Headers, Options};
+use crate::{Error, Headers, Options, ProxyKind, ProxyMode};
 
 /// Redirects followed by hand (with headers of the caller's own).
 const MAX_REDIRECTS: usize = 10;
 
-pub fn agent(o: &Options) -> ureq::Agent {
+fn proxy_of(mode: &ProxyMode) -> Result<Option<ureq::Proxy>, Error> {
+    match mode {
+        ProxyMode::Direct => Ok(None),
+        // (the environment's proxy variables, and on Windows the system's setting)
+        ProxyMode::System => Ok(ureq::Proxy::try_from_env()),
+        ProxyMode::Manual(m) => {
+            let protocol = match m.kind {
+                ProxyKind::Http => ureq::ProxyProtocol::Http,
+                // (the proxy resolves the names: the address of the server never goes through this PC's resolver)
+                ProxyKind::Socks5 => ureq::ProxyProtocol::Socks5h,
+            };
+            let mut b = ureq::Proxy::builder(protocol).host(&m.host).port(m.port);
+            if let Some(u) = m.user.as_deref().filter(|u| !u.is_empty()) {
+                b = b.username(u);
+                if let Some(p) = m.password.as_deref() {
+                    b = b.password(p);
+                }
+            }
+            // (a proxy that cannot be set up is an error, never a download that goes direct)
+            b.build().map(Some).map_err(|_| Error::Network("the proxy server's address is not valid".into()))
+        }
+    }
+}
+
+pub fn agent(o: &Options) -> Result<ureq::Agent, Error> {
     let ua = o.headers.get("user-agent").map_or_else(|| o.user_agent.clone(), str::to_string);
     let mut b = ureq::Agent::config_builder()
         .user_agent(ua)
         .timeout_connect(Some(o.connect_timeout))
         .timeout_per_read(Some(o.read_timeout))
         .http_status_as_error(false)
-        .max_idle_connections_per_host(32);
+        .max_idle_connections_per_host(32)
+        .proxy(proxy_of(&o.proxy)?);
     // headers of the caller's own: redirects are followed in `probe`, which drops Cookie and Authorization when one leaves the origin (scheme, host, port)
     if !o.headers.is_empty() {
         b = b.max_redirects(0);
     }
-    b.build().into()
+    Ok(b.build().into())
 }
 
 fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers) -> ureq::RequestBuilder<B> {

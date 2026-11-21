@@ -423,6 +423,26 @@ fn is_default_preview_height(h: &f32) -> bool {
     *h == rf_core::previewpane::BOTTOM_DEFAULT_H
 }
 
+/// How downloads reach the net.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadProxy {
+    /// No proxy, whatever the system says.
+    None,
+    /// The system's proxy (Internet Options on Windows, the proxy variables of the environment).
+    #[default]
+    System,
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyType {
+    #[default]
+    Http,
+    Socks5,
+}
+
 /// Download settings for one server (a name also covers the servers below it): connections, speed limit, user agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerRule {
@@ -727,6 +747,12 @@ pub struct Settings {
     pub download_per_host: u32,
     /// Where `leaf download <address>` saves without a folder; empty: the Downloads folder.
     pub download_folder: String,
+    /// The proxy downloads go through. The proxy's password is never here: it is in the system's keyring.
+    pub download_proxy: DownloadProxy,
+    pub download_proxy_type: ProxyType,
+    pub download_proxy_host: String,
+    pub download_proxy_port: u16,
+    pub download_proxy_user: String,
     /// Settings of single servers, over the default row (`download_per_host` and the speed limit).
     pub download_servers: Vec<ServerRule>,
     /// Downloads into the download folder (not "Download here…" into a chosen folder) are sorted into subfolders by file type.
@@ -986,6 +1012,11 @@ impl Default for Settings {
             download_parallel: 3,
             download_per_host: 32,
             download_folder: String::new(),
+            download_proxy: DownloadProxy::System,
+            download_proxy_type: ProxyType::Http,
+            download_proxy_host: String::new(),
+            download_proxy_port: 8080,
+            download_proxy_user: String::new(),
             download_servers: Vec::new(),
             download_sort: false,
             download_schedule: false,
