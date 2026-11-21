@@ -623,8 +623,16 @@ mod tests {
     const W: NameRules = NameRules::WINDOWS;
     const DAY: i64 = 86_400_000;
 
+    // a folder that is absolute on the machine the tests run on: a Windows path
+    // does not split into folders on Linux, so `{parent}` found no "Pictures" there
+    fn root_of(tail: &str) -> PathBuf {
+        let mut p = PathBuf::from(if cfg!(windows) { r"D:\" } else { "/" });
+        p.push("work");
+        p.push(tail);
+        p
+    }
     fn dir() -> PathBuf {
-        PathBuf::from(r"C:\Users\user\Pictures")
+        root_of("Pictures")
     }
     fn batch(names: &[&str]) -> (Vec<RenameItem>, Vec<FileFact>) {
         batch_in(&dir(), names)
@@ -725,7 +733,7 @@ mod tests {
         assert_eq!(one(num(10, 5, 0, At::End, "_", false), &["a.jpg", "b.jpg"]), ["a_10.jpg", "b_15.jpg"]);
         assert_eq!(one(num(3, -1, 2, At::Index(1), "", false), &["ab", "cd"]), ["a03b", "c02d"]);
         // per folder: the counter starts again in each folder
-        let d2 = PathBuf::from(r"C:\Users\user\Other");
+        let d2 = root_of("Other");
         let (mut i, mut f) = batch(&["a", "b"]);
         let (i2, f2) = batch_in(&d2, &["c", "d"]);
         i.extend(i2.clone());
