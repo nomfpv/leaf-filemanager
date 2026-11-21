@@ -1,4 +1,6 @@
-//! Linux backend of rf_win::preview_host. Status: STUB
+//! Linux backend of rf_win::preview_host. The in-window file previews and the media player of the Windows host have no counterpart here:
+//! the pane shows the poster (the thumbnail) and its Play button hands an audio or video file to the user's default program
+//! (`media_play`). Pause, seek and the state stay empty because that program is not ours to drive.
 
 use crate::geom::RECT;
 use leaf_common::stub;
@@ -21,6 +23,8 @@ pub enum MediaEvent {
 }
 
 pub fn is_playable(_path: &Path) -> bool {
+    // (false on purpose: it also decides whether the Look window hands a file to Media Foundation; the pane offers the default
+    // program for every audio / video file itself)
     stub!("preview_host::is_playable")
 }
 
@@ -28,8 +32,11 @@ pub fn mf_decodes(_codec: &str) -> bool {
     stub!("preview_host::mf_decodes")
 }
 
-pub fn media_play(_owner: isize, _path: &Path, _rect: Option<RECT>) {
-    stub!("preview_host::media_play")
+/// Plays the file in the user's default program (the window and the rectangle mean nothing here).
+pub fn media_play(_owner: isize, path: &Path, _rect: Option<RECT>) {
+    if let Err(e) = crate::shell::open(path) {
+        log::warn!("preview_host: {}: {e:#}", path.display());
+    }
 }
 
 pub fn media_pause() {

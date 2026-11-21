@@ -356,13 +356,15 @@ impl Preview {
 
     /// Audio / video with no Windows preview handler: our own player.
     fn playable(&self, path: &Path, e: &Entry) -> bool {
-        !e.is_dir() && !e.is_cloud_placeholder() && matches!(icons::category(e), Category::Video | Category::Audio) && leaf_sys::preview_host::is_playable(path)
+        !e.is_dir() && !e.is_cloud_placeholder() && matches!(icons::category(e), Category::Video | Category::Audio) && (cfg!(not(windows)) || leaf_sys::preview_host::is_playable(path))
     }
 
     fn owner(window: &Window) -> Option<isize> {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
             Ok(RawWindowHandle::Win32(h)) => Some(h.hwnd.get()),
+            // (off Windows the player opens the file in the default program: no window is needed)
+            _ if cfg!(not(windows)) => Some(0),
             _ => None,
         }
     }
@@ -382,6 +384,11 @@ impl Preview {
     fn player_toggle(&mut self, video: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((path, _)) = self.target.clone() else { return };
         let Some(owner) = Self::owner(window) else { return };
+        if cfg!(not(windows)) {
+            // no player in the window here: the default program plays it
+            leaf_sys::preview_host::media_play(owner, &path, None);
+            return;
+        }
         let pl = self.player.get_or_insert_with(|| PlayerUi { path: path.clone(), started: false, rect: None, state: None, bar: Default::default(), _poll: None });
         let playing = pl.state.is_some_and(|s| s.playing);
         if playing {
@@ -455,6 +462,30 @@ impl Preview {
 
     /// Play / pause, a seek bar and the time, under the visual.
     fn render_player_bar(&self, p: &Palette, video: bool, cx: &mut Context<Self>) -> AnyElement {
+        if cfg!(not(windows)) {
+            return h_flex()
+                .w_full()
+                .h(px(36.))
+                .gap_2()
+                .items_center()
+                .child(
+                    h_flex()
+                        .id("pl-toggle")
+                        .h(px(32.))
+                        .px_4()
+                        .gap_2()
+                        .flex_shrink_0()
+                        .items_center()
+                        .rounded_full()
+                        .bg(p.accent)
+                        .cursor_pointer()
+                        .hover(|s| s.opacity(0.85))
+                        .child(Icon::new(L::Play).size(px(16.)).text_color(gpui_kit::white()))
+                        .child(div().text_sm().text_color(gpui_kit::white()).child(t!("Play in the default player")))
+                        .on_click(cx.listener(move |this, _, window, cx| this.player_toggle(video, window, cx))),
+                )
+                .into_any_element();
+        }
         let st = self.player.as_ref().and_then(|pl| pl.state);
         let playing = st.is_some_and(|s| s.playing);
         let (pos, dur) = st.map_or((0.0, 0.0), |s| (s.position, s.duration));
