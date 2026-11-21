@@ -1,0 +1,55 @@
+# Maintainer: leaf contributors
+# Same package as PKGBUILD (leaf-git) but the source comes from a local tree, for when the repository is not reachable.
+# usage:  LEAF_SRC=/path/to/tree LEAF_REV=abc1234 makepkg -f     (run in a folder that holds only this file, renamed PKGBUILD)
+# The Rust toolchain may come from rustup instead of the rust/cargo packages, so they are not listed as makedepends here;
+# it must be on PATH (rustc new enough for mail-parser 1.0.1).
+pkgname=leaf-git
+pkgver=0.9.4
+pkgrel=1
+pkgdesc='A fast, keyboard-friendly dual-pane file manager (GPUI)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/nomfpv/leaf-filemanager'
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'fontconfig' 'freetype2' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'alsa-lib')
+makedepends=('cmake' 'pkgconf' 'clang')
+optdepends=('vulkan-radeon: Vulkan driver for AMD GPUs'
+            'vulkan-intel: Vulkan driver for Intel GPUs'
+            'nvidia-utils: Vulkan driver for NVIDIA GPUs')
+provides=('leaf')
+conflicts=('leaf')
+source=()
+options=('!lto')
+
+pkgver() {
+  local v
+  v=$(grep -m1 '^version' "${LEAF_SRC:?set LEAF_SRC to the source tree}/Cargo.toml" | cut -d'"' -f2)
+  printf '%s.r%s' "$v" "${LEAF_REV:-local}"
+}
+
+prepare() {
+  mkdir -p "$srcdir/leaf"
+  cp -a "${LEAF_SRC:?set LEAF_SRC to the source tree}/." "$srcdir/leaf/"
+  cd "$srcdir/leaf"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/leaf"
+  export CARGO_TARGET_DIR=target
+  cargo build --release --frozen -p rf-app
+}
+
+package() {
+  cd "$srcdir/leaf"
+  install -Dm755 target/release/leaf "$pkgdir/usr/bin/leaf"
+  if [ -f target/release/leaf-look ]; then
+    install -Dm755 target/release/leaf-look "$pkgdir/usr/bin/leaf-look"
+  fi
+  install -Dm644 packaging/linux/leaf.desktop "$pkgdir/usr/share/applications/leaf.desktop"
+  for s in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "packaging/linux/icons/leaf-$s.png" "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/leaf.png"
+  done
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD-PARTY.md "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY.md"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
