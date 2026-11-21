@@ -774,6 +774,85 @@ impl Conn {
         Ok(out)
     }
 
+    /// Runs a copy command (`crate::server_copy::copy_command`) on a new channel and follows it until it ends, with no time
+    /// limit: every piece of output goes to `on_text`; with `poll`, that command runs once a second beside it and its output
+    /// goes to `on_poll`. When `cancelled` turns true the process group the command named (`leaf-pid`) is signalled, the end
+    /// awaited a few seconds, and `Cancelled` returned.
+    pub async fn exec_watch(
+        &self,
+        command: &str,
+        poll: Option<&str>,
+        cancelled: &dyn Fn() -> bool,
+        on_text: &mut dyn FnMut(&str),
+        on_poll: &mut dyn FnMut(&ExecOut),
+    ) -> Result<crate::server_copy::Ended, FsError> {
+        use crate::server_copy::{Ended, kill_command, parse_pid};
+        enum Ev {
+            Msg(Option<russh::ChannelMsg>),
+            Tick,
+        }
+        let mut ch = step(self.limit_open(), self.handle.channel_open_session()).await?;
+        step(self.limit_open(), ch.exec(true, command.as_bytes().to_vec())).await?;
+        let mut end = Ended::default();
+        let mut pid = None;
+        let mut head = String::new();
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        let mut polled = Instant::now();
+        loop {
+            let ev = tokio::select! {
+                m = ch.wait() => Ev::Msg(m),
+                _ = tick.tick() => Ev::Tick,
+            };
+            match ev {
+                Ev::Msg(Some(russh::ChannelMsg::Data { data })) => {
+                    let text = String::from_utf8_lossy(&data);
+                    if pid.is_none() && head.len() < 4096 {
+                        head.push_str(&text);
+                        pid = parse_pid(&head);
+                        end.started = pid.is_some();
+                    }
+                    if let Some(l) = text.split(['\r', '\n']).map(str::trim).rfind(|l| !l.is_empty() && !l.starts_with("leaf-pid ") && crate::server_copy::parse_rsync_progress(l).is_none()) {
+                        end.last_line = l.chars().take(300).collect();
+                    }
+                    on_text(&text);
+                }
+                Ev::Msg(Some(russh::ChannelMsg::ExitStatus { exit_status })) => end.code = Some(exit_status),
+                Ev::Msg(Some(russh::ChannelMsg::Close) | None) => break,
+                Ev::Msg(Some(_)) => {}
+                Ev::Tick => {
+                    self.touch();
+                    if cancelled() {
+                        if let Some(p) = pid {
+                            let _ = self.exec(&kill_command(p), Duration::from_secs(15)).await;
+                        }
+                        let _ = ch.close().await;
+                        // (the copy may still write for a moment: the part is removed after it ended)
+                        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                            while let Some(m) = ch.wait().await {
+                                if matches!(m, russh::ChannelMsg::Close) {
+                                    break;
+                                }
+                            }
+                        })
+                        .await;
+                        return Err(FsError::Cancelled);
+                    }
+                    if let Some(p) = poll
+                        && end.started
+                        && polled.elapsed() >= Duration::from_secs(1)
+                    {
+                        polled = Instant::now();
+                        if let Ok(o) = self.exec(p, Duration::from_secs(10)).await {
+                            on_poll(&o);
+                        }
+                    }
+                }
+            }
+        }
+        self.touch();
+        Ok(end)
+    }
+
     fn limit_open(&self) -> Duration {
         Duration::from_secs(30)
     }

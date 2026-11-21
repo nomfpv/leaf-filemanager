@@ -24,6 +24,7 @@ pub mod known_hosts;
 mod prompt;
 pub mod rclone;
 pub mod secrets;
+pub mod server_copy;
 mod sftp;
 pub mod trash;
 #[cfg(test)]
@@ -158,6 +159,51 @@ pub fn remote_sum(v: &VPath, algo: checksum::Algo, cancelled: &dyn Fn() -> bool)
         _ if out.code == Some(127) => Err(FsError::Other(format!("The server has no {}", algo.program()))),
         _ => Err(FsError::Other(format!("{} gave no sum for this file", algo.program()))),
     }
+}
+
+/// Copies `from` (a file or a folder) to `to` on the same `sftp://` server, done by the server itself (`server_copy`): nothing
+/// crosses the line. `to` must be free, or (with `replace`, the conflict dialog's answer) a file. `progress` gets the bytes
+/// done of this item. `Unsupported` when the server cannot (another server, no shell, no `cp`; a folder that is merged into):
+/// nothing was done, copy as before. Blocks: call from a worker thread.
+pub fn copy_on_server(
+    from: &VPath,
+    to: &VPath,
+    replace: bool,
+    cancelled: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), FsError> {
+    if from.scheme() != "sftp" || to.scheme() != "sftp" || from.authority() != to.authority() {
+        return Err(FsError::Unsupported);
+    }
+    let fs = sftp_backend();
+    let ask = || fs.exec(from, server_copy::PROBE, std::time::Duration::from_secs(8), cancelled).map(|o| (o.stdout, o.code));
+    let Some(tool) = server_copy::tool_of(from.authority(), ask)? else { return Err(FsError::Unsupported) };
+    let progress = std::cell::RefCell::new(progress);
+    server_copy::copy_with(&*fs, tool, from, to, replace, &mut |command, part| {
+        let poll = (tool == server_copy::Tool::Cp).then(|| server_copy::size_command(part.path()));
+        let mut on_text = |t: &str| {
+            if tool == server_copy::Tool::Rsync
+                && let Some(n) = server_copy::parse_rsync_progress(t)
+            {
+                (progress.borrow_mut())(n);
+            }
+        };
+        let mut on_poll = |o: &ExecOut| {
+            if let Some(n) = server_copy::parse_size(&o.stdout) {
+                (progress.borrow_mut())(n);
+            }
+        };
+        // (a channel the server refuses: nothing started, the copy goes through this PC)
+        let end = match fs.exec_copy(from, command, poll.as_deref(), cancelled, &mut on_text, &mut on_poll) {
+            Ok(end) => end,
+            Err(FsError::Cancelled) => return Err(FsError::Cancelled),
+            Err(e) => {
+                log::info!("remote: the server did not run the copy ({e}); copying through this PC");
+                return Err(FsError::Unsupported);
+            }
+        };
+        server_copy::outcome(tool, &end)
+    })
 }
 
 /// Stands in when rclone went away after the start.

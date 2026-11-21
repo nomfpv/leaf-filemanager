@@ -120,6 +120,24 @@ impl SftpFs {
         })
     }
 
+    /// Runs a copy command on the server of `v` and follows it to its end (`Conn::exec_watch`); Cancel stops it there.
+    pub(crate) fn exec_copy(
+        &self,
+        v: &VPath,
+        command: &str,
+        poll: Option<&str>,
+        cancelled: &dyn Fn() -> bool,
+        on_text: &mut dyn FnMut(&str),
+        on_poll: &mut dyn FnMut(&conn::ExecOut),
+    ) -> Result<crate::server_copy::Ended, FsError> {
+        let t = self.target(v)?;
+        let c = block_on(cancelled, self.shared.conn(&self.cfg, &self.prompter, &t))?;
+        c.busy.fetch_add(1, Ordering::Relaxed);
+        let r = conn::rt().block_on(c.exec_watch(command, poll, cancelled, on_text, on_poll));
+        c.busy.fetch_sub(1, Ordering::Relaxed);
+        r
+    }
+
     /// The folder the server logs the user into (its home), as an address on the same server.
     pub fn home(&self, v: &VPath) -> Result<VPath, FsError> {
         let p = self.with(v, &|| false, async |c| Ok(c.home.clone()))?;

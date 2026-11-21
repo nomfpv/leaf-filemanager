@@ -936,7 +936,8 @@ pub fn upload(cx: &mut App, paths: Vec<PathBuf>, dest: VPath, after: Option<crat
 
 /// Copies (or, on the same server, moves) `items` into the folder `dest` through `leaf_vfs::copy` as a Status Center job:
 /// sizes counted first, pause and cancel, names that are there asked once in the conflict dialog. A move within one server is a
-/// rename there (nothing is copied). An upload of one big file offers "Verify on server" when it is done.
+/// rename there (nothing is copied); a copy within one SFTP server is done by the server (`leaf_remote::copy_on_server`) when
+/// it can. An upload of one big file offers "Verify on server" when it is done.
 pub fn transfer(cx: &mut App, items: Vec<(VPath, bool)>, dest: VPath, mv: bool, after: Option<crate::status_center::OnDone>) {
     if items.is_empty() {
         return;
@@ -988,10 +989,14 @@ fn transfer_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
         targets.push(t);
     }
     let (mut total_files, mut total_bytes) = (0u64, 0u64);
+    // each item's own count (a copy done by the server reports its bytes only)
+    let mut each = Vec::new();
     if !mv {
         (tr.on_progress)(0, 0, Some(t!("Counting").to_string()));
         for (v, is_dir) in items {
+            let before = (total_files, total_bytes);
             count(&*from_fs, v, *is_dir, &cancelled, &mut total_files, &mut total_bytes).map_err(anyhow_of)?;
+            each.push((total_files - before.0, total_bytes - before.1));
             if cancelled() {
                 return Ok(false);
             }
@@ -1054,6 +1059,24 @@ fn transfer_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
                 Err(e) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
             }
             continue;
+        }
+        // within one SFTP server the server copies (H6); `Unsupported`: it cannot, so the bytes go through this PC as before
+        if same_server(v) && v.scheme() == "sftp" {
+            let (files, bytes) = each.get(i).copied().unwrap_or_default();
+            let here = Some(format!("{} {}", t!("Copied on the server:"), v.name()));
+            (tr.on_progress)(total_files.max(1) as u32, base_files.min(u32::MAX as u64) as u32, here);
+            let mut on_progress = |n: u64| tr.bytes.set(base_bytes.saturating_add(n.min(bytes)), total_bytes.max(1));
+            match leaf_remote::copy_on_server(v, &target, answer == Some(Resolve::Replace), &cancelled, &mut on_progress) {
+                Ok(()) => {
+                    base_bytes = base_bytes.saturating_add(bytes);
+                    base_files += files;
+                    tr.bytes.set(base_bytes, total_bytes.max(1));
+                    continue;
+                }
+                Err(FsError::Unsupported) => {}
+                Err(FsError::Cancelled) => return Ok(false),
+                Err(e) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
+            }
         }
         let inner = if answer == Some(Resolve::Replace) { Conflict::Replace } else { Conflict::KeepBoth };
         let mut on_conflict = |_: &VPath, _: &leaf_vfs::Meta| inner;
