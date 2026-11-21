@@ -199,8 +199,17 @@ async function vpnState() {
   return r?.ok === true && r.vpn ? r.vpn : null;
 }
 
+// leaf's proxy password is kept in memory only, never in the browser profile (storage.local is a file on disk)
+let livePassword = null;
+
+// what is kept of leaf's proxy in storage: its address and user name, not the password
+function kept(p) {
+  return { host: p.host, port: p.port, user: p.user ?? null };
+}
+
+// leaf's proxy `a` is the one set now (`b` from storage; the password compared with the one in memory)
 function sameProxy(a, b) {
-  return !!a && !!b && a.host === b.host && a.port === b.port && (a.user ?? null) === (b.user ?? null) && (a.password ?? null) === (b.password ?? null);
+  return !!a && !!b && a.host === b.host && a.port === b.port && (a.user ?? null) === (b.user ?? null) && (a.password ?? null) === livePassword;
 }
 
 function isLocalHost(host) {
@@ -233,6 +242,7 @@ async function controllable() {
 }
 
 async function setProxy(p) {
+  livePassword = p.password ?? null;
   if (IS_FIREFOX) {
     if (!p.user) {
       try {
@@ -252,6 +262,7 @@ async function setProxy(p) {
 
 async function clearProxy() {
   perRequest = null;
+  livePassword = null;
   await quietly(IS_FIREFOX ? api.proxy.settings.clear({}) : api.proxy.settings.clear({ scope: "regular" }));
 }
 
@@ -293,7 +304,7 @@ async function mullvadOn() {
     return { ok: false, why: `The browser did not take the proxy setting (${e?.message ?? e}).` };
   }
   await webRtcThroughProxy(true);
-  await api.storage.local.set({ mullvad: true, mullvadProxy: vpn.proxy, mullvadNote: "", mullvadAlerted: false, mullvadCountry: vpn.country ?? "" });
+  await api.storage.local.set({ mullvad: true, mullvadProxy: kept(vpn.proxy), mullvadNote: "", mullvadAlerted: false, mullvadCountry: vpn.country ?? "" });
   showBadge("VPN", `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}`);
   api.alarms.create(VPN_ALARM, { periodInMinutes: VPN_EVERY_MIN });
   return { ok: true, country: vpn.country ?? "" };
@@ -332,7 +343,7 @@ async function checkVpn() {
   if (!sameProxy(vpn.proxy, cfg.mullvadProxy) || (IS_FIREFOX && cfg.mullvadProxy?.user && !perRequest)) {
     try {
       await setProxy(vpn.proxy);
-      await api.storage.local.set({ mullvadProxy: vpn.proxy });
+      await api.storage.local.set({ mullvadProxy: kept(vpn.proxy) });
     } catch {
       return hold("the browser did not take leaf's new proxy address");
     }
@@ -350,6 +361,8 @@ api.alarms.onAlarm.addListener((a) => {
 // (Firefox's background page, or the service worker, has just started, also at the browser's start before leaf runs: the alarm,
 // the per-request proxy and the badge are set again; the proxy setting itself stays the browser's across restarts)
 vpnConfig().then((cfg) => {
+  // (an earlier version kept the password in storage: removed)
+  if (cfg.mullvadProxy?.password) quietly(api.storage.local.set({ mullvadProxy: kept(cfg.mullvadProxy) }));
   if (!cfg.mullvad) return;
   api.alarms.get(VPN_ALARM).then((a) => a || api.alarms.create(VPN_ALARM, { periodInMinutes: VPN_EVERY_MIN }), () => {});
   checkVpn();
