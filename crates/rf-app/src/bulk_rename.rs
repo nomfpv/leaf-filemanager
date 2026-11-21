@@ -290,10 +290,11 @@ impl BulkRename {
     }
 
     fn watch(&mut self, e: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
-        self._subs.push(cx.subscribe_in(e, window, |this, _, ev: &InputEvent, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                this.recompute(cx);
-            }
+        self._subs.push(cx.subscribe_in(e, window, |this, _, ev: &InputEvent, _, cx| match ev {
+            InputEvent::Change => this.recompute(cx),
+            // Enter in a rule's field is the Rename button (when it is enabled; `apply` checks)
+            InputEvent::PressEnter { .. } => this.apply(cx),
+            _ => {}
         }));
     }
 
