@@ -240,8 +240,8 @@ mod tests {
 
     #[test]
     fn a_column_is_as_wide_as_its_text_or_its_heading() {
-        // a date of 105 px under a heading of 96: the text decides, with the air and the padding
-        assert_eq!(fit(105., 96., AIR), 105. + AIR + PAD);
+        // a date of 105 px under a heading of 80: the text decides, with the air and the padding
+        assert_eq!(fit(105., 80., AIR), 105. + AIR + PAD);
         // a type of 40 px ("Dosya") under a wide heading: the heading and its arrow decide
         assert_eq!(fit(40., 90., AIR), 90. + ARROW + PAD);
         // the right-aligned size has no air of its own
