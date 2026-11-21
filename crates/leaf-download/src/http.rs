@@ -40,6 +40,11 @@ fn total_of(content_range: &str) -> Option<u64> {
     content_range.rsplit('/').next()?.trim().parse().ok()
 }
 
+/// The error for a status worth trying again: 429 and 503 mean "fewer connections", the others are plain network trouble.
+pub fn status_error(s: u16) -> Error {
+    if matches!(s, 429 | 503) { Error::Busy(s) } else { Error::Network(format!("HTTP {s}")) }
+}
+
 /// Statuses worth trying again later.
 pub fn retriable_status(s: u16) -> bool {
     matches!(s, 408 | 425 | 429) || s >= 500
@@ -74,7 +79,7 @@ pub fn probe(agent: &ureq::Agent, url: &str) -> Result<Probe, Error> {
         416 => {
             p.len = header(&resp, "content-range").as_deref().and_then(total_of).or(Some(0));
         }
-        s if retriable_status(s) => return Err(Error::Network(format!("HTTP {s}"))),
+        s if retriable_status(s) => return Err(status_error(s)),
         s => return Err(Error::Http(s)),
     }
     // (the body of a 200 is not read: the connection is dropped)
@@ -106,8 +111,17 @@ pub fn open_range(agent: &ureq::Agent, uri: &str, start: u64, end: u64, whole: b
                 return Err(Error::Changed);
             }
         }
-        200 | 416 => return Err(Error::Changed),
-        s if retriable_status(s) => return Err(Error::Network(format!("HTTP {s}"))),
+        // the whole file for a range: from the same version (same validator, or the same length when it has none) that is a server
+        // that stopped answering ranges; anything else is a file that changed
+        200 | 416 => {
+            let same = match (&p.etag, header(&resp, "etag")) {
+                (Some(a), Some(b)) => *a == b,
+                (None, None) => p.len.is_some() && header(&resp, "content-length").and_then(|v| v.parse::<u64>().ok()) == p.len,
+                _ => false,
+            };
+            return Err(if status == 200 && same { Error::NoRanges } else { Error::Changed });
+        }
+        s if retriable_status(s) => return Err(status_error(s)),
         s => return Err(Error::Http(s)),
     }
     Ok(Box::new(resp.into_body().into_reader()))

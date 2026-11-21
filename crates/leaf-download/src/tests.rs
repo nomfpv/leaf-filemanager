@@ -187,3 +187,56 @@ fn cancel_stops_and_removes_the_partial_file() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_saved_queue_comes_back_and_resumes_byte_identical() {
+    let body = data(6 << 20);
+    let srv = serve(body.clone());
+    let dir = tmp("queue");
+    let ctl = Control::default();
+    // the first run is cut part-way (it stands for the app quitting with the download running)
+    srv.cut_after.store(300 << 10, Ordering::SeqCst);
+    assert!(download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth)).is_err());
+    let file = dir.join("downloads.json");
+    let mut store = store::Store::default();
+    store.active.push(store::Saved { key: 7, url: url(&srv, "/f.bin"), dest: dir.clone(), sha256: None, verify: false, paused: true });
+    for i in 0..60 {
+        store.remember(store::Past { url: format!("http://h/{i}"), dest: dir.clone(), ok: i % 2 == 0, when: i });
+    }
+    store.save(&file);
+    // the next start: the list is read back, the history holds the last 50, and the saved download carries on from its part
+    let back = store::Store::load(&file);
+    assert_eq!(back, store);
+    assert_eq!(back.history.len(), store::HISTORY);
+    assert_eq!(back.history[0].when, 59, "newest first");
+    srv.cut_after.store(usize::MAX, Ordering::SeqCst);
+    let saved = &back.active[0];
+    let h = host(Resolve::KeepBoth);
+    let out = download(&saved.url, &saved.dest, &opts(2), &ctl, &h).unwrap();
+    assert!(matches!(out, Outcome::Saved(ref p) if p == &dir.join("f.bin")));
+    assert!(*h.1.lock().unwrap() > 0, "it started from the part file");
+    assert_eq!(std::fs::read(dir.join("f.bin")).unwrap(), body);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_checksum_mismatch_keeps_the_part_file_and_makes_no_file() {
+    let body = data(300_000);
+    let srv = serve(body.clone());
+    let dir = tmp("sha");
+    let ctl = Control::default();
+    let wrong = Options { sha256: Some("0".repeat(64)), ..opts(0) };
+    let r = download(&url(&srv, "/f.bin"), &dir, &wrong, &ctl, &host(Resolve::KeepBoth));
+    assert!(matches!(r, Err(Error::Checksum { .. })), "{r:?}");
+    assert!(!dir.join("f.bin").exists());
+    assert_eq!(std::fs::read(dir.join("f.bin.leaf-part")).unwrap(), body, "the part file stays");
+    // the right digest (given in capitals) finishes the same download
+    let right = sha256_of(&dir.join("f.bin.leaf-part"), &ctl.cancel).unwrap();
+    let good = Options { sha256: Some(right.to_ascii_uppercase()), ..opts(0) };
+    download(&url(&srv, "/f.bin"), &dir, &good, &ctl, &host(Resolve::KeepBoth)).unwrap();
+    assert_eq!(std::fs::read(dir.join("f.bin")).unwrap(), body);
+    assert_eq!(sidecar_url("http://h/a/f.zip?x=1"), "http://h/a/f.zip.sha256?x=1");
+    assert_eq!(parse_sha256(&format!("{right}  f.bin\n")), Some(right));
+    assert!(has_password("https://u:p@h/x") && !has_password("https://u@h/x?a=b:c@d"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -3,9 +3,11 @@
 //! retries with backoff, a speed limit, a queue, and a final rename only when the file is complete. Blocking threads only: no
 //! async runtime. The caller (leaf's Status Center) supplies the progress sink and the answer to "that name exists".
 
+mod host;
 mod http;
 mod name;
 pub mod queue;
+pub mod store;
 #[cfg(test)]
 mod tests;
 
@@ -18,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+pub use host::set_host_cap;
 pub use name::{file_name, percent_decode, sanitize};
 
 /// A segment is not split into pieces smaller than this.
@@ -40,11 +43,13 @@ pub struct Options {
     pub connect_timeout: Duration,
     /// A connection that sends nothing for this long counts as cut.
     pub read_timeout: Duration,
+    /// The SHA-256 (64 hex digits) the finished file must have; a different one fails the download and keeps the partial file.
+    pub sha256: Option<String>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 6, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30) }
+        Self { segments: 6, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None }
     }
 }
 
@@ -108,12 +113,18 @@ pub enum Error {
     Changed,
     /// The disk cannot hold it (bytes needed).
     NoRoom(u64),
+    /// The server is busy or limits requests (429, 503): tried again with fewer connections.
+    Busy(u16),
+    /// The server stopped answering byte ranges part-way.
+    NoRanges,
+    /// The finished file is not the one the checksum names.
+    Checksum { expected: String, got: String },
     Io(std::io::Error),
 }
 
 impl Error {
     fn retriable(&self) -> bool {
-        matches!(self, Error::Network(_))
+        matches!(self, Error::Network(_) | Error::Busy(_) | Error::NoRanges)
     }
 }
 
@@ -125,6 +136,9 @@ impl std::fmt::Display for Error {
             Error::Http(s) => write!(f, "HTTP {s}"),
             Error::Changed => write!(f, "the file on the server changed"),
             Error::NoRoom(n) => write!(f, "{n} bytes do not fit"),
+            Error::Busy(s) => write!(f, "HTTP {s}"),
+            Error::NoRanges => write!(f, "the server stopped answering byte ranges"),
+            Error::Checksum { expected, got } => write!(f, "SHA-256 is {got}, expected {expected}"),
             Error::Io(e) => write!(f, "{e}"),
         }
     }
@@ -136,6 +150,54 @@ impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
     }
+}
+
+/// An address with a password in it (`https://user:secret@host/`): leaf does not take those (the password would be kept in a file).
+pub fn has_password(url: &str) -> bool {
+    let rest = url.trim().split_once("://").map_or("", |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    authority.rsplit_once('@').is_some_and(|(info, _)| info.contains(':'))
+}
+
+/// The address of the checksum file that sits beside `url`: the same address with `.sha256` after the file name.
+pub fn sidecar_url(url: &str) -> String {
+    let url = url.trim();
+    let cut = url.find(['?', '#']).unwrap_or(url.len());
+    format!("{}.sha256{}", &url[..cut], &url[cut..])
+}
+
+/// The SHA-256 a checksum file names: its first 64-hex-digit word (`sha256sum` format: the digest, then the file name).
+pub fn parse_sha256(text: &str) -> Option<String> {
+    text.split_whitespace().map(|w| w.trim_start_matches('\\')).find(|w| w.len() == 64 && w.bytes().all(|b| b.is_ascii_hexdigit())).map(str::to_ascii_lowercase)
+}
+
+/// Reads the checksum file beside `url` (`url.sha256`); `None` when there is none or it holds no digest.
+pub fn fetch_sidecar(url: &str, opts: &Options) -> Option<String> {
+    let agent = http::agent(opts);
+    let mut resp = agent.get(sidecar_url(url)).call().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.body_mut().with_config().limit(64 << 10).read_to_string().ok()?;
+    parse_sha256(&text)
+}
+
+fn sha256_of(path: &Path, cancel: &AtomicBool) -> Result<String, Error> {
+    use sha2::{Digest, Sha256};
+    let mut f = File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; BUF];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 pub fn is_http_url(url: &str) -> bool {
@@ -289,11 +351,25 @@ fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control
     }
     let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
     let part = part_path(&target);
-    let job = Job { net: Net { agent, probe: &probe, opts, ctl, limiter: Mutex::new(Instant::now()) }, url, part: &part, host, name: &name };
+    let want = match probe.len {
+        Some(len) if probe.ranges && len > 0 => (opts.segments.max(1) as u64).min(len.div_ceil(MIN_SEG)).max(1) as usize,
+        _ => 1,
+    };
+    // (what the other downloads from this server leave under the cap)
+    let lease = host::Lease::take(host::host_of(&probe.uri), want);
+    let net = Net { agent, probe: &probe, opts, ctl, limiter: Mutex::new(Instant::now()), allowed: AtomicUsize::new(lease.count()), lease };
+    let job = Job { net, url, part: &part, host, name: &name };
     let r = match probe.len {
         Some(len) if probe.ranges && len > 0 => job.segmented(len),
         len => job.single(len),
     };
+    let r = r.and_then(|()| match opts.sha256.as_deref().map(str::trim) {
+        Some(want) => {
+            let got = sha256_of(&part, &ctl.cancel)?;
+            if got.eq_ignore_ascii_case(want) { Ok(()) } else { Err(Error::Checksum { expected: want.to_ascii_lowercase(), got }) }
+        }
+        None => Ok(()),
+    });
     match r {
         Ok(()) => {
             let mut dest = target;
@@ -339,6 +415,10 @@ struct Net<'a> {
     opts: &'a Options,
     ctl: &'a Control,
     limiter: Mutex<Instant>,
+    /// Connections that may run now: the server answering 429 or 503 (or refusing ranges) lowers it.
+    allowed: AtomicUsize,
+    /// What this download holds of its host's cap.
+    lease: host::Lease,
 }
 
 struct Job<'a> {
@@ -352,6 +432,17 @@ struct Job<'a> {
 impl Net<'_> {
     fn cancelled(&self) -> bool {
         self.ctl.cancel.load(Ordering::Relaxed)
+    }
+
+    /// The server is overloaded or refuses ranges: fewer connections from here on (half, or one).
+    fn fewer_connections(&self, to_one: bool) {
+        let cur = self.allowed.load(Ordering::Relaxed);
+        let now = if to_one { 1 } else { (cur / 2).max(1) };
+        if now < cur {
+            log::info!("download: the server limits the connections, {cur} -> {now}");
+            self.allowed.store(now, Ordering::Relaxed);
+            self.lease.shrink_to(now);
+        }
     }
 
     /// Holds the connections back while paused.
@@ -412,15 +503,16 @@ impl Job<'_> {
         let stop = AtomicBool::new(false);
         let alive = AtomicUsize::new(0);
         let workers = (self.net.opts.segments.max(1) as u64).min(len.div_ceil(MIN_SEG)).max(1) as usize;
+        let workers = workers.min(self.net.allowed.load(Ordering::Relaxed)).max(1);
         let w = Worker { net: &self.net, file: &file, table: &table, failure: &failure, stop: &stop };
         std::thread::scope(|sc| {
-            for _ in 0..workers {
+            for index in 0..workers {
                 alive.fetch_add(1, Ordering::SeqCst);
                 let (w, alive) = (&w, &alive);
                 std::thread::Builder::new()
                     .name("leaf-download".into())
                     .spawn_scoped(sc, move || {
-                        w.work();
+                        w.work(index);
                         alive.fetch_sub(1, Ordering::SeqCst);
                     })
                     .map(drop)
@@ -555,10 +647,18 @@ impl Worker<'_> {
         self.stop.load(Ordering::Relaxed) || self.net.cancelled()
     }
 
-    fn work(&self) {
+    /// Worker `index` stops when the connections allowed fall to its number or below.
+    fn surplus(&self, index: usize) -> bool {
+        index >= self.net.allowed.load(Ordering::Relaxed)
+    }
+
+    fn work(&self, index: usize) {
         while !self.stopped() {
+            if self.surplus(index) {
+                return;
+            }
             let Some(seg) = self.claim() else { return };
-            let r = self.run_seg(&seg);
+            let r = self.run_seg(&seg, index);
             seg.active.store(false, Ordering::SeqCst);
             if let Err(e) = r {
                 let mut f = self.failure.lock().unwrap_or_else(|e| e.into_inner());
@@ -591,7 +691,7 @@ impl Worker<'_> {
         Some(s)
     }
 
-    fn run_seg(&self, seg: &Seg) -> Result<(), Error> {
+    fn run_seg(&self, seg: &Seg, index: usize) -> Result<(), Error> {
         let net = self.net;
         let mut attempt = 0u32;
         let mut buf = vec![0u8; BUF];
@@ -641,8 +741,17 @@ impl Worker<'_> {
                         attempt = 0;
                     }
                     log::debug!("download: {e}, trying again");
+                    match e {
+                        Error::Busy(_) => net.fewer_connections(false),
+                        Error::NoRanges => net.fewer_connections(true),
+                        _ => {}
+                    }
                     http::sleep_checking(backoff(net.opts, attempt), &|| self.stopped());
                     attempt += 1;
+                    // this connection is no longer allowed: the piece is let go for the ones that are
+                    if self.surplus(index) {
+                        return Ok(());
+                    }
                 }
                 Err(e) => return Err(e),
             }
