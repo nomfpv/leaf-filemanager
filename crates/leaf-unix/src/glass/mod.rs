@@ -70,8 +70,23 @@ pub struct LookParams {
 }
 
 impl LookParams {
+    /// The shipped look (the same numbers as rf-win's; a settings test keeps the app's default equal to it).
+    pub const DEFAULT: LookParams = LookParams { frost: 52.0, tint: 50.0, refraction: 67.0, saturation: 62.0 };
+
     pub fn clamped(self) -> LookParams {
-        self
+        let c = |v: f32, d: f32| if v.is_nan() { d } else { v.clamp(0.0, 100.0) };
+        LookParams {
+            frost: c(self.frost, Self::DEFAULT.frost),
+            tint: c(self.tint, Self::DEFAULT.tint),
+            refraction: c(self.refraction, Self::DEFAULT.refraction),
+            saturation: c(self.saturation, Self::DEFAULT.saturation),
+        }
+    }
+}
+
+impl Default for LookParams {
+    fn default() -> LookParams {
+        LookParams::DEFAULT
     }
 }
 
