@@ -132,6 +132,8 @@ struct Session {
     mlsx: bool,
     /// The folder the server logs the user into (`/~` in an address stands for it).
     home: String,
+    /// SYST says Windows (IIS and the like): names are compared ignoring case.
+    windows: bool,
     last_used: Instant,
 }
 
@@ -181,6 +183,9 @@ impl Lease {
     }
     fn mlsx(&self) -> bool {
         self.sess.as_ref().is_some_and(|s| s.mlsx)
+    }
+    fn windows(&self) -> bool {
+        self.sess.as_ref().is_some_and(|s| s.windows)
     }
     /// Makes the socket fail at once (a transfer stopped half-way: its connection is not used again).
     fn cut(&mut self) {
@@ -509,8 +514,9 @@ impl Inner {
             let _ = s.opts("UTF8", Some("ON"));
         }
         let home = s.pwd().ok().filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into());
-        log::info!("ftp: connected to {} (MLSD {mlsx})", t.host);
-        Ok(Session { s, mlsx, home, last_used: Instant::now() })
+        let windows = s.custom_command("SYST", &[Status::Name]).is_ok_and(|r| String::from_utf8_lossy(&r.body).to_ascii_lowercase().contains("windows"));
+        log::info!("ftp: connected to {} (MLSD {mlsx}, Windows {windows})", t.host);
+        Ok(Session { s, mlsx, home, windows, last_used: Instant::now() })
     }
 
     // -------------------------------------------------------------------------------------------- certificates
@@ -1359,7 +1365,12 @@ impl Fs for FtpFs {
         self.inner.once(p, |l| {
             // never the root, the login folder (by any address of it) or a folder the login folder is in
             let sp = spath(l.home(), p);
-            let (norm, home) = (sp.trim_end_matches('/'), l.home().trim_end_matches('/'));
+            let (mut norm, mut home) = (sp.trim_end_matches('/').to_string(), l.home().trim_end_matches('/').to_string());
+            // (a Windows server takes `/Home` for `/home`)
+            if l.windows() {
+                norm = norm.to_lowercase();
+                home = home.to_lowercase();
+            }
             if norm.is_empty() || norm == home || home.starts_with(&format!("{norm}/")) {
                 return Err(Fail::Fs(FsError::Denied));
             }
