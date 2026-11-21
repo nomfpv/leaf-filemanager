@@ -170,6 +170,22 @@ pub fn tool_of(server: &str, ask: impl FnOnce() -> Result<(String, Option<u32>),
     Ok(t)
 }
 
+/// The server's own path of an address path: `/~` and `/~/x` are in the home folder `home` (as the SFTP side takes them).
+pub fn server_path(p: &str, home: &str) -> String {
+    match p.strip_prefix("/~") {
+        Some("") => home.to_string(),
+        Some(rest) if rest.starts_with('/') => format!("{}{rest}", home.trim_end_matches('/')),
+        _ => p.to_string(),
+    }
+}
+
+/// Whether `to` is `from` or inside it on the server, `/~` taken as the home folder `home` (`/~/a` and `/home/u/a` are one).
+pub fn into_itself(from: &str, to: &str, home: &str) -> bool {
+    let (from, to) = (server_path(from, home), server_path(to, home));
+    let from = from.trim_end_matches('/');
+    to == from || to.strip_prefix(from).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Copies `from` to `to` on one server with `tool`: `run(command, part)` runs the command, which writes `part` only; then
 /// `part` gets the name `to` (replacing a FILE there only with `replace`: the conflict dialog's answer). The caller has asked
 /// about a name that is there; when one is there without `replace` (it appeared meanwhile) nothing runs. On any failure the
@@ -177,13 +193,17 @@ pub fn tool_of(server: &str, ask: impl FnOnce() -> Result<(String, Option<u32>),
 pub fn copy_with(
     fs: &dyn Fs,
     tool: Tool,
+    home: &str,
     from: &VPath,
     to: &VPath,
     replace: bool,
     run: &mut dyn FnMut(&str, &VPath) -> Result<(), FsError>,
 ) -> Result<(), FsError> {
-    if from.scheme() != to.scheme() || from.authority() != to.authority() || from.is_root() || to.is_root() || to.starts_with(from) {
+    if from.scheme() != to.scheme() || from.authority() != to.authority() || from.is_root() || to.is_root() {
         return Err(FsError::Unsupported);
+    }
+    if into_itself(from.path(), to.path(), home) {
+        return Err(FsError::Other("a folder cannot be copied into itself".into()));
     }
     let src = fs.stat(from)?;
     // links: the generic copy leaves them out and says so; leaf does the same here
@@ -203,7 +223,9 @@ pub fn copy_with(
     }
     let parent = to.parent().ok_or(FsError::Denied)?;
     let part = parent.join(&part_name(to.name()));
-    if let Err(e) = run(&copy_command(tool, from.path(), part.path(), is_dir), &part) {
+    // (the paths as the server has them: the same ones the check above compared)
+    let command = copy_command(tool, &server_path(from.path(), home), &server_path(part.path(), home), is_dir);
+    if let Err(e) = run(&command, &part) {
         // (`Exists`: something was under the part name before the command; it is not leaf's to remove. A copy that could
         // not be stopped is left alone too: it is still writing there, and the error names the part)
         if e != FsError::Exists && !matches!(&e, FsError::Other(m) if m.starts_with(UNSTOPPED)) {
@@ -227,6 +249,8 @@ pub fn copy_with(
 mod tests {
     use super::*;
     use leaf_vfs::MemFs;
+
+    const HOME: &str = "/home/u";
 
     #[test]
     fn server_copy_quoting() {
@@ -293,11 +317,11 @@ mod tests {
             Ok(())
         };
         // the name appeared after the question (or no "Replace"): nothing runs, nothing changes
-        assert_eq!(copy_with(&fs, Tool::Cp, &src, &dst, false, &mut run), Err(FsError::Exists));
+        assert_eq!(copy_with(&fs, Tool::Cp, HOME, &src, &dst, false, &mut run), Err(FsError::Exists));
         assert!(commands.borrow().is_empty());
         assert_eq!(read(&dst), "old");
         // "Replace": the command names the part, never the file that is there
-        copy_with(&fs, Tool::Rsync, &src, &dst, true, &mut run).unwrap();
+        copy_with(&fs, Tool::Rsync, HOME, &src, &dst, true, &mut run).unwrap();
         assert_eq!(commands.borrow().len(), 1);
         assert!(!commands.borrow()[0].contains(&crate::checksum::quote(dst.path())));
         assert_eq!(read(&dst), "new");
@@ -307,7 +331,7 @@ mod tests {
             fs.put_file(part, b"half".to_vec(), 1);
             Err(FsError::Other("cp ended with code 1".into()))
         };
-        assert!(copy_with(&fs, Tool::Cp, &src, &dst, true, &mut fail).is_err());
+        assert!(copy_with(&fs, Tool::Cp, HOME, &src, &dst, true, &mut fail).is_err());
         assert_eq!(read(&dst), "old");
         let mut left = Vec::new();
         fs.list(&root, 100, &|| false, &mut |b| left.extend(b)).unwrap();
@@ -315,7 +339,19 @@ mod tests {
         // a folder that is there is merged by the generic copy, never by the server
         fs.put_dir(&root.join("d"), 1);
         fs.put_dir(&root.join("e"), 1);
-        assert_eq!(copy_with(&fs, Tool::Cp, &root.join("d"), &root.join("e"), true, &mut run), Err(FsError::Unsupported));
+        assert_eq!(copy_with(&fs, Tool::Cp, HOME, &root.join("d"), &root.join("e"), true, &mut run), Err(FsError::Unsupported));
         assert_eq!(commands.borrow().len(), 1);
+        // a folder into itself, one side named through the home folder: refused before anything runs
+        assert!(into_itself("/~/a", "/home/u/a/b", HOME) && into_itself("/home/u/a", "/~/a", HOME));
+        assert!(!into_itself("/~/a", "/home/u/ab", HOME) && !into_itself("/home/u/a/b", "/~/a", HOME));
+        assert!(into_itself("/", "/x", HOME));
+        fs.put_dir(&root.join("~"), 1);
+        fs.put_dir(&root.join("~").join("a"), 1);
+        let into = copy_with(&fs, Tool::Rsync, HOME, &root.join("~").join("a"), &VPath::parse("mem://test/home/u/a/b").unwrap(), false, &mut run);
+        assert!(matches!(into, Err(FsError::Other(_))));
+        assert_eq!(commands.borrow().len(), 1);
+        assert_eq!(server_path("/~", HOME), HOME);
+        assert_eq!(server_path("/~/x y", HOME), "/home/u/x y");
+        assert_eq!(server_path("/~x", HOME), "/~x");
     }
 }

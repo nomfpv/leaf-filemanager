@@ -177,10 +177,15 @@ pub fn copy_on_server(
         return Err(FsError::Unsupported);
     }
     let fs = sftp_backend();
+    // (before anything else: `/~/a` into `/home/u/a/b` is a folder into itself, whichever way it would be copied)
+    let home = fs.home(from)?.path().to_string();
+    if server_copy::into_itself(from.path(), to.path(), &home) {
+        return Err(FsError::Other("a folder cannot be copied into itself".into()));
+    }
     let ask = || fs.exec(from, server_copy::PROBE, std::time::Duration::from_secs(8), cancelled).map(|o| (o.stdout, o.code));
     let Some(tool) = server_copy::tool_of(from.authority(), ask)? else { return Err(FsError::Unsupported) };
     let progress = std::cell::RefCell::new(progress);
-    server_copy::copy_with(&*fs, tool, from, to, replace, &mut |command, part| {
+    server_copy::copy_with(&*fs, tool, &home, from, to, replace, &mut |command, part| {
         let poll = (tool == server_copy::Tool::Cp).then(|| server_copy::size_command(part.path()));
         let mut on_text = |t: &str| {
             if tool == server_copy::Tool::Rsync
