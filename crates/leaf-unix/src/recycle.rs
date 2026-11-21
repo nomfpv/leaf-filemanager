@@ -313,12 +313,13 @@ fn candidate(name: &std::ffi::OsStr, i: u32) -> std::ffi::OsString {
 
 /// Moves one item into `t`: info file first (`O_EXCL`), then the no-replace rename. The item's place in `files/`.
 pub(crate) fn put(t: &Trash, path: &Path) -> io::Result<PathBuf> {
-    put_with(t, path, &|from, to| crate::fileops::renameat2(from, to, libc::RENAME_NOREPLACE))
+    put_with(t, path, &|from, to| crate::fileops::renameat2(from, to, libc::RENAME_NOREPLACE)).map(|(dst, _)| dst)
 }
 
 /// [`put`] with another way of moving the item into `files/` (`mover` must never replace, and answers `AlreadyExists` for a taken
-/// name).
-fn put_with(t: &Trash, path: &Path, mover: &dyn Fn(&Path, &Path) -> io::Result<()>) -> io::Result<PathBuf> {
+/// name). When the mover fails but the item arrived in `files/` all the same (copied whole, but some originals could not be
+/// removed), the record is kept, so the item stays visible and restorable: the answer is its place plus what went wrong.
+fn put_with(t: &Trash, path: &Path, mover: &dyn Fn(&Path, &Path) -> io::Result<()>) -> io::Result<(PathBuf, Option<io::Error>)> {
     let orig = absolute(path)?;
     let name = orig.file_name().ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?.to_os_string();
     let shown = match &t.top {
@@ -342,12 +343,15 @@ fn put_with(t: &Trash, path: &Path, mover: &dyn Fn(&Path, &Path) -> io::Result<(
         drop(f);
         let dst = t.files().join(&cand);
         match mover(path, &dst) {
-            Ok(()) => return Ok(dst),
+            Ok(()) => return Ok((dst, None)),
+            // (a taken name in files/ is another item's: our record goes, the next name is tried)
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                let _ = std::fs::remove_file(&info);
+            }
+            Err(e) if std::fs::symlink_metadata(&dst).is_ok() => return Ok((dst, Some(e))),
             Err(e) => {
                 let _ = std::fs::remove_file(&info);
-                if e.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(e);
-                }
+                return Err(e);
             }
         }
     }
@@ -414,7 +418,12 @@ pub fn to_home_trash(paths: &[PathBuf], tracker: Arc<Tracker>) -> anyhow::Result
             crate::fastcopy::move_across(from, to).map_err(io::Error::other)
         };
         match put_with(&t, p, &mover) {
-            Ok(dst) => tracker.results.lock().unwrap().push((p.clone(), dst)),
+            Ok((dst, warn)) => {
+                tracker.results.lock().unwrap().push((p.clone(), dst));
+                if let Some(e) = warn {
+                    failed.push(format!("{}: moved to the trash, but some originals could not be removed: {e}", p.display()));
+                }
+            }
             Err(e) => failed.push(format!("{}: {e}", p.display())),
         }
     }
@@ -683,6 +692,32 @@ mod tests {
         assert!(delete_one(&t, &t.files().join("Documents")).is_err());
         assert_eq!(std::fs::read(victim.join("Documents/thesis.txt")).unwrap(), b"years of work");
         std::fs::remove_file(t.files()).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_home_trash_record_stays_when_some_originals_could_not_be_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("leaf-unix-trash-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let d = root.join("stick/D");
+        std::fs::create_dir_all(d.join("locked")).unwrap();
+        std::fs::write(d.join("a.txt"), b"a").unwrap();
+        std::fs::write(d.join("locked/b.txt"), b"b").unwrap();
+        // a folder whose files cannot be unlinked (we are not root on the Linux PC)
+        std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let dev = std::fs::metadata(&root).unwrap().dev();
+        let t = Trash { dir: root.join("Trash"), top: None };
+        ready(&t, dev).unwrap();
+        let mover = |from: &Path, to: &Path| crate::fastcopy::move_across(from, to).map_err(io::Error::other);
+        let (dst, warn) = put_with(&t, &d, &mover).unwrap();
+        assert!(warn.is_some(), "the job says what went wrong");
+        assert_eq!(std::fs::read(dst.join("locked/b.txt")).unwrap(), b"b");
+        assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"a");
+        assert!(t.info_of(std::ffi::OsStr::new("D")).exists(), "the record is kept");
+        assert_eq!(list_one(&t).len(), 1, "the item is visible in the trash");
+        std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(dst.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
