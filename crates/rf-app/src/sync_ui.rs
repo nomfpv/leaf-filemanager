@@ -1,5 +1,5 @@
 //! Sync jobs in the app (B3): the "Sync jobs" page (`Location::SyncJobs`: the saved jobs with their last run, Run / Preview /
-//! Edit / Delete, Purge for a server side), the job editor (also opened by "Sync with…" with the other pane as the right side),
+//! Edit / Delete, Purge of the kept files in `.leaf-sync-trash`), the job editor (also opened by "Sync with…" with the other pane as the right side),
 //! the plan in a compare-style list where each row can be skipped or turned, and the run as ONE Status Center job (progress,
 //! pause, cancel) with a report at the end. The engine is `leaf_sync` (plan first, nothing deleted for good); jobs are kept in
 //! `sync.toml` in the config folder, the state of the last run in leaf's data folder.
@@ -231,7 +231,9 @@ fn start_run(plan: Plan, cx: &mut App) {
                     (tracker.on_progress)(p.rows_total.max(1) as u32, p.rows_done as u32, cur);
                 };
                 let trash = |paths: &[PathBuf]| crate::checkpoint_ui::to_trash(paths);
-                let mut ctl = leaf_sync::Control { cancelled: &cancelled, paused: &paused, progress: &mut progress, trash_local: &trash };
+                let bin_takes = |p: &Path| bin_takes(p);
+                let mut ctl =
+                    leaf_sync::Control { cancelled: &cancelled, paused: &paused, progress: &mut progress, trash_local: &trash, bin_takes: &bin_takes };
                 leaf_sync::run(&p2, &*lf, &*rf, &state_dir(), &mut ctl)
             })();
             let res = match &r {
@@ -249,6 +251,16 @@ fn start_run(plan: Plan, cx: &mut App) {
         })),
     );
     id_cell.set(id);
+}
+
+/// Will the Trash take `p` by a move? Not on a network drive or a stick without a Recycle Bin, not when the drive's bin is off or
+/// too small for it (Windows), not on a mount without a usable trash (Linux): the shell would delete for good there, or ask
+/// whether to in the middle of the run. The run then keeps the file in `.leaf-sync-trash` in the job's folder.
+fn bin_takes(p: &Path) -> bool {
+    use leaf_sys::organize::Recycler as _;
+    let tracker = Arc::new(leaf_sys::fileops::Tracker::new(Box::new(|_, _, _| {}), Arc::new(AtomicBool::new(false))));
+    let bin = leaf_sys::organize::ShellRecycler { tracker };
+    bin.can_recycle(p) && bin.bin_takes(p)
 }
 
 fn finish(job_id: &str, name: &str, got: Option<Result<Report, leaf_sync::Error>>, id: u64, cx: &mut App) {
@@ -312,7 +324,7 @@ fn report_text(rep: &Report) -> String {
     }
     s.push_str(&format!("\n{}: {}", t!("Removed"), rep.removed));
     if rep.removed > 0 {
-        s.push_str(&format!(" ({} .leaf-sync-trash/{})", t!("to the Trash; on a server into"), rep.trash_stamp));
+        s.push_str(&format!(" ({} .leaf-sync-trash/{})", t!("to the Trash; on a server, or where the Trash would not take them, into"), rep.trash_stamp));
     }
     if rep.folders > 0 {
         s.push_str(&format!("\n{}: {}", t!("Folders made"), rep.folders));
@@ -601,7 +613,7 @@ impl SyncView {
                 let (l, r) = job.sides()?;
                 let mut n = 0;
                 for v in [l, r] {
-                    if v.scheme() != "file" && leaf_sync::purge(&*side_fs(&v)?, &v)? {
+                    if leaf_sync::purge(&*side_fs(&v)?, &v)? {
                         n += 1;
                     }
                 }
@@ -612,7 +624,7 @@ impl SyncView {
                     let got = work.await;
                     let _ = cx.update(|window, cx| match got {
                         Ok(0) => crate::prompt::notice(t!("Purge"), t!("There was nothing to purge.").to_string(), window, cx),
-                        Ok(_) => crate::prompt::notice(t!("Purge"), t!("The kept files of earlier runs on the server are deleted.").to_string(), window, cx),
+                        Ok(_) => crate::prompt::notice(t!("Purge"), t!("The kept files of earlier runs in .leaf-sync-trash are deleted.").to_string(), window, cx),
                         Err(e) => crate::prompt::notice(t!("Purge failed"), error_text(&e), window, cx),
                     });
                 })
@@ -621,7 +633,7 @@ impl SyncView {
         });
         crate::prompt::show(
             t!("Purge kept files?"),
-            Some(t!("Deletes .leaf-sync-trash on the server side for good: the files earlier runs removed or replaced there. Files on this computer went to the Trash and stay there.").to_string()),
+            Some(t!("Deletes .leaf-sync-trash in both folders for good: the files earlier runs removed or replaced on a server, or on a drive whose Trash would not take them. Files that went to the Trash stay there.").to_string()),
             None,
             vec![go, Button::cancel()],
             window,
@@ -700,7 +712,6 @@ impl SyncView {
             } else {
                 t!("Never run").to_string()
             };
-            let server = [&job.left, &job.right].iter().any(|a| VPath::parse(a).is_ok_and(|v| v.scheme() != "file"));
             let (j1, j2, j3, j4, j5) = (job.clone(), job.clone(), job.clone(), job.clone(), job.clone());
             rows = rows.child(
                 h_flex()
@@ -736,7 +747,7 @@ impl SyncView {
                     .child(small_button(("sync-run", i), t!("Run"), p).on_click(cx.listener(move |v, _, window, cx| v.run_job(j1.clone(), window, cx))))
                     .child(small_button(("sync-preview", i), t!("Preview"), p).on_click(cx.listener(move |v, _, _, cx| v.preview(j2.clone(), cx))))
                     .child(small_button(("sync-edit", i), t!("Edit"), p).on_click(cx.listener(move |_, _, window, cx| edit(Some(j3.clone()), String::new(), String::new(), None, window, cx))))
-                    .when(server, |d| d.child(small_button(("sync-purge", i), t!("Purge"), p).on_click(cx.listener(move |v, _, window, cx| v.purge_job(j5.clone(), window, cx)))))
+                    .child(small_button(("sync-purge", i), t!("Purge"), p).on_click(cx.listener(move |v, _, window, cx| v.purge_job(j5.clone(), window, cx))))
                     .child(small_button(("sync-delete", i), t!("Delete"), p).on_click(cx.listener(move |v, _, window, cx| v.delete_job(j4.clone(), window, cx)))),
             );
         }

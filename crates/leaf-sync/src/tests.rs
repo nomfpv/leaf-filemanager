@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use leaf_vfs::{Fs, LocalFs, MemFs, VPath};
 
-use crate::{Action, Control, Job, Mode, Report, TRASH_DIR, plan, restore_from_trash, run};
+use crate::{Action, Control, Job, Mode, Report, TRASH_DIR, plan, purge, restore_from_trash, run};
 
 fn temp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("leaf-sync-{name}-{}-{}", std::process::id(), crate::now_ms()));
@@ -25,7 +25,8 @@ fn read(fs: &dyn Fs, p: &str) -> Option<Vec<u8>> {
 fn go(p: &crate::Plan, l: &dyn Fs, r: &dyn Fs, state: &std::path::Path, trash: &dyn Fn(&[PathBuf]) -> Result<(), String>) -> Report {
     let no = || false;
     let mut progress = |_: &crate::Progress| {};
-    let mut ctl = Control { cancelled: &no, paused: &no, progress: &mut progress, trash_local: trash };
+    let takes = |_: &std::path::Path| true;
+    let mut ctl = Control { cancelled: &no, paused: &no, progress: &mut progress, trash_local: trash, bin_takes: &takes };
     run(p, l, r, state, &mut ctl).unwrap()
 }
 
@@ -259,4 +260,42 @@ fn a_read_that_stops_early_never_replaces_the_target() {
     let mut names = Vec::new();
     fs.list(&v("mem://t/r"), 100, &no, &mut |b| names.extend(b.into_iter().map(|e| e.name.to_string()))).unwrap();
     assert_eq!(names, vec!["doc.txt".to_string()]);
+}
+
+#[test]
+fn a_local_side_whose_trash_refuses_keeps_the_files_in_the_sync_trash() {
+    // a network drive or a stick without a Recycle Bin: the shell would delete for good there, so the Trash is never asked
+    let no = || false;
+    let state = temp("refuse-state");
+    let (l, r) = (temp("refuse-l"), temp("refuse-r"));
+    std::fs::write(l.join("a.txt"), b"new").unwrap();
+    std::fs::write(r.join("a.txt"), b"old version").unwrap();
+    std::fs::write(r.join("gone.txt"), b"was here").unwrap();
+    std::fs::create_dir_all(r.join("sub")).unwrap();
+    std::fs::write(r.join("sub/deep.txt"), b"deep").unwrap();
+    let job = Job::new("t", &LocalFs::address(&l).to_string(), &LocalFs::address(&r).to_string());
+    let p = plan(&job, &LocalFs, &LocalFs, &state, &no).unwrap();
+    assert_eq!(p.counts().delete_right, 2, "{:?}", p.rows);
+    let called = std::cell::Cell::new(false);
+    let trash = |_: &[PathBuf]| -> Result<(), String> {
+        called.set(true);
+        Err("the shell would delete this for good".into())
+    };
+    let refuses = |_: &std::path::Path| false;
+    let mut progress = |_: &crate::Progress| {};
+    let mut ctl = Control { cancelled: &no, paused: &no, progress: &mut progress, trash_local: &trash, bin_takes: &refuses };
+    let rep = run(&p, &LocalFs, &LocalFs, &state, &mut ctl).unwrap();
+    assert!(rep.failed.is_empty(), "{rep:?}");
+    assert!(!called.get(), "the Trash is not asked when it will not take the file");
+    assert_eq!(std::fs::read(r.join("a.txt")).unwrap(), b"new");
+    assert!(!r.join("gone.txt").exists() && !r.join("sub").exists());
+    let kept = r.join(TRASH_DIR).join(&rep.trash_stamp);
+    assert_eq!(std::fs::read(kept.join("gone.txt")).unwrap(), b"was here");
+    assert_eq!(std::fs::read(kept.join("a.txt")).unwrap(), b"old version");
+    assert_eq!(std::fs::read(kept.join("sub/deep.txt")).unwrap(), b"deep");
+    // the kept files are never part of a plan, and Purge empties them on a local side too
+    assert!(plan(&job, &LocalFs, &LocalFs, &state, &no).unwrap().is_empty());
+    assert!(purge(&LocalFs, &LocalFs::address(&r)).unwrap());
+    assert!(!r.join(TRASH_DIR).exists());
+    assert_eq!(std::fs::read(r.join("a.txt")).unwrap(), b"new");
 }

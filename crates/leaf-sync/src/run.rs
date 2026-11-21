@@ -10,7 +10,8 @@ use crate::plan::{Action, Info, Plan, Row, hash};
 use crate::state::Seen;
 use crate::{Error, TIME_SLACK_MS};
 
-/// The folder inside a server side's root that removed and overwritten files are moved into, one folder per run.
+/// The folder inside a side's root that removed and overwritten files are moved into, one folder per run: always on a server, and
+/// on a local side whose Trash will not take the file (a network drive, a stick without a Recycle Bin, a file bigger than the bin).
 pub const TRASH_DIR: &str = ".leaf-sync-trash";
 
 /// How the caller follows and steers a run.
@@ -21,6 +22,9 @@ pub struct Control<'a> {
     pub progress: &'a mut dyn FnMut(&Progress),
     /// Moves local files to the Trash (or the Recycle Bin); blocks. Never a permanent delete.
     pub trash_local: &'a dyn Fn(&[PathBuf]) -> Result<(), String>,
+    /// Will the Trash take this local file or folder by a move (not delete it for good, not ask whether to)? When it will not,
+    /// the run moves it into [`TRASH_DIR`] in that side's root instead, as on a server.
+    pub bin_takes: &'a dyn Fn(&Path) -> bool,
 }
 
 #[derive(Debug, Clone)]
@@ -195,24 +199,26 @@ impl Runner<'_, '_> {
         if to_right { (&self.left, &self.right) } else { (&self.right, &self.left) }
     }
 
-    /// Moves `p` (at `rel` on `side`) out of the way: to the Trash locally, into this run's `.leaf-sync-trash` folder on a server.
-    fn trash(&self, left: bool, p: &VPath, rel: &str) -> Result<(), String> {
+    /// Moves `p` (at `rel` on `side`) out of the way: to the Trash locally when the Trash takes it, else into this run's
+    /// `.leaf-sync-trash` folder in the side's root. Returns where it went, in words for a message.
+    fn trash(&self, left: bool, p: &VPath, rel: &str) -> Result<String, String> {
         let side = if left { &self.left } else { &self.right };
-        if side.local {
+        if side.local && (self.ctl.bin_takes)(&LocalFs::native(p)) {
             (self.ctl.trash_local)(&[LocalFs::native(p)])?;
             return match side.fs.stat(p) {
-                Err(FsError::NotFound) => Ok(()),
+                Err(FsError::NotFound) => Ok("the Trash".into()),
                 _ => Err("it is still there after the move to the Trash".into()),
             };
         }
         let in_trash = format!("{TRASH_DIR}/{}/{rel}", self.stamp);
         let parent = parent_of(side, &in_trash, true)?;
         let name = rel.rsplit('/').next().unwrap_or(rel);
+        let dir = in_trash.rsplit_once('/').map_or("", |(d, _)| d);
         for n in 1..1000 {
             let cand = if n == 1 { name.to_string() } else { format!("{name} ({n})") };
             let to = names::vchild(&parent, &cand).map_err(|w| format!("the name cannot be used ({w})"))?;
             match side.fs.rename(p, &to, false) {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(format!("{dir}/{cand}")),
                 Err(FsError::Exists) => continue,
                 Err(e) => return Err(err_text(&format!("it could not be moved into {TRASH_DIR}"), &e)),
             }
@@ -344,7 +350,7 @@ impl Runner<'_, '_> {
                 Err(e) => Err(err_text("the folder could not be removed", &e)),
             };
         }
-        self.trash(on_left, &p, rel)
+        self.trash(on_left, &p, rel).map(|_| ())
     }
 
     fn one(&mut self, row: &Row) {
@@ -504,7 +510,7 @@ fn save_state(plan: &Plan, seen: &[(String, Action, Option<Seen>)], report: &Rep
     }
 }
 
-/// Empties `.leaf-sync-trash` of a server side for good (the user's "Purge"). Ok(false): there was none.
+/// Empties `.leaf-sync-trash` of a side (a server, or a local folder whose Trash would not take a file) for good (the user's "Purge"). Ok(false): there was none.
 pub fn purge(fs: &dyn Fs, root: &VPath) -> Result<bool, Error> {
     let p = names::vchild(root, TRASH_DIR).map_err(|w| Error::new("The folder cannot be used", w))?;
     match fs.stat(&p) {

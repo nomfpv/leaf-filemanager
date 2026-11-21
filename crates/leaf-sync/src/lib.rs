@@ -11,8 +11,8 @@
 //!
 //! Safety, in the engine (not in the app):
 //! - nothing is ever deleted for good: on a local side a removed or overwritten file goes to the Trash (through the caller's
-//!   `trash`), on a server it is moved by rename into `.leaf-sync-trash/<run time>/` inside the job's root ([`TRASH_DIR`]), which
-//!   [`purge`] empties when the user asks;
+//!   `trash`), on a server, and on a local side whose Trash will not take it (the caller's `bin_takes`), it is moved by rename
+//!   into `.leaf-sync-trash/<run time>/` inside the job's root ([`TRASH_DIR`]), which [`purge`] empties when the user asks;
 //! - links (symbolic links, junctions) are never followed and nothing is written through one: they are listed as skipped, and so is
 //!   everything that would go through them;
 //! - a run is refused when a root is missing, or empty while the last run saw files there ("the drive may not be connected"),
