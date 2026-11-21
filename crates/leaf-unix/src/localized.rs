@@ -97,6 +97,13 @@ pub fn folder_label(dir: &Path, _attrs: Option<u32>) -> Option<Arc<str>> {
     label
 }
 
+/// Drops the cached label of `dir` (its `.directory` file changed).
+pub fn forget(dir: &Path) {
+    if let Ok(mut c) = by_path().lock() {
+        c.remove(dir);
+    }
+}
+
 /// The label of `dir` if it was already asked for, from the cache alone (never touches the disk).
 pub fn label_if_known(dir: &Path) -> Option<Arc<str>> {
     by_path().lock().ok()?.get(dir)?.clone()
