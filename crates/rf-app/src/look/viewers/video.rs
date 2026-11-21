@@ -229,8 +229,7 @@ mod heavy_tests {
 
 /// MPEG-TS: 188 baytlık (ya da 4 bayt zaman damgalı 192 baytlık) paketlerin başında 0x47.
 pub(crate) fn is_transport_stream(head: &[u8]) -> bool {
-    let synced = |start: usize, step: usize| (0..3).all(|k| head.get(start + k * step) == Some(&0x47));
-    synced(0, 188) || synced(4, 192)
+    rf_core::tssource::is_transport_stream(head)
 }
 
 enum Kind {

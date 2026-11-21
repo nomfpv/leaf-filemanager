@@ -41,6 +41,8 @@ pub struct Entry {
     /// File Explorer, this misleads the user into thinking the folders/files are not in place"). The list marks it with Explorer's
     /// arrow. Other reparse points (cloud placeholders, deduplicated files) are not links. Set by the folder listing.
     pub link: bool,
+    /// A `.ts`/`.mts`/`.cts` file that is TypeScript source, not a video (set by the folder view after the listing, see `tssource`).
+    pub ts_source: bool,
 }
 
 impl Entry {
@@ -49,7 +51,7 @@ impl Entry {
             Some(i) if kind == EntryKind::File && i > 0 && i + 1 < name.len() => shared_ext(&name[i + 1..]),
             _ => shared_ext(""),
         };
-        Self { name: name.into(), ext, kind, size, modified_ms, created_ms, attrs, label: None, link: false }
+        Self { name: name.into(), ext, kind, size, modified_ms, created_ms, attrs, label: None, link: false, ts_source: false }
     }
 
     /// The name to show (and sort and type-select by): the localized one when there is one.

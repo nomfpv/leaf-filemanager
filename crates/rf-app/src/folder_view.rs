@@ -1878,7 +1878,8 @@ impl FolderView {
                                 None => format!("{e:#}"),
                             }),
                     },
-                    None => leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |b| {
+                    None => leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |mut b| {
+                        rf_core::tssource::mark_ts_sources(&path, &mut b);
                         all.extend(b.iter().cloned());
                         let _ = tx2.unbounded_send(Msg::Batch(b));
                     })

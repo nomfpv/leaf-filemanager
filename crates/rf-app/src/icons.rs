@@ -25,6 +25,9 @@ pub fn category(e: &Entry) -> Category {
     if e.is_dir() {
         return Category::Folder;
     }
+    if e.ts_source {
+        return Category::Code;
+    }
     category_for_ext(&e.ext)
 }
 
@@ -80,6 +83,9 @@ pub fn icon_for(cat: Category) -> L {
 }
 
 pub fn type_label(e: &Entry) -> String {
+    if e.ts_source {
+        return t!("TypeScript source").into();
+    }
     type_label_of(e.is_dir(), &e.ext)
 }
 
