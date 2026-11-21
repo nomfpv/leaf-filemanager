@@ -44,7 +44,7 @@ pub enum Page {
     About,
 }
 
-const PAGES: [(Page, L, &str); 18] = [
+const PAGES: [(Page, L, &str); 19] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
