@@ -132,6 +132,8 @@ pub struct PlanItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     pub items: Vec<PlanItem>,
+    /// Paths git gave whose name is not valid Unicode (shown with replacement characters): never written or removed.
+    pub unreadable: Vec<String>,
     /// git: the tree of the state now and the checkpoint's commit, for the diff of one file.
     now_tree: Option<String>,
     cp_tree: Option<String>,
@@ -686,7 +688,7 @@ pub fn plan(store: &Store, cp: &Checkpoint) -> Result<Plan, Error> {
                 items.push(PlanItem { rel: rel.clone(), change: Change::Added, src: Src::None });
             }
             items.sort_by(|a, b| a.rel.cmp(&b.rel));
-            Ok(Plan { items, now_tree: None, cp_tree: None, cp_files: Some(cp_files) })
+            Ok(Plan { items, unreadable: Vec::new(), now_tree: None, cp_tree: None, cp_files: Some(cp_files) })
         }
     }
 }
@@ -694,19 +696,25 @@ pub fn plan(store: &Store, cp: &Checkpoint) -> Result<Plan, Error> {
 fn plan_git(root: &Path, git_dir: &Path, empty_tree: &str, cp: &Checkpoint, now: String) -> Result<Plan, Error> {
     let cp_tree = format!("{}^{{tree}}", cp.handle);
     let raw = run(with_args(store_git(root, git_dir, empty_tree, false), &["diff-tree", "-r", "-z", "--no-renames", "--raw", &now, &cp_tree]), &[0], LONG)?;
-    let mut items = parse_raw_diff(&raw);
+    let (mut items, unreadable) = parse_raw_diff(&raw);
     items.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(Plan { items, now_tree: Some(now), cp_tree: Some(cp_tree), cp_files: None })
+    Ok(Plan { items, unreadable, now_tree: Some(now), cp_tree: Some(cp_tree), cp_files: None })
 }
 
-/// Parses `diff-tree -r -z --raw <now> <checkpoint>`: `:mode mode oid oid S\0path\0`. Submodules are left out.
-fn parse_raw_diff(raw: &[u8]) -> Vec<PlanItem> {
-    let t = String::from_utf8_lossy(raw);
-    let mut parts = t.split('\0');
+/// Parses `diff-tree -r -z --raw <now> <checkpoint>`: `:mode mode oid oid S\0path\0`. Submodules are left out; a path that is not
+/// valid UTF-8 goes to the second list (by a lossy name, for the message), never to the items.
+fn parse_raw_diff(raw: &[u8]) -> (Vec<PlanItem>, Vec<String>) {
+    let mut parts = raw.split(|&b| b == 0);
     let mut out = Vec::new();
+    let mut bad = Vec::new();
     while let Some(head) = parts.next() {
+        let head = String::from_utf8_lossy(head);
         let Some(head) = head.strip_prefix(':') else { continue };
         let Some(path) = parts.next() else { break };
+        let Ok(path) = std::str::from_utf8(path) else {
+            bad.push(String::from_utf8_lossy(path).into_owned());
+            continue;
+        };
         let f: Vec<&str> = head.split_whitespace().collect();
         if f.len() < 5 {
             continue;
@@ -724,7 +732,7 @@ fn parse_raw_diff(raw: &[u8]) -> Vec<PlanItem> {
         let src = if change == Change::Added { Src::None } else { Src::Blob { oid: f[3].to_string(), mode: cp_mode } };
         out.push(PlanItem { rel: path.to_string(), change, src });
     }
-    out
+    (out, bad)
 }
 
 fn all_removed(bytes: &[u8]) -> FileDiff {
@@ -891,6 +899,7 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
         Store::Copy { .. } => None,
     };
     let mut done = Restored { auto, written: Vec::new(), back: Vec::new(), trashed: Vec::new(), failed: Vec::new() };
+    done.failed.extend(plan.unreadable.iter().map(|n| (n.clone(), "the name is not valid Unicode: left as it is".to_string())));
     for it in plan.items.iter().filter(|i| i.change != Change::Added) {
         let path = folder.join(&it.rel);
         if let Err(e) = no_link_on_the_way(&folder, &it.rel) {
