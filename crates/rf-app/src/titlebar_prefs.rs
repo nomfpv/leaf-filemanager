@@ -149,7 +149,7 @@ fn visibility_button(p: &Palette, popups_open: bool, cx: &App) -> AnyElement {
         .text_color(if high { p.text } else { p.text_secondary })
         .hover(|s| s.bg(p.hover).text_color(p.text))
         .when(!popups_open, move |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)))
-        .child(Icon::new(L::Contrast).size(px(16.)))
+        .child(contrast_glyph(if high { p.text } else { p.text_secondary }))
         .child(label)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| crate::settings::update(cx, move |s| s.visibility = if high { Visibility::Standard } else { Visibility::High }))
@@ -187,5 +187,26 @@ fn status_dot(p: &Palette, ops: &Entity<crate::status_center::Ops>, popups_open:
             let owner = window.window_handle();
             ops.update(cx, |o, cx| o.toggle(owner, cx))
         })
+        .into_any_element()
+}
+
+/// The mockup's contrast mark: a 12 px ring with its right half filled (Lucide's has a different inner shape). The half is a filled
+/// circle cut by a clip the width of half the ring.
+fn contrast_glyph(color: Hsla) -> AnyElement {
+    div()
+        .size(px(16.))
+        .flex_shrink_0()
+        .relative()
+        .child(div().absolute().left(px(1.35)).top(px(1.35)).size(px(13.3)).rounded_full().border(px(1.3)).border_color(color))
+        .child(
+            div()
+                .absolute()
+                .left(px(8.))
+                .top(px(2.))
+                .w(px(6.))
+                .h(px(12.))
+                .overflow_hidden()
+                .child(div().absolute().left(px(-6.)).top_0().size(px(12.)).rounded_full().bg(color)),
+        )
         .into_any_element()
 }
