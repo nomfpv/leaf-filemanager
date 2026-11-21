@@ -179,7 +179,22 @@ pub fn open_main_window_made(
         Some(bounds) => (bounds, None),
         None => {
             let restored = if workspace::any_main_window(cx) || leaf_sys::window::offscreen() { None } else { restored_bounds(cx) };
-            restored.unwrap_or_else(|| (WindowBounds::centered(size(px(1280.), px(800.)), cx), None))
+            restored.unwrap_or_else(|| {
+                // the window manager may add a title bar and borders of its own (KWin on Wayland does): leave room for them, or
+                // the bottom of a small screen is cut off
+                let mut want = size(px(1280.), px(800.));
+                if !cfg!(windows) {
+                    // (Wayland does not list the outputs this early: then a height that fits the smallest usual screen, 800 px)
+                    match cx.primary_display().or_else(|| cx.displays().into_iter().next()) {
+                        Some(d) => {
+                            let room = d.visible_bounds().size;
+                            want = size(want.width.min(room.width - px(16.)), want.height.min(room.height - px(64.)));
+                        }
+                        None => want.height = px(720.),
+                    }
+                }
+                (WindowBounds::centered(want, cx), None)
+            })
         }
     };
     let options = WindowOptions {
@@ -188,6 +203,8 @@ pub fn open_main_window_made(
         window_min_size: Some(size(px(720.), px(420.))),
         focus: !leaf_sys::window::offscreen(),
         window_background: crate::theme::window_material(WindowBackgroundAppearance::MicaBackdrop),
+        // Wayland app id / X11 WM_CLASS: the desktop file leaf.desktop gives the window its icon and name
+        app_id: (!cfg!(windows)).then(|| "leaf".to_string()),
         ..TitleBar::window_options()
     };
     let opened = gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| Workspace::new(start, ipc, window, cx)));
