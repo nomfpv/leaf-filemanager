@@ -4542,6 +4542,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-vfs"
+version = "0.9.4"
+dependencies = [
+ "leaf-sys",
+ "log",
+ "rf-core",
+]
+
+[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
