@@ -5,6 +5,7 @@ mod aliases;
 mod background;
 pub mod bench;
 mod fast_start;
+mod features_page;
 mod bench_view;
 mod nearby;
 mod archive_view;
@@ -604,6 +605,7 @@ pub fn main() {
         cx.set_global(status_center::OpsGlobal(ops));
         actions::bind(cx);
         actions::bind_user(cx);
+        features_page::init(cx);
         keymap_editor::init(cx);
         if let Some(page) = &settings_arg {
             settings_view::open_page(
@@ -613,6 +615,7 @@ pub fn main() {
                     "appearance" => settings_view::Page::Appearance,
                     "filetypes" => settings_view::Page::FileTypes,
                     "hypersearch" => settings_view::Page::Search,
+                    "features" => settings_view::Page::Features,
                     "advanced" => settings_view::Page::Advanced,
                     _ => settings_view::Page::Look,
                 },

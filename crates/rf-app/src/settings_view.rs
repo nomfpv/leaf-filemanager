@@ -36,10 +36,11 @@ pub enum Page {
     Advanced,
     Speed,
     Organizer,
+    Features,
     About,
 }
 
-const PAGES: [(Page, L, &str); 14] = [
+const PAGES: [(Page, L, &str); 15] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -53,6 +54,7 @@ const PAGES: [(Page, L, &str); 14] = [
     (Page::Advanced, L::Wrench, "Advanced"),
     (Page::Speed, L::Gauge, "Speed test"),
     (Page::Organizer, L::WandSparkles, "File organizer"),
+    (Page::Features, L::Sparkles, "What leaf can do"),
     (Page::About, L::Info, "About"),
 ];
 
@@ -219,6 +221,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         }
         Page::Speed => crate::bench_view::page(p, cx),
         Page::Organizer => crate::organizer::page::page(p, cx),
+        Page::Features => crate::features_page::page(p, cx),
         Page::About => about(p, cx),
     }
 }
@@ -443,6 +446,7 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
     let page = ui(cx).page;
     PAGE_SCROLL.with(|h| *h.borrow_mut() = Some(scroll.clone()));
     let s = cx.global::<Settings>().clone();
+    crate::features_page::ensure_search(window, cx);
     let search = match ui(cx).search.clone() {
         Some(e) => e,
         None => {
