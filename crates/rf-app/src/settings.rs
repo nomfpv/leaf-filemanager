@@ -792,8 +792,8 @@ pub struct Settings {
     pub vpn_socks: bool,
     /// The port asked for (a free one is taken when it is in use; the page shows which).
     pub vpn_socks_port: u16,
-    /// The proxy asks for a user name and password (the password is in the system keyring, never here). On by default on a Linux
-    /// PC with several user accounts.
+    /// The proxy asks for a user name and password (the password is in the system keyring, never here). On by default on a PC with
+    /// more than one user (Linux accounts, Windows profiles): every signed-in session reaches 127.0.0.1.
     pub vpn_socks_password: bool,
     /// Downloads the browser starts are taken over by leaf (through the leaf extension and `leaf-nmhost`).
     pub capture_browser: bool,

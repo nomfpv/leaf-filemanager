@@ -206,7 +206,7 @@ pub fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::Lock,
             t!("Ask for a password"),
-            Some(t!("Other users and programs on this PC then cannot use the proxy. Chromium browsers (Chrome, Edge, Brave) cannot give a SOCKS password: turn this off to browse through Mullvad there.")),
+            Some(t!("Other users and programs on this PC then cannot use the proxy: every user signed in on this PC (also by switching users or remote desktop) reaches 127.0.0.1. On by default when the PC has more than one user. Chromium browsers (Chrome, Edge, Brave) cannot give a SOCKS password: with it on, Browse through Mullvad works in Firefox only.")),
             sw("vpn-socks-password", p, s.vpn_socks_password, |s, v| s.vpn_socks_password = v),
         ));
         if s.vpn_socks_password

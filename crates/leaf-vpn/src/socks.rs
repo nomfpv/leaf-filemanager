@@ -69,9 +69,30 @@ impl Credentials {
     }
 }
 
-/// Whether the proxy asks for a password unless the user says otherwise: on a PC where several people sign in (Linux with more
-/// than one user account), so the others cannot use this user's VPN; elsewhere not.
+/// Whether the proxy asks for a password unless the user says otherwise: on a PC where several people sign in (127.0.0.1 is shared
+/// by every signed-in session: fast user switching, remote desktop), so the others cannot use this user's VPN; elsewhere not.
+/// Linux: more than one user account with a login shell. Windows: more than one user profile (a profile folder with its
+/// `NTUSER.DAT`; every user who has signed in has one, so this also covers several users signed in now).
 pub fn password_by_default() -> bool {
+    #[cfg(windows)]
+    {
+        // (the folder that holds the profiles: the parent of this user's)
+        let Some(root) = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).and_then(|p| p.parent().map(|p| p.to_path_buf())) else {
+            return false;
+        };
+        let people = std::fs::read_dir(&root)
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+                        let system = matches!(name.as_str(), "default" | "default user" | "public" | "all users") || name.starts_with("defaultuser");
+                        !system && e.path().join("NTUSER.DAT").is_file()
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        people > 1
+    }
     #[cfg(target_os = "linux")]
     {
         let text = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
@@ -86,7 +107,7 @@ pub fn password_by_default() -> bool {
             .count();
         people > 1
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         false
     }
