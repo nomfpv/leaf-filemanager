@@ -626,7 +626,7 @@ fn login_suite_and_download() {
     c.opts.chunk = 16 * 1024;
     assert_eq!(c.run(&server.addr("/big.bin"), &to), Err(FsError::Cancelled));
     assert!(!dest.0.join("big.bin").exists());
-    assert!(!dest.0.join(part_name("big.bin")).exists(), "the partial file is removed");
+    assert!(!names_in(&dest.0).iter().any(|n| n.ends_with(".leaf-part")), "the partial file is removed");
     let mut progress = |_: &leaf_vfs::copy::Progress| {};
     let r = Copy::new(&fs, &LocalFs, &|| false, &mut progress, &mut conflict).run(&server.addr("/big.bin"), &to).unwrap();
     assert_eq!((r.files, r.bytes), (1, 400_000));
@@ -933,4 +933,28 @@ fn unsent_edit_copy_is_set_aside() {
     assert_eq!(std::fs::read(&p).unwrap(), b"my unsent edit");
     let n = p.file_name().unwrap().to_string_lossy().into_owned();
     assert!(n.starts_with("notes (unsent ") && n.ends_with(").txt"), "{n}");
+}
+
+/// Two uploads of the same file at once never share a part file: each gets its own name, created exclusively; a part name
+/// that is there already (another job's, or something planted) is refused, never truncated.
+#[test]
+fn two_writers_never_share_a_part_file() {
+    use std::io::Write;
+    let tmp = Temp::new("parts");
+    let served = Temp::new("parts-served");
+    let password = format!("pw-{}-parts", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    let (a, b) = (server.addr("/").join(&part_name("x.bin")), server.addr("/").join(&part_name("x.bin")));
+    assert_ne!(a, b);
+    let mut wa = fs.open_write(&a, leaf_vfs::WriteOpts::REPLACE).unwrap();
+    let mut wb = fs.open_write(&b, leaf_vfs::WriteOpts::REPLACE).unwrap();
+    wa.write_all(&vec![1u8; 100_000]).unwrap();
+    wb.write_all(&vec![2u8; 70_000]).unwrap();
+    wa.finish().unwrap();
+    wb.finish().unwrap();
+    assert_eq!(std::fs::read(served.0.join(a.name())).unwrap(), vec![1u8; 100_000]);
+    assert_eq!(std::fs::read(served.0.join(b.name())).unwrap(), vec![2u8; 70_000]);
+    assert!(matches!(fs.open_write(&a, leaf_vfs::WriteOpts::REPLACE), Err(FsError::Exists)), "an existing part file is not reused");
+    assert_eq!(std::fs::read(served.0.join(a.name())).unwrap(), vec![1u8; 100_000], "and not truncated");
 }

@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::copy::{Conflict, Copy, part_name};
+use crate::copy::{Conflict, Copy};
 use crate::*;
 
 fn names(fs: &dyn Fs, dir: &VPath) -> Vec<String> {
@@ -138,7 +138,7 @@ fn copy_between(from: &dyn Fs, from_root: &VPath, to: &dyn Fs, to_root: &VPath, 
     c.opts.chunk = 4096;
     assert_eq!(c.run(&src.join("big.bin"), &to_root.join("big.bin")), Err(FsError::Cancelled));
     assert_eq!(to.stat(&to_root.join("big.bin")), Err(FsError::NotFound));
-    assert_eq!(to.stat(&to_root.join(&part_name("big.bin"))), Err(FsError::NotFound), "the partial file is removed");
+    assert!(!names(to, &to_root).iter().any(|n| n.ends_with(".leaf-part")), "the partial file is removed");
 
     // the whole tree; the link is not followed
     let mut progress = |_: &copy::Progress| {};

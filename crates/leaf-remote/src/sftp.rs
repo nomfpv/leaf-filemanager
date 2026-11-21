@@ -5,7 +5,8 @@
 //!   over the real name only in `finish`, after every byte was acknowledged: a cut connection leaves the old file as it was
 //!   (and at worst the temporary file). The move replaces with `posix-rename@openssh.com` when the server has it, else the
 //!   old file is moved aside, the new one put in and the old one removed (moved back when the second step fails). A name
-//!   that is already a part file of the generic copy (`.name.leaf-part`) is written in place: it is the temporary file.
+//!   that is already a part file of the generic copy (`.name.<n>.leaf-part`) is written in place, created exclusively: it is
+//!   the temporary file (a new name per job).
 //! - `WriteMode::At` (resume) writes into the existing file in place from the offset, cutting off what follows.
 //! - `rename` never replaces unless asked, never a folder; `remove` unlinks a link (never its target); a recursive remove
 //!   looks at every folder with LSTAT before going into it, so a link to a folder is unlinked, not followed.
@@ -172,10 +173,12 @@ impl SftpFs {
                 // a new version keeps the mode bits of the file it replaces (a script stays executable)
                 let attrs = FileAttributes { permissions: existing.as_ref().and_then(|m| m.mode), ..FileAttributes::empty() };
                 if is_part_name(p.name()) && backup.is_none() {
-                    // the generic copy's own temporary file: written in place
-                    let mut flags = OpenFlags::WRITE | OpenFlags::CREATE;
-                    flags |= if mode == WriteMode::CreateNew { OpenFlags::EXCLUDE } else { OpenFlags::TRUNCATE };
-                    (open(target.clone(), flags, attrs)?, 0, None)
+                    // the generic copy's own temporary file (a new name per job): written in place, created exclusively, so
+                    // nothing that is there (another job's part file, a planted link) is ever truncated or written through
+                    if existing.is_some() {
+                        return Err(FsError::Exists);
+                    }
+                    (open(target.clone(), OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE, attrs)?, 0, None)
                 } else {
                     let temp = spath(&c, &parent.join(&side_name(p.name(), "leaf-up")));
                     let h = open(temp.clone(), OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::TRUNCATE, attrs)?;
@@ -312,7 +315,7 @@ fn put_in_place(c: &Conn, from: &str, to: &str, replace: bool, backup: Option<&s
     }
 }
 
-/// The generic copy's temporary name (`.name.leaf-part`): such a file is written in place.
+/// The generic copy's temporary name (`.name.<n>.leaf-part`): such a file is written in place.
 fn is_part_name(name: &str) -> bool {
     name.starts_with('.') && name.ends_with(".leaf-part")
 }

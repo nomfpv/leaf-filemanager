@@ -81,9 +81,23 @@ pub fn too_deep() -> FsError {
     FsError::Other(format!("The folders go deeper than {MAX_DEPTH} levels (a folder that contains itself?); leaf stopped there"))
 }
 
-/// The temporary name a file is written under before it gets its own.
+/// The temporary name a file is written under before it gets its own: `.{name}.{pid}{counter}.leaf-part`, new for every
+/// call, so two jobs writing the same target never share one, and it is created exclusively (never a file or a planted link
+/// that is there already). Every such name starts with `.` and ends with `.leaf-part`.
 pub fn part_name(name: &str) -> String {
-    format!(".{name}.leaf-part")
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    // (kept under 255 bytes: the name is shortened, at a character boundary)
+    let mut short = name;
+    while short.len() > 200 {
+        let mut cut = short.len() - 1;
+        while !short.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        short = &short[..cut];
+    }
+    format!(".{short}.{:x}{n:x}.leaf-part", std::process::id())
 }
 
 impl<'a> Copy<'a> {
@@ -218,7 +232,7 @@ impl<'a> Copy<'a> {
 
     fn write_part(&mut self, from: &VPath, m: &Meta, part: &VPath) -> Result<(), FsError> {
         let mut src = self.from_fs.open_read(from, 0)?;
-        let mut sink = self.to_fs.open_write(part, WriteOpts::REPLACE)?;
+        let mut sink = self.to_fs.open_write(part, WriteOpts::CREATE_NEW)?;
         let mut buf = vec![0u8; self.opts.chunk.max(1)];
         let mut done = 0u64;
         loop {
