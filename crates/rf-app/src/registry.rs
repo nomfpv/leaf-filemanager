@@ -377,10 +377,17 @@ pub fn set_custom(rows: Vec<&'static CommandSpec>) {
     *CUSTOM.write().unwrap_or_else(|e| e.into_inner()) = rows;
 }
 
-/// The row of one of the user's own actions (`actions.toml`). Leaked: it lives as long as the program.
+/// The row of one of the user's own actions (`actions.toml`). Made once for each distinct action and kept for the life of the program (a row is reused when the file is read again).
 pub fn custom_row(name: &str, description: &str, shortcut: Option<&str>, icon: L, palette: bool, toolbar: bool) -> &'static CommandSpec {
     fn leak(s: &str) -> &'static str {
         Box::leak(s.to_string().into_boxed_str())
+    }
+    // the same row again (the file was read again, nothing in this action changed): the row made before, nothing leaked
+    static MADE: std::sync::Mutex<Vec<(String, &'static CommandSpec)>> = std::sync::Mutex::new(Vec::new());
+    let sig = format!("{name} {description} {} {icon:?} {palette}{toolbar}", shortcut.unwrap_or(""));
+    let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, spec)) = made.iter().find(|(s, _)| *s == sig) {
+        return spec;
     }
     let keys: &'static [Key] = match shortcut {
         Some(k) => Box::leak(Box::new([Key { keys: leak(k), ctx: KeyCtx::Window }])),
@@ -393,7 +400,7 @@ pub fn custom_row(name: &str, description: &str, shortcut: Option<&str>, icon: L
     if toolbar {
         places = Places(places.0 | Places::TOOLBAR.0);
     }
-    Box::leak(Box::new(CommandSpec {
+    let spec: &'static CommandSpec = Box::leak(Box::new(CommandSpec {
         id: leak(&format!("{}{name}", crate::custom_actions::ID_PREFIX)),
         title: leak(name),
         description: leak(description),
@@ -403,7 +410,9 @@ pub fn custom_row(name: &str, description: &str, shortcut: Option<&str>, icon: L
         places,
         custom: leak(name),
         ..BASE
-    }))
+    }));
+    made.push((sig, spec));
+    spec
 }
 
 /// The rows of the user's own actions (every one, whether the palette lists it or not).

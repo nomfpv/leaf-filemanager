@@ -2346,7 +2346,8 @@ fn actions(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                         .when_some(clash.filter(|_| !waiting), |d, tip| {
                             d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
                         })
-                        .when(custom.is_some() && !waiting, |d| {
+                        // (a shortcut that came from actions.toml is changed there: nothing here to reset)
+                        .when(crate::keymap_editor::custom_keys(&reset_act, cx).is_some() && !waiting, |d| {
                             d.child(
                                 div()
                                     .id(("kb-reset", i))

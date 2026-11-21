@@ -161,10 +161,12 @@ fn bind(a: &CustomAction, cx: &mut App) {
 /// The key binding of an action's shortcut: in the file list's key context, the one the built-in file commands (Copy path ...)
 /// are bound in. `None` when `keys` is not a valid keystroke.
 pub fn binding(name: &str, keys: &str) -> Option<KeyBinding> {
-    if keys.split(' ').any(|k| Keystroke::parse(k).is_err()) {
+    // (the binding wants its keys for good; one is made per bound shortcut)
+    let kept: &'static str = Box::leak(keys.to_string().into_boxed_str());
+    if kept.split(' ').any(|k| Keystroke::parse(k).is_err()) {
         return None;
     }
-    Some(KeyBinding::new(keys, crate::actions::RunCustomAction { name: name.to_string(), keys: keys.to_string() }, Some(crate::actions::FOLDER_CTX)))
+    Some(KeyBinding::new(kept, crate::actions::RunCustomAction { name: name.to_string(), keys: keys.to_string() }, Some(crate::actions::FOLDER_CTX)))
 }
 
 /// Whether a key press that reached the binding made for `keys` is still the shortcut of the action `name` (the user's own, else
