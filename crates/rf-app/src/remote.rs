@@ -299,25 +299,47 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                     Ok(())
                 }
             };
-            let first = if q.changed {
-                t!("This server shows another certificate than the one you trusted before, and this PC does not trust it either. Someone may be intercepting the connection, or the server got a new certificate.")
+            if q.trusted_before.is_empty() {
+                let first = t!("This PC does not trust the server's certificate. Trust it only if you know it is the server's own (a home server or NAS often has a self-signed one).");
+                let msg = format!("{first}\n\n{} {}\n{} {}", t!("Reason:"), crate::i18n::td(&q.reason), t!("Fingerprint:"), q.fingerprint);
+                crate::prompt::show(
+                    format!("{} {}", t!("Certificate not trusted:"), q.host),
+                    Some(msg),
+                    None,
+                    // Cancel is the default button: Enter never trusts a certificate
+                    vec![
+                        Button::new(t!("Trust this certificate"), Kind::Normal, answer(HostKeyAnswer::TrustAndRemember)),
+                        Button::new(t!("Trust once"), Kind::Normal, answer(HostKeyAnswer::TrustOnce)),
+                        Button::new(t!("Cancel"), Kind::Primary, answer(HostKeyAnswer::Cancel)),
+                    ],
+                    window,
+                    cx,
+                );
             } else {
-                t!("This PC does not trust the server's certificate. Trust it only if you know it is the server's own (a home server or NAS often has a self-signed one).")
-            };
-            let msg = format!("{first}\n\n{} {}\n{} {}", t!("Reason:"), crate::i18n::td(&q.reason), t!("Fingerprint:"), q.fingerprint);
-            crate::prompt::show(
-                format!("{} {}", t!("Certificate not trusted:"), q.host),
-                Some(msg),
-                None,
-                // Cancel is the default button: Enter never trusts a certificate
-                vec![
-                    Button::new(t!("Trust this certificate"), Kind::Normal, answer(HostKeyAnswer::TrustAndRemember)),
-                    Button::new(t!("Trust once"), Kind::Normal, answer(HostKeyAnswer::TrustOnce)),
-                    Button::new(t!("Cancel"), Kind::Primary, answer(HostKeyAnswer::Cancel)),
-                ],
-                window,
-                cx,
-            );
+                // a certificate other than the one trusted before: a warning of its own, no "Trust once"
+                let first = t!("WARNING: this server shows another certificate than the one you trusted, and this PC does not trust the new one either. Someone may be intercepting the connection. Replace the trusted certificate only if you know the server got a new one (ask its owner).");
+                let msg = format!(
+                    "{first}\n\n{} {}\n{} {}\n{} {}",
+                    t!("Trusted before:"),
+                    q.trusted_before.join(", "),
+                    t!("Shown now:"),
+                    q.fingerprint,
+                    t!("Reason:"),
+                    crate::i18n::td(&q.reason)
+                );
+                crate::prompt::show(
+                    format!("{} {}", t!("Certificate changed:"), q.host),
+                    Some(msg),
+                    None,
+                    // Cancel is the default button: Enter never replaces a trusted certificate
+                    vec![
+                        Button::new(t!("Replace trusted certificate"), Kind::Normal, answer(HostKeyAnswer::TrustAndRemember)),
+                        Button::new(t!("Cancel"), Kind::Primary, answer(HostKeyAnswer::Cancel)),
+                    ],
+                    window,
+                    cx,
+                );
+            }
         }
         Ask::Secret(q, reply) => {
             let reply: Once<Option<Secret>> = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));

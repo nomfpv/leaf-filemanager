@@ -544,20 +544,31 @@ impl Inner {
     }
 
     fn ask_certificate(&self, t: &Target, check: &CertCheck, fp: String, why: String) -> Result<(), FsError> {
-        let q = CertQuestion { host: t.cert_name(), fingerprint: fp.clone(), reason: why, changed: !check.trusted.is_empty() };
-        log::info!("ftp: the certificate of {} is not trusted by the system; asking", q.host);
+        let changed = !check.trusted.is_empty();
+        let q = CertQuestion { host: t.cert_name(), fingerprint: fp.clone(), reason: why, trusted_before: check.trusted.clone() };
+        log::info!("ftp: the certificate of {} is not trusted by the system{}; asking", q.host, if changed { " and not the one trusted before" } else { "" });
+        let name = t.cert_name();
         match crate::prompt::ask_certificate_blocking(&*self.prompter, q) {
             HostKeyAnswer::TrustAndRemember => {
+                // a new certificate replaces the ones trusted for this server before (in the file and in this run)
                 if let Some(p) = self.trusted_file() {
-                    let line = format!("{} {fp}\n", t.cert_name());
-                    let r = std::fs::OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| f.write_all(line.as_bytes()));
-                    if let Err(e) = r {
+                    let kept: String = std::fs::read_to_string(&p)
+                        .unwrap_or_default()
+                        .lines()
+                        .filter(|l| !l.split_once(' ').is_some_and(|(h, _)| h.eq_ignore_ascii_case(&name)))
+                        .map(|l| format!("{l}\n"))
+                        .collect();
+                    if let Err(e) = std::fs::write(&p, format!("{kept}{name} {fp}\n")) {
                         log::warn!("ftp: could not write {}: {e} (trusted for this run only)", p.display());
                     }
                 }
-                lock(&self.shared.trusted_once).insert((t.cert_name(), fp));
+                let mut once = lock(&self.shared.trusted_once);
+                once.retain(|(h, _)| *h != name);
+                once.insert((name, fp));
                 Ok(())
             }
+            // (never for a certificate that replaces a trusted one: the dialog does not offer it)
+            HostKeyAnswer::TrustOnce if changed => Err(FsError::Cancelled),
             HostKeyAnswer::TrustOnce => {
                 lock(&self.shared.trusted_once).insert((t.cert_name(), fp));
                 Ok(())

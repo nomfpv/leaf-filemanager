@@ -47,8 +47,9 @@ pub struct CertQuestion {
     pub fingerprint: String,
     /// Why the system refused it, in leaf's words.
     pub reason: String,
-    /// The user trusted another certificate for this server before.
-    pub changed: bool,
+    /// The fingerprints the user trusted for this server before (empty: none). Not empty: the certificate changed; the only
+    /// way past is to replace the trusted one (`TrustAndRemember`), never "once".
+    pub trusted_before: Vec<String>,
 }
 
 pub trait Prompter: Send + Sync {
