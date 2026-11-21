@@ -114,6 +114,7 @@ gpui_kit::actions!(
         CopyAsContext,
         ToggleHideIgnored,
         FindBuildJunk,
+        ShowChanges,
     ]
 );
 

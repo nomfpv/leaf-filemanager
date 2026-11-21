@@ -624,6 +624,8 @@ pub struct Settings {
     pub terminal_custom: String,
     /// A small lock after the name of a file the secret guard flags by its name (.env, private keys ...).
     pub secret_marks: bool,
+    /// A small letter after the name of what git reports changed in the folder (M, A, ?, U, D, R), in every view.
+    pub git_marks: bool,
     /// The biggest file "Copy as context" takes in, in KB (larger ones are listed as left out).
     pub context_max_file_kb: u32,
     /// The most text "Copy as context" builds, in KB; it stops with a message past this.
@@ -815,6 +817,7 @@ impl Default for Settings {
             terminal: rf_core::terminal::Terminal::Auto,
             terminal_custom: String::new(),
             secret_marks: true,
+            git_marks: true,
             context_max_file_kb: 256,
             context_max_total_kb: 2048,
             show_token_estimate: false,

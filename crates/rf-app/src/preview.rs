@@ -66,6 +66,13 @@ pub struct Preview {
     wide: Option<(f32, f32)>,
     /// Time marks (a test copy with LEAF_PREVIEW_TRACE only).
     trace: crate::preview_trace::PaneTrace,
+    /// What git says differs in the current file (the "Changes" tab): asked for text files, shown only when there is something.
+    diff: Option<Entity<crate::diff_view::DiffPane>>,
+    _diff_sub: Option<Subscription>,
+    /// The tab the user picked (None: Changes for a file chosen in the change feed, else the normal preview).
+    changes_tab: Option<bool>,
+    /// The page in front is the change feed: files open on the Changes tab.
+    feed: bool,
 }
 
 /// How long the previous thumbnail may stand in for one that is still loading.
@@ -135,6 +142,10 @@ impl Preview {
             _hold_task: None,
             wide: None,
             trace: Default::default(),
+            diff: None,
+            _diff_sub: None,
+            changes_tab: None,
+            feed: false,
         }
     }
 
@@ -669,6 +680,14 @@ impl Preview {
         }
     }
 
+    pub fn set_feed(&mut self, feed: bool, cx: &mut Context<Self>) {
+        if self.feed != feed {
+            self.feed = feed;
+            self.changes_tab = None;
+            cx.notify();
+        }
+    }
+
     /// Called by the workspace whenever the focused item may have changed.
     pub fn set_target(&mut self, target: Option<(PathBuf, Entry)>, cx: &mut Context<Self>) {
         let same = match (&self.target, &target) {
@@ -690,6 +709,8 @@ impl Preview {
             let _ = this.update(cx, |_, cx| cx.notify());
         }));
         self.stop_player();
+        self.diff = None;
+        self._diff_sub = None;
         self._task = None;
         self.media = None;
         self._media_task = None;
@@ -805,6 +826,13 @@ impl Preview {
                     }
                 }));
             }
+            // what git says about it: asked for text files (and for whatever the change feed picked), off the UI thread
+            let hint = crate::diff_view::hint_of(path);
+            if !e.is_dir() && !in_archive && !e.is_cloud_placeholder() && (hint.is_some() || is_text_like(e) || is_markdown(e)) {
+                let pane = cx.new(|cx| crate::diff_view::DiffPane::new(path.clone(), hint, cx));
+                self._diff_sub = Some(cx.observe(&pane, |_, _, cx| cx.notify()));
+                self.diff = Some(pane);
+            }
             if !e.is_dir() && is_text_like(e) && e.size > 0 && !e.is_cloud_placeholder() && (!in_archive || e.size <= crate::archive_view::PREVIEW_EXTRACT_MAX) {
                 let path = path.clone();
                 let p2 = path.clone();
@@ -844,6 +872,54 @@ fn read_text_head(path: &Path) -> Option<String> {
     let s = leaf_sys::encoding::decode_text(buf.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&buf));
     // keep it light: at most 400 lines
     Some(s.lines().take(400).collect::<Vec<_>>().join("\n"))
+}
+
+impl Preview {
+    /// The Changes tab is in front for this file: git reports it changed, and the user (or the change feed) wants the diff.
+    fn changes_shown(&self, path: &Path, cx: &App) -> bool {
+        let Some(d) = self.diff.as_ref() else { return false };
+        let d = d.read(cx);
+        d.path() == path && d.has_changes() && self.changes_tab.unwrap_or(self.feed)
+    }
+
+    /// "Preview | Changes +12 -3" under the file's name, only for a file git reports as changed.
+    fn changes_tabs(&self, path: &Path, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let d = self.diff.as_ref()?.read(cx);
+        if d.path() != path || !d.has_changes() {
+            return None;
+        }
+        let on = self.changes_shown(path, cx);
+        let label = match d.counts() {
+            Some((a, r)) => format!("{} {}", t!("Changes"), crate::diff_view::counts_text(a, r)),
+            None => t!("Changes").to_string(),
+        };
+        let tab = |id: &'static str, text: String, active: bool, val: bool| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .text_xs()
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .rounded(theme::RADIUS_SM)
+                .when(active, |d| d.bg(p.selection).text_color(p.text))
+                .when(!active, |d| d.text_color(p.text_secondary).hover(|s| s.bg(p.hover)))
+                .child(text)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.changes_tab = Some(val);
+                    cx.notify();
+                }))
+        };
+        Some(
+            h_flex()
+                .id("pv-tabs")
+                .gap_1()
+                .flex_shrink_0()
+                .child(tab("pv-tab-preview", t!("Preview").to_string(), !on, false))
+                .child(tab("pv-tab-changes", label, on, true))
+                .into_any_element(),
+        )
+    }
 }
 
 /// Archive contents / shortcut target block of the pane.
@@ -1003,7 +1079,14 @@ impl Render for Preview {
                     .child(crate::rtl::display_text(&e.name)),
             );
 
-        if let Some((tp, text)) = &self.text {
+        col = col.children(self.changes_tabs(&path, &p, cx));
+        let show_diff = self.changes_shown(&path, cx);
+        if show_diff {
+            if let Some(d) = self.diff.clone() {
+                col = col.child(div().w_full().h(px(380.)).flex_shrink_0().child(d));
+            }
+        }
+        if let Some((tp, text)) = self.text.as_ref().filter(|_| !show_diff) {
             if *tp == path {
                 let md = is_markdown(&e);
                 col = col.child(

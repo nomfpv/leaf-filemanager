@@ -1105,7 +1105,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_));
+                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_));
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -2893,6 +2893,7 @@ impl Workspace {
                     Location::DiskUsage(p) => crate::disk_usage::title(p),
                     Location::Duplicates(r) => crate::duplicates_view::title(r),
                     Location::BuildJunk(p) => crate::junk_view::title(p),
+                    Location::Changes(p) => crate::changes_view::title(p),
                     other => crate::i18n::td(&other.title()),
                 })
                 .collect()
@@ -3671,6 +3672,7 @@ impl Workspace {
             Location::DiskUsage(path) => vec![(crate::disk_usage::title(path), loc.clone())],
             Location::Duplicates(roots) => vec![(crate::duplicates_view::title(roots), loc.clone())],
             Location::BuildJunk(path) => vec![(crate::junk_view::title(path), loc.clone())],
+            Location::Changes(path) => vec![(crate::changes_view::title(path), loc.clone())],
             other => vec![(crate::i18n::td(&other.title()), other.clone())],
         };
         // Too long for the address box: hide leading segments after the drive behind "…"
@@ -5327,7 +5329,12 @@ impl Render for Workspace {
         });
         let preview = if pane_shown && !preview_bottom {
             let target = self.active_tab().read(cx).preview_target();
-            self.preview.update(cx, |pv, cx| pv.set_target(target, cx));
+            // (on the change feed's page the pane opens on the Changes tab)
+            let feed = matches!(self.active_tab().read(cx).location(), Location::Changes(_));
+            self.preview.update(cx, |pv, cx| {
+                pv.set_feed(feed, cx);
+                pv.set_target(target, cx)
+            });
             Some(
                 theme::sheet(&p, p.content_bg)
                     .w(px(self.preview_w))
@@ -5473,6 +5480,20 @@ impl Render for Workspace {
                 };
                 if let Some(root) = root {
                     v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::BuildJunk(root))));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowChanges, window, cx| {
+                // the folder shown, else the folder of the selected item; it must be inside a git repository
+                let v = this.active_tab().clone();
+                let dir = v.read(cx).current_dir();
+                match dir.filter(|d| leaf_dev::gitignore::repo_root(d).is_some()) {
+                    Some(d) => v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::Changes(d)))),
+                    None => crate::prompt::notice(
+                        t!("Not in a git repository"),
+                        t!("Show changes lists the changed files of a git repository. This folder is not in one.").to_string(),
+                        window,
+                        cx,
+                    ),
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleHideIgnored, window, cx| {

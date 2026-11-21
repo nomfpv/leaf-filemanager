@@ -2667,6 +2667,13 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         ),
         card(
             p,
+            L::GitCompare,
+            t!("Git marks after names"),
+            Some(t!("Inside a git repository, a small letter after the name of what changed: M changed, A added, ? new and not tracked, U in conflict, D deleted, R renamed. Folders show it when something inside changed.")),
+            sw("git-marks", p, s.git_marks, |s, v| s.git_marks = v),
+        ),
+        card(
+            p,
             L::Hash,
             t!("Show token estimate"),
             Some(t!("The status line shows about how many tokens the selected files are (bytes / 4), for pasting into a chat.")),

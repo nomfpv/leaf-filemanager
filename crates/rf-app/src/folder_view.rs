@@ -584,6 +584,8 @@ pub struct FolderView {
     dup_selected: Option<(PathBuf, Entry)>,
     /// The build-junk finder's page of this tab.
     junk: Option<Entity<crate::junk_view::JunkView>>,
+    /// The change feed's page of this tab.
+    changes: Option<Entity<crate::changes_view::ChangesView>>,
     /// How many git-ignored items the list leaves out now ("Hide git-ignored files"), and the matching in flight.
     ignored_n: usize,
     ignore_on: bool,
@@ -795,6 +797,7 @@ impl FolderView {
             ignore_serial: 0,
             _ignore_task: None,
             dup_selected: None,
+            changes: None,
             git: None,
             git_commits: None,
             column_cache: Default::default(),
@@ -856,6 +859,9 @@ impl FolderView {
         if let Location::BuildJunk(p) = self.location() {
             return crate::junk_view::title(p);
         }
+        if let Location::Changes(p) = self.location() {
+            return crate::changes_view::title(p);
+        }
         crate::i18n::td(&self.location().title())
     }
 
@@ -871,6 +877,7 @@ impl FolderView {
             Location::DiskUsage(_) => L::ChartPie,
             Location::Duplicates(_) => L::Copy,
             Location::BuildJunk(_) => L::Eraser,
+            Location::Changes(_) => L::GitCompare,
             Location::Downloads => L::ArrowDownToLine,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
@@ -986,6 +993,7 @@ impl FolderView {
         let p = Palette::for_window(window);
         let mut out = Vec::with_capacity(range.len());
         let secret_marks = cx.global::<crate::settings::Settings>().secret_marks;
+        let git_marks = cx.global::<crate::settings::Settings>().git_marks;
         let pack = chosen_pack(cx.global::<crate::settings::Settings>());
         for vi in range {
             let Some(&ei) = self.visible.get(vi) else { break };
@@ -998,6 +1006,7 @@ impl FolderView {
             let e = &self.entries[ei as usize];
             let is_dir = e.is_dir();
             let lock = secret_marks.then(|| secret_lock(e, &p)).flatten();
+            let git = self.git_mark(ei, git_marks).map(|(l, c)| git_letter(l, c, &p));
             let cmp = self.compare_look(ei);
             let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
             let cmp_word = cmp.and_then(|l| l.glyph()).zip(cmp_color);
@@ -1027,6 +1036,7 @@ impl FolderView {
                     ))
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(crate::rtl::display_text(&e.name)))
                     .children(lock)
+                    .children(git)
                     .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g)))
                     .when(is_dir, |d| d.child(Icon::new(L::ChevronRight).size(px(12.)).text_color(p.text_tertiary)))
                     .on_mouse_down(
@@ -2856,6 +2866,7 @@ impl FolderView {
         };
         let show_ext = cx.global::<crate::settings::Settings>().show_extensions;
         let secret_marks = cx.global::<crate::settings::Settings>().secret_marks;
+        let git_marks = cx.global::<crate::settings::Settings>().git_marks;
         let system_icons = cx.global::<crate::settings::Settings>().system_icons;
         let pack = chosen_pack(cx.global::<crate::settings::Settings>());
         let any_cut = crate::cut_marks::any();
@@ -2946,6 +2957,7 @@ impl FolderView {
                 let overlay = self.overlay_of(ei, visual_px, cx);
                 // the secret-file lock and the compare mode's word and tint (what the details list shows after the name)
                 let lock = secret_marks.then(|| secret_lock(&self.entries[ei as usize], &p)).flatten();
+                let git = self.git_mark(ei, git_marks);
                 let cmp = self.compare_look(ei);
                 let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
                 let cmp_word = cmp.and_then(|l| l.glyph()).zip(cmp_color);
@@ -3058,6 +3070,20 @@ impl FolderView {
                                 .children(lock.map(|l| {
                                     div().absolute().right(px(4.)).top(px(4.)).p(px(2.)).rounded(px(3.)).bg(gpui_kit::hsla(0., 0., 0., 0.62)).child(l)
                                 }))
+                                .children(git.map(|(g, c)| {
+                                    div()
+                                        .absolute()
+                                        .left(px(4.))
+                                        .bottom(px(4.))
+                                        .px(px(4.))
+                                        .rounded(px(3.))
+                                        .bg(gpui_kit::hsla(0., 0., 0., 0.62))
+                                        .text_size(px(10.))
+                                        .line_height(px(16.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c)
+                                        .child(g)
+                                }))
                                 .children(length.map(|len| {
                                     div()
                                         .absolute()
@@ -3090,6 +3116,7 @@ impl FolderView {
                                         .items_center()
                                         .child(div().min_w_0().flex_shrink(1.).text_sm().font_weight(FontWeight::MEDIUM).whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
                                         .children(lock)
+                                        .children(git.map(|(g, c)| git_letter(g, c, &p)))
                                         .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g))),
                                 )
                                 .children(facts.unwrap_or_default().into_iter().map(|t| div().text_xs().text_color(p.text_secondary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(t))),
@@ -3101,6 +3128,7 @@ impl FolderView {
                         .child(div().size(visual_px).flex_shrink_0().flex().items_center().justify_center().child(visual))
                         .child(div().flex_1().min_w_0().text_sm().whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
                         .children(lock)
+                        .children(git.map(|(g, c)| git_letter(g, c, &p)))
                         .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g))),
                 };
                 let renaming_here = self.renaming.as_ref().is_some_and(|(i, _)| *i == ei);
@@ -3779,6 +3807,16 @@ impl FolderView {
     }
 
     /// Folder containing entry `ei` (differs per entry in search results).
+    /// The letter and colour of the git mark after an item's name (what changed in it, or below it for a folder), when marks are on.
+    fn git_mark(&self, ei: u32, on: bool) -> Option<(&'static str, Hsla)> {
+        if !on {
+            return None;
+        }
+        let g = self.git.as_ref()?;
+        let st = leaf_sys::git::state_for_child(g, self.parent_of(ei)?, &self.entries.get(ei as usize)?.name)?;
+        (st != leaf_sys::git::FileState::Ignored).then(|| git_style(st))
+    }
+
     pub(crate) fn parent_of(&self, ei: u32) -> Option<&std::path::Path> {
         if matches!(self.location(), Location::Shell { .. }) {
             return self.shell_items.get(ei as usize)?.fs_path.as_deref()?.parent();
@@ -3820,7 +3858,7 @@ impl FolderView {
 
     /// Item shown in the preview pane.
     pub fn preview_target(&self) -> Option<(PathBuf, Entry)> {
-        if matches!(self.location(), Location::Duplicates(_)) {
+        if matches!(self.location(), Location::Duplicates(_) | Location::Changes(_)) {
             return self.dup_selected.clone();
         }
         let ei = self.cursor_entry()?;
@@ -3873,6 +3911,7 @@ impl FolderView {
     pub(crate) fn page_status(&self, cx: &App) -> Option<String> {
         let text = match self.location() {
             Location::BuildJunk(_) => self.junk.as_ref()?.read(cx).status_text(),
+            Location::Changes(_) => self.changes.as_ref()?.read(cx).status_text(),
             _ => return None,
         };
         (!text.is_empty()).then_some(text)
@@ -4379,6 +4418,7 @@ impl FolderView {
         let prefs = cx.global::<crate::settings::Settings>();
         let show_ext = prefs.show_extensions;
         let secret_marks = prefs.secret_marks;
+        let git_marks = prefs.git_marks;
         let system_icons = prefs.system_icons;
         let pack = chosen_pack(prefs);
         let any_cut = crate::cut_marks::any();
@@ -4499,7 +4539,7 @@ impl FolderView {
                 };
                 div().w(px(cw[5])).flex_shrink_0().px_2().text_color(color).whitespace_nowrap().overflow_hidden().text_ellipsis().child(label)
             });
-            let git_badge = (!col_git).then_some(()).and(self.git.as_ref()).and_then(|g| {
+            let git_badge = (!col_git && git_marks).then_some(()).and(self.git.as_ref()).and_then(|g| {
                 let dir = self.parent_of(ei)?;
                 let st = leaf_sys::git::state_for_child(g, dir, &e.name)?;
                 let (letter, color) = git_style(st);
@@ -5181,6 +5221,11 @@ fn git_label(s: leaf_sys::git::FileState) -> &'static str {
     }
 }
 
+/// The small letter itself: after a name in the lists, in a corner of a tile.
+fn git_letter(letter: &'static str, color: Hsla, p: &Palette) -> Div {
+    div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(letter)
+}
+
 fn git_style(s: leaf_sys::git::FileState) -> (&'static str, Hsla) {
     use leaf_sys::git::FileState::*;
     let c = |x: u32| -> Hsla { rgb(x).into() };
@@ -5189,9 +5234,9 @@ fn git_style(s: leaf_sys::git::FileState) -> (&'static str, Hsla) {
         Added => ("A", c(0x30D158)),
         Deleted => ("D", c(0xFF453A)),
         Renamed => ("R", c(0x0A84FF)),
-        Untracked => ("U", c(0x8E8E93)),
+        Untracked => ("?", c(0x8E8E93)),
         Ignored => ("I", c(0x636366)),
-        Conflicted => ("!", c(0xFF453A)),
+        Conflicted => ("U", c(0xFF453A)),
     }
 }
 
@@ -5532,6 +5577,35 @@ impl Render for FolderView {
                     }
                 };
                 div().size_full().child(jv).into_any_element()
+            }
+            Location::Changes(dir) => {
+                let dir = dir.clone();
+                let cv = match &self.changes {
+                    Some(cv) if cv.read(cx).dir() == dir.as_path() => cv.clone(),
+                    _ => {
+                        let cv = cx.new(|cx| crate::changes_view::ChangesView::new(dir, cx));
+                        cx.subscribe(&cv, |this, _, ev: &crate::changes_view::ChangesEvent, cx| match ev {
+                            crate::changes_view::ChangesEvent::Selected(sel) => {
+                                this.dup_selected = sel.as_ref().map(|(p, size, ms)| {
+                                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    (p.clone(), Entry::new(&name, rf_core::EntryKind::File, *size, *ms, 0, 0))
+                                });
+                                cx.notify();
+                            }
+                            crate::changes_view::ChangesEvent::ShowInFolder(path) => {
+                                if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+                                    this.set_reselect(name.to_string_lossy().into_owned());
+                                    this.navigate(Location::Path(parent.to_path_buf()), cx);
+                                }
+                            }
+                        })
+                        .detach();
+                        cx.observe(&cv, |_, _, cx| cx.notify()).detach();
+                        self.changes = Some(cv.clone());
+                        cv
+                    }
+                };
+                div().size_full().child(cv).into_any_element()
             }
             // (the HyperDownload page is cut: a tab restored on it shows nothing)
             Location::Downloads => div().size_full().into_any_element(),

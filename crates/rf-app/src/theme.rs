@@ -62,6 +62,8 @@ pub struct Palette {
     pub compare: [Hsla; 4],
     /// The lock mark after the name of a file the secret guard flags.
     pub secret_mark: Hsla,
+    /// Changes view: added line, removed line, hunk header.
+    pub diff: [Hsla; 3],
     /// Icon tints: folder, image, video, document, code, text, archive, app (see `kind_color`).
     pub kinds: [Hsla; 8],
     /// The theme lets the window backdrop show through (Canopy). Off: every surface is opaque.
@@ -280,6 +282,7 @@ impl Palette {
             success: col("success"),
             compare: ["compare_only", "compare_newer", "compare_older", "compare_different"].map(col),
             secret_mark: col("secret_mark"),
+            diff: ["diff_added", "diff_removed", "diff_hunk"].map(col),
             kinds: ["kind_folder", "kind_image", "kind_video", "kind_document", "kind_code", "kind_text", "kind_archive", "kind_app"].map(col),
             backdrop,
             sheet_opacity,

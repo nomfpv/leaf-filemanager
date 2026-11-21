@@ -24,9 +24,10 @@ impl Preview {
         let video = matches!(cat, Category::Video);
         let video_on = playable && video && !self.occluded && self.player.as_ref().is_some_and(|pl| pl.path == path && pl.started);
 
-        let text = self.text.as_ref().filter(|(tp, _)| *tp == path).map(|(_, t)| t.clone());
+        let show_diff = self.changes_shown(&path, cx);
+        let text = self.text.as_ref().filter(|(tp, _)| *tp == path && !show_diff).map(|(_, t)| t.clone());
         let has_extra = self.extra.as_ref().is_some_and(|(xp, _)| *xp == path);
-        let has_block = text.is_some() || has_extra;
+        let has_block = text.is_some() || has_extra || show_diff;
         let kind = if has_block {
             VisualKind::Compact
         } else if handler || (playable && video) {
@@ -161,11 +162,14 @@ impl Preview {
                     .child(full_name.clone())
                     .when(cut, |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full_name.clone()).build(w, cx))),
             )
+            .children(self.changes_tabs(&path, &p, cx))
             .child(h_flex().gap(px(pp::PROP_COL_GAP)).items_start().children(columns))
             .children(hash_under);
 
         // ---- a text / archive / shortcut block after the properties
-        let block: Option<AnyElement> = if let Some(text) = text {
+        let block: Option<AnyElement> = if let (true, Some(d)) = (show_diff, self.diff.clone()) {
+            Some(div().flex_1().min_w_0().h_full().child(d).into_any_element())
+        } else if let Some(text) = text {
             let md = is_markdown(&e);
             Some(
                 div()

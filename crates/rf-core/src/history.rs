@@ -23,6 +23,8 @@ pub enum Location {
     Duplicates(Vec<PathBuf>),
     /// Rebuildable folders (`node_modules`, `target`...) under this folder (the build-junk finder's results page).
     BuildJunk(PathBuf),
+    /// The files changed in the git repository this folder is in (the change feed's page).
+    Changes(PathBuf),
     /// HyperDownload's page: what is downloading and what was downloaded.
     Downloads,
 }
@@ -80,6 +82,7 @@ impl Location {
             Location::DiskUsage(p) => Location::DiskUsage(clean_path(&p)),
             Location::Duplicates(v) => Location::Duplicates(v.iter().map(|p| clean_path(p)).collect()),
             Location::BuildJunk(p) => Location::BuildJunk(clean_path(&p)),
+            Location::Changes(p) => Location::Changes(clean_path(&p)),
             other => other,
         }
     }
@@ -106,6 +109,7 @@ impl Location {
             Location::Search { root, .. } => Some(Location::Path(root.clone())),
             Location::DiskUsage(p) => Some(Location::Path(p.clone())),
             Location::BuildJunk(p) => Some(Location::Path(p.clone())),
+            Location::Changes(p) => Some(Location::Path(p.clone())),
             Location::Duplicates(v) => Some(v.first().map_or(Location::Home, |p| Location::Path(p.clone()))),
             Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads => {
                 Some(Location::Home)
@@ -128,6 +132,7 @@ impl Location {
             Location::DiskUsage(p) => format!("Disk usage — {}", display_name(p)),
             Location::Duplicates(_) => "Duplicates".into(),
             Location::BuildJunk(p) => format!("Build junk — {}", display_name(p)),
+            Location::Changes(p) => format!("Changes — {}", display_name(p)),
             Location::Downloads => "HyperDownload".into(),
             Location::Path(p) => display_name(p),
         }

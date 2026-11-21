@@ -172,6 +172,7 @@ impl Workspace {
                 }
             }
             "usage" => self.navigate(rf_core::Location::DiskUsage(std::path::PathBuf::from(arg)), window, cx),
+            "changes" => self.navigate(rf_core::Location::Changes(std::path::PathBuf::from(arg)), window, cx),
             "junk" => self.navigate(rf_core::Location::BuildJunk(std::path::PathBuf::from(arg)), window, cx),
             // the Recycle Bin page: `bin restore` restores what is selected there (select with `run SelectAll`)
             "bin" if arg == "restore" => {

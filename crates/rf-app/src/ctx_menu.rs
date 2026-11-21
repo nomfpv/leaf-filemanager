@@ -707,6 +707,8 @@ impl FolderView {
                     Item::action(t!("Select none"), icon(L::Square), act(&me, |v, _, cx| v.select_no_items(cx))).enabled(!none),
                     Item::action(t!("Invert selection"), icon(L::ArrowLeftRight), act(&me, |v, _, cx| v.invert_selected_items(cx))),
                     Item::Separator,
+                    Item::action(t!("Show changes"), icon(L::GitCompare), |w, cx| w.dispatch_action(Box::new(crate::actions::ShowChanges), cx))
+                        .enabled(self.current_dir().is_some_and(|d| leaf_dev::gitignore::repo_root(&d).is_some())),
                     Item::action(t!("Properties"), icon(L::Wrench), act(&me, |v, _, cx| v.folder_properties(cx))),
                     Item::action(t!("Settings"), icon(L::Settings), |w, cx| w.dispatch_action(Box::new(crate::actions::GoSettings), cx)).hint("Ctrl+,"),
                 ];
