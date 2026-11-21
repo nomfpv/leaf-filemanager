@@ -29,3 +29,20 @@ pub(crate) const LOG_FILTER: &str = "warn,gpui_windows=info";
 /// theme then names), and zbus warns when the private session has no portal settings service; neither is a fault.
 #[cfg(not(windows))]
 pub(crate) const LOG_FILTER: &str = "warn,gpui::text_system=error,zbus=error";
+
+/// Keeps the system layer's last-known modifier keys and pointer position current from the events GPUI delivers to `el` (put it on the
+/// window's root). Off Windows that is the only source for `leaf_sys::input` (Wayland says neither outside an event); on Windows the
+/// calls land in no-ops.
+pub(crate) fn watch_input<E: gpui_kit::InteractiveElement>(el: E) -> E {
+    use gpui_kit::{Modifiers, Pixels, Point};
+    fn note(m: &Modifiers, pos: Option<Point<Pixels>>) {
+        leaf_sys::input::note_modifiers(m.shift, m.control);
+        if let Some(p) = pos {
+            leaf_sys::input::note_pointer(f32::from(p.x).round() as i32, f32::from(p.y).round() as i32);
+        }
+    }
+    el.on_modifiers_changed(|e, _, _| note(&e.modifiers, None))
+        .capture_any_mouse_down(|e, _, _| note(&e.modifiers, Some(e.position)))
+        .capture_any_mouse_up(|e, _, _| note(&e.modifiers, Some(e.position)))
+        .on_mouse_move(|e, _, _| note(&e.modifiers, Some(e.position)))
+}

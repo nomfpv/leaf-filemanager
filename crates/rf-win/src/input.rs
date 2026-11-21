@@ -59,3 +59,9 @@ pub fn release_capture() {
         let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
     }
 }
+
+/// Linux twin's feed of the last-known modifier keys; Windows reads them itself, so this does nothing.
+pub fn note_modifiers(_shift: bool, _ctrl: bool) {}
+
+/// Linux twin's feed of the last-known pointer position; Windows reads it itself, so this does nothing.
+pub fn note_pointer(_x: i32, _y: i32) {}

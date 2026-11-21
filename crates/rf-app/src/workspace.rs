@@ -5471,8 +5471,7 @@ impl Render for Workspace {
             h_flex().flex_1().min_h_0().gap(px(p.gap)).child(list_slot).children(shelf).children(preview).into_any_element()
         };
 
-        v_flex()
-            .id("workspace")
+        crate::platform::watch_input(v_flex().id("workspace"))
             .size_full()
             .bg(p.window_bg)
             .text_color(p.text)
