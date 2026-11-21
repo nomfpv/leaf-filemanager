@@ -1,0 +1,17 @@
+[package]
+name = "leaf-sync"
+description = "leaf: sync and backup jobs between two places of any kind (local, sftp, ftp): plan first, then run"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+leaf-vfs.workspace = true
+rf-core.workspace = true
+log.workspace = true
+serde.workspace = true
+toml.workspace = true
+sha2.workspace = true
+# the .gitignore matcher (already in the tree through rf-core and leaf-dev)
+ignore = "0.4"

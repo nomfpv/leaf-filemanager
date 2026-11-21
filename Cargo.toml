@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-download"]
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-download", "crates/leaf-sync"]
 exclude = ["vendor/velopack"]
 
 [workspace.package]
@@ -21,6 +21,7 @@ leaf-vfs = { path = "crates/leaf-vfs" }
 leaf-remote = { path = "crates/leaf-remote" }
 leaf-mcp = { path = "crates/leaf-mcp" }
 leaf-download = { path = "crates/leaf-download" }
+leaf-sync = { path = "crates/leaf-sync" }
 rf-player = { path = "crates/rf-player" }
 rf-nearby = { path = "crates/rf-nearby" }
 rustdecoder = { path = "crates/rustdecoder" }
