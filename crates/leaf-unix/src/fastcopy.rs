@@ -227,6 +227,17 @@ struct Copied {
     dirs: Vec<(PathBuf, (u64, u64))>,
 }
 
+/// Makes the entries of folder `p` durable (a new file's or folder's name), so that a source is never removed while its copy could
+/// still vanish in a power cut.
+fn sync_dir(p: &Path) -> io::Result<()> {
+    File::open(p)?.sync_all()
+}
+
+/// The folder `dst` lies in.
+fn parent_of(dst: &Path) -> &Path {
+    dst.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."))
+}
+
 /// Removes one copied source file or link, but only while it is still the item that was copied.
 fn remove_source_file(job: &mut Job, p: &Path, was: &Ident) {
     match std::fs::symlink_metadata(p) {
@@ -394,6 +405,13 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
     match kind(&m) {
         Kind::File => {
             let was = copy_file(job, src, dst, verify)?;
+            if job.stay_on.is_some() {
+                // (a move: the copy's name must be on disk before any source goes)
+                if let Err(e) = sync_dir(parent_of(dst)) {
+                    job.fail(src, format_args!("copied, but the copy could not be made durable, the original was kept: {e}"));
+                    return Ok(false);
+                }
+            }
             if remove_now {
                 remove_source_file(job, src, &was);
             } else {
@@ -405,6 +423,10 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
             let target = std::fs::read_link(src)?;
             std::os::unix::fs::symlink(&target, dst)?;
             let _ = set_times_path(dst, &m, true);
+            if job.stay_on.is_some() && sync_dir(parent_of(dst)).is_err() {
+                job.fail(src, "copied, but the copy could not be made durable, the original was kept");
+                return Ok(false);
+            }
             // (the link read is the link copied only if it did not change around the read)
             let was = Ident::of(&m);
             if std::fs::symlink_metadata(src).map(|n| Ident::of(&n)).ok() != Some(was) {
@@ -431,6 +453,9 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
                 }
             }
             std::fs::DirBuilder::new().mode(0o700).create(dst)?;
+            if job.stay_on.is_some() {
+                sync_dir(parent_of(dst))?;
+            }
             let mut all = true;
             for e in std::fs::read_dir(src)? {
                 let e = e?;
@@ -571,7 +596,10 @@ fn copy_new(job: &mut Job, kind_of_job: Transfer, src: &Path, sm: &std::fs::Meta
                     let _ = crate::fastdelete::remove_tree(&target);
                     return Ok(());
                 }
-                std::fs::rename(&target, &dst)?
+                std::fs::rename(&target, &dst)?;
+                if kind_of_job == Transfer::Move {
+                    sync_dir(parent_of(&dst))?;
+                }
             }
             _ => {
                 // the old file stays as it was; the unfinished new one goes
