@@ -292,6 +292,8 @@ impl AgentsView {
                 let dim = s.state == State::Ended;
                 let (open_s, resume_s) = (s.clone(), s.clone());
                 let resumable = dim && crate::agents::can_resume(s);
+                // (D6) a session in a lane: the lane's colour before its folder and branch
+                let lane = crate::lanes::color_of_dir(cx, &s.folder, p);
                 h_flex()
                     .id(("agents-row", i))
                     .w_full()
@@ -315,6 +317,7 @@ impl AgentsView {
                     }))
                     .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(crate::agents::state_color(s.state, p)))
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_color(if dim { p.text_secondary } else { p.text }).child(title))
+                    .children(lane.map(|c| div().size(px(6.)).flex_shrink_0().rounded_full().bg(c)))
                     .child(div().w(px(180.)).flex_shrink_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_xs().text_color(p.text_secondary).child(lane_text(s)))
                     .child(div().w(px(110.)).flex_shrink_0().text_xs().text_color(crate::agents::state_color(s.state, p)).child(crate::agents::state_text(s.state)))
                     .child(div().w(px(90.)).flex_shrink_0().text_xs().text_right().text_color(p.text_secondary).child(crate::agents::ago(s.last_activity_ms)))

@@ -89,7 +89,7 @@ impl Workspace {
     }
 
     /// Forgets the list so the next draw reads it again (after a worktree was added).
-    fn wt_forget(&mut self) {
+    pub(super) fn wt_forget(&mut self) {
         self.wt.at = None;
         self.wt.for_dir = None;
         self.wt.root = None;

@@ -126,6 +126,8 @@ gpui_kit::actions!(
         ShowWorktrees,
         OpenDocker,
         NewWorktree,
+        NewLane,
+        EndLane,
         ShowProjectBrain,
         BookmarkRemoteFolder,
         DownloadHere,

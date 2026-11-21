@@ -111,6 +111,7 @@ impl Tab {
     }
 }
 
+mod lanes;
 mod worktrees;
 
 pub struct Workspace {
@@ -2494,6 +2495,8 @@ impl Workspace {
             let tab_dir = v.location().path().map(Path::to_path_buf);
             // (D2) a coding agent session works in this tab's folder or one inside it: a calm dot after the name
             let tab_agent = tab_dir.as_deref().and_then(|d| crate::agents::tab_state(cx, d)).map(|st| crate::agents::state_color(st, &p));
+            // (D6) a tab in a lane wears the lane's colour as a short line along its foot
+            let tab_lane = tab_dir.as_deref().and_then(|d| crate::lanes::color_of_dir(cx, d, &p));
             let term_dir = tab_terminal.then(|| tab_terminal_dir(v.location())).flatten();
             let tab_w = if fit_names {
                 let name = window.text_system().layout_line(&title, name_px, &[name_style.to_run(title.len())], None).width;
@@ -2529,6 +2532,7 @@ impl Workspace {
                         _ => d.rounded_t(px(p.control_radius + 2.)),
                     })
                     .text_size(px(p.fs))
+                    .when_some(tab_lane, |d, c| d.relative().child(div().absolute().bottom(px(2.)).left(px(10.)).right(px(10.)).h(px(2.)).rounded_full().bg(c)))
                     // Stem: the accent line on top of the tab in front
                     .when(active && p.tab_marker > 0., |d| {
                         d.relative().child(div().absolute().top_0().left(px(12.)).right(px(12.)).h(px(p.tab_marker)).rounded_b(px(2.)).bg(p.accent))
@@ -4166,6 +4170,7 @@ impl Workspace {
             (b.len() <= 3 && b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()).then(|| (b[0] as char).to_ascii_uppercase())
         });
         let is_wt = matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-wt");
+        let is_lane = matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-lane");
         let two_lines = extra.is_some();
         // a mounted share of the Network list: its own menu (Disconnect); a saved host: its own menu (Forget saved password...)
         let net_share = match &target3 {
@@ -4259,6 +4264,8 @@ impl Workspace {
                         cx.stop_propagation();
                         if is_wt {
                             this.wt_menu(path.clone(), window, cx);
+                        } else if is_lane {
+                            this.lane_menu(path.clone(), window, cx);
                         } else {
                             this.sidebar_menu(path.clone(), window, cx);
                         }
@@ -4597,6 +4604,10 @@ impl Workspace {
                 cx,
             );
             col = col.child(item.when(n > 0 && !rail, |d| d.child(div().flex_shrink_0().text_size(px(p.fs_xs)).text_color(p.text_tertiary).child(n.to_string()))));
+        }
+        // the lanes (F1), under the tags as in the mockup; behind the agent layer's switch
+        if !demo && !rail {
+            col = self.lanes_sidebar(col, header(t!("Lanes")), &cur, p, cx);
         }
         // (LEAF_MOCKUP_DEMO: the mockup's lanes, under the tags)
         if demo {
@@ -6234,6 +6245,8 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ShowWorktrees, window, cx| this.show_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.new_worktree(window, cx)))
+            .on_action(cx.listener(|this, _: &NewLane, window, cx| this.new_lane(window, cx)))
+            .on_action(cx.listener(|this, _: &EndLane, window, cx| this.end_lane(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleHideIgnored, window, cx| {
                 let on = cx.global::<crate::settings::Settings>().hide_ignored;
                 let dir = this.active_tab().read(cx).location().path().map(Path::to_path_buf);

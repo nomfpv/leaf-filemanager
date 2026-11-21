@@ -833,6 +833,9 @@ pub struct Settings {
     /// The master switch of the agent layer (Settings > Developer): the Agents page, the dot on folders and tabs with a running agent session and
     /// the status-bar line. Off: no agent file is read, no process is looked at, nothing of it is shown.
     pub ai_layer: bool,
+    /// Where a new lane's worktree goes (Settings > Developer): `<repo>` is the repository's folder, `<name>` the lane's name; a
+    /// relative pattern is taken from the repository's parent folder.
+    pub lane_folder: String,
 
     // ---- Advanced
     pub show_flatten: bool,
@@ -1055,6 +1058,7 @@ impl Default for Settings {
             count_usage: true,
             fresh_tint: false,
             ai_layer: true,
+            lane_folder: "<repo>-wt/<name>".into(),
             show_flatten: false,
             space_quicklook: false,
             look_enabled: true,

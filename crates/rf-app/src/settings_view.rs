@@ -2711,6 +2711,35 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             Some(t!("Shows what coding agents (Claude Code) are doing: the Agents page, a small dot on the folder and the tab of a running session, and a line in the status bar. Reads the agent's own session files on this PC, never changes them. Off: nothing is read and nothing is shown.")),
             sw("ai-layer", p, s.ai_layer, |s, v| s.ai_layer = v),
         ),
+        {
+            let current = s.lane_folder.clone();
+            card(
+                p,
+                L::GitBranchPlus,
+                t!("Lane folders"),
+                Some(&format!("{} {}", t!("Where New lane puts a lane's worktree:"), s.lane_folder)),
+                button("lane-folder", p, t!("Edit"), move |window, cx| {
+                    crate::prompt::show(
+                        t!("Lane folders"),
+                        Some(t!("<repo> is the repository's folder, <name> the lane's name. A relative pattern starts in the repository's parent folder.").to_string()),
+                        Some((current.clone(), "<repo>-wt/<name>".to_string())),
+                        vec![
+                            crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |value, _, cx| {
+                                let v = value.unwrap_or_default().trim().to_string();
+                                if !v.contains("<name>") {
+                                    return Err(t!("The pattern needs <name>, so that every lane gets a folder of its own").to_string());
+                                }
+                                settings::update(cx, move |s| s.lane_folder = v);
+                                Ok(())
+                            }),
+                            crate::prompt::Button::cancel(),
+                        ],
+                        window,
+                        cx,
+                    );
+                }),
+            )
+        },
         card(
             p,
             L::ListTree,
