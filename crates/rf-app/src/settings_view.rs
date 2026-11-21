@@ -15,6 +15,7 @@ use crate::fluent_menu::{self, Item, Menu, MenuIcon};
 use crate::select_box::{Choice, select_box};
 use crate::settings::{
     self, AnimPref, BackdropPref, ClickPref, DatePref, DefaultView, DeletePref, IdePref, RendererPref, Settings, StartupPref, ThemePref,
+    Visibility,
 };
 use crate::t;
 use crate::look::config::LookSettings;
@@ -989,15 +990,67 @@ fn hidden_places_card(p: &Palette, s: &Settings) -> AnyElement {
     )
 }
 
-/// The colours offered for the accent (Fluent's own set): blue, purple, magenta, red, orange, yellow, green, teal, grey.
-pub(crate) const ACCENT_CHOICES: [u32; 9] = [0x0078D4, 0x8764B8, 0xE3008C, 0xE81123, 0xF7630C, 0xFFB900, 0x107C10, 0x00B7C3, 0x69797E];
 
 /// What the accent setting holds after the user wrote a colour of their own: the colour as it is kept, or what to tell them.
 pub(crate) fn accent_answer(text: &str) -> Result<String, String> {
     rf_win::accent::parse_hex(text).map(rf_win::accent::to_hex).ok_or_else(|| t!("Write the color as #RRGGBB, for example #F7630C.").to_string())
 }
 
-/// The accent colour: Windows' own, one of a few, or any colour written as #RRGGBB.
+/// The theme: the three built-in looks and the user's own (`<config>/themes/*.toml`), with where those go and a way there.
+fn theme_card(p: &Palette, s: &Settings) -> AnyElement {
+    let themes = theme::data::list();
+    let current = s.theme_name.trim().to_ascii_lowercase();
+    let label = themes.iter().find(|(id, _)| *id == current).map(|(_, n)| n.clone()).unwrap_or_else(|| "Canopy".to_string());
+    let control = select_box("theme-name", p, label, move |_| {
+        themes
+            .iter()
+            .map(|(id, name)| {
+                let id = id.clone();
+                Choice::new(name.clone(), id == current, move |_, cx| {
+                    let id = id.clone();
+                    settings::update(cx, move |s| s.theme_name = id)
+                })
+            })
+            .collect()
+    });
+    card(
+        p,
+        L::Palette,
+        t!("Theme"),
+        Some(t!("Canopy: frosted glass over the window backdrop. Stem: calm and solid, a thin accent line marks where you are. Index: dense and ruled, with monospace numbers.")),
+        control,
+    )
+}
+
+/// Where user themes go, and a button that opens that folder (made when it is not there yet).
+fn themes_folder_card(p: &Palette) -> AnyElement {
+    let dir = theme::data::user_dir();
+    let shown = dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+    let desc = format!("Your own themes are .toml files in {shown}. A theme lists only what it changes; the rest comes from its base theme (see docs/themes.md).");
+    shell(p)
+        .child(card_body(
+            p,
+            L::FolderOpen,
+            t!("Your own themes").into(),
+            Some(desc.into()),
+            Some(button("open-themes", p, t!("Open themes folder"), move |_, cx| {
+                if let Some(d) = dir.clone() {
+                    if let Err(e) = std::fs::create_dir_all(&d) {
+                        log::warn!("themes folder: {e}");
+                        return;
+                    }
+                    if let Err(e) = rf_win::shell::open(&d) {
+                        log::warn!("themes folder: {e:#}");
+                    }
+                    // (a theme added there shows in the list the next time it is drawn)
+                    cx.refresh_windows();
+                }
+            })),
+        ))
+        .into_any_element()
+}
+
+/// The accent colour: one of the theme's set, Windows' own, or any colour written as #RRGGBB.
 fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
     let current = rf_win::accent::parse_hex(&s.accent_color);
     let chip = |id: &'static str, label: &'static str, on: bool, p: &Palette| {
@@ -1016,22 +1069,49 @@ fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
             .hover(|d| d.bg(p.pressed))
             .child(label)
     };
-    let mut row = h_flex().flex_wrap().gap_2().items_center().justify_end().child(chip("accent-windows", t!("Windows' color"), current.is_none(), p).on_click(|_, _, cx| settings::update(cx, |s| s.accent_color.clear())));
-    for (i, c) in ACCENT_CHOICES.into_iter().enumerate() {
-        let on = current == Some(c);
+    // the theme's own set, in the colour each has in this mode
+    let all = theme::data::all_themes();
+    let accents = all
+        .iter()
+        .find(|t| t.id == s.theme_name.trim().to_ascii_lowercase())
+        .or_else(|| all.iter().find(|t| t.id == theme::data::DEFAULT_THEME))
+        .map(|t| theme::data::resolve(&theme::data::chain(t, &all), p.dark, false).accents)
+        .unwrap_or_default();
+    let windows = current.is_none() && s.accent.eq_ignore_ascii_case("windows");
+    let named = |i: usize, name: &str| current.is_none() && !windows && (s.accent.eq_ignore_ascii_case(name) || (i == 0 && !accents.iter().any(|a| a.name.eq_ignore_ascii_case(&s.accent))));
+    let mut row = h_flex().flex_wrap().gap_2().items_center().justify_end();
+    for (i, a) in accents.iter().enumerate() {
+        let on = named(i, &a.name);
+        let name = a.name.clone();
         row = row.child(
             div()
                 .id(("accent-choice", i))
                 .size(px(24.))
                 .rounded_full()
-                .bg(gpui_kit::rgb(c))
+                .bg(gpui_kit::rgb(if p.dark { a.dark } else { a.light }))
                 .border_2()
                 .border_color(if on { p.text } else { gpui_kit::transparent_black() })
                 .cursor_pointer()
-                .on_click(move |_, _, cx| settings::update(cx, move |s| s.accent_color = rf_win::accent::to_hex(c))),
+                .tooltip({
+                    let name = name.clone();
+                    move |w, cx| gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(w, cx)
+                })
+                .on_click(move |_, _, cx| {
+                    let name = name.clone();
+                    settings::update(cx, move |s| {
+                        s.accent = name;
+                        s.accent_color.clear();
+                    })
+                }),
         );
     }
-    let custom = current.is_some_and(|c| !ACCENT_CHOICES.contains(&c));
+    row = row.child(chip("accent-windows", t!("Windows' color"), windows, p).on_click(|_, _, cx| {
+        settings::update(cx, |s| {
+            s.accent = "windows".into();
+            s.accent_color.clear();
+        })
+    }));
+    let custom = current.is_some();
     let shown = s.accent_color.clone();
     row = row.child(chip("accent-own", t!("My own color…"), custom, p).on_click(move |_, window, cx| {
         crate::prompt::show(
@@ -1054,7 +1134,7 @@ fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
         p,
         L::Palette,
         t!("Accent color"),
-        Some(t!("The color of buttons, the selection and highlights: Windows' own, one of these, or a color you write yourself.")),
+        Some(t!("The color of buttons, the selection and highlights: one of the theme's, Windows' own, or a color you write yourself.")),
         row.into_any_element(),
     )
 }
@@ -1439,10 +1519,11 @@ fn hyperglass_card(p: &Palette, s: &Settings, cx: &mut App) -> AnyElement {
 
 fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     let mut v = vec![
+        theme_card(p, s),
         card(
             p,
             L::SunMoon,
-            t!("Theme"),
+            t!("Mode"),
             None,
             dropdown(
                 "theme",
@@ -1452,8 +1533,16 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 |s, v| s.theme = v,
             ),
         ),
-        backdrop_card(p, s),
+        card(
+            p,
+            L::Eye,
+            t!("Visibility"),
+            Some(t!("High: stronger text, lines and selection, and nearly opaque glass. Standard: the calmer original.")),
+            dropdown("visibility", p, s.visibility, vec![(Visibility::High, t!("High").into()), (Visibility::Standard, t!("Standard").into())], |s, v| s.visibility = v),
+        ),
         accent_card(p, s),
+        backdrop_card(p, s),
+        themes_folder_card(p),
         card(
             p,
             L::AppWindow,
@@ -1493,9 +1582,9 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             sw("scrollbar", p, s.show_scrollbar, |s, v| s.show_scrollbar = v),
         ),
     ];
-    // HyperGlass look, right under the backdrop card (index 1) while Glass is the material
+    // HyperGlass look, right under the backdrop card (index 4) while Glass is the material
     if s.backdrop_in_use() == BackdropPref::Glass || crate::glass::forced() {
-        v.insert(2, hyperglass_card(p, s, cx));
+        v.insert(5, hyperglass_card(p, s, cx));
     }
     // tint swatches
     let tint = s.tint;
@@ -3326,10 +3415,11 @@ mod hyperglass_tests {
         assert_eq!(super::accent_answer(" #abc "), Ok("#AABBCC".to_string()));
         assert!(super::accent_answer("turuncu").is_err());
         assert!(super::accent_answer("").is_err());
-        // every colour that is offered is a colour, and none is offered twice
-        let unique: std::collections::HashSet<u32> = super::ACCENT_CHOICES.into_iter().collect();
-        assert_eq!(unique.len(), super::ACCENT_CHOICES.len());
-        assert!(super::ACCENT_CHOICES.iter().all(|c| *c <= 0xFF_FFFF));
+        // every theme offers its own six accents, each named once
+        for t in crate::theme::data::builtins() {
+            let names: std::collections::HashSet<String> = t.accents.iter().map(|a| a.name.to_ascii_lowercase()).collect();
+            assert_eq!(names.len(), 6, "{}", t.id);
+        }
     }
 
     #[test]
