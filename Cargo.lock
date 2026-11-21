@@ -4974,6 +4974,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
+name = "leaf-agents"
+version = "0.9.4"
+dependencies = [
+ "dirs 6.0.0",
+ "log",
+ "notify",
+ "serde",
+ "serde_json",
+ "sysinfo",
+]
+
+[[package]]
 name = "leaf-common"
 version = "0.9.4"
 dependencies = [

@@ -1,0 +1,16 @@
+[package]
+name = "leaf-agents"
+description = "leaf: what coding agents are doing on this computer (sessions, folders, state), read from the agents' own data folders"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+notify.workspace = true
+# running processes and their working folders (already in the tree for other platforms; no multithreading, no disks or networks)
+sysinfo = { version = "0.31", default-features = false, features = ["system"] }
