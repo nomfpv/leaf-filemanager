@@ -15,6 +15,7 @@ mod command_palette;
 mod compare_mode;
 mod conflict_dialog;
 mod ctx_menu;
+mod menu_model;
 mod context_copy;
 mod custom_actions;
 mod custom_actions_page;

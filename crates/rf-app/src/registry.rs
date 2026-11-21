@@ -9,6 +9,7 @@ use gpui_kit::assets::IconName as L;
 use gpui_kit::{Action, App, KeyBinding};
 
 use crate::actions::{DIALOG_CTX, FOLDER_CTX, TREE_CTX};
+use crate::menu_model::{MenuPlace, Section as S, Slot as K, Targets as T, place};
 
 /// Where a default key works: everywhere in the window, or only while that part has the keyboard.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -110,11 +111,15 @@ impl Places {
     pub const PALETTE: Places = Places(1);
     /// The "What leaf can do" page and `FEATURES.md`.
     pub const PAGE: Places = Places(2);
-    /// The context menu (not generated from the registry yet).
+    /// The right-click menu: the command has rows in `menu` (`menu_model.rs` makes the menu from them).
     pub const MENU: Places = Places(4);
     /// The tool bar (not generated from the registry yet).
     pub const TOOLBAR: Places = Places(8);
     pub const LISTED: Places = Places(1 | 2);
+    /// In the palette and on the page, and in the right-click menu.
+    pub const LISTED_MENU: Places = Places(1 | 2 | 4);
+    /// On the page and in the right-click menu, not in the palette.
+    pub const PAGE_MENU: Places = Places(2 | 4);
 
     pub const fn contains(self, other: Places) -> bool {
         self.0 & other.0 == other.0
@@ -160,6 +165,8 @@ pub struct CommandSpec {
     pub hint: &'static str,
     pub icon: L,
     pub places: Places,
+    /// Where the right-click menu has it (empty: nowhere); `places` has MENU exactly when this is not empty.
+    pub menu: &'static [MenuPlace],
     /// Whether it is offered right now; `None`: always.
     pub when: Option<fn(&App) -> bool>,
     /// Makes the action.
@@ -219,6 +226,7 @@ const BASE: CommandSpec = CommandSpec {
     hint: "",
     icon: L::Command,
     places: Places::LISTED,
+    menu: &[],
     when: None,
     action: || Box::new(crate::actions::ToggleCommandPalette),
     bind: |k, c| KeyBinding::new(k, crate::actions::ToggleCommandPalette, c),
@@ -260,7 +268,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(ReopenClosedTab, Tabs, "Reopen closed tab", "Opens the tab closed last again.", RotateCcw, [w("ctrl-shift-t")], keywords: &["undo close", "restore"]),
     c!(NewFolder, Files, "New folder", "Makes a new folder here and lets you name it.", FolderPlus, [f("ctrl-shift-n")], keywords: &["create", "directory"]),
     c!(NewTextFile, Files, "New text document", "Makes a new empty text file here.", FilePlus, [], keywords: &["create", "txt"]),
-    c!(Refresh, Navigation, "Refresh", "Reads the folder again.", RotateCw, [w("f5"), w("ctrl-r")], keywords: &["reload"]),
+    c!(Refresh, Navigation, "Refresh", "Reads the folder again.", RotateCw, [w("f5"), w("ctrl-r")], keywords: &["reload"], places: Places::LISTED_MENU, menu: &[place(K::Refresh, "Refresh", L::RotateCw, T::BACKGROUND, S::View, 40).hint("Ctrl+R")]),
     c!(MapNetworkDrive, Tools, "Map network drive…", "Gives a shared network folder a drive letter.", Network, [], keywords: &["smb", "share"], platforms: Platforms::WINDOWS),
     c!(RestartApp, App, "Restart leaf", "Closes leaf and starts it again with the same tabs.", RotateCw, [w("ctrl-alt-shift-r")]),
     c!(SaveSession, App, "Save session…", "Saves the open tabs as a session to open later.", Save, [], keywords: &["workspace", "tabs"]),
@@ -276,8 +284,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(GoRecycleBin, Navigation, "Recycle Bin", "Opens the Recycle Bin.", Trash, [], keywords: &["trash", "deleted"]),
     c!(FocusAddress, Navigation, "Focus address bar", "Puts the keyboard in the address bar to type a path.", TextCursorInput, [w("ctrl-l"), w("alt-d")], keywords: &["path", "location"]),
     c!(FocusSearch, Navigation, "Search", "Searches this folder.", Search, [w("ctrl-f"), w("ctrl-e")], keywords: &["find", "filter"]),
-    c!(ToggleHidden, View, "Show/hide hidden items", "Shows or hides hidden files and folders.", Eye, [w("ctrl-h")], keywords: &["dotfiles"]),
-    c!(ToggleHideIgnored, View, "Hide git-ignored files", "Inside a git repository, leaves out the files and folders .gitignore ignores (node_modules, target, logs...). The status line says how many are hidden.", EyeOff, [], keywords: &["gitignore", "ignored", "node_modules", "build", "developer"], since: "0.9.5"),
+    c!(ToggleHidden, View, "Show/hide hidden items", "Shows or hides hidden files and folders.", Eye, [w("ctrl-h")], keywords: &["dotfiles"], places: Places::LISTED_MENU, menu: &[place(K::ShowHidden, "Show hidden items", L::Eye, T::BACKGROUND, S::Organize, 110).hint("Ctrl+H")]),
+    c!(ToggleHideIgnored, View, "Hide git-ignored files", "Inside a git repository, leaves out the files and folders .gitignore ignores (node_modules, target, logs...). The status line says how many are hidden.", EyeOff, [], keywords: &["gitignore", "ignored", "node_modules", "build", "developer"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::HideIgnored, "Hide git-ignored files", L::EyeOff, T::BACKGROUND, S::Organize, 120)]),
     c!(ViewDetails, View, "Details view", "Shows the folder as a list with columns.", List, [w("ctrl-shift-1")], keywords: &["layout"]),
     c!(ViewGrid, View, "Grid view", "Shows the folder as large icons.", LayoutGrid, [w("ctrl-shift-2")], keywords: &["layout", "icons", "thumbnails"]),
     c!(ViewColumns, View, "Columns view", "Shows the folder and the ones above it side by side.", Columns3, [w("ctrl-shift-3")], keywords: &["layout", "miller"]),
@@ -303,16 +311,16 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CloseActivePane, Panes, "Close active pane", "Closes the pane that has the keyboard.", X, [w("ctrl-shift-w")]),
     c!(TogglePreview, View, "Preview pane", "Shows or hides the preview of the selected file.", PanelRight, [w("alt-p")]),
     c!(ToggleSidebar, View, "Sidebar", "Shows or hides the sidebar.", PanelLeft, [w("ctrl-b")]),
-    c!(OpenTerminal, Tools, "Open in terminal", "Opens a terminal in this folder.", SquareTerminal, [w("ctrl-shift-`")], keywords: &["console", "shell", "command prompt"]),
+    c!(OpenTerminal, Tools, "Open in terminal", "Opens a terminal in this folder.", SquareTerminal, [w("ctrl-shift-`")], keywords: &["console", "shell", "command prompt"], places: Places::LISTED_MENU, menu: &[place(K::Terminal, "Open in terminal", L::SquareTerminal, T::BACKGROUND, S::Tools, 10).hint("Ctrl+Shift+`")]),
     c!(OpenTerminalAdmin, Tools, "Open in Terminal as administrator", "Opens an elevated terminal in this folder.", ShieldCheck, [], keywords: &["elevated", "admin"], platforms: Platforms::WINDOWS),
     c!(OpenInIde, Tools, "Open in editor", "Opens this folder in your code editor.", Code, [], keywords: &["ide", "vscode"]),
     c!(CompareFolders, Tools, "Compare folders", "Marks what differs between the two panes' folders: only here, newer, older, other size.", Columns2, [], keywords: &["diff", "difference", "sync", "dual pane"], since: "0.9.5"),
-    c!(FindDuplicates, Tools, "Find duplicates", "Looks for files with identical content in this folder or the selected folders.", Copy, [], keywords: &["duplicate", "same files", "identical", "free space", "clean up"], since: "0.9.5"),
-    c!(FindBuildJunk, Tools, "Find build junk", "Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin.", Eraser, [], keywords: &["node_modules", "target", "venv", "pycache", "clean up", "free space", "developer", "build"], since: "0.9.5"),
+    c!(FindDuplicates, Tools, "Find duplicates", "Looks for files with identical content in this folder or the selected folders.", Copy, [], keywords: &["duplicate", "same files", "identical", "free space", "clean up"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::FindDuplicates, "Find duplicates", L::Copy, T::BACKGROUND, S::Organize, 90).when(|c| !c.in_search && !c.archive_path && !c.ftp)]),
+    c!(FindBuildJunk, Tools, "Find build junk", "Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin.", Eraser, [], keywords: &["node_modules", "target", "venv", "pycache", "clean up", "free space", "developer", "build"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::FindBuildJunk, "Find build junk", L::Eraser, T::BACKGROUND, S::Organize, 100).when(|c| !c.in_search && !c.archive_path && !c.ftp)]),
     c!(ShowChanges, Tools, "Show changes", "Lists every changed, new, deleted and renamed file of the git repository this folder is in, grouped by folder, with the difference of each in the preview pane. It only reads: nothing in the repository is changed.", GitCompare, [], keywords: &["git", "diff", "changes", "modified", "status", "uncommitted", "developer"], since: "0.9.5"),
     c!(ShowWorktrees, Tools, "Worktrees", "Lists the worktrees of the git repository this folder is in, by branch, to jump to one. It only reads.", GitBranch, [], keywords: &["git", "worktree", "branch", "checkout", "developer"], since: "0.9.5"),
     c!(NewWorktree, Tools, "New worktree…", "Adds a second working folder to the git repository this folder is in, on a new branch from the current head or on an existing branch, and opens it in a new tab. Nothing that exists is changed.", GitBranchPlus, [], keywords: &["git", "worktree", "branch", "developer"], since: "0.9.5"),
-    c!(OrganizeFolder, Tools, "Organize folder", "Sorts the folder's files into folders by kind.", WandSparkles, [], keywords: &["tidy", "sort", "clean up"]),
+    c!(OrganizeFolder, Tools, "Organize folder", "Sorts the folder's files into folders by kind.", WandSparkles, [], keywords: &["tidy", "sort", "clean up"], places: Places::LISTED_MENU, menu: &[place(K::OrganizeFolder, "Organize folder", L::WandSparkles, T::BACKGROUND, S::Tools, 20).when(|c| !c.in_search && c.organizer)]),
     c!(ToggleTheme, View, "Light / dark theme", "Switches between the light and the dark theme.", SunMoon, [w("ctrl-alt-t")], keywords: &["dark mode"]),
     c!(OpenInNewWindow, Tabs, "Open in new window", "Opens the selected folder in a new window.", AppWindow, [f("ctrl-alt-enter")]),
     c!(SelectAll, Selection, "Select all", "Selects every item in the folder.", SquareCheck, [f("ctrl-a")]),
@@ -322,15 +330,15 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CutItems, Files, "Cut", "Takes the selected items to paste them somewhere else.", Scissors, [f("ctrl-x")], keywords: &["move"]),
     c!(PasteItems, Files, "Paste", "Puts the copied or cut items into this folder.", ClipboardPaste, [f("ctrl-v")]),
     c!(PasteIntoSelected, Files, "Paste into selected folder", "Puts the copied items into the selected folder.", ClipboardPaste, [f("ctrl-shift-v")]),
-    c!(PasteShortcut, Files, "Paste as shortcut", "Makes shortcuts to the copied items here.", Link, [], keywords: &["link"]),
+    c!(PasteShortcut, Files, "Paste as shortcut", "Makes shortcuts to the copied items here.", Link, [], keywords: &["link"], places: Places::LISTED_MENU, menu: &[place(K::PasteShortcut, "Paste shortcut", L::ClipboardPaste, T::BACKGROUND, S::Organize, 40).when(|c| !c.in_archive)]),
     c!(DeleteItems, Files, "Move to Recycle Bin", "Moves the selected items to the Recycle Bin.", Trash, [f("delete"), f("ctrl-d")], keywords: &["delete", "remove"]),
     c!(DeletePermanently, Files, "Delete permanently", "Deletes the selected items without the Recycle Bin.", TrashOff, [f("shift-delete")], keywords: &["remove", "erase"]),
     c!(RenameItem, Files, "Rename", "Renames the selected item.", Pencil, [f("f2")]),
     c!(DuplicateItems, Files, "Duplicate", "Makes a copy of the selected items next to them.", CopyPlus, [f("ctrl-alt-d")]),
     c!(CopyToOtherPane, Panes, "Copy to other pane", "Copies the selected items into the other pane's folder.", CopyPlus, [f("shift-f5")]),
     c!(MoveToOtherPane, Panes, "Move to other pane", "Moves the selected items into the other pane's folder.", MoveRight, [f("shift-f6")]),
-    c!(Undo, Files, "Undo", "Takes back the last copy, move, rename or delete.", Undo2, [f("ctrl-z")]),
-    c!(CopyPath, CopyPath, "Copy path", "Copies the full path of the selected items.", Link, [f("ctrl-shift-c")]),
+    c!(Undo, Files, "Undo", "Takes back the last copy, move, rename or delete.", Undo2, [f("ctrl-z")], places: Places::LISTED_MENU, menu: &[place(K::Undo, "Undo", L::Undo2, T::BACKGROUND, S::Organize, 10).hint("Ctrl+Z").when(|c| c.undo.is_some())]),
+    c!(CopyPath, CopyPath, "Copy path", "Copies the full path of the selected items.", Link, [f("ctrl-shift-c")], places: Places::LISTED_MENU, menu: &[place(K::CopyPath, "Copy path", L::ClipboardCopy, T::BACKGROUND, S::CopyPath, 60)]),
     c!(CopyPathQuoted, CopyPath, "Copy path as quoted", "Copies the paths in quotes, ready for a command line.", Link, [f("ctrl-alt-c")]),
     c!(CopyPathName, CopyPath, "Copy path as name only", "Copies just the names of the selected items.", Link, [], since: "0.9.5"),
     c!(CopyPathFolder, CopyPath, "Copy path as folder path", "Copies the path of the folder the items are in.", Link, [], since: "0.9.5"),
@@ -339,7 +347,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CopyPathAt, CopyPath, "Copy path as @path", "Copies the paths with an @ in front, as coding assistants take them.", Link, [], keywords: &["ai", "agent"], since: "0.9.5"),
     c!(CopyPathWsl, CopyPath, "Copy path as WSL path", "Copies the paths as Linux under WSL sees them (/mnt/c/...).", Link, [], keywords: &["linux"], since: "0.9.5", platforms: Platforms::WINDOWS),
     c!(CopyPathUrl, CopyPath, "Copy path as file URL", "Copies the paths as file:/// addresses.", Link, [], keywords: &["uri", "link"], since: "0.9.5"),
-    c!(CopyAsContext, CopyPath, "Copy as context", "Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files.", FileText, [], keywords: &["ai", "llm", "prompt", "claude", "chatgpt", "tokens", "agent"], since: "0.9.5"),
+    c!(CopyAsContext, CopyPath, "Copy as context", "Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files.", FileText, [], keywords: &["ai", "llm", "prompt", "claude", "chatgpt", "tokens", "agent"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::CopyAsContext, "Copy as context", L::FileText, T::BACKGROUND, S::Organize, 70).when(|c| !c.in_archive)]),
     c!(OpenWith, Files, "Open with…", "Opens the selected file in a program you choose.", AppWindow, []),
     c!(Properties, Files, "Properties", "Shows the details of the selected items.", Info, [f("alt-enter")], keywords: &["info", "size", "attributes"]),
     c!(ShowContextMenu, Files, "Context menu", "Opens the right-click menu for the selected items.", Menu, [f("shift-f10"), f("menu")], keywords: &["right click"]),
@@ -360,7 +368,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(PageDown, Selection, "Page down", "Moves the selection down by a screenful.", ArrowDown, [f("pagedown")], places: PAGE_ONLY),
     c!(PageUp, Selection, "Page up", "Moves the selection up by a screenful.", ArrowUp, [f("pageup")], places: PAGE_ONLY),
     c!(ClearSelection, Selection, "Clear selection", "Selects nothing.", X, [f("escape")], places: PAGE_ONLY),
-    c!(Redo, Files, "Redo", "Does again what Undo took back.", Redo2, [f("ctrl-y")], places: PAGE_ONLY),
+    c!(Redo, Files, "Redo", "Does again what Undo took back.", Redo2, [f("ctrl-y")], places: Places::PAGE_MENU, menu: &[place(K::Redo, "Redo", L::Redo2, T::BACKGROUND, S::Organize, 20).hint("Ctrl+Y").when(|c| c.redo.is_some())]),
     c!(ToggleToolbar, View, "Tool bar", "Shows or hides the tool bar.", PanelTop, [w("ctrl-shift-b")], places: PAGE_ONLY),
     c!(ToggleCommandPalette, App, "Command palette", "Finds any command by typing a few letters of its name, or a path to go to.", Command, [w("ctrl-shift-p"), w("f1")], places: PAGE_ONLY),
     // ---- keyboard plumbing (bound, not listed)
@@ -518,6 +526,13 @@ mod tests {
             for k in c.default_keys {
                 assert!(seen.insert((k.keys, k.ctx)), "{} in {:?} is bound twice (again by {})", k.keys, k.ctx, c.id);
             }
+        }
+    }
+
+    #[test]
+    fn menu_rows_hang_on_commands_that_say_so() {
+        for c in COMMANDS {
+            assert_eq!(!c.menu.is_empty(), c.places.contains(Places::MENU), "{}: places and menu rows differ", c.id);
         }
     }
 

@@ -14,6 +14,7 @@ use leaf_sys::fileops::Transfer;
 
 use crate::fluent_menu::{self, Item, Menu, MenuIcon, Pending, Quick, Sub};
 use crate::folder_view::{FolderEvent, FolderView, GroupBy, ViewMode};
+use crate::menu_model::{Entry, MenuContext, MenuPlace, Slot, Target, plan};
 use crate::t;
 
 /// Shell verbs we show as our own commands (or that make no sense here), hidden from
@@ -60,6 +61,78 @@ fn icon(l: L) -> MenuIcon {
 fn cursor() -> (i32, i32) {
     let pt = leaf_sys::input::cursor_pos();
     (pt.x, pt.y)
+}
+
+/// What the builders of a menu's entries read: the view, the folder the menu acts on, the user's own actions.
+struct Build<'a> {
+    me: &'a Me,
+    v: &'a FolderView,
+    cx: &'a App,
+    ctx: &'a MenuContext,
+    /// The folder the menu acts on: the one of the list, or the selected folder.
+    dir: PathBuf,
+    own: Option<Item>,
+}
+
+/// The items of a menu: the rows of `menu_model` that this context shows, each made by its builder.
+fn generate(b: &Build) -> Vec<Item> {
+    plan(b.ctx)
+        .into_iter()
+        .map(|e| match e {
+            Entry::Separator => Item::Separator,
+            Entry::Row(p) => {
+                let item = build_item(p, b);
+                if p.hint.is_empty() { item } else { item.hint(p.hint) }
+            }
+        })
+        .collect()
+}
+
+/// The entry of one row: its label and icon from the row, what it does from here.
+fn build_item(p: &MenuPlace, b: &Build) -> Item {
+    let (me, v, cx) = (b.me, b.v, b.cx);
+    let (label, ic) = (p.label(b.ctx), icon(p.icon));
+    let d = b.dir.clone();
+    match p.slot {
+        Slot::Layout => Item::sub(label, ic, layout_items(me, v.view_mode, v.grid_style)),
+        Slot::Sort => Item::sub(label, ic, sort_items(me, v.sort, v.sort_offers(cx))),
+        Slot::GroupBy => {
+            let mut group_menu = group_items(me, v.group);
+            group_menu.extend(v.property_group_items(me, cx));
+            Item::sub(label, ic, group_menu)
+        }
+        Slot::Refresh => Item::action(label, ic, act(me, |v, _, cx| v.refresh(cx))),
+        // what Ctrl+Z and Ctrl+Y would do, when there is something (issue 55: Explorer's "Undo Delete")
+        Slot::Undo => Item::action(label, ic, |_, cx| crate::undo::undo(cx)),
+        Slot::Redo => Item::action(label, ic, |_, cx| crate::undo::redo(cx)),
+        Slot::New => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "new", fallback: Some(Rc::new(own_new_items(me))) }, click: None },
+        Slot::PasteShortcut => Item::action(label, ic, act(me, |v, w, cx| v.paste_shortcuts(w, cx))).enabled(leaf_sys::clipboard::has_files()),
+        Slot::Pin => Item::action(label, ic, act(me, move |v, _, cx| v.pin(d.clone(), cx))),
+        Slot::CopyPath => Item::action(label, ic, act(me, |v, _, cx| v.copy_path(cx))),
+        Slot::CopyAsContext => Item::action(label, ic, act(me, |v, w, cx| v.copy_as_context(w, cx))),
+        Slot::DiskUsage => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInNewTab(Location::DiskUsage(d.clone()))))),
+        Slot::FindDuplicates => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInNewTab(Location::Duplicates(vec![d.clone()]))))),
+        Slot::FindBuildJunk => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInNewTab(Location::BuildJunk(d.clone()))))),
+        Slot::ShowHidden => Item::action(label, ic, act(me, |v, _, cx| v.toggle_hidden(cx))).checked(v.filter.show_hidden),
+        Slot::HideIgnored => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::ToggleHideIgnored), cx))
+            .checked(cx.global::<crate::settings::Settings>().hide_ignored),
+        Slot::Terminal => Item::action(label, ic, move |_, cx| open_terminal(d.clone(), cx)),
+        // the folder organizer: only where the folder has rules
+        Slot::OrganizeFolder => Item::action(label, ic, move |w, cx| crate::organizer::organize_folder(d.clone(), w, cx)),
+        // Git (Files: initialize / clone from the folder background)
+        Slot::Git => {
+            let mut git_items = Vec::new();
+            if v.git.is_none() {
+                let (m, d) = (me.clone(), d.clone());
+                git_items.push(Item::action(t!("Initialize Git repository"), icon(L::GitBranchPlus), move |_, cx| crate::git_ui::init_repo(m.clone(), d.clone(), cx)));
+            }
+            let m = me.clone();
+            git_items.push(Item::action(t!("Clone repository…"), icon(L::GitFork), move |w, cx| crate::git_ui::clone_dialog(m.clone(), d.clone(), w, cx)));
+            Item::sub(label, ic, git_items)
+        }
+        Slot::YourActions => b.own.clone().expect("a row for the user's actions is shown only when there are some"),
+        Slot::More => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "more", fallback: None }, click: None },
+    }
 }
 
 impl FolderView {
@@ -445,86 +518,29 @@ impl FolderView {
         Menu { quick, items: v }
     }
 
+    /// The folder background's menu: made from the rows of `menu_model` for this context.
     fn background_menu(&self, me: &Me, dir: &std::path::Path, cx: &mut Context<Self>) -> Menu {
-        let mode = self.view_mode;
-        let sort = self.sort;
-        let group = self.group;
-        let mut v: Vec<Item> = Vec::new();
-        v.push(Item::sub(t!("Layout"), icon(L::LayoutGrid), layout_items(me, mode, self.grid_style)));
-        v.push(Item::sub(t!("Sort"), icon(L::ArrowUpDown), sort_items(me, sort, self.sort_offers(cx))));
-        let mut group_menu = group_items(me, group);
-        group_menu.extend(self.property_group_items(me, cx));
-        v.push(Item::sub(t!("Group by"), icon(L::ListTree), group_menu));
-        v.push(Item::action(t!("Refresh"), icon(L::RotateCw), act(me, |v, _, cx| v.refresh(cx))).hint("Ctrl+R"));
-        v.push(Item::Separator);
-        // what Ctrl+Z and Ctrl+Y would do, when there is something (issue 55: Explorer's "Undo Delete")
+        let in_search = self.is_search();
+        let archive_path = crate::archive_view::is_browsable_path(dir);
         let (undo, redo) = crate::undo::next_labels();
-        if undo.is_some() {
-            v.push(Item::action(undo_text(undo), icon(L::Undo2), |_, cx| crate::undo::undo(cx)).hint("Ctrl+Z"));
-        }
-        if redo.is_some() {
-            v.push(Item::action(redo_text(redo), icon(L::Redo2), |_, cx| crate::undo::redo(cx)).hint("Ctrl+Y"));
-        }
-        let fallback = Rc::new(own_new_items(me));
-        v.push(Item::Sub { label: t!("New").into(), icon: icon(L::CirclePlus), items: Sub::Pending { key: "new", fallback: Some(fallback) }, click: None });
-        let in_archive = crate::archive_view::split(dir).is_some() && !dir.exists();
-        if !in_archive {
-            v.push(Item::action(t!("Paste shortcut"), icon(L::ClipboardPaste), act(me, |v, w, cx| v.paste_shortcuts(w, cx))).enabled(leaf_sys::clipboard::has_files()));
-        }
-        let d = dir.to_path_buf();
-        v.push(Item::action(t!("Pin to sidebar"), icon(L::Pin), act(me, move |v, _, cx| v.pin(d.clone(), cx))));
-        v.push(Item::action(t!("Copy path"), icon(L::ClipboardCopy), act(me, |v, _, cx| v.copy_path(cx))));
-        if !in_archive {
-            v.push(Item::action(t!("Copy as context"), icon(L::FileText), act(me, |v, w, cx| v.copy_as_context(w, cx))));
-        }
-        if !self.is_search() && !crate::archive_view::is_browsable_path(dir) && !leaf_sys::ftp::is_ftp(dir) {
-            let d = dir.to_path_buf();
-            v.push(Item::action(t!("Show disk usage"), icon(L::ChartPie), act(me, move |_, _, cx| {
-                cx.emit(FolderEvent::OpenInNewTab(Location::DiskUsage(d.clone())))
-            })));
-            let d = dir.to_path_buf();
-            v.push(Item::action(t!("Find duplicates"), icon(L::Copy), act(me, move |_, _, cx| {
-                cx.emit(FolderEvent::OpenInNewTab(Location::Duplicates(vec![d.clone()])))
-            })));
-            let d = dir.to_path_buf();
-            v.push(Item::action(t!("Find build junk"), icon(L::Eraser), act(me, move |_, _, cx| {
-                cx.emit(FolderEvent::OpenInNewTab(Location::BuildJunk(d.clone())))
-            })));
-        }
-        let show_hidden = self.filter.show_hidden;
-        v.push(Item::action(t!("Show hidden items"), icon(L::Eye), act(me, |v, _, cx| v.toggle_hidden(cx))).checked(show_hidden).hint("Ctrl+H"));
-        v.push(
-            Item::action(t!("Hide git-ignored files"), icon(L::EyeOff), |w, cx| w.dispatch_action(Box::new(crate::actions::ToggleHideIgnored), cx))
-                .checked(cx.global::<crate::settings::Settings>().hide_ignored),
-        );
-        v.push(Item::Separator);
-        {
-            let d = dir.to_path_buf();
-            v.push(Item::action(t!("Open in terminal"), icon(L::SquareTerminal), move |_, cx| open_terminal(d.clone(), cx)).hint("Ctrl+Shift+`"));
-        }
-        // the folder organizer: only where the folder has rules
-        if !self.is_search() && crate::organizer::has_rules_for(dir, cx) {
-            let d = dir.to_path_buf();
-            v.push(Item::action(t!("Organize folder"), icon(L::WandSparkles), move |w, cx| crate::organizer::organize_folder(d.clone(), w, cx)));
-        }
-        // Git (Files: initialize / clone from the folder background)
-        if !self.is_search() && !crate::archive_view::is_browsable_path(dir) {
-            let mut git_items = Vec::new();
-            if self.git.is_none() {
-                let (m, d) = (me.clone(), dir.to_path_buf());
-                git_items.push(Item::action(t!("Initialize Git repository"), icon(L::GitBranchPlus), move |_, cx| crate::git_ui::init_repo(m.clone(), d.clone(), cx)));
-            }
-            let (m, d) = (me.clone(), dir.to_path_buf());
-            git_items.push(Item::action(t!("Clone repository…"), icon(L::GitFork), move |w, cx| crate::git_ui::clone_dialog(m.clone(), d.clone(), w, cx)));
-            v.push(Item::sub("Git", icon(L::GitBranch), git_items));
-        }
-        if let Some(own) = crate::custom_actions::menu_section(&[], dir, true, cx) {
-            v.push(Item::Separator);
-            v.push(own);
-        }
-        v.push(Item::Separator);
-        v.push(Item::Sub { label: t!("Show more options").into(), icon: icon(L::Ellipsis), items: Sub::Pending { key: "more", fallback: None }, click: None });
-        Menu { quick: self.quick_clipboard(me, false), items: v }
+        let own = crate::custom_actions::menu_section(&[], dir, true, cx);
+        let ctx = MenuContext {
+            target: Target::Background,
+            in_archive: crate::archive_view::split(dir).is_some() && !dir.exists(),
+            in_search,
+            in_repository: self.git.is_some(),
+            windows: cfg!(windows),
+            prefs: cx.global::<crate::settings::Settings>().menu.clone(),
+            archive_path,
+            ftp: leaf_sys::ftp::is_ftp(dir),
+            organizer: !in_search && crate::organizer::has_rules_for(dir, cx),
+            own_actions: own.is_some(),
+            undo: undo.map(str::to_string),
+            redo: redo.map(str::to_string),
+            ..Default::default()
+        };
+        let build = Build { me, v: self, cx, ctx: &ctx, dir: dir.to_path_buf(), own };
+        Menu { quick: self.quick_clipboard(me, false), items: generate(&build) }
     }
 
     /// F2 from the menu: bulk rename for several items, inline for one.
@@ -549,14 +565,14 @@ impl FolderView {
 }
 
 /// "Geri al: Silme", or plain "Geri al" when there is nothing to undo.
-fn undo_text(what: Option<&str>) -> String {
+pub(crate) fn undo_text(what: Option<&str>) -> String {
     match what {
         Some(w) => format!("{}: {w}", t!("Undo")),
         None => t!("Undo").to_string(),
     }
 }
 
-fn redo_text(what: Option<&str>) -> String {
+pub(crate) fn redo_text(what: Option<&str>) -> String {
     match what {
         Some(w) => format!("{}: {w}", t!("Redo")),
         None => t!("Redo").to_string(),

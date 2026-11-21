@@ -1,0 +1,414 @@
+//! The right-click menu as data. A row of it ([`MenuPlace`]) says where an entry sits (which targets, which section, in what order),
+//! when it is there (a predicate over [`MenuContext`]) and which of Settings > Right-click menu's switches hides it. The rows that are
+//! a command of the registry hang on that command (`CommandSpec::menu`); the others are in [`MENU_ONLY`]. [`plan`] turns the rows
+//! and a context into the list of what the menu shows, separators included. `ctx_menu.rs` makes the real items from that list: what
+//! an entry does stays there, in one builder for each [`Slot`].
+//!
+//! Nothing here touches the window, the file system or the settings: a context is plain data, so the menu can be tested by giving
+//! it contexts and comparing what comes out (`menu_snapshots.txt`).
+
+use gpui_kit::assets::IconName as L;
+
+use crate::settings::MenuPrefs;
+
+/// What the menu is opened on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Target {
+    /// The empty part of the file list: the folder itself.
+    #[default]
+    Background,
+    /// One file.
+    File,
+    /// One folder.
+    Folder,
+    /// Several items.
+    Multi,
+    /// An item in an archive, the Recycle Bin, or the sidebar: still made by hand in `ctx_menu.rs`.
+    #[allow(dead_code)]
+    ArchiveItem,
+    #[allow(dead_code)]
+    RecycleItem,
+    #[allow(dead_code)]
+    Sidebar,
+}
+
+/// A set of [`Target`]s. A bit set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Targets(u8);
+
+#[allow(dead_code)]
+impl Targets {
+    pub const BACKGROUND: Targets = Targets(1);
+    pub const FILE: Targets = Targets(2);
+    pub const FOLDER: Targets = Targets(4);
+    pub const MULTI: Targets = Targets(8);
+    pub const ARCHIVE_ITEM: Targets = Targets(16);
+    pub const RECYCLE_ITEM: Targets = Targets(32);
+    pub const SIDEBAR: Targets = Targets(64);
+    /// A selection of files and folders in the file list.
+    pub const ITEMS: Targets = Targets(2 | 4 | 8);
+
+    pub const fn contains(self, t: Target) -> bool {
+        self.0 & (1 << t as u8) != 0
+    }
+}
+
+/// A part of the menu. Sections of one block (see [`Section::block`]) follow each other without a separator.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Section {
+    /// How the folder is shown: layout, sort, group, refresh.
+    View,
+    /// Opening: Open, in a new tab, Open with, Send to.
+    Open,
+    /// The path of the item on the clipboard.
+    CopyPath,
+    /// Doing something with the items or the folder: undo, new, duplicate, pin, the type's own actions.
+    Organize,
+    /// The folder's tools: terminal, organizer, Git.
+    Tools,
+    /// Packing and spreading the selection: archives, tags, the shelf, the other pane.
+    Pack,
+    /// "Open in terminal" under a selected folder.
+    Terminal,
+    /// The user's own actions (`actions.toml`).
+    YourActions,
+    /// "Show more options": the shell's own items.
+    More,
+}
+
+/// Whether a block of the menu has a separator before it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sep {
+    None,
+    /// Always, also when the block has nothing (as the hand-written menu did).
+    Always,
+    /// Only when the block has something.
+    IfAny,
+}
+
+impl Section {
+    /// The blocks of the menu, top to bottom; a separator may stand between two of them.
+    pub const fn block(self) -> u8 {
+        match self {
+            Section::View | Section::Open => 0,
+            Section::CopyPath | Section::Organize => 1,
+            Section::Tools | Section::Pack => 2,
+            Section::Terminal => 3,
+            Section::YourActions => 4,
+            Section::More => 5,
+        }
+    }
+}
+
+/// The separator before block `b`.
+pub const fn sep_before(block: u8) -> Sep {
+    match block {
+        0 => Sep::None,
+        3 | 4 => Sep::IfAny,
+        _ => Sep::Always,
+    }
+}
+
+/// One of the switches of Settings > Right-click menu: it hides every row that names it. Stored in `settings.toml` `[menu]` under `key`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Switch {
+    pub key: &'static str,
+    /// The English text beside the switch.
+    pub label: &'static str,
+    /// Where it stands in the list.
+    pub pos: u8,
+}
+
+pub const SW_NEW_TAB: Switch = Switch { key: "open_in_new_tab", label: "Open in new tab", pos: 0 };
+pub const SW_NEW_WINDOW: Switch = Switch { key: "open_in_new_window", label: "Open in new window", pos: 1 };
+pub const SW_COPY_PATH: Switch = Switch { key: "copy_path", label: "Copy item path", pos: 2 };
+pub const SW_SHORTCUT: Switch = Switch { key: "create_shortcut", label: "Create shortcut", pos: 3 };
+pub const SW_PIN: Switch = Switch { key: "pin", label: "Pin to sidebar", pos: 4 };
+pub const SW_COMPRESS: Switch = Switch { key: "compress", label: "Compress / Extract", pos: 5 };
+pub const SW_TAGS: Switch = Switch { key: "tags", label: "Tags", pos: 6 };
+pub const SW_SHELF: Switch = Switch { key: "shelf", label: "Add to shelf", pos: 7 };
+pub const SW_TERMINAL: Switch = Switch { key: "terminal", label: "Open in terminal", pos: 8 };
+pub const SW_SEND_TO: Switch = Switch { key: "send_to", label: "Send to", pos: 9 };
+
+/// What a row's builder in `ctx_menu.rs` makes. One variant for each kind of entry; the label, icon and shortcut hint come from the row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Slot {
+    Layout,
+    Sort,
+    GroupBy,
+    Refresh,
+    Undo,
+    Redo,
+    New,
+    PasteShortcut,
+    Pin,
+    CopyPath,
+    CopyAsContext,
+    DiskUsage,
+    FindDuplicates,
+    FindBuildJunk,
+    ShowHidden,
+    HideIgnored,
+    Terminal,
+    OrganizeFolder,
+    Git,
+    YourActions,
+    More,
+}
+
+/// Whether a row is in the menu, given the situation.
+pub type MenuWhen = fn(&MenuContext) -> bool;
+
+/// Where an entry sits in the menu.
+#[derive(Clone, Copy, Debug)]
+pub struct MenuPlace {
+    pub slot: Slot,
+    /// The English text of the entry (a few have a dynamic one, see [`MenuPlace::label`]).
+    pub label: &'static str,
+    pub icon: L,
+    /// The shortcut shown at the right; empty: none.
+    pub hint: &'static str,
+    pub targets: Targets,
+    pub section: Section,
+    /// Within its block, the lower first.
+    pub order: u16,
+    /// `None`: always (for its targets).
+    pub when: Option<MenuWhen>,
+    pub switch: Option<Switch>,
+    /// The entry opens a submenu.
+    pub sub: bool,
+}
+
+pub const fn place(slot: Slot, label: &'static str, icon: L, targets: Targets, section: Section, order: u16) -> MenuPlace {
+    MenuPlace { slot, label, icon, hint: "", targets, section, order, when: None, switch: None, sub: false }
+}
+
+impl MenuPlace {
+    pub const fn hint(mut self, hint: &'static str) -> Self {
+        self.hint = hint;
+        self
+    }
+    pub const fn when(mut self, when: MenuWhen) -> Self {
+        self.when = Some(when);
+        self
+    }
+    pub const fn switch(mut self, switch: Switch) -> Self {
+        self.switch = Some(switch);
+        self
+    }
+    pub const fn sub(mut self) -> Self {
+        self.sub = true;
+        self
+    }
+
+    /// The text shown (translated).
+    pub fn label(&self, ctx: &MenuContext) -> String {
+        match self.slot {
+            Slot::Undo => crate::ctx_menu::undo_text(ctx.undo.as_deref()),
+            Slot::Redo => crate::ctx_menu::redo_text(ctx.redo.as_deref()),
+            _ => crate::i18n::t(self.label).to_string(),
+        }
+    }
+
+    /// Whether the menu has it in this situation: the target, the switch of Settings and the row's own condition.
+    pub fn shown(&self, ctx: &MenuContext) -> bool {
+        self.targets.contains(ctx.target) && self.switch.is_none_or(|s| ctx.prefs.get(s.key)) && self.when.is_none_or(|w| w(ctx))
+    }
+}
+
+/// What a row's condition can look at: the situation the menu is opened in, read once when it opens.
+#[derive(Clone, Debug, Default)]
+pub struct MenuContext {
+    pub target: Target,
+    /// How many items are selected (0 on the background).
+    pub count: usize,
+    pub single_dir: bool,
+    /// One archive that opens like a folder.
+    pub single_archive: bool,
+    /// Something that is not one folder is selected.
+    pub has_files: bool,
+    /// The selection is inside an archive (or, on the background, the folder is).
+    pub in_archive: bool,
+    /// The folder of the list is the result of a search.
+    pub in_search: bool,
+    pub dual: bool,
+    /// The folder is a Git repository.
+    pub in_repository: bool,
+    /// The system is Windows.
+    pub windows: bool,
+    pub prefs: MenuPrefs,
+    pub show_flatten: bool,
+    pub name_index: bool,
+    /// "Send to" has its place: files of one folder on disk.
+    pub send_to_fits: bool,
+    /// The folder the menu acts on (the selected one, or the one of the list) is an archive's folder.
+    pub archive_path: bool,
+    /// The same folder is on an FTP server.
+    pub ftp: bool,
+    /// The folder has rules for the organizer.
+    pub organizer: bool,
+    /// Every selected item can be rotated.
+    pub rotatable: bool,
+    /// The one selected file is a picture.
+    pub image: bool,
+    /// The one selected file can be run.
+    pub runnable: bool,
+    /// Every selected item is a font.
+    pub fonts: bool,
+    /// Every selected item is an archive that can be extracted.
+    pub extractable: bool,
+    /// Nearby sharing is on.
+    pub nearby: bool,
+    /// The user has actions for this selection (`actions.toml`).
+    pub own_actions: bool,
+    /// What Ctrl+Z would undo, when there is something.
+    pub undo: Option<String>,
+    pub redo: Option<String>,
+    /// The alias of the folder, when it has one.
+    pub alias: Option<String>,
+}
+
+impl MenuContext {
+    /// Which [`Target`] a selection of `count` items is (`single_dir`: it is one folder).
+    pub fn target_of(count: usize, single_dir: bool) -> Target {
+        match (count, single_dir) {
+            (0, _) => Target::Background,
+            (1, true) => Target::Folder,
+            (1, false) => Target::File,
+            _ => Target::Multi,
+        }
+    }
+}
+
+// ---- the rows that are not a command of the registry
+
+use Section as S;
+use Slot as K;
+use Targets as T;
+
+/// Rows with no command of their own in the registry.
+pub static MENU_ONLY: &[MenuPlace] = &[
+    // ---- folder background
+    place(K::Layout, "Layout", L::LayoutGrid, T::BACKGROUND, S::View, 10).sub(),
+    place(K::Sort, "Sort", L::ArrowUpDown, T::BACKGROUND, S::View, 20).sub(),
+    place(K::GroupBy, "Group by", L::ListTree, T::BACKGROUND, S::View, 30).sub(),
+    place(K::New, "New", L::CirclePlus, T::BACKGROUND, S::Organize, 30).sub(),
+    place(K::Pin, "Pin to sidebar", L::Pin, T::BACKGROUND, S::Organize, 50),
+    place(K::DiskUsage, "Show disk usage", L::ChartPie, T::BACKGROUND, S::Organize, 80).when(|c| !c.in_search && !c.archive_path && !c.ftp),
+    place(K::Git, "Git", L::GitBranch, T::BACKGROUND, S::Tools, 30).sub().when(|c| !c.in_search && !c.archive_path),
+    place(K::YourActions, "Your actions", L::Zap, T::BACKGROUND, S::YourActions, 10).sub().when(|c| c.own_actions),
+    place(K::More, "Show more options", L::Ellipsis, T::BACKGROUND, S::More, 10).sub(),
+];
+
+/// Every row, the registry's commands' first.
+pub fn places() -> impl Iterator<Item = &'static MenuPlace> {
+    crate::registry::COMMANDS.iter().flat_map(|c| c.menu.iter()).chain(MENU_ONLY.iter())
+}
+
+/// One line of the menu.
+#[derive(Clone, Copy, Debug)]
+pub enum Entry {
+    Separator,
+    Row(&'static MenuPlace),
+}
+
+/// What the menu shows in this situation, top to bottom, separators in.
+pub fn plan(ctx: &MenuContext) -> Vec<Entry> {
+    let mut rows: Vec<&'static MenuPlace> = places().filter(|p| p.shown(ctx)).collect();
+    rows.sort_by_key(|p| (p.section.block(), p.order));
+    let mut out = Vec::with_capacity(rows.len() + 6);
+    let mut first = true;
+    for block in 0..=5u8 {
+        let mine: Vec<&&'static MenuPlace> = rows.iter().filter(|p| p.section.block() == block).collect();
+        match sep_before(block) {
+            Sep::Always if !first => out.push(Entry::Separator),
+            Sep::IfAny if !mine.is_empty() && !first => out.push(Entry::Separator),
+            _ => {}
+        }
+        if !mine.is_empty() {
+            first = false;
+        }
+        out.extend(mine.into_iter().map(|p| Entry::Row(*p)));
+    }
+    out
+}
+
+/// The switches of Settings > Right-click menu, from the rows that name one, in the order of their `pos`.
+pub fn switches() -> Vec<Switch> {
+    let mut out: Vec<Switch> = Vec::new();
+    for s in places().filter_map(|p| p.switch) {
+        if !out.iter().any(|o| o.key == s.key) {
+            out.push(s);
+        }
+    }
+    out.sort_by_key(|s| s.pos);
+    out
+}
+
+/// The menu as text, one line for each entry: `label[ >] | Icon[ | hint]`, a separator as `-`.
+#[cfg(test)]
+pub fn render(ctx: &MenuContext) -> String {
+    let mut s = String::new();
+    for e in plan(ctx) {
+        match e {
+            Entry::Separator => s.push_str("-\n"),
+            Entry::Row(p) => {
+                s.push_str(&p.label(ctx));
+                if p.sub {
+                    s.push_str(" >");
+                }
+                s.push_str(&format!(" | {:?}", p.icon));
+                if !p.hint.is_empty() {
+                    s.push_str(&format!(" | {}", p.hint));
+                }
+                s.push('\n');
+            }
+        }
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cases of `menu_snapshots.txt` whose name starts with `prefix`, in the file's order: (name, text).
+    fn cases(prefix: &str) -> Vec<(String, String)> {
+        let file = include_str!("menu_snapshots.txt").replace("\r\n", "\n");
+        let mut out: Vec<(String, String)> = Vec::new();
+        for part in file.split("\n## ").skip(1) {
+            let (name, body) = part.split_once('\n').unwrap();
+            if name.starts_with(prefix) {
+                out.push((name.to_string(), body.trim_end().to_string() + "\n"));
+            }
+        }
+        out
+    }
+
+    fn check(name: &str, ctx: MenuContext, prefix: &str) {
+        let want = cases(prefix).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no snapshot {name}")).1;
+        let have = render(&ctx);
+        assert_eq!(have, want, "the menu for \"{name}\" is not the recorded one");
+    }
+
+    #[test]
+    fn background_menu_is_as_recorded() {
+        let bg = MenuContext { target: Target::Background, windows: true, ..Default::default() };
+        assert_eq!(cases("background").len(), 4);
+        check("background plain", bg.clone(), "background");
+        check(
+            "background busy",
+            MenuContext {
+                undo: Some("Delete".into()),
+                redo: Some("Rename".into()),
+                in_repository: true,
+                organizer: true,
+                own_actions: true,
+                ..bg.clone()
+            },
+            "background",
+        );
+        check("background in archive", MenuContext { in_archive: true, archive_path: true, ..bg.clone() }, "background");
+        check("background search results", MenuContext { in_search: true, ..bg }, "background");
+    }
+}

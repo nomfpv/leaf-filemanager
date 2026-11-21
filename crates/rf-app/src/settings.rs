@@ -245,6 +245,48 @@ pub struct MenuPrefs {
     pub send_to: bool,
     /// Shell extensions under "Show more options" (off = listed at the bottom of the menu).
     pub shell_submenu: bool,
+    /// Switches of rows added later (`menu_model::Switch::key`): the ones with no field of their own. Missing: on.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub more: std::collections::BTreeMap<String, bool>,
+}
+
+impl MenuPrefs {
+    /// Whether the switch `key` of Settings > Right-click menu is on.
+    pub fn get(&self, key: &str) -> bool {
+        match key {
+            "open_in_new_tab" => self.open_in_new_tab,
+            "open_in_new_window" => self.open_in_new_window,
+            "copy_path" => self.copy_path,
+            "create_shortcut" => self.create_shortcut,
+            "pin" => self.pin,
+            "compress" => self.compress,
+            "tags" => self.tags,
+            "shelf" => self.shelf,
+            "terminal" => self.terminal,
+            "send_to" => self.send_to,
+            "shell_submenu" => self.shell_submenu,
+            k => self.more.get(k).copied().unwrap_or(true),
+        }
+    }
+
+    pub fn set(&mut self, key: &str, on: bool) {
+        match key {
+            "open_in_new_tab" => self.open_in_new_tab = on,
+            "open_in_new_window" => self.open_in_new_window = on,
+            "copy_path" => self.copy_path = on,
+            "create_shortcut" => self.create_shortcut = on,
+            "pin" => self.pin = on,
+            "compress" => self.compress = on,
+            "tags" => self.tags = on,
+            "shelf" => self.shelf = on,
+            "terminal" => self.terminal = on,
+            "send_to" => self.send_to = on,
+            "shell_submenu" => self.shell_submenu = on,
+            k => {
+                self.more.insert(k.to_string(), on);
+            }
+        }
+    }
 }
 
 impl Default for MenuPrefs {
@@ -261,6 +303,7 @@ impl Default for MenuPrefs {
             terminal: true,
             send_to: true,
             shell_submenu: true,
+            more: Default::default(),
         }
     }
 }
