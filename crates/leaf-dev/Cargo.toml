@@ -1,6 +1,6 @@
 [package]
 name = "leaf-dev"
-description = "leaf: developer helpers (secret guard, copy as context), pure Rust, no system calls"
+description = "leaf: developer helpers (secret guard, copy as context, git reading, checkpoints)"
 version.workspace = true
 edition.workspace = true
 license = "MIT"
@@ -9,3 +9,4 @@ publish.workspace = true
 [dependencies]
 ignore = "0.4"
 regex.workspace = true
+reflink-copy = "0.1"
