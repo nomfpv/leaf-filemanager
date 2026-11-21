@@ -386,13 +386,21 @@ pub fn measure_launch(app: &App, arg: &std::ffi::OsStr, title: &str, quiet: Dura
     };
     let window_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let h = hwnd(win.hwnd);
+    // the app started with LEAF_OFFSCREEN=1 parks its window outside every monitor: only the size
+    // is set (same area as on screen), it is neither moved nor raised
+    let off = app.env.iter().any(|(k, v)| k == "LEAF_OFFSCREEN" && !v.is_empty() && v != "0");
     unsafe {
-        let _ = MoveWindow(h, 80, 80, SIZE.0, SIZE.1, true);
-        // On top of everything, without taking the focus: Windows opens a window started from
-        // the background behind the active one, and some apps draw less (or not at all) while
-        // covered, which would skew the comparison. Every app is measured visible.
-        use windows::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos};
-        let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        if off {
+            use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos};
+            let _ = SetWindowPos(h, None, 0, 0, SIZE.0, SIZE.1, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER);
+        } else {
+            let _ = MoveWindow(h, 80, 80, SIZE.0, SIZE.1, true);
+            // On top of everything, without taking the focus: Windows opens a window started from
+            // the background behind the active one, and some apps draw less (or not at all) while
+            // covered, which would skew the comparison. Every app is measured visible.
+            use windows::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos};
+            let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        }
     }
     let proc = Proc::open(win.pid);
     let shared = proc.as_ref().and_then(|p| p.times()).is_some_and(|(created, _)| created < launched_at);

@@ -170,7 +170,7 @@ pub fn open_main_window_made(
     let (bounds, display_id) = match bounds {
         Some(bounds) => (bounds, None),
         None => {
-            let restored = if workspace::any_main_window(cx) { None } else { restored_bounds(cx) };
+            let restored = if workspace::any_main_window(cx) || rf_win::window::offscreen() { None } else { restored_bounds(cx) };
             restored.unwrap_or_else(|| (WindowBounds::centered(size(px(1280.), px(800.)), cx), None))
         }
     };
@@ -178,10 +178,13 @@ pub fn open_main_window_made(
         window_bounds: Some(bounds),
         display_id,
         window_min_size: Some(size(px(720.), px(420.))),
+        focus: !rf_win::window::offscreen(),
         window_background: crate::theme::window_material(WindowBackgroundAppearance::MicaBackdrop),
         ..TitleBar::window_options()
     };
-    if let Err(e) = gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| Workspace::new(start, ipc, window, cx))) {
+    let opened = gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| Workspace::new(start, ipc, window, cx)));
+    rf_win::window::park_offscreen();
+    if let Err(e) = opened {
         log::error!("open window: {e:#}");
         rf_win::handover::trace("open window: failed");
         return false;

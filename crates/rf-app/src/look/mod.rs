@@ -142,7 +142,7 @@ impl LookManager {
             window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(r.x), px(r.y)), size: gpui_kit::size(px(r.w), px(r.h)) })),
             window_min_size: Some(gpui_kit::size(px(320.), px(180.))),
             window_background: backdrop(&s),
-            focus: s.look_focus_on_open,
+            focus: s.look_focus_on_open && !rf_win::window::offscreen(),
             ..TitleBar::window_options()
         };
         let show_in_taskbar = s.look_show_in_taskbar;
@@ -155,6 +155,7 @@ impl LookManager {
             cx.new(|cx| LookWindow::new(path, topmost, viewer, prepared, window, cx))
         }) {
             Ok(h) => {
+                rf_win::window::park_offscreen();
                 Self::global(cx).active = Some(h);
                 Self::report_windows(cx);
                 if slow {

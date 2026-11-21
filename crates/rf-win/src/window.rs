@@ -366,3 +366,71 @@ pub fn exists(hwnd: isize) -> bool {
 pub fn foreground() -> isize {
     unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as isize }
 }
+
+// ------------------------------------------------------------------ off-screen test mode
+
+/// `LEAF_OFFSCREEN=1`: automated checks and benchmarks run the app with its windows outside every
+/// monitor, so they never appear in front of the owner's work.
+pub fn offscreen() -> bool {
+    std::env::var("LEAF_OFFSCREEN").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Left edge of the parking spot: right of the whole virtual screen.
+fn offscreen_x() -> i32 {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN};
+    unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN) + 200 }
+}
+
+/// Whether the window is entirely right of the virtual screen (where [`park_offscreen`] puts it).
+pub fn is_parked(hwnd: isize) -> bool {
+    rect(hwnd).is_some_and(|(r, _)| r[0] >= offscreen_x() - 100)
+}
+
+/// In off-screen mode: puts this process's visible top-level windows that are not parked yet right
+/// of the virtual screen (size kept), makes them tool windows (no taskbar button, not in Alt+Tab)
+/// and not topmost, and shows them again without activating. The windows stay shown and rendered.
+/// Call it right after a window is created, before its first frame. Does nothing otherwise.
+pub fn park_offscreen() {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::core::BOOL;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible};
+    if !offscreen() {
+        return;
+    }
+    unsafe extern "system" fn each(h: HWND, l: LPARAM) -> BOOL {
+        let out = unsafe { &mut *(l.0 as *mut Vec<isize>) };
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        if pid == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(h) }.as_bool() {
+            out.push(h.0 as isize);
+        }
+        BOOL(1)
+    }
+    let mut found: Vec<isize> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut found as *mut _ as isize));
+    }
+    for hwnd in found.into_iter().filter(|&h| !is_parked(h)) {
+        park_one(hwnd);
+    }
+}
+
+fn park_one(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, ShowWindow,
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    let h = HWND(hwnd as *mut _);
+    let Some((r, _)) = rect(hwnd) else { return };
+    unsafe {
+        // not on a monitor, not in front, not topmost
+        let _ = SetWindowPos(h, Some(HWND_NOTOPMOST), offscreen_x(), r[1], 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        // the taskbar and Alt+Tab only notice the style change when the window is shown again
+        let _ = ShowWindow(h, SW_HIDE);
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, (ex & !(WS_EX_APPWINDOW.0 as isize)) | WS_EX_TOOLWINDOW.0 as isize);
+        let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(h, None, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+}

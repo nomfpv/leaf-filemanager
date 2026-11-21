@@ -228,6 +228,9 @@ struct MainPlacement {
 
 impl MainPlacement {
     fn capture(window: &Window, cx: &App) -> Option<Self> {
+        if rf_win::window::offscreen() {
+            return None; // a parked test window must not become the saved placement
+        }
         let (b, max) = match window.window_bounds() {
             WindowBounds::Windowed(b) => (b, 0.),
             WindowBounds::Maximized(b) | WindowBounds::Fullscreen(b) => (b, 1.),
