@@ -984,11 +984,14 @@ impl PropsView {
                 ],
             ));
         }
-        out.push(
-            link_button(p, "win-props", L::ExternalLink, t!("Windows properties (previous versions and more)…"))
-                .on_click(cx.listener(|v, _, _, _| v.windows_properties()))
-                .into_any_element(),
-        );
+        // (the system's own dialog: Windows only; leaf's page is the properties page elsewhere)
+        if cfg!(windows) {
+            out.push(
+                link_button(p, "win-props", L::ExternalLink, t!("Windows properties (previous versions and more)…"))
+                    .on_click(cx.listener(|v, _, _, _| v.windows_properties()))
+                    .into_any_element(),
+            );
+        }
         out
     }
 
@@ -1125,11 +1128,14 @@ impl PropsView {
                     .into_any_element(),
             );
         }
-        out.push(
-            link_button(p, "win-props", L::ExternalLink, t!("Windows properties (tools, hardware, quota)…"))
-                .on_click(cx.listener(|v, _, _, _| v.windows_properties()))
-                .into_any_element(),
-        );
+        // (the system's own dialog: Windows only; leaf's page is the properties page elsewhere)
+        if cfg!(windows) {
+            out.push(
+                link_button(p, "win-props", L::ExternalLink, t!("Windows properties (tools, hardware, quota)…"))
+                    .on_click(cx.listener(|v, _, _, _| v.windows_properties()))
+                    .into_any_element(),
+            );
+        }
         out
     }
 
@@ -1441,8 +1447,10 @@ impl PropsView {
         if s.protected {
             out.push(note(p, t!("This item does not inherit permissions from its parent folder.")));
         }
-        out.push(note(p, t!("To change permissions, use Windows' Security window (it may ask for administrator permission).")));
-        out.push(self.win_props_link(p, cx));
+        if cfg!(windows) {
+            out.push(note(p, t!("To change permissions, use Windows' Security window (it may ask for administrator permission).")));
+            out.push(self.win_props_link(p, cx));
+        }
         out
     }
 

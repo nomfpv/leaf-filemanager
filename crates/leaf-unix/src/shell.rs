@@ -1,5 +1,5 @@
-﻿//! Linux backend of rf_win::shell. Status: REAL for open (xdg-open) and the terminal; open-with, properties and the
-//! admin terminal stay stubs.
+﻿//! Linux backend of rf_win::shell. Status: REAL for open (xdg-open), open-with and the terminal; properties (the system's own
+//! dialog, leaf has its own page) and the admin terminal stay stubs.
 
 use crate::Owner;
 use leaf_common::{stub, stub_err};
@@ -40,8 +40,9 @@ pub fn open(path: &Path) -> anyhow::Result<()> {
     spawn_reaped(c)
 }
 
-pub fn open_with(_path: &Path) -> anyhow::Result<()> {
-    stub_err!("shell::open_with")
+/// "Open with": a chooser of the programs that list the file's type (kdialog or zenity), then the chosen one is started.
+pub fn open_with(path: &Path) -> anyhow::Result<()> {
+    crate::openwith::open_with(path, false).map(|_| ())
 }
 
 pub fn properties(_path: &Path) -> anyhow::Result<()> {
@@ -64,8 +65,9 @@ pub fn suppress_critical_error_dialogs() {
     stub!("shell::suppress_critical_error_dialogs")
 }
 
-pub fn open_with_dialog(_owner: Owner, _path: &Path) -> anyhow::Result<()> {
-    stub_err!("shell::open_with_dialog")
+/// The same chooser, but the choice becomes the type's default program (`xdg-mime default`), as the properties page's "Change…" means.
+pub fn open_with_dialog(_owner: Owner, path: &Path) -> anyhow::Result<()> {
+    crate::openwith::open_with(path, true).map(|_| ())
 }
 
 /// The program of a terminal kind, when installed (`$TERMINAL` for [`Terminal::EnvTerminal`]).

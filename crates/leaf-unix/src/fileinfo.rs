@@ -191,10 +191,10 @@ pub fn mime_guess(path: &Path) -> Option<&'static str> {
     })
 }
 
-/// No default-application lookup yet: nothing is shown after "Opens with".
-pub fn opens_with(_path: &Path) -> Option<String> {
-    stub::hit("fileinfo::opens_with");
-    None
+/// The name of the program that opens the file's type by default (from `mimeapps.list` and the desktop entries).
+pub fn opens_with(path: &Path) -> Option<String> {
+    let mime = crate::openwith::mime_of(path)?;
+    crate::openwith::default_app(&mime).map(|a| a.name)
 }
 
 pub fn zone_blocked(_path: &Path) -> bool {

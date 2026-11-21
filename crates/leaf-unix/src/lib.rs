@@ -78,6 +78,7 @@ pub mod security;
 pub mod sendto;
 pub mod settingscat;
 pub mod share;
+mod openwith;
 pub mod shell;
 pub mod shell_window;
 pub mod shellfolder;
