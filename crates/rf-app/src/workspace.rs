@@ -2511,7 +2511,8 @@ impl Workspace {
                     .when(!active, |d| d.text_color(p.text_secondary).hover(|s| s.bg(p.hover)))
                     // Index: the tab's number (Ctrl+1..9) in a small box in place of its icon, the box in the accent on the tab in front
                     .when(!(p.numbered_tabs && i < 9) && !busy, |d| {
-                        d.child(Icon::new(icon).size(px(14.)).flex_shrink_0().text_color(if active { p.accent } else { p.text_secondary }))
+                        // (16 px, the mockups' tab icon)
+                        d.child(Icon::new(icon).size(px(16.)).flex_shrink_0().text_color(if active { p.accent } else { p.text_secondary }))
                     })
                     .when(!(p.numbered_tabs && i < 9) && busy, |d| {
                         d.child(
@@ -2585,11 +2586,13 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(theme::RADIUS_SM)
+                            // (the mockups' quieter x, brighter under the pointer)
+                            .text_color(p.text_secondary)
                             // like Files: every tab shows its close button while there is room
                             // (pill tabs, the mockups': a tab in the back shows its close button on hover only)
                             .when((!roomy || pill) && !active, |d| d.invisible())
                             .group_hover("tab", |s| s.visible())
-                            .hover(|s| s.bg(p.pressed))
+                            .hover(|s| s.bg(p.pressed).text_color(p.text))
                             .child(Icon::new(L::X).size(px(12.)))
                             // the press stays with the x: the tab's own press would bring the tab forward first, so closing a tab in the
                             // back showed it for a moment (#145)
