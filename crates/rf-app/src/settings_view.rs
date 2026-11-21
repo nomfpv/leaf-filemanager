@@ -2522,7 +2522,7 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             settings::update(cx, move |s| s.ide_path = exe)
         })
     });
-    let installed = rf_win::shell::installed_terminals();
+    let installed = leaf_sys::shell::installed_terminals();
     let mut terminal_cards = vec![card(
         p,
         L::SquareTerminal,

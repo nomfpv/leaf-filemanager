@@ -1,4 +1,4 @@
-//! "Open in terminal": which folder (the guards) and which terminal (the setting). The OS call is rf_win's.
+//! "Open in terminal": which folder (the guards) and which terminal (the setting). The OS call is leaf_sys's.
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +23,7 @@ pub fn target(p: &Path) -> Option<PathBuf> {
         Some((archive, _)) => archive.parent()?.to_path_buf(),
         None => p.to_path_buf(),
     };
-    if rf_win::ftp::is_ftp(&p) || rf_win::network::server_root(&p).is_some() {
+    if leaf_sys::ftp::is_ftp(&p) || leaf_sys::network::server_root(&p).is_some() {
         return None;
     }
     p.ancestors().filter(|a| !a.as_os_str().is_empty()).find(|a| a.is_dir()).map(Path::to_path_buf)
@@ -31,7 +31,7 @@ pub fn target(p: &Path) -> Option<PathBuf> {
 
 /// Whether a terminal button has anything to open for this location (from the location alone: it runs every frame).
 pub fn offered(loc: &Location) -> bool {
-    location_dir(loc).is_some_and(|p| !rf_win::ftp::is_ftp(&p) && rf_win::network::server_root(&p).is_none())
+    location_dir(loc).is_some_and(|p| !leaf_sys::ftp::is_ftp(&p) && leaf_sys::network::server_root(&p).is_none())
 }
 
 /// Opens the terminal of the settings in the folder for `p` (see [`target`]); nothing happens, quietly, when there is none.
@@ -40,7 +40,7 @@ pub fn open(p: PathBuf, cx: &App) {
     let (kind, custom) = (s.terminal, s.terminal_custom.clone());
     std::thread::spawn(move || {
         if let Some(dir) = target(&p) {
-            if let Err(e) = rf_win::shell::open_terminal_with(kind, &custom, &dir) {
+            if let Err(e) = leaf_sys::shell::open_terminal_with(kind, &custom, &dir) {
                 log::warn!("terminal: {e:#}");
             }
         }
@@ -58,7 +58,7 @@ pub fn open_location(loc: &Location, cx: &App) {
 pub fn open_admin(p: PathBuf) {
     std::thread::spawn(move || {
         if let Some(dir) = target(&p) {
-            if let Err(e) = rf_win::shell::open_terminal_admin(&dir) {
+            if let Err(e) = leaf_sys::shell::open_terminal_admin(&dir) {
                 log::warn!("terminal (admin): {e:#}");
             }
         }
