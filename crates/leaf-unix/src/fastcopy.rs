@@ -1076,12 +1076,25 @@ fn run(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: Arc<Tracke
     // the same folder under another path)
     let dest_chain: Vec<(u64, u64)> = dest_abs.ancestors().filter_map(|a| std::fs::metadata(a).ok()).map(|m| (m.dev(), m.ino())).collect();
     let mut jobs = Vec::new();
+    // (a resumed job's sources that are not there: a stick pulled, a share gone)
+    let mut missing = Vec::new();
     for s in sources {
         let name = s.file_name().ok_or_else(|| anyhow::anyhow!("{}: not an item that can be copied", s.display()))?;
         let m = match std::fs::symlink_metadata(s) {
             Ok(m) => m,
-            // (a resumed move: this one went before the cut)
-            Err(_) if resumed => continue,
+            Err(e) if resumed => {
+                // a resumed move: this one went before the cut, if its copy is there
+                let kept = match &start {
+                    Start::Resumed(_, rs, _) => rs.kept.get(s).cloned(),
+                    Start::New(_) => None,
+                };
+                let copy = kept.unwrap_or_else(|| dest_dir.join(name));
+                if kind == Transfer::Move && std::fs::symlink_metadata(&copy).is_ok() {
+                    continue;
+                }
+                missing.push((s.clone(), e));
+                continue;
+            }
             Err(e) => anyhow::bail!("{}: {e}", s.display()),
         };
         let parent = s.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -1136,6 +1149,11 @@ fn run(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: Arc<Tracke
     }
     job.jr = jr;
     job.resume = rs;
+    for (s, e) in &missing {
+        // the job stays resumable: it is carried on when the source is back
+        job.fail(s, format_args!("the original is not there ({e})"));
+        job.cut = true;
+    }
     job.progress(0, None);
     let mut cancelled = false;
     for (s, d, _) in &jobs {
@@ -1650,6 +1668,23 @@ mod tests {
         assert_eq!(std::fs::metadata(&done).unwrap().ino(), ino, "the finished copy is kept, not copied again");
         assert!(std::fs::symlink_metadata(root.join("dest/a (2).bin")).is_err(), "no second copy");
         assert_eq!(std::fs::read(root.join("dest/b.bin")).unwrap(), b);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_resume_without_its_sources_keeps_the_job() {
+        let (root, jobs) = fresh("nosource");
+        let big = pattern(9 << 20, 11);
+        std::fs::write(root.join("src/big.bin"), &big).unwrap();
+        let journal = copy_and_die(&[root.join("src/big.bin")], &root.join("dest"), &jobs, "big.bin");
+        // the stick it came from was pulled
+        std::fs::rename(root.join("src"), root.join("away")).unwrap();
+        let e = resume(&journal, quiet()).unwrap_err().to_string();
+        assert!(e.contains("not there"), "{e}");
+        assert!(journal.exists(), "the job is still offered");
+        assert_eq!(parts_in(&root.join("dest")).len(), 1, "its part stays");
+        std::fs::rename(root.join("away"), root.join("src")).unwrap();
+        assert!(resume(&journal, quiet()).unwrap());
+        assert_eq!(std::fs::read(root.join("dest/big.bin")).unwrap(), big);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
