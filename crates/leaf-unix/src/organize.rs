@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use leaf_common::stub;
-use leaf_common::stub::Unsupported;
 use rf_core::organize::safety::{ProtectedPaths, is_inside, is_partial_download, norm};
 use rf_core::organize::{Dest, FileFact, FileKind, Step};
 use rf_core::{Entry, EntryKind, attrs};
@@ -164,12 +163,6 @@ impl Recycler for ShellRecycler {
     fn recycle(&self, _paths: &[PathBuf]) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
         leaf_common::stub_err!("organize::ShellRecycler::recycle")
     }
-}
-
-/// Every step of `paths` as a failure: "not available" (a data operation never reports success).
-fn unavailable(name: &'static str, paths: impl Iterator<Item = PathBuf>) -> Vec<Failure> {
-    let message = Unsupported(name).to_string();
-    paths.map(|path| Failure { path, message: message.clone() }).collect()
 }
 
 // ---------------------------------------------------------------- the moves (the only code here that changes files)
@@ -570,18 +563,70 @@ pub struct UndoReport {
     pub failed: Vec<Failure>,
 }
 
-/// A data operation: nothing is moved back, every move is a failure.
+/// Puts the moved files back to their exact old paths (newest first) and removes the folders the run made, innermost first and only
+/// while they are empty. A file that is gone, that is no longer a regular file, or whose old place has been taken in the meantime is
+/// left where it is and listed; nothing is ever replaced and nothing gets a number. The Recycle Bin part of the record is for the
+/// caller (it restores through the trash).
 pub fn undo_moves(rec: &Record) -> UndoReport {
-    // STUB(linux): an UndoReport that says nothing was restored and why
-    stub::hit("organize::undo_moves");
-    UndoReport { restored: 0, failed: unavailable("organize::undo_moves", rec.moves.iter().map(|(_, to)| to.clone())) }
+    let mut out = UndoReport::default();
+    for (from, to) in rec.moves.iter().rev() {
+        let fail = |out: &mut UndoReport, m: &str| out.failed.push(Failure { path: to.clone(), message: m.to_string() });
+        match std::fs::symlink_metadata(to) {
+            Err(_) => {
+                fail(&mut out, tx("The file is gone"));
+                continue;
+            }
+            // (a folder or a link holds the name now: not what was moved, never moved back)
+            Ok(m) if !m.file_type().is_file() => {
+                fail(&mut out, tx("Not a file"));
+                continue;
+            }
+            Ok(_) => {}
+        }
+        if exists(from) {
+            fail(&mut out, tx("Another file is in its old place"));
+            continue;
+        }
+        if let Some(dir) = from.parent().filter(|p| !p.as_os_str().is_empty()) {
+            // (the run's source folder may have gone meanwhile; these are not the run's folders and stay)
+            let _ = ensure_dir(dir, &mut Vec::new());
+        }
+        match move_file(to, from, false) {
+            Ok(_) => out.restored += 1,
+            Err(MoveErr::Taken) => fail(&mut out, tx("Another file is in its old place")),
+            Err(e) => fail(&mut out, &e.to_string()),
+        }
+    }
+    for d in rec.created_dirs.iter().rev() {
+        // (fails while anything is inside, and on a link: that is wanted)
+        remove_empty_dir(d);
+    }
+    out
 }
 
-/// A data operation: nothing is moved again, every move is a failure.
+/// Does the moves of the record again (after an undo), to the same paths: a file that is gone or not a regular file, or a target
+/// name that is taken, is listed and left alone (never replaced, never numbered).
 pub fn redo_moves(rec: &Record) -> UndoReport {
-    // STUB(linux): an UndoReport that says nothing was redone and why
-    stub::hit("organize::redo_moves");
-    UndoReport { restored: 0, failed: unavailable("organize::redo_moves", rec.moves.iter().map(|(from, _)| from.clone())) }
+    let mut out = UndoReport::default();
+    let mut created = Vec::new();
+    for (from, to) in &rec.moves {
+        let fail = |out: &mut UndoReport, m: &str| out.failed.push(Failure { path: from.clone(), message: m.to_string() });
+        if !std::fs::symlink_metadata(from).is_ok_and(|m| m.file_type().is_file()) || exists(to) {
+            fail(&mut out, tx("The file could not be moved"));
+            continue;
+        }
+        if let Some(dir) = to.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Err(e) = ensure_dir(dir, &mut created)
+        {
+            fail(&mut out, &format!("{}: {e}", tx("Could not create the destination folder")));
+            continue;
+        }
+        match move_file(from, to, false) {
+            Ok(_) => out.restored += 1,
+            Err(e) => fail(&mut out, &e.to_string()),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------- facts (read only)
@@ -784,5 +829,34 @@ mod tests {
         let rep = go(&[step(&d, &c, Dest::Move(d.p("hedef/a.txt/c.txt")))]);
         assert_eq!(rep.failed.len(), 1);
         assert!(rep.record.created_dirs.is_empty() && exists(&c));
+    }
+
+    #[test]
+    fn undo_restores_exactly_and_leaves_a_taken_path_alone() {
+        let d = Dir::new("undo");
+        let a = d.write("a.txt", "A");
+        let b = d.write("b.txt", "B");
+        let rep = go(&[step(&d, &a, Dest::Move(d.p("hedef/sub/a.txt"))), step(&d, &b, Dest::Move(d.p("hedef/sub/b.txt")))]);
+        assert_eq!(rep.record.moves.len(), 2, "{rep:?}");
+        assert_eq!(rep.record.created_dirs, [d.p("hedef"), d.p("hedef/sub")]);
+        // somebody puts a new b.txt where the old one was
+        d.write("b.txt", "intruder");
+        let u = undo_moves(&rep.record);
+        assert_eq!(u.restored, 1);
+        assert_eq!(u.failed.len(), 1);
+        assert_eq!(u.failed[0].path, d.p("hedef/sub/b.txt"));
+        assert_eq!((d.read("a.txt"), d.read("b.txt"), d.read("hedef/sub/b.txt")), ("A".into(), "intruder".into(), "B".into()));
+        assert!(exists(&d.p("hedef/sub")), "a folder that is not empty stays");
+        // the intruder goes; a second undo puts b back and the emptied folders the run made go
+        std::fs::remove_file(&b).unwrap();
+        let u = undo_moves(&rep.record);
+        assert_eq!((u.restored, u.failed.len()), (1, 1), "a is gone from the destination now: listed, nothing else");
+        assert_eq!(d.read("b.txt"), "B");
+        assert!(!exists(&d.p("hedef")));
+        // redo: the same moves to the same paths; a taken target is listed and left alone
+        d.write("hedef/sub/b.txt", "theirs");
+        let r = redo_moves(&rep.record);
+        assert_eq!((r.restored, r.failed.len()), (1, 1));
+        assert_eq!((d.read("hedef/sub/a.txt"), d.read("hedef/sub/b.txt"), d.read("b.txt")), ("A".into(), "theirs".into(), "B".into()));
     }
 }
