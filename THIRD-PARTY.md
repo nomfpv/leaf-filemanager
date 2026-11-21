@@ -10130,6 +10130,40 @@ SOFTWARE.
 ### MIT License (MIT)
 
 Used by:
+- [lazy-regex 3.6.2](https://github.com/Canop/lazy-regex)
+
+<details><summary>Licence text</summary>
+
+```text
+MIT License
+
+Copyright (c) 2018 Canop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
 - [tiff 0.11.3](https://github.com/image-rs/image-tiff)
 
 <details><summary>Licence text</summary>
@@ -11039,6 +11073,7 @@ Used by:
 - [heifer-hevc-dec 0.5.1](https://github.com/HarpeLm/Heifer)
 - [heifer-isobmff 0.5.1](https://github.com/HarpeLm/Heifer)
 - [heifer 0.5.1](https://github.com/HarpeLm/Heifer)
+- [lazy-regex-proc_macros 3.6.2](https://github.com/Canop/lazy-regex/tree/main/src/proc_macros)
 - [libm 0.2.16](https://github.com/rust-lang/compiler-builtins)
 - [lyon 1.0.19](https://github.com/nical/lyon)
 - [lyon_algorithms 1.0.22](https://github.com/nical/lyon)
@@ -11054,6 +11089,7 @@ Used by:
 - [rust-i18n-macro 4.2.4](https://github.com/longbridge/rust-i18n)
 - [rust-i18n-support 4.2.4](https://github.com/longbridge/rust-i18n)
 - [seahash 4.1.0](https://gitlab.redox-os.org/redox-os/seahash)
+- [suppaftp 13.0.0](https://github.com/veeso/suppaftp)
 - [svg_fmt 0.4.5](https://github.com/nical/rust_debug)
 - [taffy 0.15.1](https://github.com/DioxusLabs/taffy)
 - [windows-collections 0.3.2](https://github.com/microsoft/windows-rs)
@@ -12029,7 +12065,9 @@ Used by:
 - [grep-searcher 0.1.17](https://github.com/BurntSushi/ripgrep/tree/master/crates/searcher)
 - [ignore 0.4.34](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore)
 - [jiff-core 0.1.2](https://github.com/BurntSushi/jiff)
+- [jiff-core 1.0.1](https://github.com/BurntSushi/jiff)
 - [jiff 0.2.39](https://github.com/BurntSushi/jiff)
+- [jiff 1.0.2](https://github.com/BurntSushi/jiff)
 - [memchr 2.8.3](https://github.com/BurntSushi/memchr)
 - [walkdir 2.5.0](https://github.com/BurntSushi/walkdir)
 
