@@ -1,6 +1,6 @@
 [package]
 name = "leaf-decode"
-description = "leaf: portable JPEG XL and AVIF decoders (pure Rust, no system calls), used when the system has no codec"
+description = "leaf: portable JPEG XL, AVIF, Photoshop and camera RAW decoders (pure Rust, no system calls), used when the system has no codec"
 version.workspace = true
 edition.workspace = true
 license = "MIT"
@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-image = { workspace = true }
+image = { workspace = true, features = ["jpeg"] }
+kamadak-exif = "0.6"
+psd = "0.3"
 jxl-oxide = { version = "0.12", default-features = false }
 rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }

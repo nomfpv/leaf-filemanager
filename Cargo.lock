@@ -4870,6 +4870,8 @@ dependencies = [
  "anyhow",
  "image",
  "jxl-oxide",
+ "kamadak-exif",
+ "psd",
  "rav1d",
 ]
 
@@ -7432,7 +7434,6 @@ dependencies = [
  "notify",
  "parking_lot",
  "png 0.18.1",
- "psd",
  "rayon",
  "resvg 0.46.0",
  "rf-core",

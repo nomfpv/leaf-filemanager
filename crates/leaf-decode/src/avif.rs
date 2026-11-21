@@ -453,5 +453,5 @@ pub fn decode(bytes: &[u8], max_side: u32) -> Result<Rgba> {
             _ => img,
         };
     }
-    Ok(Rgba { width: img.width(), height: img.height(), data: img.into_raw(), full })
+    Ok(Rgba { width: img.width(), height: img.height(), data: img.into_raw(), full, orientation: 1, exif: Vec::new() })
 }

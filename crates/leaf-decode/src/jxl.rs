@@ -13,6 +13,8 @@ pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
 pub fn decode(bytes: &[u8], max_side: u32) -> anyhow::Result<Rgba> {
     let mut img = JxlImage::builder().read(std::io::Cursor::new(bytes)).map_err(|e| anyhow::anyhow!("jxl: {e}"))?;
+    // a picture of too many pixels is not rendered (a broken header never asks for a huge buffer)
+    anyhow::ensure!(u64::from(img.width()) * u64::from(img.height()) <= 100_000_000, "jxl: picture too large");
     // the screen's colours; an image that cannot be converted without a colour engine keeps its own
     img.request_color_encoding(EnumColourEncoding::srgb(RenderingIntent::Relative));
     let render = img.render_frame(0).map_err(|e| anyhow::anyhow!("jxl: {e}"))?;
@@ -32,5 +34,5 @@ pub fn decode(bytes: &[u8], max_side: u32) -> anyhow::Result<Rgba> {
     }
     let img = image::RgbaImage::from_raw(w, h, data).ok_or_else(|| anyhow::anyhow!("jxl: size"))?;
     let img = crate::shrink(img, max_side);
-    Ok(Rgba { width: img.width(), height: img.height(), data: img.into_raw(), full: (w, h) })
+    Ok(Rgba { width: img.width(), height: img.height(), data: img.into_raw(), full: (w, h), orientation: 1, exif: Vec::new() })
 }

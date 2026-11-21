@@ -20,8 +20,6 @@ pub struct Decoded {
     pub height: u32,
 }
 
-const RAW_EXTENSIONS: &[&str] =
-    &["arw", "cr2", "cr3", "crw", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f"];
 
 fn to_bgra(img: RgbaImage) -> Bgra {
     let (width, height) = img.dimensions();
@@ -195,26 +193,6 @@ fn wic(path: &Path, max_side: u32) -> anyhow::Result<Decoded> {
     }
 }
 
-/// Kamera RAW dosyasının içine gömülü en büyük JPEG önizleme.
-fn raw_embedded_jpeg(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
-    let mut best: Option<(usize, u64)> = None;
-    let mut i = 0;
-    while i + 3 < bytes.len() {
-        if bytes[i] == 0xFF && bytes[i + 1] == 0xD8 && bytes[i + 2] == 0xFF {
-            let r = image::ImageReader::with_format(Cursor::new(&bytes[i..]), image::ImageFormat::Jpeg);
-            if let Ok((w, h)) = r.into_dimensions() {
-                let area = w as u64 * h as u64;
-                if best.is_none_or(|(_, a)| area > a) {
-                    best = Some((i, area));
-                }
-            }
-        }
-        i += 1;
-    }
-    let (start, _) = best.context("no embedded JPEG")?;
-    with_image_crate(&bytes[start..], max_side)
-}
-
 /// A design file's own picture (see `crate::design`) is small (CorelDRAW saves 256 px on the
 /// short side): the previewer shows it enlarged smoothly to at least this long side.
 const DESIGN_SIDE: u32 = 720;
@@ -240,13 +218,6 @@ pub(crate) fn bgra_within(img: RgbaImage, max_side: u32) -> Bgra {
     to_bgra(shrink(img, max_side))
 }
 
-fn psd(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
-    let p = psd::Psd::from_bytes(bytes).map_err(|e| anyhow!("psd: {e}"))?;
-    let img = RgbaImage::from_raw(p.width(), p.height(), p.rgba()).context("psd pixels")?;
-    let (width, height) = img.dimensions();
-    Ok(Decoded { frames: vec![(to_bgra(shrink(img, max_side)), 0)], orientation: 1, exif: Vec::new(), width, height })
-}
-
 /// Resmin (EXIF yönüne göre döndürülmüş) boyutu; yalnız başlık okunur, hızlıdır.
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -260,7 +231,7 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
         let tree = resvg::usvg::Tree::from_data(&bytes, &resvg::usvg::Options::default()).ok()?;
         return Some((tree.size().width().round() as u32, tree.size().height().round() as u32));
     }
-    if !RAW_EXTENSIONS.contains(&ext.as_str()) {
+    if !leaf_decode::is_raw_ext(&ext) {
         if let Ok(r) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) {
             if let Ok(mut d) = r.into_decoder() {
                 let (w, h) = d.dimensions();
@@ -301,7 +272,7 @@ pub fn decode_full(path: &Path, max_side: u32) -> anyhow::Result<Decoded> {
     if ext == "svg" || ext == "svgz" {
         return svg(&bytes, max_side);
     }
-    let raw = RAW_EXTENSIONS.contains(&ext.as_str());
+    let raw = leaf_decode::is_raw_ext(&ext);
     if !raw {
         if let Ok(d) = with_image_crate(&bytes, max_side) {
             return Ok(d);
@@ -310,21 +281,12 @@ pub fn decode_full(path: &Path, max_side: u32) -> anyhow::Result<Decoded> {
     if let Ok(d) = wic(path, max_side) {
         return Ok(d);
     }
-    if raw {
-        if let Ok(d) = raw_embedded_jpeg(&bytes, max_side) {
-            return Ok(d);
-        }
-    }
-    if ext == "psd" || ext == "psb" {
-        if let Ok(d) = psd(&bytes, max_side) {
-            return Ok(d);
-        }
-    }
     if crate::picture_fallback::handles(path) {
-        // JPEG XL / AVIF without a Windows codec
-        let img = leaf_decode::decode(path, max_side).map_err(|e| anyhow!("{}: {e}", ext.to_ascii_uppercase()))?;
+        // JPEG XL / AVIF without a Windows codec; Photoshop files and the JPEG inside a camera RAW file
+        let mut img = leaf_decode::decode(path, max_side).map_err(|e| anyhow!("{}: {e}", ext.to_ascii_uppercase()))?;
         let (width, height) = img.full;
-        return Ok(Decoded { frames: vec![(crate::picture_fallback::bgra(img), 0)], orientation: 1, exif: Vec::new(), width, height });
+        let (orientation, exif) = (img.orientation, std::mem::take(&mut img.exif));
+        return Ok(Decoded { frames: vec![(crate::picture_fallback::bgra(img), 0)], orientation, exif, width, height });
     }
     if crate::picture_fallback::is_heif(path) && crate::picture_fallback::heif_codec_missing() {
         bail!(crate::picture_fallback::HEIF_NEEDS_EXTENSION);

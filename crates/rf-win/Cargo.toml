@@ -9,7 +9,6 @@ publish.workspace = true
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
 resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 kamadak-exif = "0.6"
-psd = "0.3"
 # design files' own pictures are ZIP entries (CorelDRAW, Krita, Sketch…): see design.rs
 zip.workspace = true
 roxmltree = "0.20"

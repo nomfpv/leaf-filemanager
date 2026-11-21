@@ -1,7 +1,7 @@
 //! Linux backend of rf_win::look::decode. Status: REAL for pictures
 //!
 //! Pictures are decoded in this process: the `image` crate (PNG, JPEG, GIF incl. animation, WebP incl. animation, BMP, ICO, TIFF,
-//! TGA, QOI, EXR, HDR, DDS, PNM) and `leaf-decode` (JPEG XL, AVIF). EXIF orientation is applied. Not here: SVG, RAW, PSD, design
+//! TGA, QOI, EXR, HDR, DDS, PNM) and `leaf-decode` (JPEG XL, AVIF, PSD, the JPEG inside a RAW file). EXIF orientation is applied. Not here: SVG, design
 //! files, HEIC (each answers an error, and the viewer shows its "could not be opened" line).
 
 use std::io::Cursor;
@@ -148,9 +148,10 @@ pub fn decode_full(path: &Path, max_side: u32) -> anyhow::Result<Decoded> {
         bail!("file too large for a picture: {len} bytes");
     }
     if leaf_decode::handles_ext(&ext) {
-        let img = leaf_decode::decode(path, max_side).map_err(|e| anyhow!("{}: {e}", ext.to_ascii_uppercase()))?;
+        let mut img = leaf_decode::decode(path, max_side).map_err(|e| anyhow!("{}: {e}", ext.to_ascii_uppercase()))?;
         let (width, height) = img.full;
-        return Ok(Decoded { frames: vec![(crate::picture_fallback::bgra(img), 0)], orientation: 1, exif: Vec::new(), width, height });
+        let (orientation, exif) = (img.orientation, std::mem::take(&mut img.exif));
+        return Ok(Decoded { frames: vec![(crate::picture_fallback::bgra(img), 0)], orientation, exif, width, height });
     }
     let bytes = std::fs::read(path).with_context(|| path.display().to_string())?;
     with_image_crate(&bytes, max_side)
