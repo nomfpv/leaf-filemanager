@@ -152,6 +152,9 @@ pub trait Host {
     fn room(&self, _need: u64, _dir: &Path) -> bool {
         true
     }
+    /// The download is running on one connection that cannot be taken up again where it stopped (the server takes no byte ranges):
+    /// pausing it would lose what is downloaded.
+    fn no_resume(&self) {}
     /// The server took the sign-in this download carries (its first answer was not a 401).
     fn signed_in(&self) {}
 }
@@ -740,6 +743,7 @@ impl Job<'_> {
 
     fn single_try(&self, file: &File, len: Option<u64>) -> Result<(), Error> {
         let mut body = http::open_range(self.net.agent, &self.net.probe.uri, 0, len.unwrap_or(0), true, self.net.probe)?;
+        self.host.no_resume();
         let mut buf = vec![0u8; BUF];
         let mut at = 0u64;
         let mut shown = Instant::now() - Duration::from_secs(1);
