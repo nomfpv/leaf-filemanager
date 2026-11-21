@@ -333,6 +333,10 @@ fn end_dialog(lane: Lane, info: leaf_dev::lanes::EndInfo, me: WeakEntity<Workspa
     if !info.ignored.is_empty() {
         msg.push_str(&format!("\n\n{} ({}):{}", t!("Ignored files (Remove would delete them; Discard keeps them in the Trash)"), info.ignored.len(), listed(&info.ignored)));
     }
+    match &info.base_dir {
+        Some(d) => msg.push_str(&format!("\n\n{} {}", t!("Merges in:"), d.display())),
+        None => msg.push_str(&format!("\n\n{}", t!("Merge: the base branch is not checked out in any folder."))),
+    }
     let review = Button::new(t!("Review"), Kind::Normal, {
         let (me, path) = (me.clone(), lane.path.clone());
         move |_, window, cx| {
