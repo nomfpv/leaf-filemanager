@@ -140,6 +140,9 @@ struct Session {
     /// The server lists `SITE CHMOD` in its HELP SITE (asked once, when first needed).
     site_chmod: Option<bool>,
     last_used: Instant,
+    /// The route it was made on (see `leaf_vpn::RouteMark`): an idle one made on another route than leaf would take now is
+    /// closed, not lent out again.
+    route: leaf_vpn::RouteMark,
 }
 
 impl Session {
@@ -331,7 +334,9 @@ impl Inner {
                 continue;
             }
             // connections unused for long are closed (the server has likely dropped them anyway)
-            let (fresh, stale): (Vec<Session>, Vec<Session>) = std::mem::take(&mut st.idle).into_iter().partition(|s| s.last_used.elapsed() < IDLE_AFTER);
+            // (and the ones made on another route than leaf would take now: leaf's VPN came up or went down, or the host's tick changed)
+            let route = leaf_vpn::RouteMark::now(&t.host, t.vpn);
+            let (fresh, stale): (Vec<Session>, Vec<Session>) = std::mem::take(&mut st.idle).into_iter().partition(|s| s.last_used.elapsed() < IDLE_AFTER && s.route.reusable(&route));
             st.idle = fresh;
             st.open = st.open.saturating_sub(stale.len());
             if let Some(sess) = st.idle.pop() {
@@ -583,7 +588,7 @@ impl Inner {
         let home = s.pwd().ok().filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into());
         let windows = s.custom_command("SYST", &[Status::Name]).is_ok_and(|r| String::from_utf8_lossy(&r.body).to_ascii_lowercase().contains("windows"));
         log::info!("ftp: connected to {} (MLSD {mlsx}, Windows {windows})", t.host);
-        Ok(Session { s, mlsx, home, windows, site_chmod: None, last_used: Instant::now() })
+        Ok(Session { s, mlsx, home, windows, site_chmod: None, last_used: Instant::now(), route: leaf_vpn::RouteMark::now(&t.host, t.vpn) })
     }
 
     // -------------------------------------------------------------------------------------------- certificates

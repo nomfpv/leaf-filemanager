@@ -125,3 +125,18 @@ fn the_bridge_serves_implicit_ftps_connection_and_only_its_own_caller() {
     let mut buf = [0u8; 1];
     assert!(matches!(stray.read(&mut buf), Ok(0) | Err(_)), "the stray connection was not served");
 }
+
+#[test]
+fn a_pooled_direct_connection_is_not_reused_once_the_host_is_set_to_vpn() {
+    // made while the host was not ticked: direct, and reusable while it stays so
+    let kept = RouteMark::now("files.example.com", false);
+    assert!(kept.reusable(&RouteMark::now("files.example.com", false)));
+    // the tick is set: the kept direct connection is not used again
+    let now = RouteMark::now("files.example.com", true);
+    assert!(!kept.reusable(&now));
+    // made for a VPN host on one route, then the VPN came up or went down: not used again either
+    let before = RouteMark { vpn: true, tunnel: false, generation: 3 };
+    assert!(!before.reusable(&RouteMark { vpn: true, tunnel: true, generation: 4 }));
+    assert!(!before.reusable(&RouteMark { vpn: true, tunnel: false, generation: 4 }));
+    assert!(before.reusable(&before));
+}

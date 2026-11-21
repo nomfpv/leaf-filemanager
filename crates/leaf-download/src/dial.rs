@@ -4,7 +4,7 @@
 //! not looked up on this PC (its name goes to the dialer as it is).
 
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,6 +42,10 @@ pub trait Dialer: Send + Sync + 'static {
     fn takes(&self, host: &str) -> bool;
     /// A connection to `host:port`; `Ok(None)`: connect directly. An error refuses it (nothing is opened instead).
     fn dial(&self, host: &str, port: u16, timeout: Duration) -> io::Result<Option<Box<dyn Conn>>>;
+    /// Goes up whenever the route changes (leaf's VPN came up or went down): a connection opened before is not used any more.
+    fn generation(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Clone)]
@@ -59,9 +63,56 @@ fn host_port(uri: &ureq::http::Uri) -> (String, u16) {
     (host, port)
 }
 
-/// The first link of the chain: the dialer's stream, or nothing (the TCP connector after it then connects directly).
+/// The first link of the chain, and the only one that connects: the dialer's stream, or (when the dialer says "directly")
+/// a plain TCP connection made here, to the resolver's addresses or, when the name was left to the dialer, looked up now.
+/// Never `None`: ureq's own TCP connector is not in the chain, so a placeholder address is never connected to.
 #[derive(Debug)]
 pub(crate) struct DialConnector(pub Shared);
+
+/// A plain TCP connection as a [`Conn`].
+struct DirectConn(TcpStream);
+
+impl Read for DirectConn {
+    fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+        self.0.read(b)
+    }
+}
+
+impl Write for DirectConn {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        self.0.write(b)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl Conn for DirectConn {
+    fn set_read_timeout(&mut self, t: Option<Duration>) {
+        let _ = self.0.set_read_timeout(t);
+    }
+    fn set_write_timeout(&mut self, t: Option<Duration>) {
+        let _ = self.0.set_write_timeout(t);
+    }
+}
+
+fn connect_direct(details: &ConnectionDetails, host: &str, port: u16, timeout: Duration) -> io::Result<Box<dyn Conn>> {
+    let mut addrs: Vec<SocketAddr> = details.addrs.iter().copied().filter(|a| !a.ip().is_unspecified()).collect();
+    if addrs.is_empty() {
+        addrs = (host, port).to_socket_addrs()?.collect();
+    }
+    let mut last = io::Error::new(io::ErrorKind::NotFound, "the server's name has no address");
+    for a in addrs {
+        match TcpStream::connect_timeout(&a, timeout) {
+            Ok(s) => {
+                let _ = s.set_nodelay(true);
+                return Ok(Box::new(DirectConn(s)));
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
 
 impl Connector<()> for DialConnector {
     type Out = DialTransport;
@@ -69,15 +120,20 @@ impl Connector<()> for DialConnector {
     fn connect(&self, details: &ConnectionDetails, _: Option<()>) -> Result<Option<DialTransport>, ureq::Error> {
         let (host, port) = host_port(details.uri);
         let timeout = details.timeout.not_zero().map_or(Duration::from_secs(30), |d| *d);
-        match self.0.0.dial(&host, port, timeout) {
-            Ok(Some(conn)) => Ok(Some(DialTransport {
-                conn,
-                buffers: LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size()),
-                open: true,
-            })),
-            Ok(None) => Ok(None),
-            Err(e) => Err(ureq::Error::Io(e)),
-        }
+        // (the route as it is now: a connection made on it stops being used once it changes)
+        let generation = self.0.0.generation();
+        let conn = match self.0.0.dial(&host, port, timeout) {
+            Ok(Some(conn)) => conn,
+            Ok(None) => connect_direct(details, &host, port, timeout).map_err(ureq::Error::Io)?,
+            Err(e) => return Err(ureq::Error::Io(e)),
+        };
+        Ok(Some(DialTransport {
+            conn,
+            buffers: LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size()),
+            open: true,
+            dialer: self.0.clone(),
+            generation,
+        }))
     }
 }
 
@@ -85,6 +141,20 @@ pub(crate) struct DialTransport {
     conn: Box<dyn Conn>,
     buffers: LazyBuffers,
     open: bool,
+    dialer: Shared,
+    /// The dialer's route when this was opened.
+    generation: u64,
+}
+
+impl DialTransport {
+    /// The route changed since this connection was opened (the VPN came up or went down): it is not used any more, so the
+    /// request is made again on the route of now.
+    fn stale(&mut self) -> Option<ureq::Error> {
+        (self.dialer.0.generation() != self.generation).then(|| {
+            self.open = false;
+            ureq::Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, "the route changed (leaf's VPN came up or went down)"))
+        })
+    }
 }
 
 impl std::fmt::Debug for DialTransport {
@@ -103,6 +173,9 @@ impl Transport for DialTransport {
     }
 
     fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        if let Some(e) = self.stale() {
+            return Err(e);
+        }
         let t = timeout.for_write();
         self.conn.set_write_timeout(t.not_zero().map(|d| *d));
         let out = &self.buffers.output()[..amount];
@@ -113,6 +186,9 @@ impl Transport for DialTransport {
     }
 
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        if let Some(e) = self.stale() {
+            return Err(e);
+        }
         let t = timeout.for_read();
         self.conn.set_read_timeout(t.not_zero().map(|d| *d));
         let input = self.buffers.input_append_buf();
@@ -128,7 +204,7 @@ impl Transport for DialTransport {
     }
 
     fn is_open(&mut self) -> bool {
-        self.open
+        self.open && self.dialer.0.generation() == self.generation
     }
 }
 

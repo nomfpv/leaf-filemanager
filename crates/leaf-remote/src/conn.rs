@@ -193,6 +193,8 @@ pub(crate) struct Conn {
     /// Open readers (an idle close waits for them).
     pub busy: AtomicUsize,
     born: Instant,
+    /// The route it was made on (see `leaf_vpn::RouteMark`).
+    route: leaf_vpn::RouteMark,
 }
 
 impl Conn {
@@ -216,8 +218,12 @@ impl Shared {
         if let Some(c) = g.as_ref()
             && c.alive()
         {
-            c.touch();
-            return Ok(c.clone());
+            // (made on another route than leaf would take now: a new one; work still running on the old one finishes there)
+            if c.route.reusable(&leaf_vpn::RouteMark::now(&t.host, t.vpn)) {
+                c.touch();
+                return Ok(c.clone());
+            }
+            log::info!("remote: the route to {} changed (leaf's VPN); a new connection is made", known_hosts::host_name(&t.host, t.port));
         }
         *g = None;
         let c = Arc::new(connect(cfg, prompter, self, t).await?);
@@ -431,6 +437,8 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     // the first machine is reached over TCP, every next one through a direct-tcpip channel of the one before (the name of the
     // next one is looked up by the jump host, as OpenSSH does); each has its own host-key check and login
     let mut jumps: Vec<client::Handle<Client>> = Vec::new();
+    // (taken before dialling: a route change while connecting makes the next use connect again)
+    let route = leaf_vpn::RouteMark::now(&t.host, t.vpn);
     let handle = match hops.first() {
         None => session(cfg, prompter, shared, t, dial(cfg, t).await?).await?,
         Some(first) => {
@@ -465,7 +473,7 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         _ => "/".into(),
     };
     log::info!("remote: connected (SFTP version {}, statvfs {statvfs}, posix-rename {posix_rename})", version.version);
-    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route })
 }
 
 /// What a host set to use leaf's VPN reads while the VPN is down and its kill switch is on.

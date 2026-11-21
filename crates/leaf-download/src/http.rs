@@ -51,9 +51,9 @@ pub fn agent(o: &Options) -> Result<ureq::Agent, Error> {
     Ok(match &o.dialer {
         // (the connections come from the dialer, TLS on top of them as usual)
         Some(d) => {
-            use ureq::unversioned::transport::{Connector as _, RustlsConnector, TcpConnector};
+            use ureq::unversioned::transport::{Connector as _, RustlsConnector};
             let d = crate::dial::Shared(d.clone());
-            let chain = crate::dial::DialConnector(d.clone()).chain(TcpConnector::default()).chain(RustlsConnector::default());
+            let chain = crate::dial::DialConnector(d.clone()).chain(RustlsConnector::default());
             ureq::Agent::with_parts(b.build(), chain, crate::dial::DialResolver(d))
         }
         None => b.build().into(),

@@ -426,6 +426,10 @@ impl leaf_download::dial::Conn for VpnConn {
 }
 
 impl leaf_download::dial::Dialer for DownloadDialer {
+    fn generation(&self) -> u64 {
+        leaf_vpn::generation()
+    }
+
     fn takes(&self, host: &str) -> bool {
         leaf_vpn::route(host) != leaf_vpn::Route::Direct
     }

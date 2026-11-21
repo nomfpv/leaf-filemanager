@@ -284,6 +284,31 @@ pub fn generation() -> u64 {
     ROUTE_GEN.load(Ordering::Acquire)
 }
 
+/// The route a kept connection (an SFTP or FTP session) was made on: a connection whose mark differs from the one of now is
+/// not used again (the host's "Through VPN" tick changed, or the VPN came up or went down for a host that uses it). A
+/// transfer already running on it finishes on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteMark {
+    pub vpn: bool,
+    pub tunnel: bool,
+    pub generation: u64,
+}
+
+impl RouteMark {
+    /// The mark a new connection to `host` gets now (`vpn`: the host is set to use the VPN).
+    pub fn now(host: &str, vpn: bool) -> RouteMark {
+        if !vpn {
+            return RouteMark { vpn, tunnel: false, generation: 0 };
+        }
+        RouteMark { vpn, tunnel: route(host) == Route::Tunnel, generation: generation() }
+    }
+
+    /// Whether a connection made with this mark may carry new work under `now`.
+    pub fn reusable(&self, now: &RouteMark) -> bool {
+        self == now
+    }
+}
+
 fn bump_route() {
     ROUTE_GEN.fetch_add(1, Ordering::AcqRel);
 }
