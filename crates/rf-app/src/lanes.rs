@@ -209,6 +209,27 @@ pub fn refresh(cx: &mut App) {
     }
 }
 
+/// Why `name` cannot be a lane's name, `None` when it can. Only letters, digits and `. _ / -`: the name is the branch and the
+/// folder, and the folder goes on a terminal's command line (Windows Terminal splits it at `;` even inside quotes). No device
+/// name of Windows (`CON`, `NUL`, `COM1`, also with an extension) and no `.` at an end.
+pub fn name_problem(name: &str) -> Option<&'static str> {
+    if name.is_empty() || name.starts_with(['-', '.', '/']) || name.ends_with(['.', '/']) {
+        return Some(crate::t!("A lane name starts and ends with a letter or a digit"));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-')) {
+        return Some(crate::t!("A lane name has only letters, digits and . _ / -"));
+    }
+    let device = |part: &str| {
+        let stem = part.split('.').next().unwrap_or("").to_ascii_uppercase();
+        matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+            || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit())
+    };
+    if device(&folder_name(name)) || name.split('/').any(device) {
+        return Some(crate::t!("This name is reserved by Windows for a device"));
+    }
+    None
+}
+
 /// The lane's name made safe as one folder name (`/` and the characters Windows refuses become `-`).
 pub fn folder_name(name: &str) -> String {
     name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c }).collect()

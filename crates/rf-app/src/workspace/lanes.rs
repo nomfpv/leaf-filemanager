@@ -102,8 +102,8 @@ impl Workspace {
         let me = cx.entity().downgrade();
         let create = Button::new(t!("Create"), Kind::Primary, move |text, window, cx| {
             let name = text.unwrap_or_default().trim().to_string();
-            if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) {
-                return Err(t!("Enter a name without spaces; it is also the branch name").to_string());
+            if let Some(why) = crate::lanes::name_problem(&name) {
+                return Err(why.to_string());
             }
             if !leaf_dev::lanes::valid_branch(&main, &name) {
                 return Err(t!("git does not accept this as a branch name").to_string());
