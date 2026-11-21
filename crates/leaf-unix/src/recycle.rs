@@ -697,27 +697,29 @@ mod tests {
 
     #[test]
     fn the_home_trash_record_stays_when_some_originals_could_not_be_removed() {
-        use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("leaf-unix-trash-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let d = root.join("stick/D");
-        std::fs::create_dir_all(d.join("locked")).unwrap();
+        std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("a.txt"), b"a").unwrap();
-        std::fs::write(d.join("locked/b.txt"), b"b").unwrap();
-        // a folder whose files cannot be unlinked (we are not root on the Linux PC)
-        std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o555)).unwrap();
         let dev = std::fs::metadata(&root).unwrap().dev();
         let t = Trash { dir: root.join("Trash"), top: None };
         ready(&t, dev).unwrap();
-        let mover = |from: &Path, to: &Path| crate::fastcopy::move_across(from, to).map_err(io::Error::other);
+        // what move_across answers when the copy is whole but an original could not be removed (made up here: as root on the test
+        // machine nothing refuses an unlink)
+        let mover = |from: &Path, to: &Path| -> io::Result<()> {
+            std::fs::create_dir(to)?;
+            std::fs::copy(from.join("a.txt"), to.join("a.txt"))?;
+            Err(io::Error::other("copied, but the original could not be removed"))
+        };
         let (dst, warn) = put_with(&t, &d, &mover).unwrap();
         assert!(warn.is_some(), "the job says what went wrong");
-        assert_eq!(std::fs::read(dst.join("locked/b.txt")).unwrap(), b"b");
         assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"a");
         assert!(t.info_of(std::ffi::OsStr::new("D")).exists(), "the record is kept");
         assert_eq!(list_one(&t).len(), 1, "the item is visible in the trash");
-        std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::set_permissions(dst.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        // a mover that fails before anything arrived: the record goes
+        let none = |_: &Path, _: &Path| -> io::Result<()> { Err(io::Error::other("nothing copied")) };
+        assert!(put_with(&t, &d, &none).is_err());
+        assert_eq!(std::fs::read_dir(t.info()).unwrap().count(), 1);
         std::fs::remove_dir_all(&root).unwrap();
-    }
-}
+    }}
