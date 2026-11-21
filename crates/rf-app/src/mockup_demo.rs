@@ -227,6 +227,8 @@ pub const COPY: (&str, f32, f64, f64) = ("Copying 214 files to nas.example.com",
 
 /// The item the left pane is renaming and what is typed in its box.
 pub const RENAMING: (&str, &str) = ("drafts", "drafts-2025");
+/// The row the mockup shows under the pointer (its hover fill).
+pub const HOVERED: &str = "docs";
 /// The cut item (waits for a paste).
 pub const CUT: &str = "backup-2026-10.zip";
 /// The selection of the left pane (the cursor on the second), and of the right one.

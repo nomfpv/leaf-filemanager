@@ -4627,7 +4627,8 @@ impl FolderView {
             }))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<prop_cols::PropResize>, _, cx| this.props_drag_move(e, cx)))
             .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| this.show_header_menu(ev.position, window, cx)))
-            .child(col("h-name", t!("Name"), SortKey::Name, self.name_fixed(cx).map(px), false, cx).relative().child(handle(NAME_COL, cx)))
+            // (the heading over the names, not over their icons: the mockups')
+            .child(col("h-name", t!("Name"), SortKey::Name, self.name_fixed(cx).map(px), false, cx).pl(px(NAME_HEAD_PAD)).relative().child(handle(NAME_COL, cx)))
             .children(show_tags.then(|| self.sortx_header("h-tags", t!("File tag"), w[4], SortKey::Tag, p, cx).child(handle(4, cx))))
             .children(show_git.then(|| plain("h-git", t!("Git status"), w[5]).child(handle(5, cx))))
             .children(show_sync.then(|| self.sortx_header("h-sync", t!("Sync status"), w[6], SortKey::Sync, p, cx).child(handle(6, cx))))
@@ -4638,7 +4639,7 @@ impl FolderView {
             .children(vis.perms.then(|| plain("h-perms", t!("Permissions"), PERMS_COL_W)))
             .children(vis.size.then(|| col("h-size", t!("Size"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))))
             .children(vis.modified.then(|| {
-                col("h-mod", t!("Modified"), SortKey::Modified, Some(px(w[0])), false, cx).relative().child(handle(0, cx))
+                col("h-mod", t!("Modified"), SortKey::Modified, Some(px(w[0])), false, cx).when(vis.size, |d| d.pl(px(0.))).relative().child(handle(0, cx))
             }))
             .children(vis.created.then(|| {
                 col("h-created", t!("Date created"), SortKey::Created, Some(px(w[1])), false, cx).relative().child(handle(1, cx))
@@ -4999,17 +5000,26 @@ impl FolderView {
                     .flex_shrink(1.)
                     .w_full()
                     .min_w_0()
-                    .h(row_h - px(6.))
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(p.control_radius - 2.))
-                    .bg(p.field_bg)
-                    .border_1()
-                    .border_color(p.accent)
-                    .shadow(vec![BoxShadow { color: p.accent.opacity(0.2), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }])
+                    // (the ring is a 3 px border round the box, not a shadow: a shadow lies under the whole box and showed through the
+                    // translucent field as a lighter fill with square corners)
+                    .h(row_h)
+                    .mx(px(-3.))
+                    .rounded(px(p.control_radius + 1.))
+                    .border(px(3.))
+                    .border_color(p.accent.opacity(0.2))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(gpui_kit::component::input::Input::new(&inp).appearance(false).small().px_0())
+                    .child(
+                        div()
+                            .size_full()
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(p.control_radius - 2.))
+                            .bg(p.field_bg)
+                            .border_1()
+                            .border_color(p.accent)
+                            .child(gpui_kit::component::input::Input::new(&inp).appearance(false).small().px_0()),
+                    )
                     .into_any_element(),
                 None => div()
                     .min_w_0()
@@ -5079,7 +5089,9 @@ impl FolderView {
                 .group("rowgrp")
                 .h(row_h)
                 .w_full()
-                .px(px(4.))
+                // (the mockups' row: its icon 2 px further in than the right edge's air)
+                .pl(px(6.))
+                .pr(px(4.))
                 .rounded(px(p.row_radius))
                 .items_center()
                 .text_size(px(p.fs))
@@ -5091,6 +5103,8 @@ impl FolderView {
                 .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
                 .when(selected && inactive, |d| d.bg(p.selection_inactive))
                 .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
+                // LEAF_MOCKUP_DEMO: the row the mockup shows under the pointer
+                .when(!selected && crate::mockup_demo::on() && &*e.name == crate::mockup_demo::HOVERED, |d| d.bg(p.hover))
                 // the focused item of a multiple selection, else the theme's outline of a selected row (Canopy's), else none
                 .map(|d| match (selected, is_cursor && self.selected.len() > 1) {
                     (true, _) if inactive => if p.selection_inactive_border.a > 0. { d.border_1().border_color(p.selection_inactive_border) } else { d },
@@ -5128,7 +5142,8 @@ impl FolderView {
                             None => d.flex_1().min_w(px(120.)),
                         })
                         .px_2()
-                        .gap_2()
+                        // (the mockups' icon column is 20 px and 8 px of air: the name starts 28 px after the icon)
+                        .gap(px(10.))
                         .items_center()
                         .overflow_hidden()
                         // Settings → "Show checkboxes when selecting items"
@@ -5210,6 +5225,8 @@ impl FolderView {
                         .w(px(cw[0]))
                         .flex_shrink_0()
                         .px_2()
+                        // (after the right-aligned sizes the mockups' 8 px of air, not the two cells' padding)
+                        .when(show_size, |d| d.pl(px(0.)))
                         .text_size(px(p.fs_small))
                         .text_color(p.text_secondary)
                         .whitespace_nowrap()
@@ -5788,6 +5805,8 @@ fn static_column(
 
 /// The air between two cards, across and down (the mockups' 8 px).
 const GRID_GAP: Pixels = px(8.);
+/// The Name heading's left padding: it stands over the names (the row's icon, 16 px, and its 10 px of air in), not over the icons.
+const NAME_HEAD_PAD: f32 = 38.;
 /// Grid sizes (Ctrl+= / Ctrl+-): tile width, row height, thumbnail pixels.
 /// (Tiles are the mockups' cards: an 8 px frame round a 4:3 picture, the name and a size line under it: the row is the picture's height
 /// and 56 px.)
