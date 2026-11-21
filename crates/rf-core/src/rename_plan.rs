@@ -37,6 +37,10 @@ pub enum Problem {
     /// The same item was given twice.
     #[error("This item is listed twice")]
     Twice,
+    /// The item is inside a folder that the same batch renames: its path would change under
+    /// it (undo and tags would point into the old folder name).
+    #[error("Inside \"{0}\", which this batch renames too")]
+    InsideRenamed(String),
     /// The item is not in its folder any more (undo / redo after something else changed it).
     #[error("The item is not there any more")]
     Missing,
@@ -200,6 +204,15 @@ pub fn check(rows: &mut [Row], existing: &HashMap<PathBuf, Vec<String>>, rules: 
             && let Some(name) = others.get(r.dir.as_path()).and_then(|s| s.get(&rules.key(&r.new)))
         {
             r.status = Status::Problem(Problem::Exists(name.to_string()));
+        }
+    }
+    // an item inside a folder the batch renames is refused (the folder is renamed, the item keeps its name)
+    let renamed: HashMap<String, String> = rows.iter().filter(|r| r.status.runs()).map(|r| (rules.key(&r.dir.join(&r.old).to_string_lossy()), r.old.clone())).collect();
+    if !renamed.is_empty() {
+        for r in rows.iter_mut().filter(|r| r.status.runs()) {
+            if let Some(folder) = r.dir.ancestors().find_map(|a| renamed.get(&rules.key(&a.to_string_lossy()))) {
+                r.status = Status::Problem(Problem::InsideRenamed(folder.clone()));
+            }
         }
     }
     // collisions inside the batch, until stable: an item that is not renamed keeps its old name

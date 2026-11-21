@@ -669,6 +669,31 @@ mod tests {
     }
 
     #[test]
+    fn an_item_inside_a_folder_of_the_same_batch_is_refused_and_undo_is_exact() {
+        let s = Sandbox::new("nested");
+        std::fs::create_dir(s.0.join("sub")).unwrap();
+        std::fs::write(s.0.join("sub").join("f.txt"), b"inner").unwrap();
+        s.write("other.txt", b"other");
+        // sub\f.txt -> g.txt, sub -> sub2, other.txt -> other2.txt (the tag view can mix folders like this)
+        let sub = s.0.join("sub");
+        let mut preview = vec![Row::new(sub.clone(), "f.txt", Ok("g.txt".into())), Row::new(s.0.clone(), "sub", Ok("sub2".into())), Row::new(s.0.clone(), "other.txt", Ok("other2.txt".into()))];
+        check(&mut preview, &listings([sub.as_path(), s.0.as_path()]), RULES);
+        assert_eq!(preview[0].status, Status::Problem(rf_core::rename_plan::Problem::InsideRenamed("sub".into())));
+        assert!(preview[1].status.runs() && preview[2].status.runs());
+        assert!(!Summary::of(&preview).can_run(false), "shown as a problem: not run without skipping");
+        let out = apply_batch(&preview, true, None, &mut native_rename).unwrap();
+        assert!(out.failed.is_empty(), "{:?}", out.failed);
+        assert_eq!(out.done, vec![(s.0.join("sub"), s.0.join("sub2")), (s.0.join("other.txt"), s.0.join("other2.txt"))]);
+        assert_eq!(std::fs::read(s.0.join("sub2").join("f.txt")).unwrap(), b"inner", "the inner item kept its name");
+        // undo puts everything back, nothing left over
+        let back = run_pairs(&inverse(&out.done), None, &mut native_rename);
+        assert!(back.failed.is_empty(), "{:?}", back.failed);
+        assert_eq!(std::fs::read(s.0.join("sub").join("f.txt")).unwrap(), b"inner");
+        assert_eq!(std::fs::read(s.0.join("other.txt")).unwrap(), b"other");
+        assert!(!s.0.join("sub2").exists() && !s.0.join("other2.txt").exists());
+    }
+
+    #[test]
     fn undo_reports_what_cannot_be_put_back() {
         let s = Sandbox::new("undo");
         for n in ["a", "b", "z"] {
