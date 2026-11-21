@@ -408,13 +408,16 @@ fn fresh_id(taken: &[Checkpoint]) -> (String, i64) {
 /// Every regular file under `dir` (relative, with `/`), with its size. Links are not followed and not listed; `skip` (leaf's own
 /// checkpoint folder, should it be inside) is left out.
 fn walk(dir: &Path, skip: Option<&Path>) -> Result<BTreeMap<String, (PathBuf, u64)>, Error> {
+    let skip_key = skip.map(path_key);
+    let skip_name = skip.and_then(Path::file_name).map(|n| n.to_string_lossy().to_lowercase());
     let mut out = BTreeMap::new();
     let mut stack = vec![(dir.to_path_buf(), String::new())];
     while let Some((d, rel)) = stack.pop() {
         let rd = std::fs::read_dir(&d).map_err(|e| Error::new(format!("The folder {} could not be read", d.display()), e.to_string()))?;
         for e in rd.flatten() {
             let p = e.path();
-            if skip.is_some_and(|s| p == s) {
+            // (the name first, cheaply; then the real paths, as the file system spells them)
+            if skip_name.as_deref().is_some_and(|n| e.file_name().to_string_lossy().to_lowercase() == n) && skip_key.as_deref() == Some(path_key(&p).as_str()) {
                 continue;
             }
             let Ok(ft) = e.file_type() else { continue };
@@ -437,10 +440,24 @@ fn walk(dir: &Path, skip: Option<&Path>) -> Result<BTreeMap<String, (PathBuf, u6
     Ok(out)
 }
 
+/// A path as the file system resolves it (links and `..` followed), with `/`, without the `\\?\` prefix, case folded on Windows:
+/// two spellings of one folder give the same text.
+fn path_key(p: &Path) -> String {
+    let real = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = real.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\UNC\").map(|r| format!("//{r}")).unwrap_or_else(|| s.strip_prefix(r"\\?\").unwrap_or(&s).to_string());
+    let mut s = s.replace('\\', "/");
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
 fn copy_skip(folder: &Path, base: &Path) -> Option<PathBuf> {
     // (leaf's checkpoints folder, `<data>/checkpoints`, when the folder holds it)
     let top = base.parent()?;
-    top.starts_with(folder).then(|| top.to_path_buf())
+    let (t, f) = (path_key(top), path_key(folder));
+    (t == f || t.starts_with(&format!("{}/", f.trim_end_matches('/')))).then(|| top.to_path_buf())
 }
 
 /// What a checkpoint would add: (files, bytes). Outside a repository the whole folder (it is copied); in one the files git does not
@@ -1127,9 +1144,7 @@ mod tests {
         let store = store_for(&d, &temp("ignored-now-data")).unwrap();
         let cp = create(&store, "", false, None).unwrap();
         // later git ignores it, and it holds other bytes: the automatic checkpoint will not have them
-        write(&d, ".gitignore", b"*.log
-*.out
-");
+        write(&d, ".gitignore", b"*.log\n*.out\n");
         write(&d, "build.out", b"only copy of this");
         // (leaf's own index keeps a file it once took even when it is ignored later; made again from nothing, as after damage, it
         // does not take it)
