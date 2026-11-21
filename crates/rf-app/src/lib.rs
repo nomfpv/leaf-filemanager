@@ -71,6 +71,7 @@ mod settings_view;
 mod share;
 mod shelf_view;
 mod status_center;
+mod mcp_host;
 mod space_check;
 mod transfer_view;
 mod tags;
@@ -729,6 +730,12 @@ pub fn main() {
         cx.spawn(async move |cx| {
             use futures::StreamExt;
             while let Some((msg, ack)) = launch_rx.next().await {
+                // leaf-mcp's requests have answers of their own (see mcp_host)
+                if let Some(req) = msg.strip_prefix(mcp_host::PREFIX) {
+                    let req = req.to_string();
+                    cx.update(|cx| mcp_host::handle(req, ack, cx));
+                    continue;
+                }
                 leaf_sys::handover::trace("first: acting on a request");
                 let shown = cx.update(|cx| workspace::route_ipc_shown(msg, cx));
                 // (no window could be made: the second launch is told, and shows the folder itself)

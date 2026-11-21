@@ -69,6 +69,33 @@ pub fn pick(owner: HWND, title: &str, kind: Pick<'_>) -> Option<PathBuf> {
     }
 }
 
+/// Shows the open dialog with several files to choose; an empty list when cancelled.
+pub fn pick_many(owner: HWND, title: &str) -> Vec<PathBuf> {
+    use windows::Win32::UI::Shell::FOS_ALLOWMULTISELECT;
+    unsafe {
+        let Ok(dialog) = CoCreateInstance::<_, IFileOpenDialog>(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) else { return Vec::new() };
+        let Ok(opts) = dialog.GetOptions() else { return Vec::new() };
+        let _ = dialog.SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_ALLOWMULTISELECT);
+        let t = wide(title);
+        let _ = dialog.SetTitle(PCWSTR(t.as_ptr()));
+        if dialog.Show(Some(owner)).is_err() {
+            return Vec::new();
+        }
+        let Ok(items) = dialog.GetResults() else { return Vec::new() };
+        let n = items.GetCount().unwrap_or(0);
+        let mut out = Vec::new();
+        for i in 0..n {
+            let Ok(item) = items.GetItemAt(i) else { continue };
+            let Ok(p) = item.GetDisplayName(SIGDN_FILESYSPATH) else { continue };
+            if let Ok(s) = p.to_string() {
+                out.push(PathBuf::from(s));
+            }
+            CoTaskMemFree(Some(p.0 as *const _));
+        }
+        out
+    }
+}
+
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "leaf";
 

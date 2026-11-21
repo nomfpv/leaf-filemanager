@@ -1,0 +1,15 @@
+[package]
+name = "leaf-mcp"
+description = "leaf: a small MCP server (stdio) that lets an assistant show a file in the running leaf and ask the user to pick files"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[[bin]]
+name = "leaf-mcp"
+path = "src/main.rs"
+
+[dependencies]
+leaf-sys.workspace = true
+serde_json.workspace = true

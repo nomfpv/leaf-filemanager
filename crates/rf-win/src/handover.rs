@@ -362,6 +362,13 @@ impl Ack {
         self.release()
     }
 
+    /// A line of data for the client before the last word (`d <text>`): the answer of a request that has one (leaf-mcp's).
+    pub fn reply(&self, text: &str) {
+        if self.pipe != -1 {
+            say(self.pipe, &format!("d {}\n", text.replace(['\r', '\n'], " ")));
+        }
+    }
+
     fn release(&mut self) -> bool {
         if self.pipe != -1 {
             // (not DisconnectNamedPipe: that throws away what the client has not read yet)
@@ -640,6 +647,77 @@ pub fn send_followup(message: &str) -> bool {
                 return false;
             }
         }
+    }
+}
+
+/// A request to the running leaf that has an answer in lines (leaf-mcp: `show_file`, `pick_files`): writes `message`, collects the
+/// lines of data (`d <text>`) the first instance replies with and ends on its last word. Never becomes the first instance and
+/// never shows anything itself; `Err` says why nothing came of it (not running, leaving, refused, no answer within `wait`).
+pub fn ask(message: &str, wait: Duration) -> Result<Vec<String>, String> {
+    let (_, pipe_name) = names_for(&instance_name());
+    let w = wide(&pipe_name);
+    let h = open_pipe(&w, GENERIC_READ.0 | GENERIC_WRITE.0).map_err(|_| "leaf is not running".to_string())?;
+    grant_foreground(h);
+    let mut bytes = message.as_bytes().to_vec();
+    bytes.push(b'\n');
+    let close = |h: HANDLE| unsafe {
+        let _ = CloseHandle(h);
+    };
+    if unsafe { WriteFile(h, Some(&bytes), None, None) }.is_err() {
+        close(h);
+        return Err("leaf did not take the request".into());
+    }
+    let begun = Instant::now();
+    let mut pending = Vec::<u8>::new();
+    let mut data = Vec::new();
+    loop {
+        let mut avail = 0u32;
+        let mut closed = false;
+        match unsafe { PeekNamedPipe(h, None, 0, None, Some(&mut avail), None) } {
+            Ok(()) if avail > 0 => {
+                let mut buf = vec![0u8; avail as usize];
+                let mut n = 0u32;
+                if unsafe { ReadFile(h, Some(&mut buf), Some(&mut n), None) }.is_err() || n == 0 {
+                    closed = true;
+                } else {
+                    pending.extend_from_slice(&buf[..n as usize]);
+                }
+            }
+            Ok(()) => {}
+            Err(_) => closed = true,
+        }
+        while let Some(i) = pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=i).collect();
+            let line = String::from_utf8_lossy(&line).trim_end().to_string();
+            match line.as_str() {
+                "ok" => {
+                    close(h);
+                    return Ok(data);
+                }
+                "leaving" => {
+                    close(h);
+                    return Err("leaf is closing".into());
+                }
+                "failed" => {
+                    close(h);
+                    return Err("leaf could not do it".into());
+                }
+                l => {
+                    if let Some(d) = l.strip_prefix("d ") {
+                        data.push(d.to_string());
+                    }
+                }
+            }
+        }
+        if closed {
+            close(h);
+            return Err("leaf closed the connection".into());
+        }
+        if begun.elapsed() >= wait {
+            close(h);
+            return Err("no answer in time".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

@@ -143,6 +143,11 @@ impl Ack {
         self.release()
     }
 
+    /// A line of data for the client before the last word (`d <text>`): the answer of a request that has one (leaf-mcp's).
+    pub fn reply(&mut self, text: &str) {
+        self.say(&format!("d {}\n", text.replace(['\r', '\n'], " ")));
+    }
+
     fn say(&mut self, text: &str) {
         if let Some(s) = self.stream.as_mut() {
             let _ = s.write_all(text.as_bytes());
@@ -240,6 +245,44 @@ fn request(app: &str, message: &str, stall: Duration) -> Sent {
         }
         if begun.elapsed() >= stall {
             return Sent::Stalled;
+        }
+    }
+}
+
+/// A request to the running leaf that has an answer in lines (leaf-mcp: `show_file`, `pick_files`): see rf-win's `ask`. Never becomes
+/// the first instance; `Err` says why nothing came of it.
+pub fn ask(message: &str, wait: Duration) -> Result<Vec<String>, String> {
+    let app = instance_name();
+    let mut s = connect(&app).ok_or_else(|| "leaf is not running".to_string())?;
+    if !write_message(&mut s, message) {
+        return Err("leaf did not take the request".into());
+    }
+    let begun = Instant::now();
+    let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+    let mut r = BufReader::new(s);
+    let mut line = String::new();
+    let mut data = Vec::new();
+    loop {
+        match r.read_line(&mut line) {
+            Ok(0) => return Err("leaf closed the connection".into()),
+            Ok(_) => {
+                match line.trim_end() {
+                    "ok" => return Ok(data),
+                    "leaving" => return Err("leaf is closing".into()),
+                    "failed" => return Err("leaf could not do it".into()),
+                    l => {
+                        if let Some(d) = l.strip_prefix("d ") {
+                            data.push(d.to_string());
+                        }
+                    }
+                }
+                line.clear();
+            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(_) => return Err("leaf closed the connection".into()),
+        }
+        if begun.elapsed() >= wait {
+            return Err("no answer in time".into());
         }
     }
 }

@@ -21,6 +21,11 @@ pub fn pick(_owner: Owner, _title: &str, _kind: Pick<'_>) -> Option<PathBuf> {
     stub!("dialogs::pick")
 }
 
+/// Several files to choose (rf-win's `pick_many`): no dialog on this system yet, so nothing is chosen.
+pub fn pick_many(_owner: Owner, _title: &str) -> Vec<PathBuf> {
+    Vec::new()
+}
+
 /// Autostart on Linux is a desktop entry in `$XDG_CONFIG_HOME/autostart/` (the XDG autostart rule: the session starts every entry
 /// there that is not `Hidden`). `name` is the entry's file name stem. Nothing is written until the user flips the switch.
 fn autostart_path(name: &str) -> PathBuf {
