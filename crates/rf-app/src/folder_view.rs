@@ -2616,14 +2616,21 @@ impl FolderView {
 
     fn grid_tile_w(&self) -> Pixels {
         match self.grid_style {
-            GridStyle::Tiles => px(GRID_SIZES[self.grid_size as usize].0),
+            GridStyle::Tiles => px(self.grid_base_w()),
             GridStyle::Cards => px(300.),
             GridStyle::List => px(240.),
         }
     }
+    /// The size's card width; at the default size the theme's (Index's cards are narrower).
+    fn grid_base_w(&self) -> f32 {
+        match theme::tile_width() {
+            w if w > 0. && self.grid_size == DEFAULT_GRID_SIZE => w,
+            _ => GRID_SIZES[self.grid_size as usize].0,
+        }
+    }
     /// A card's width in Tiles: the size's width, stretched so that the cards of a row fill the list (the mockups' grid).
     fn grid_card_w(&self) -> Pixels {
-        let base = GRID_SIZES[self.grid_size as usize].0;
+        let base = self.grid_base_w();
         let gap = f32::from(GRID_GAP);
         let avail = f32::from(self.content_width) - 12.;
         if avail <= base {
@@ -2738,6 +2745,8 @@ impl FolderView {
         // Tiles: the picture is the card's width inside its 8 px frame, at 4:3
         let tile_pic_w = tile_w - px(16.);
         let tile_pic_h = (tile_pic_w * 0.75).round();
+        // (the picture's corners follow the card's: 12 / 8 in Canopy, square in Index)
+        let pic_radius = px((p.tile_radius * 2. / 3.).round());
         let visual_px = match style {
             GridStyle::Tiles => tile_pic_h,
             GridStyle::Cards => px(60.),
@@ -2810,7 +2819,7 @@ impl FolderView {
                 let is_video = cat == icons::Category::Video && !e.is_dir();
                 let has_picture = fills && thumb.is_some();
                 let visual: AnyElement = match thumb {
-                    Some(im) if fills => img(im).w(tile_pic_w).h(tile_pic_h).rounded(px(8.)).object_fit(ObjectFit::Cover).into_any_element(),
+                    Some(im) if fills => img(im).w(tile_pic_w).h(tile_pic_h).rounded(pic_radius).object_fit(ObjectFit::Cover).into_any_element(),
                     Some(im) => img(im)
                         .size(visual_px)
                         .object_fit(ObjectFit::Contain)
@@ -2903,7 +2912,7 @@ impl FolderView {
                                 .w(tile_pic_w)
                                 .h(tile_pic_h)
                                 .flex_shrink_0()
-                                .rounded(px(8.))
+                                .rounded(pic_radius)
                                 .overflow_hidden()
                                 .flex()
                                 .items_center()
@@ -2975,7 +2984,7 @@ impl FolderView {
                     .id(("cell", vi))
                     .w(tile_w)
                     .h(row_h - px(4.))
-                    .rounded(if tiles { px(12.) } else { theme::RADIUS })
+                    .rounded(if tiles { px(p.tile_radius) } else { theme::RADIUS })
                     // tiles: quiet fill + a thin accent outline (a pill would read as a crop)
                     .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
                     .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { p.selection_inactive }))
@@ -3984,7 +3993,7 @@ impl FolderView {
                 .flex()
                 .justify_end()
                 .cursor_col_resize()
-                .child(div().w(px(1.)).h_full().when(p.header_fill.a <= 0., |d| d.bg(p.divider)))
+                .child(div().w(px(1.)).h_full().when(p.header_rules, |d| d.bg(p.divider)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
@@ -4052,8 +4061,10 @@ impl FolderView {
             };
             d
         };
-        // the theme's header: a filled, rounded strip (Canopy) or a plain row ruled off under it
-        let filled = p.header_fill.a > 0.;
+        // the theme's header: a filled, rounded strip (Canopy), a plain row ruled off under it (Stem) or, with `header_rules`, a ruled
+        // bar the pane's full width (Index: filled, a line between the headings)
+        let rules = p.header_rules;
+        let filled = p.header_fill.a > 0. && !rules;
         h_flex()
             .h(px(p.header_h))
             .pl(px(if filled { 4. } else { 10. }))
@@ -4063,6 +4074,7 @@ impl FolderView {
             .overflow_hidden()
             .text_size(px(p.fs_xs))
             .when(!filled, |d| d.border_b_1().border_color(p.border))
+            .when(rules && p.header_fill.a > 0., |d| d.bg(p.header_fill).font_weight(FontWeight::SEMIBOLD))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ColumnResize>, _, cx| {
                 let Some((ix, sx, sw)) = this.col_drag else { return };
                 let dx = f32::from(e.event.position.x) - sx;
@@ -4293,6 +4305,8 @@ impl FolderView {
             let inactive = self.pane_inactive;
             let p = if selected && !inactive { p.on_row_selection() } else { p };
             let cat = icons::category(e);
+            // (on a solid selection the icon wears the text's colour, as the mockup's Index: a kind colour on the accent is mud)
+            let kind_c = if selected && !inactive && p.row_selection.a >= 1. { p.row_selection_text } else { theme::kind_color(cat, p.dark) };
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
             // (Windows' icons only when asked for: the line icons are the default look)
@@ -4589,7 +4603,7 @@ impl FolderView {
                                 Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().when(is_cut, |d| d.opacity(0.5)).into_any_element(),
                                 // a folder's outline gets a light fill of its colour (the mockups': 26 %), laid under the line
                                 None if cat == Category::Folder => {
-                                    let c = theme::kind_color(cat, p.dark);
+                                    let c = kind_c;
                                     div()
                                         .relative()
                                         .size(px(16.))
@@ -4602,7 +4616,7 @@ impl FolderView {
                                 None => Icon::new(icons::icon_for(cat))
                                     .size(px(16.))
                                     .flex_shrink_0()
-                                    .text_color(theme::kind_color(cat, p.dark))
+                                    .text_color(kind_c)
                                     .when(is_cut, |d| d.opacity(0.5))
                                     .into_any_element(),
                             },

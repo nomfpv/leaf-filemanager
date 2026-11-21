@@ -211,6 +211,10 @@ pub struct Workspace {
     side_tree: sidebar_tree::Holder,
     /// Window width from the last frame (breadcrumb collapsing).
     viewport_w: f32,
+    /// Window height from the last frame (the sidebar folds its drives when the tags would not fit).
+    viewport_h: f32,
+    /// The sidebar's Drives section opened or folded by a click on its heading; None: folded only when the sidebar is too short.
+    drives_open: Option<bool>,
     /// The address box's width for the path as last laid out (logical px; 0 before the first layout): what the breadcrumb folds its
     /// leading folders to fit (issue 164: a guess from the window's width folded them with room to spare).
     crumb_room: std::rc::Rc<std::cell::Cell<f32>>,
@@ -912,6 +916,8 @@ impl Workspace {
             free_cache: None,
             side_tree: Default::default(),
             viewport_w: 1300.,
+            viewport_h: 800.,
+            drives_open: None,
             crumb_room: Default::default(),
             last_session: Vec::new(),
             _bulk_sub: None,
@@ -2272,7 +2278,27 @@ impl Workspace {
                         ))
                     })
                     .when(!active, |d| d.text_color(p.text_secondary).hover(|s| s.bg(p.hover)))
-                    .child(Icon::new(icon).size(px(14.)).flex_shrink_0().text_color(if active { p.accent } else { p.text_secondary }))
+                    // Index: the tab's number (Ctrl+1..9) in a small box in place of its icon, the box in the accent on the tab in front
+                    .when(!(p.numbered_tabs && i < 9), |d| {
+                        d.child(Icon::new(icon).size(px(14.)).flex_shrink_0().text_color(if active { p.accent } else { p.text_secondary }))
+                    })
+                    .when(p.numbered_tabs && i < 9, |d| {
+                        d.child(
+                            div()
+                                .size(px(18.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .border_1()
+                                .border_color(if active { p.accent } else { p.border_strong })
+                                .when(active, |d| d.bg(p.accent).text_color(p.accent_text))
+                                .when(!active, |d| d.text_color(p.text_tertiary))
+                                .when(!p.font_mono.is_empty(), |d| d.font_family(p.font_mono))
+                                .text_size(px(10.))
+                                .child(format!("{}", i + 1)),
+                        )
+                    })
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(title))
                     .when_some(term_dir, |d, dir| {
                         d.child(
@@ -3042,8 +3068,16 @@ impl Workspace {
         const LABELS: [&str; FolderView::TYPE_BUCKETS] = ["Folders", "Images", "Video", "Audio", "Documents", "Code", "Text", "Archives", "Apps"];
         use crate::icons::Category as C;
         const CATS: [C; FolderView::TYPE_BUCKETS] = [C::Folder, C::Image, C::Video, C::Audio, C::Document, C::Code, C::Text, C::Archive, C::Executable];
-        let dot = if p.tag_dot >= 8. { 8. } else { 6. };
-        let mut bar = h_flex().w(px(144.)).h(px(4.)).flex_shrink_0().gap(px(1.)).rounded(px(3.)).overflow_hidden();
+        let dot = if p.tag_dot >= 8. || p.square_marks { 8. } else { 6. };
+        // (Index: a ruler of square blocks, Canopy and Stem a thin rounded bar)
+        let sq = p.square_marks;
+        let mut bar = h_flex()
+            .w(px(if sq { 240. } else { 144. }))
+            .h(px(if sq { 8. } else { 4. }))
+            .flex_shrink_0()
+            .gap(px(if sq { 2. } else { 1. }))
+            .when(!sq, |d| d.rounded(px(3.)))
+            .overflow_hidden();
         let mut chips = h_flex().gap(px(2.)).min_w_0().overflow_hidden().flex_shrink(1.);
         for (b, &(n, _)) in sums.iter().enumerate().filter(|(_, s)| s.0 > 0) {
             let c = theme::kind_color(CATS[b], p.dark);
@@ -3058,12 +3092,12 @@ impl Workspace {
                     .gap(px(6.))
                     .flex_shrink_0()
                     .items_center()
-                    .rounded(px(10.))
+                    .when(!sq, |d| d.rounded(px(10.)))
                     .whitespace_nowrap()
                     .text_color(if chosen { p.text } else { p.text_secondary })
                     .when(chosen, |d| d.bg(p.selection).border_1().border_color(p.accent.opacity(0.45)))
                     .when(!chosen, |d| d.hover(|s| s.bg(p.hover).text_color(p.text)))
-                    .child(div().size(px(dot)).rounded_full().flex_shrink_0().bg(c))
+                    .child(div().size(px(dot)).when(!sq, |d| d.rounded_full()).flex_shrink_0().bg(c))
                     .child(crate::i18n::t(LABELS[b]))
                     .child(div().text_color(if chosen { p.text_secondary } else { p.text_tertiary }).child(n.to_string()))
                     .on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_type_filter(Some(b), cx))),
@@ -3099,7 +3133,7 @@ impl Workspace {
                 .when(total == 0, |d| d.child(div().text_color(p.text_tertiary).child(t!("No files to summarise"))))
                 .child(div().flex_1())
                 .when(total > 0, |d| {
-                    d.child(div().flex_shrink_0().whitespace_nowrap().text_color(p.text_tertiary).child(format!("{} · {}", crate::i18n::items(total as usize), format::size(bytes))))
+                    d.child(div().flex_shrink_0().whitespace_nowrap().text_color(p.text_tertiary).when(p.mono_chrome && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono)).child(format!("{} · {}", crate::i18n::items(total as usize), format::size(bytes))))
                 })
                 .into_any_element(),
         )
@@ -3512,7 +3546,17 @@ impl Workspace {
         let drop_bg = p.selection;
         // (the row fills the box; its own width, measured as it is laid out, is the room the segments have)
         let room = self.crumb_room.clone();
-        let mut row = h_flex().flex_1().min_w_0().relative().gap_0p5().items_center().text_sm().overflow_hidden().child(
+        let mut row = h_flex()
+            .flex_1()
+            .min_w_0()
+            .relative()
+            .gap_0p5()
+            .items_center()
+            .text_sm()
+            // Index: the path in the monospace face, 12 px (about the width the estimate below counts with)
+            .when(p.mono_chrome && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono).text_size(px(12.)))
+            .overflow_hidden()
+            .child(
             canvas(
                 move |bounds, window, _| {
                     let w = f32::from(bounds.size.width);
@@ -3685,10 +3729,12 @@ impl Workspace {
                 div()
                     .relative()
                     .flex_shrink_0()
-                    .when(tag, |d| {
+                    .when(tag && !p.square_marks, |d| {
                         // a tag: a dot in its colour with a soft ring (16 px wide like the icons)
                         d.size(px(16.)).flex().items_center().justify_center().rounded_full().bg(icon_color.opacity(0.22)).child(div().size(px(10.)).rounded_full().bg(icon_color))
                     })
+                    // (Index: a plain square)
+                    .when(tag && p.square_marks, |d| d.size(px(16.)).flex().items_center().justify_center().child(div().size(px(9.)).bg(icon_color)))
                     .when(!tag, |d| d.child(Icon::new(icon).size(px(if rail { 18. } else { 16. })).text_color(icon_color)))
                     .when_some(tag_dot, |d, c| d.child(crate::tags::corner_dot(c, p.card_bg)))
                     .when_some(letter, |d, l| {
@@ -3754,6 +3800,7 @@ impl Workspace {
         let cur = self.active_tab().read(cx).location().clone();
         let places = self.places.read(cx);
         let pinned = places.pinned.clone();
+        let pinned_n = pinned.len();
         let drives = places.drives.clone();
         // (the pins and drives are read off the UI thread and are there a moment after the window: see the tags below)
         let places_loaded = places.loaded;
@@ -3772,6 +3819,8 @@ impl Workspace {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(p.text_tertiary)
                 .child(t)
+                // Index: the label ruled off to the edge
+                .when(p.section_rule, |d| d.gap_2().child(div().flex_1().h(px(1.)).bg(p.border)))
         };
         // the "drop here to pin" row lives as long as a file drag does
         if !cx.has_active_drag() {
@@ -3885,9 +3934,34 @@ impl Workspace {
         let drives = if shown("drives") && !self.shows_tree(rail) { drives } else { Vec::new() };
         shown_elsewhere |= drives.iter().any(|d| cur == Location::Path(d.root.clone()));
         col = self.append_tree(col, &cur, shown_elsewhere, rail, p, cx);
-        if !drives.is_empty() {
+        // The drives fold under their heading when the sidebar is too short for the sections under them (at 800 px the tags were cut
+        // off): a click on the heading opens or folds them for good
+        let drives_folded = !rail && self.drives_open.map(|o| !o).unwrap_or_else(|| {
+            let n_tags = if shown("tags") { cx.global::<crate::tags::Tags>().0.defs.len() } else { 0 };
+            let n_cloud = if shown("cloud") { self.places.read(cx).cloud.len() } else { 0 };
+            let rows = (pinned_n + 2 + n_cloud + n_tags) as f32 * p.sidebar_row + drives.len() as f32 * (p.sidebar_row + 7.);
+            let heads = (2 + usize::from(n_cloud > 0) + usize::from(n_tags > 0)) as f32 * 38.;
+            let room = self.viewport_h - p.titlebar_h - 48. - p.typebar_h - p.status_h - 56.;
+            !drives.is_empty() && rows + heads > room
+        });
+        if !drives.is_empty() && rail {
             col = col.child(header(t!("Drives")));
+        } else if !drives.is_empty() {
+            let n = drives.len();
+            col = col.child(
+                header(t!("Drives"))
+                    .id("sb-drives-head")
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(p.text_secondary))
+                    .child(Icon::new(if drives_folded { L::ChevronRight } else { L::ChevronDown }).size(px(12.)).flex_shrink_0())
+                    .when(drives_folded, |d| d.child(div().text_color(p.text_tertiary).child(n.to_string())))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.drives_open = Some(drives_folded);
+                        cx.notify();
+                    })),
+            );
         }
+        let drives = if drives_folded { Vec::new() } else { drives };
         for (i, d) in drives.into_iter().enumerate() {
             let loc = Location::Path(d.root.clone());
             let active = cur == loc || lit.as_ref() == Some(&d.root);
@@ -4155,6 +4229,8 @@ impl Workspace {
             .when(p.gap <= 0., |d| d.border_t_1().border_color(p.sheet_border))
             .text_size(px(p.fs_small))
             .text_color(p.text_secondary)
+            // Index: the status line is a readout in the monospace face
+            .when(p.mono_chrome && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono))
             .child(left)
             // a running operation's progress (Settings → Aktarım ilerlemesi → Durum çubuğu)
             .children(strip)
@@ -4823,6 +4899,7 @@ impl Render for Workspace {
             }
         }
         self.viewport_w = f32::from(window.viewport_size().width);
+        self.viewport_h = f32::from(window.viewport_size().height);
         // (the tab strip's selected tab and "+" button are lenses over glass; they claim them while the strip is built)
         let glass_on = self.glass_shown && self.glass_hwnd != 0;
         self.tab_lens = glass_on;

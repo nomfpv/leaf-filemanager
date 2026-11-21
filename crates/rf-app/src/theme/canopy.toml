@@ -49,6 +49,15 @@ place = "accent/0.24"
 place_border = "accent/0.30"
 selection_inactive_border = "#00000000"
 
+# Pass 3: the keys Stem and Index use for their own structure (Canopy: the rounded header strip, 12 px cards).
+header_rules = false
+date_style = ""
+tile_width = 0
+tile_radius = 12
+section_rule = false
+square_marks = false
+mono_chrome = false
+
 [dark]
 toolbar = "#101916"
 sidebar = "#101916"

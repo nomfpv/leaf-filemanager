@@ -113,6 +113,16 @@ pub struct Palette {
     pub fs: f32,
     pub fs_small: f32,
     pub fs_xs: f32,
+    /// Lines between the column headings (a filled header becomes a full-width ruled bar).
+    pub header_rules: bool,
+    /// "iso" or "": the dates of the Application date style.
+    pub date_style: &'static str,
+    /// Smallest grid card width (0: the view's own) and the cards' corner radius.
+    pub tile_w: f32,
+    pub tile_radius: f32,
+    pub section_rule: bool,
+    pub square_marks: bool,
+    pub mono_chrome: bool,
     /// The controls of this window are drawn the liquid way (the window shows glass, or it is a popup opened from one): see `liquid`.
     /// Set by `for_window`.
     pub liquid: bool,
@@ -312,10 +322,64 @@ impl Palette {
             fs: num("font_size", 13.0).clamp(9.0, 20.0),
             fs_small: num("font_size_small", 12.0).clamp(8.0, 20.0),
             fs_xs: num("font_size_xs", 11.0).clamp(8.0, 20.0),
+            header_rules: flag("header_rules"),
+            date_style: text("date_style"),
+            tile_w: num("tile_width", 0.0).clamp(0.0, 400.0),
+            tile_radius: num("tile_radius", 12.0).clamp(0.0, 24.0),
+            section_rule: flag("section_rule"),
+            square_marks: flag("square_marks"),
+            mono_chrome: flag("mono_chrome"),
             liquid: false,
         }
     }
 
+    /// The tinted greys (surfaces, lines, text, hover) turned to `hue`, keeping their saturation and lightness; plain greys and the
+    /// coloured tokens (kinds, danger, the accent) stay.
+    pub fn tint_neutrals(&mut self, hue: f32) {
+        let turn = |c: &mut Hsla| {
+            if c.s > 0.0 && c.s < 0.45 {
+                c.h = hue;
+            }
+        };
+        for c in [
+            &mut self.window_bg,
+            &mut self.titlebar_bg,
+            &mut self.toolbar_bg,
+            &mut self.sidebar_bg,
+            &mut self.content_bg,
+            &mut self.card_bg,
+            &mut self.tile_bg,
+            &mut self.tile_hover,
+            &mut self.field_bg,
+            &mut self.field_border,
+            &mut self.status_bg,
+            &mut self.status_text,
+            &mut self.status_text_secondary,
+            &mut self.stripe,
+            &mut self.border,
+            &mut self.divider,
+            &mut self.border_strong,
+            &mut self.text,
+            &mut self.text_secondary,
+            &mut self.text_tertiary,
+            &mut self.text_disabled,
+            &mut self.hover,
+            &mut self.pressed,
+            &mut self.tab_active,
+            &mut self.solid_window,
+            &mut self.solid_sheet,
+            &mut self.solid_raised,
+            &mut self.sheet_border,
+            &mut self.sheet_edge,
+            &mut self.selection_inactive,
+            &mut self.header_fill,
+            &mut self.seg_on,
+            &mut self.place,
+            &mut self.place_text,
+        ] {
+            turn(c);
+        }
+    }
     /// The backdrop is off or not there: a backdrop theme wears its solid colours (the layout stays, only the see-through goes).
     pub fn apply_solid(&mut self) {
         if !self.backdrop {
@@ -497,6 +561,8 @@ struct Current {
 static CURRENT: parking_lot::RwLock<Option<Current>> = parking_lot::RwLock::new(None);
 /// The details row height of the theme, as f32 bits (read where no palette is at hand: the list's scroll arithmetic).
 static THEME_ROW_H: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The grid's card width of the theme, as f32 bits.
+static THEME_TILE_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn build(sel: &Selection) -> Current {
     let all = data::all_themes();
@@ -507,7 +573,15 @@ fn build(sel: &Selection) -> Current {
     let ch = theme.map(|t| data::chain(t, &all)).unwrap_or_default();
     let variant = |dark: bool| {
         let r = data::resolve(&ch, dark, sel.high);
-        Palette::from_resolved(&r, dark, accent_for(&r, dark, &sel.accent))
+        let accent = accent_for(&r, dark, &sel.accent);
+        let mut p = Palette::from_resolved(&r, dark, accent);
+        // Another colourway than the theme's own first accent: the tinted greys take the accent's hue (Purple in Canopy's light mode
+        // kept Canopy's green greys under a purple selection). The theme's own accent leaves the file's colours as they are.
+        let own = r.accents.first().map(|a| hex(if dark { a.dark } else { a.light }));
+        if own.is_none_or(|o| o != accent.0) {
+            p.tint_neutrals(accent.0.h);
+        }
+        p
     };
     let (light, dark) = (variant(false), variant(true));
     Current { light, dark, black: Palette::blacken(dark) }
@@ -517,6 +591,7 @@ fn build(sel: &Selection) -> Current {
 pub fn select(sel: &Selection) {
     let cur = build(sel);
     THEME_ROW_H.store(cur.dark.row_height.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    THEME_TILE_W.store(cur.dark.tile_w.to_bits(), std::sync::atomic::Ordering::Relaxed);
     *CURRENT.write() = Some(cur);
 }
 
@@ -527,6 +602,17 @@ fn current() -> Current {
     // (a process or a test that never loaded the settings: the defaults)
     select(&Selection::default());
     CURRENT.read().unwrap_or_else(|| build(&Selection::default()))
+}
+
+/// The theme in use writes the details list's dates as ISO ("2026-11-18 10:05") where the application's own date style applies.
+pub fn iso_dates() -> bool {
+    current().dark.date_style == "iso"
+}
+
+/// The grid's card width at the default size from the theme in use (0: the view's own).
+pub fn tile_width() -> f32 {
+    // (0 before the settings chose a theme: the view's own size)
+    f32::from_bits(THEME_TILE_W.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// The details list's row height at the default size, from the theme in use.
@@ -692,7 +778,7 @@ mod tests {
         assert_eq!(index.row_selection, index.accent, "a solid accent selection");
         assert_eq!(index.row_selection_text, index.accent_text);
         assert_eq!(index.on_row_selection().text, index.accent_text);
-        assert!(index.mono_numbers && index.font_ui == "Bahnschrift" && index.row_height == 28.0);
+        assert!(index.mono_numbers && index.font_ui == "Bahnschrift" && index.row_height == 22.0);
         assert!(index.stripe.a > 0.0 && index.status_bg.a == 1.0);
         assert_eq!(index.for_status().text, index.status_text);
         // the other two keep the text on their selection

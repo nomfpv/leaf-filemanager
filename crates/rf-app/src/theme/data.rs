@@ -121,6 +121,13 @@ tokens! {
     font_size: Number = "Size of body text and file names, in pixels.",
     font_size_small: Number = "Size of secondary text (sizes, dates, the status line), in pixels.",
     font_size_xs: Number = "Size of the smallest text (section labels, column header, chips), in pixels.",
+    header_rules: Bool = "true/false: lines between the column headings; with a header_fill the header is then a full-width ruled bar instead of a rounded strip.",
+    date_style: Text = "The dates of the details list while Settings > Date style is the application's own: empty for Today, 10:05 and 18 Nov 2026; iso for 2026-11-18 10:05.",
+    tile_width: Number = "Smallest width of a card in the grid (Tiles) view, in pixels; 0 means the view's own size.",
+    tile_radius: Number = "Corner radius of the cards and pictures in the grid view.",
+    section_rule: Bool = "true/false: a sidebar section label is followed by a line to the edge.",
+    square_marks: Bool = "true/false: tag marks in the sidebar and the type bar's swatches are squares instead of dots.",
+    mono_chrome: Bool = "true/false: the address path, the pane headers' counts and the status line use font_mono.",
 }
 
 pub fn token(key: &str) -> Option<&'static Token> {

@@ -53,6 +53,15 @@ header_fill = "#00000000"
 place_border = "#00000000"
 selection_inactive_border = "#00000000"
 
+# Pass 3: the grid's cards (132 px, 6 px corners, pictures at 4 px).
+tile_width = 132
+tile_radius = 6
+header_rules = false
+date_style = ""
+section_rule = false
+square_marks = false
+mono_chrome = false
+
 [dark]
 sheet_border = "#1b221d"
 selection_inactive = "#96aa961a"

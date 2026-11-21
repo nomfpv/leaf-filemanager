@@ -1044,6 +1044,8 @@ impl Settings {
         // (the system's own short date and time for the "System" style and older dates, issue 59; set once)
         rf_core::format::set_system_format(leaf_sys::datefmt::short_date_time);
         rf_core::format::set_date_style(match self.date_format {
+            // (the theme may want its own: Index writes ISO dates in its monospace columns)
+            DatePref::Application if crate::theme::iso_dates() => rf_core::format::DateStyle::Universal,
             DatePref::Application => rf_core::format::DateStyle::Calendar,
             DatePref::System => rf_core::format::DateStyle::Local,
             DatePref::Universal => rf_core::format::DateStyle::Universal,

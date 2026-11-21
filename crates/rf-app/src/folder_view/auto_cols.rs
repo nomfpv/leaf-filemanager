@@ -170,23 +170,28 @@ impl FolderView {
         let pal = crate::theme::Palette::for_window(window);
         let (sm, xs) = (px(pal.fs_small), px(pal.fs_xs));
         let font = style.font();
+        // (dates and sizes drawn in the theme's monospace face are measured in it: Index's ISO dates were cut short)
+        let mono = (pal.mono_numbers && !pal.font_mono.is_empty()).then(|| gpui_kit::Font { family: pal.font_mono.into(), ..font.clone() });
         let ts = window.text_system();
-        let width = |s: &str, size: Pixels| -> f32 {
+        let width_in = |s: &str, size: Pixels, f: &gpui_kit::Font| -> f32 {
             if s.is_empty() {
                 return 0.;
             }
-            let run = TextRun { len: s.len(), font: font.clone(), color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
+            let run = TextRun { len: s.len(), font: f.clone(), color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
             f32::from(ts.layout_line(s, size, &[run], None).width)
         };
+        let width = |s: &str, size: Pixels| width_in(s, size, &font);
+        let num_font = mono.clone().unwrap_or_else(|| font.clone());
+        let widest_num = |texts: &[String], size: Pixels| texts.iter().map(|s| width_in(s, size, &num_font)).fold(0., f32::max);
         let widest = |texts: &[String], size: Pixels| texts.iter().map(|s| width(s, size)).fold(0., f32::max);
         let heading = |label: &str| width(label, xs);
 
         // dates: the widest forms the formatter gives in the style that is set (a full date; the longest "… ago" forms)
         let dates: Vec<String> = [400 * DAY, 59 * 60_000, 23 * 3_600_000, 6 * DAY].iter().map(|ago| format::datetime(now - ago)).collect();
-        let date_w = widest(&dates, sm);
+        let date_w = widest_num(&dates, sm);
         // sizes: four digits, three with a unit, a decimal point; and the "calculate" link of a folder, which is drawn smaller
         let sizes: Vec<String> = [1023, 1023 << 10, 104_752_742, 10_726_932_152, 1023 << 30].iter().map(|b| format::size(*b)).collect();
-        let size_w = widest(&sizes, sm).max(if key.calc_link { width(t!("Calculate size"), xs) } else { 0. });
+        let size_w = widest_num(&sizes, sm).max(if key.calc_link { width(t!("Calculate size"), xs) } else { 0. });
         // types: what this listing has
         let k = kinds(self.entries.iter().take(SCAN).map(|e| (e.is_dir(), &e.ext)));
         let mut types: Vec<String> = k.exts.iter().chain(k.longest_more.iter()).map(|ext| icons::type_label_of(false, ext)).collect();
