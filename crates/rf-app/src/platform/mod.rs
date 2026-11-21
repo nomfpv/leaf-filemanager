@@ -50,7 +50,27 @@ pub(crate) fn watch_input<E: gpui_kit::InteractiveElement>(el: E) -> E {
         }
     }
     el.on_modifiers_changed(|e, _, _| note(&e.modifiers, None))
-        .capture_any_mouse_down(|e, _, _| note(&e.modifiers, Some(e.position)))
-        .capture_any_mouse_up(|e, _, _| note(&e.modifiers, Some(e.position)))
-        .on_mouse_move(|e, _, _| note(&e.modifiers, Some(e.position)))
+        .capture_any_mouse_down(|e, _, _| {
+            note(&e.modifiers, Some(e.position));
+            drag_log(format_args!("down {:?} at {:?} count {}", e.button, e.position, e.click_count));
+        })
+        .capture_any_mouse_up(|e, _, _| {
+            note(&e.modifiers, Some(e.position));
+            drag_log(format_args!("up {:?} at {:?}", e.button, e.position));
+        })
+        .on_mouse_move(|e, window, cx| {
+            note(&e.modifiers, Some(e.position));
+            if e.pressed_button.is_some() {
+                drag_log(format_args!("move {:?} pressed {:?} viewport {:?} drag {}", e.position, e.pressed_button, window.viewport_size(), cx.has_active_drag()));
+            }
+        })
+}
+
+/// `LEAF_DRAG_LOG=1`: every press, release and move with a button held, as the window gets them, on stderr (warn level, so the
+/// default log filter shows it). For finding out why dragging does nothing on a desktop no script can drive.
+pub(crate) fn drag_log(what: std::fmt::Arguments) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("LEAF_DRAG_LOG").is_some()) {
+        log::warn!("drag log: {what}");
+    }
 }

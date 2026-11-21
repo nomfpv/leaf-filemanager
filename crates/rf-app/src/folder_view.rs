@@ -3479,6 +3479,7 @@ impl FolderView {
         }
         let d = ev.position - press.origin;
         if d.x.abs() + d.y.abs() > px(8.) {
+            crate::platform::drag_log(format_args!("row drag passes 8 px at {:?} (toolkit drag {})", ev.position, cx.has_active_drag()));
             self.drag_origin = None;
             self.slow_click = None;
             self.start_drag_out(window, cx);
@@ -3496,6 +3497,7 @@ impl FolderView {
     fn begin_marquee(&mut self, ev: &MouseDownEvent) {
         let p = self.content_point(ev.position);
         let base = if ev.modifiers.control || ev.modifiers.shift { self.selected.clone() } else { HashSet::new() };
+        crate::platform::drag_log(format_args!("band starts at {:?}", ev.position));
         self.marquee = Some(Marquee { start: p, cur: p, base });
     }
 
@@ -5179,6 +5181,15 @@ impl FolderView {
                         }),
                     )
                     .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                        if ev.pressed_button.is_some() || this.marquee.is_some() || this.drag_origin.is_some() {
+                            crate::platform::drag_log(format_args!(
+                                "list move {:?} pressed {:?} band {} row press {}",
+                                ev.position,
+                                ev.pressed_button,
+                                this.marquee.is_some(),
+                                this.drag_origin.is_some()
+                            ));
+                        }
                         if this.marquee.is_some() {
                             if ev.pressed_button == Some(MouseButton::Left) {
                                 this.update_marquee(ev.position, cx);
