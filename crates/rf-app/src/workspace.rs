@@ -6074,6 +6074,20 @@ impl Render for Workspace {
                     v.toggle_remote_follow();
                 });
             }))
+            .on_action(cx.listener(|this, _: &Checkpoint, window, cx| {
+                let v = this.active_tab().clone();
+                match v.read(cx).checkpoint_dir() {
+                    Some(d) => crate::checkpoint_ui::new_checkpoint(d, v.downgrade(), window, cx),
+                    None => crate::prompt::notice(t!("Checkpoint"), t!("A checkpoint is taken of a folder on this computer. Open one first.").to_string(), window, cx),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowCheckpoints, window, cx| {
+                let v = this.active_tab().clone();
+                match v.read(cx).checkpoint_dir() {
+                    Some(d) => crate::checkpoint_ui::show_list(d, v.downgrade(), cx),
+                    None => crate::prompt::notice(t!("Checkpoints"), t!("Checkpoints are kept for folders on this computer. Open one first.").to_string(), window, cx),
+                }
+            }))
             .on_action(cx.listener(|this, _: &ShowWorktrees, window, cx| this.show_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.new_worktree(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleHideIgnored, window, cx| {

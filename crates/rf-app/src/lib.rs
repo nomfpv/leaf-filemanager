@@ -32,6 +32,7 @@ mod usage;
 mod diff_view;
 mod duplicates_view;
 mod changes_view;
+mod checkpoint_ui;
 mod junk_view;
 mod fluent_menu;
 mod flyout;

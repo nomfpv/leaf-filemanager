@@ -17,6 +17,7 @@ Copy as context | FileText
 Show disk usage | ChartPie
 Find duplicates | Copy
 Find build junk | Eraser
+Checkpoint | FolderClock
 Show hidden items | Eye | Ctrl+H
 Hide git-ignored files | EyeOff
 -
@@ -41,6 +42,7 @@ Copy as context | FileText
 Show disk usage | ChartPie
 Find duplicates | Copy
 Find build junk | Eraser
+Checkpoint | FolderClock
 Show hidden items | Eye | Ctrl+H
 Hide git-ignored files | EyeOff
 -
@@ -152,6 +154,7 @@ New folder with selection | FolderInput
 Show disk usage | ChartPie
 Find duplicates | Copy
 Find build junk | Eraser
+Checkpoint | FolderClock
 Pin to sidebar | Pin
 Add alias… | AtSign
 Leave out of the search index | SearchSlash
@@ -181,6 +184,7 @@ Create shortcut | Link
 Show disk usage | ChartPie
 Find duplicates | Copy
 Find build junk | Eraser
+Checkpoint | FolderClock
 Pin to sidebar | Pin
 Edit alias (@docs)… | AtSign
 Leave out of the search index | SearchSlash

@@ -691,6 +691,11 @@ pub struct Settings {
     pub context_max_file_kb: u32,
     /// The most text "Copy as context" builds, in KB; it stops with a message past this.
     pub context_max_total_kb: u32,
+    /// How many checkpoints of one folder or repository are kept; taking one more removes the oldest.
+    pub checkpoint_keep: u32,
+    /// The biggest folder a checkpoint outside a git repository copies, in MB (a repository's checkpoint is not capped: git keeps
+    /// each content once).
+    pub checkpoint_cap_mb: u32,
     /// The status line shows the token estimate (bytes / 4) of the selected files.
     pub show_token_estimate: bool,
     /// The status line adds lines, play time and pixels of the selected files (read off the UI thread); a click on it breaks the selection down by type.
@@ -895,6 +900,8 @@ impl Default for Settings {
             git_marks: true,
             context_max_file_kb: 256,
             context_max_total_kb: 2048,
+            checkpoint_keep: 20,
+            checkpoint_cap_mb: 2048,
             show_token_estimate: false,
             selection_details: false,
             count_usage: true,

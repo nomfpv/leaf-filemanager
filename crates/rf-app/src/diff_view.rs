@@ -14,9 +14,9 @@ use crate::t;
 use crate::theme::{self, Palette};
 
 /// Lines of unchanged text kept round a change in "Only changes".
-const CONTEXT: u32 = 3;
+pub(crate) const CONTEXT: u32 = 3;
 /// Enough context to take in the whole file.
-const WHOLE: u32 = 1_000_000;
+pub(crate) const WHOLE: u32 = 1_000_000;
 const ROW_H: f32 = 18.;
 /// About the width of one character of the mono font at the diff's text size.
 const CHAR_W: f32 = 7.3;
@@ -27,7 +27,12 @@ pub struct Hint {
     pub root: PathBuf,
     pub rel: String,
     pub from: Option<String>,
+    /// Another difference than against HEAD (a checkpoint's restore preview): asked with "whole file", off the UI thread.
+    pub custom: Option<Custom>,
 }
+
+/// Works out the difference of one file another way than `git diff HEAD`; the flag asks for the whole file.
+pub type Custom = std::sync::Arc<dyn Fn(bool) -> Option<FileDiff> + Send + Sync>;
 
 #[derive(Clone)]
 enum Row {
@@ -74,6 +79,9 @@ impl DiffPane {
     fn load(&mut self, whole: bool, cx: &mut Context<Self>) {
         let (path, hint) = (self.path.clone(), self.hint.clone());
         let work = cx.background_spawn(async move {
+            if let Some(f) = hint.as_ref().and_then(|h| h.custom.clone()) {
+                return f(whole);
+            }
             let (root, rel, from) = match hint {
                 Some(h) => (h.root, h.rel, h.from),
                 None => {

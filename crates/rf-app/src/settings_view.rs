@@ -2736,6 +2736,32 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 |s, v| s.context_max_total_kb = v,
             ),
         ),
+        card(
+            p,
+            L::FolderClock,
+            t!("Checkpoints to keep"),
+            Some(t!("For each folder or repository. Taking one more removes the oldest.")),
+            dropdown(
+                "checkpoint-keep",
+                p,
+                s.checkpoint_keep,
+                [5u32, 10, 20, 50, 100].into_iter().map(|n| (n, n.to_string())).collect(),
+                |s, v| s.checkpoint_keep = v,
+            ),
+        ),
+        card(
+            p,
+            L::FolderClock,
+            t!("Checkpoint size limit"),
+            Some(t!("Outside a git repository a checkpoint is a copy of the folder in leaf's data folder; a bigger folder is refused. In a repository git keeps each content once and there is no limit.")),
+            dropdown(
+                "checkpoint-cap",
+                p,
+                s.checkpoint_cap_mb,
+                [256u32, 512, 1024, 2048, 4096, 8192, 16384].into_iter().map(|m| (m, if m >= 1024 { format!("{} GB", m / 1024) } else { format!("{m} MB") })).collect(),
+                |s, v| s.checkpoint_cap_mb = v,
+            ),
+        ),
     ]);
     cards
 }

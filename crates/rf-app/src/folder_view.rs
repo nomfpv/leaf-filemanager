@@ -4246,6 +4246,15 @@ impl FolderView {
         self.recycle.clone()
     }
 
+    /// The folder a checkpoint of this tab is of: the change feed's folder, else the folder shown when it is a real folder on this
+    /// computer (not a search, an archive, a server or a library).
+    pub(crate) fn checkpoint_dir(&self) -> Option<PathBuf> {
+        match self.location() {
+            Location::Changes(p) | Location::Path(p) => Some(p.clone()).filter(|p| p.is_dir()),
+            _ => None,
+        }
+    }
+
     /// The change feed page of this view while it shows one (the scripted test driver picks a row through it).
     pub(crate) fn changes_view(&self) -> Option<Entity<crate::changes_view::ChangesView>> {
         self.changes.clone()
@@ -6113,7 +6122,8 @@ impl Render for FolderView {
                 let cv = match &self.changes {
                     Some(cv) if cv.read(cx).dir() == dir.as_path() => cv.clone(),
                     _ => {
-                        let cv = cx.new(|cx| crate::changes_view::ChangesView::new(dir, cx));
+                        let tab = cx.entity().downgrade();
+                        let cv = cx.new(|cx| crate::changes_view::ChangesView::new(dir, tab, cx));
                         cx.subscribe(&cv, |this, _, ev: &crate::changes_view::ChangesEvent, cx| match ev {
                             crate::changes_view::ChangesEvent::Selected(sel) => {
                                 this.dup_selected = sel.as_ref().map(|(p, size, ms)| {

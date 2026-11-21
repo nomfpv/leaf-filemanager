@@ -151,6 +151,7 @@ pub enum Slot {
     DiskUsage,
     FindDuplicates,
     FindBuildJunk,
+    Checkpoint,
     ShowHidden,
     HideIgnored,
     Terminal,

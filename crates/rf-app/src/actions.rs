@@ -117,6 +117,8 @@ gpui_kit::actions!(
         FindBuildJunk,
         ShowChanges,
         FollowRemoteFile,
+        Checkpoint,
+        ShowCheckpoints,
         ShowWorktrees,
         OpenDocker,
         NewWorktree,
