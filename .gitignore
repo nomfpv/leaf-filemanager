@@ -1,11 +1,3 @@
 /target
 *.pdb
 /.claude/
-.superpowers/
-/notes/
-/rustyfilescom/
-/macos/.build/
-/macos/build/
-/macos/Sources/RustyFiles/Generated/
-/macos/Sources/rf_macFFI/include/
-/crates/rf-mac/target/
