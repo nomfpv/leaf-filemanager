@@ -17,6 +17,7 @@ path = "src/bin/leaf-look.rs"
 rf-core.workspace = true
 leaf-sys.workspace = true
 leaf-decode.workspace = true
+leaf-dev.workspace = true
 # installer and auto-update (GitHub Releases)
 velopack = "=1.2.161"
 rf-archive.workspace = true

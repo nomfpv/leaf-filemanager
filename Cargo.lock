@@ -4504,6 +4504,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-dev"
+version = "0.9.4"
+dependencies = [
+ "ignore",
+ "regex",
+]
+
+[[package]]
 name = "leaf-sys"
 version = "0.9.4"
 dependencies = [
@@ -6669,6 +6677,7 @@ dependencies = [
  "gpui-pre-windows",
  "image",
  "leaf-decode",
+ "leaf-dev",
  "leaf-sys",
  "log",
  "mail-parser",
