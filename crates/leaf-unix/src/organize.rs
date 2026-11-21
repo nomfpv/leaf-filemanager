@@ -195,7 +195,7 @@ impl Recycler for ShellRecycler {
 
 // ---------------------------------------------------------------- the moves (the only code here that changes files)
 
-/// Why one move did not happen. Whatever the reason, the file is whole at its old path (or, for `Placed`, whole at the new one).
+/// Why one move did not happen. Whatever the reason, the file is whole at its old path (a copy that could not be taken back again stays as a second copy, never instead of it).
 #[derive(Debug)]
 enum MoveErr {
     /// The name (and, when numbered, every numbered name) is taken: nothing was replaced.
