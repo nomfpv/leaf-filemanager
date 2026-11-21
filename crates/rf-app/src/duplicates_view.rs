@@ -94,16 +94,6 @@ impl DuplicatesView {
         &self.roots
     }
 
-    /// The status line while this page is the tab's: "12 files in 5 groups · 3 ticked (4.2 MB)".
-    pub fn status_text(&self) -> String {
-        if self.groups.is_empty() {
-            return String::new();
-        }
-        let (files, ngroups, _) = totals(&self.groups);
-        let (nt, bytes) = self.ticked_total();
-        format!("{} {} {} {} · {} {} ({})", files, t!("files in"), ngroups, t!("groups"), nt, t!("ticked"), format::size(bytes))
-    }
-
     /// Starts the search as a Status Center job; its Cancel and this page's Stop are the same flag.
     fn start(&mut self, cx: &mut Context<Self>) {
         self.stop.store(true, Ordering::Relaxed);

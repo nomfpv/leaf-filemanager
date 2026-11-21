@@ -3869,10 +3869,9 @@ impl FolderView {
         self.dups.clone()
     }
 
-    /// What the status line says on the duplicate finder and build junk pages (empty: nothing yet).
+    /// What the status line says on the build junk page (the duplicate finder's is `DuplicatesView::status_text`) (empty: nothing yet).
     pub(crate) fn page_status(&self, cx: &App) -> Option<String> {
         let text = match self.location() {
-            Location::Duplicates(_) => self.dups.as_ref()?.read(cx).status_text(),
             Location::BuildJunk(_) => self.junk.as_ref()?.read(cx).status_text(),
             _ => return None,
         };
