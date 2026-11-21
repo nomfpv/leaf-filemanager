@@ -746,7 +746,10 @@ pub fn main() {
             downloads::restore(cx);
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);
-            // sync jobs with a schedule (only while leaf runs)
+        }
+        // sync jobs with a schedule run while leaf runs, also when it was started for the quick search and stays in the background;
+        // a test copy (LEAF_MULTI_INSTANCE) never runs the user's jobs
+        if std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
             sync_ui::start_scheduler(cx);
         }
         // leaf-look ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
