@@ -571,6 +571,41 @@ fn verified(src: &Path, dst: &Path, len: u64, verify: Verify) -> io::Result<bool
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: act as a file system without `renameat2` flags (NFS, FUSE without rename2).
+    static NO_RENAME2: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Renames `from` to `to` without replacing anything there (`AlreadyExists` then, nothing touched). Where the file system refuses
+/// `RENAME_NOREPLACE` (NFS rejects any rename flag; FUSE file systems without rename2, such as ntfs-3g, sshfs and gvfs mounts, answer
+/// EINVAL), the name is claimed first with an empty file made `O_EXCL` and the part renamed over that placeholder; the placeholder goes
+/// again if the rename fails.
+fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    let forced = NO_RENAME2.with(|f| f.get());
+    #[cfg(not(test))]
+    let forced = false;
+    let e = if forced { io::Error::from_raw_os_error(libc::EINVAL) } else {
+        match crate::fileops::renameat2(from, to, libc::RENAME_NOREPLACE) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        }
+    };
+    if !matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+        return Err(e);
+    }
+    let claim = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(to)?;
+    let ino = claim.metadata()?.ino();
+    drop(claim);
+    std::fs::rename(from, to).inspect_err(|_| {
+        // (only our placeholder: a name someone put there meanwhile is theirs)
+        if std::fs::symlink_metadata(to).is_ok_and(|m| m.ino() == ino && m.len() == 0) {
+            let _ = std::fs::remove_file(to);
+        }
+    })
+}
+
 /// Copies one regular file to `dst` through its part file (see the module text): a fresh part, or on a resume the part carried on
 /// where the journal says, or nothing when `dst` already is the finished copy. The part is fsynced, checked as `verify` says and
 /// renamed to `dst`: without replacing anything, unless `replace` (the user chose it; never when `dst` is the source itself under
@@ -690,7 +725,7 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
             }
             std::fs::rename(&part, dst)
         } else {
-            crate::fileops::renameat2(&part, dst, libc::RENAME_NOREPLACE)
+            rename_noreplace(&part, dst)
         }
     })();
     drop(to);
@@ -1550,6 +1585,28 @@ mod tests {
         }
         assert_eq!(std::fs::read(root.join("outside/o.txt")).unwrap(), b"o", "nothing written through a link");
         assert_eq!(std::fs::read_dir(root.join("outside")).unwrap().count(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_copy_without_rename_flags_claims_the_name_and_never_replaces() {
+        let (root, jobs) = fresh("norename2");
+        NO_RENAME2.with(|f| f.set(true));
+        std::fs::write(root.join("src/a.bin"), pattern(3 << 20, 8)).unwrap();
+        std::fs::write(root.join("src/b.txt"), b"new").unwrap();
+        std::fs::write(root.join("dest/b.txt"), b"old").unwrap();
+        let r = run(Transfer::Copy, &[root.join("src/a.bin"), root.join("src/b.txt")], &root.join("dest"), quiet(), false, Start::New(Some(jobs)));
+        assert!(r.unwrap());
+        assert_eq!(std::fs::read(root.join("dest/a.bin")).unwrap(), pattern(3 << 20, 8), "copied through the placeholder");
+        assert_eq!(std::fs::read(root.join("dest/b.txt")).unwrap(), b"old", "not replaced");
+        assert_eq!(std::fs::read(root.join("dest/b (2).txt")).unwrap(), b"new");
+        assert!(parts_in(&root.join("dest")).is_empty());
+        // a name that is taken: refused, both left as they were
+        std::fs::write(root.join("p"), b"part").unwrap();
+        let e = rename_noreplace(&root.join("p"), &root.join("dest/b.txt")).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(root.join("dest/b.txt")).unwrap(), b"old");
+        assert_eq!(std::fs::read(root.join("p")).unwrap(), b"part");
+        NO_RENAME2.with(|f| f.set(false));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
