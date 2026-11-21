@@ -26,5 +26,44 @@ pub fn is_lan_host(host: &str) -> bool {
     if let Ok(ip) = h.parse::<IpAddr>() {
         return is_lan_ip(ip);
     }
+    // (the forms the system's resolver turns into an address by itself: `16843009`, `0x01010101`, `1.1`, `0177.0.0.1`)
+    if let Some(ip) = inet_aton(&h) {
+        return is_lan_ip(IpAddr::V4(ip));
+    }
     h.is_empty() || h == "localhost" || !h.contains('.') || [".local", ".lan", ".home.arpa", ".internal", ".localhost"].iter().any(|s| h.ends_with(s))
+}
+
+/// An IPv4 address in the old `inet_aton` forms: one to four parts, each decimal, octal (a leading 0) or hex (`0x`); the last
+/// part fills the bytes that are left.
+pub fn inet_aton(s: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let mut nums = Vec::with_capacity(parts.len());
+    for p in &parts {
+        let v = if let Some(h) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+            if h.is_empty() { Some(0) } else { u64::from_str_radix(h, 16).ok() }
+        } else if p.len() > 1 && p.starts_with('0') {
+            u64::from_str_radix(&p[1..], 8).ok()
+        } else if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) {
+            p.parse::<u64>().ok()
+        } else {
+            None
+        }?;
+        nums.push(v);
+    }
+    let (last, head) = nums.split_last()?;
+    if head.iter().any(|&n| n > 255) {
+        return None;
+    }
+    let room = 8 * (4 - head.len() as u32);
+    if room < 64 && *last >= 1u64 << room {
+        return None;
+    }
+    let mut v: u64 = 0;
+    for (i, n) in head.iter().enumerate() {
+        v |= n << (24 - 8 * i as u32);
+    }
+    Some(std::net::Ipv4Addr::from((v | last) as u32))
 }

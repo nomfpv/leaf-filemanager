@@ -419,9 +419,15 @@ pub async fn dial(host: &str, port: u16, timeout: Duration) -> io::Result<Stream
             let Some(t) = tunnel() else {
                 return if kill_switch() { Err(blocked()) } else { direct(host, port, timeout).await.map(Stream::Direct) };
             };
-            let ips = t.resolve(host.trim_start_matches('[').trim_end_matches(']')).await?;
-            if let Some(lan) = ips.iter().copied().find(|ip| route::is_lan_ip(IpAddr::V4(*ip))) {
-                return direct(&lan.to_string(), port, timeout).await.map(Stream::Direct);
+            let name = host.trim_start_matches('[').trim_end_matches(']');
+            let ips = match route::inet_aton(name) {
+                Some(ip) => vec![ip],
+                None => t.resolve(name).await?,
+            };
+            // a public name whose answer is this PC or the local network (0.0.0.0 is this PC on Linux; DNS rebinding): refused,
+            // never connected directly (a name that looks local went direct before it got here)
+            if ips.iter().any(|ip| ip.is_unspecified() || route::is_lan_ip(IpAddr::V4(*ip))) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the name points to this PC or the local network; leaf does not connect to it through the VPN"));
             }
             let mut last = io::Error::new(io::ErrorKind::NotFound, "the server's name has no address");
             for ip in ips {
