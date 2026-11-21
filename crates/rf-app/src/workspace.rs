@@ -620,6 +620,10 @@ pub fn route_ipc(msg: String, cx: &mut App) {
 /// [`route_ipc`], saying whether the request is taken care of: false only when it needed a window and none could be made. The
 /// launch of a second process waits for this answer (see `leaf_sys::handover`) and shows the folder itself on false.
 pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
+    let (msg, force_tab) = match msg.strip_prefix(crate::cli::NEW_TAB_PREFIX) {
+        Some(rest) => (rest.to_string(), true),
+        None => (msg, false),
+    };
     match crate::look::ipc::ToApp::decode(&msg) {
         Some(crate::look::ipc::ToApp::LookClosed) => {
             crate::folder_view::QUICK_LOOK_OPEN.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -651,7 +655,7 @@ pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
     }
     let (loc, select) = parse_launch(&msg);
     // (with "open folders from other programs in a new window" on, no window takes it as a tab: issue 77)
-    let list = if cx.global::<crate::settings::Settings>().launch_in_new_window {
+    let list = if cx.global::<crate::settings::Settings>().launch_in_new_window && !force_tab {
         Vec::new()
     } else {
         cx.try_global::<OpenWorkspaces>().map(|g| g.0.clone()).unwrap_or_default()

@@ -3,6 +3,7 @@
 mod actions;
 mod aliases;
 mod background;
+mod cli;
 pub mod bench;
 mod fast_start;
 mod features_page;
@@ -399,12 +400,13 @@ pub fn main() {
     // appearing for the whole SMB timeout. Undecided after 2 s = treat as a (slow) folder.
     // `--settings=look`: leaf-look'un simge menüsünden "leaf-look ayarları"
     // `--settings=speed`: straight to Settings → Speed test
-    let settings_arg = std::env::args().nth(1).and_then(|a| a.strip_prefix("--settings=").map(str::to_string));
+    let cli = cli::parse(std::env::args());
+    let settings_arg = cli.args.iter().cloned().nth(1).and_then(|a| a.strip_prefix("--settings=").map(str::to_string));
     let open_look_settings = settings_arg.is_some();
     // `--quick-search`: the quick search window, as its hotkey opens it (a shortcut of the
     // user's own can run this)
-    let quick_search = std::env::args().nth(1).as_deref() == Some(quick_search::LAUNCH_ARG);
-    let arg = std::env::args().nth(1).map(|a| a.trim().trim_matches('"').to_string()).filter(|a| !a.is_empty());
+    let quick_search = cli.args.iter().cloned().nth(1).as_deref() == Some(quick_search::LAUNCH_ARG);
+    let arg = cli.args.iter().cloned().nth(1).map(|a| a.trim().trim_matches('"').to_string()).filter(|a| !a.is_empty());
     let arg = arg.filter(|_| !open_look_settings && !quick_search);
     // jump list task "New window"
     let new_window = arg.as_deref() == Some(leaf_sys::jumplist::NEW_WINDOW_ARG);
@@ -413,8 +415,8 @@ pub fn main() {
     // with its error, and the first one that is there opens instead; `first_taken` is how many arguments that used up
     let mut first_taken = 1;
     let arg = match arg {
-        Some(a) if std::env::args().nth(2).is_some() && !a.starts_with("::") && !a.to_ascii_lowercase().starts_with("shell:") && !a.starts_with("/") && !a.starts_with('-') && !std::path::Path::new(&a).exists() => {
-            let later = std::env::args()
+        Some(a) if cli.args.iter().cloned().nth(2).is_some() && !a.starts_with("::") && !a.to_ascii_lowercase().starts_with("shell:") && !a.starts_with("/") && !a.starts_with('-') && !std::path::Path::new(&a).exists() => {
+            let later = cli.args.iter().cloned()
                 .enumerate()
                 .skip(2)
                 .map(|(i, x)| (i, x.trim().trim_matches('"').to_string()))
@@ -432,7 +434,7 @@ pub fn main() {
     let mut start: Option<Location> = None;
     // Explorer's `/select,<file>`: its folder, with the file selected
     // (callers also write `/select, <file>`: the path then comes as the next argument)
-    let all_args = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let all_args = cli.args.iter().cloned().skip(1).collect::<Vec<_>>().join(" ");
     let mut select = {
         let lower = all_args.to_ascii_lowercase();
         (lower.starts_with("/select,") || lower.starts_with("-select,"))
@@ -527,7 +529,9 @@ pub fn main() {
     // first (issue 125). Only plain folders that are there (one that is gone is passed over without a word), after a first argument that
     // was one too.
     let more_folders: Vec<String> = if matches!(start, Some(Location::Path(_))) && select.is_none() {
-        std::env::args()
+        cli.args
+            .iter()
+            .cloned()
             .skip(first_taken + 1)
             .map(|a| a.trim().trim_matches('"').to_string())
             .filter(|a| !a.is_empty() && !a.starts_with("--") && is_dir_bounded(PathBuf::from(a), std::time::Duration::from_secs(2)) == Some(true))
@@ -571,6 +575,8 @@ pub fn main() {
         }
         _ => String::new(),
     };
+    // `--new-tab`: a tab of the running window, whatever the setting for folders from other programs says
+    let message = if cli.new_tab && !message.is_empty() && !new_window && !quick_search && !open_look_settings { format!("{}{message}", cli::NEW_TAB_PREFIX) } else { message };
     // LEAF_MULTI_INSTANCE=1 skips forwarding (automated tests run several copies).
     let multi = std::env::var_os("LEAF_MULTI_INSTANCE").is_some();
     leaf_sys::handover::trace(&format!("main: launch, request of {} bytes, multi {multi}", message.len()));
