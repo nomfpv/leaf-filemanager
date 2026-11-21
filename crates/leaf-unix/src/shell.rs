@@ -23,7 +23,7 @@ fn spawn_reaped(mut cmd: Command) -> anyhow::Result<()> {
 }
 
 /// A program on `PATH` (or an absolute path that is executable).
-fn which(name: &str) -> Option<PathBuf> {
+pub(crate) fn which(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let is_exe = |p: &Path| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
     if name.contains('/') {

@@ -203,8 +203,8 @@ impl FolderView {
         // the lists grey what is cut until it is pasted (a copy ends a cut, as in Explorer)
         crate::cut_marks::set(if kind == Transfer::Move { &paths } else { &[] });
         cx.refresh_windows();
-        // Linux: GPUI's clipboard offers text only (no `text/uri-list`), so other programs get the paths as text, one per line;
-        // the files themselves stay leaf's own (`leaf_sys::clipboard`) for pasting inside leaf.
+        // Linux: GPUI's clipboard offers text only, so the paths go there as text, one per line; `leaf_sys::clipboard::set_files`
+        // then offers the files as `text/uri-list` through wl-copy / xclip when installed (that offer replaces the text one)
         #[cfg(not(windows))]
         cx.write_to_clipboard(ClipboardItem::new_string(paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("
 ")));
