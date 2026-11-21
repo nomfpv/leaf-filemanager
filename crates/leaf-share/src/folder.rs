@@ -3,11 +3,14 @@
 //! the result's folder, resolved by the system, must still lie inside the shared folder). A refused path is logged by its name and
 //! answered with "access denied". A removal never deletes: the item is moved into the folder's own `.leaf-sync-trash/<time>/`. A
 //! write only ever creates a new temporary file (`.<name>.<n>.leaf-part`), which becomes the real name by a rename that never
-//! replaces anything.
+//! replaces anything. Only a temporary file this connection made is ever deleted outright; no other file can be renamed to such a
+//! name.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use leaf_vfs::{Fs as _, FsError, LocalFs, MetaChange, names};
 use rf_nearby::kit;
@@ -21,6 +24,18 @@ pub struct Folder {
     root: PathBuf,
     /// The root as the system resolves it, for the last check of every path.
     canon: PathBuf,
+    /// The temporary files this connection made ([`Folder::create_part`]): the only files a removal deletes outright.
+    made: Mutex<HashSet<PathBuf>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Whether the first part of `rel` names the trash folder (in any case: Windows names are not case-sensitive).
+fn names_trash(rel: &str) -> bool {
+    let first = rel.split('/').next().unwrap_or(rel);
+    if cfg!(windows) { first.eq_ignore_ascii_case(TRASH) } else { first == TRASH }
 }
 
 fn is_link(m: &fs::Metadata) -> bool {
@@ -98,7 +113,7 @@ impl Folder {
             return Err(FsError::Other(format!("{} is not a folder (or is a link)", root.display())));
         }
         let canon = fs::canonicalize(root)?;
-        Ok(Folder { root: root.to_path_buf(), canon })
+        Ok(Folder { root: root.to_path_buf(), canon, made: Mutex::new(HashSet::new()) })
     }
 
     pub fn root(&self) -> &Path {
@@ -191,7 +206,28 @@ impl Folder {
         }
         let p = self.resolve(rel, false)?;
         let f = fs::OpenOptions::new().write(true).create_new(true).open(&p)?;
+        lock(&self.made).insert(p.clone());
         Ok((f, p))
+    }
+
+    /// Deletes a temporary file of [`Folder::create_part`] whose write failed.
+    pub fn discard_part(&self, p: &Path) {
+        if lock(&self.made).remove(p) {
+            let _ = fs::remove_file(p);
+        }
+    }
+
+    /// Whether `p` lies in the trash folder, by the system's own answer (an 8.3 alias like `LEAF-S~1` or another case of the name
+    /// gets past a check of the text).
+    fn in_trash(&self, p: &Path) -> bool {
+        let Some(parent) = p.parent() else { return false };
+        let Ok(cp) = fs::canonicalize(parent) else { return false };
+        let full = match fs::symlink_metadata(p) {
+            Ok(m) if !is_link(&m) => fs::canonicalize(p).unwrap_or_else(|_| cp.join(p.file_name().unwrap_or_default())),
+            _ => cp.join(p.file_name().unwrap_or_default()),
+        };
+        let trash = self.canon.join(TRASH);
+        full.starts_with(fs::canonicalize(&trash).unwrap_or(trash))
     }
 
     pub fn mkdir(&self, rel: &str) -> Result<(), FsError> {
@@ -205,8 +241,18 @@ impl Folder {
         if from.is_empty() || to.is_empty() {
             return Err(refused(from, "the folder itself"));
         }
+        let last = |r: &str| r.rsplit('/').next().unwrap_or(r).to_string();
+        // a real file never takes a temporary name: a temporary file may be deleted outright
+        if is_part(&last(to)) && !is_part(&last(from)) {
+            return Err(refused(to, "only a temporary file can have a temporary name"));
+        }
         let (a, b) = (self.resolve(from, false)?, self.resolve(to, false)?);
-        LocalFs.rename(&LocalFs::address(&a), &LocalFs::address(&b), false)
+        LocalFs.rename(&LocalFs::address(&a), &LocalFs::address(&b), false)?;
+        let mut made = lock(&self.made);
+        if made.remove(&a) && is_part(&last(to)) {
+            made.insert(b);
+        }
+        Ok(())
     }
 
     pub fn set_time(&self, rel: &str, mtime_ms: i64) -> Result<(), FsError> {
@@ -234,13 +280,16 @@ impl Folder {
         if rel.is_empty() {
             return Err(refused(rel, "the folder itself"));
         }
-        if rel == TRASH || rel.starts_with(&format!("{TRASH}/")) {
+        if names_trash(rel) {
             return Err(refused(rel, "inside the trash folder"));
         }
         let p = self.resolve(rel, true)?;
+        if self.in_trash(&p) {
+            return Err(refused(rel, "inside the trash folder"));
+        }
         let m = fs::symlink_metadata(&p)?;
-        let name = rel.rsplit('/').next().unwrap_or(rel);
-        if m.is_file() && !is_link(&m) && is_part(name) {
+        // deleted outright: only a temporary file this connection made (any other goes to the trash like every file)
+        if m.is_file() && !is_link(&m) && lock(&self.made).remove(&p) {
             return Ok(fs::remove_file(&p)?);
         }
         if m.is_dir() && !is_link(&m) && !recursive && fs::read_dir(&p)?.next().is_some() {

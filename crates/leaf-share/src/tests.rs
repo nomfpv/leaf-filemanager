@@ -165,6 +165,32 @@ fn a_remove_request_moves_to_the_trash_folder_and_never_deletes() {
 }
 
 #[test]
+fn a_file_never_gets_deleted_by_way_of_a_temporary_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    std::fs::write(root.join("report.docx"), "keep me").unwrap();
+    std::fs::write(root.join(".old.1.leaf-part"), "a part this connection did not make").unwrap();
+    let f = Folder::new(&root).unwrap();
+    // a real file cannot take a temporary name
+    assert_eq!(f.rename("report.docx", ".report.docx.1.leaf-part"), Err(leaf_vfs::FsError::Denied));
+    assert_eq!(read(root.join("report.docx")), "keep me");
+    // a temporary file it did not make goes to the trash, not away
+    f.remove(".old.1.leaf-part", false).unwrap();
+    assert!(!root.join(".old.1.leaf-part").exists());
+    let stamp_dir = std::fs::read_dir(root.join(TRASH)).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(read(stamp_dir.join(".old.1.leaf-part")), "a part this connection did not make");
+    // its own temporary file is deleted outright, and only that
+    let (file, _) = f.create_part(".new.2.leaf-part").unwrap();
+    drop(file);
+    f.remove(".new.2.leaf-part", false).unwrap();
+    assert!(!root.join(".new.2.leaf-part").exists() && !stamp_dir.join(".new.2.leaf-part").exists());
+    // the trash folder by another case of its name is refused too (Windows names are not case-sensitive)
+    if cfg!(windows) {
+        assert!(f.remove(&TRASH.to_uppercase(), true).is_err());
+    }
+}
+
+#[test]
 fn a_file_changed_on_both_sides_keeps_both() {
     let p = joined_pair();
     std::fs::write(p.hf.join("a.txt"), "changed here").unwrap();

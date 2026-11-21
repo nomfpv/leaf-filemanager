@@ -999,7 +999,7 @@ async fn serve(folder: Option<Arc<Folder>>, share: &str, mut s: SendHalf, mut r:
                     match r {
                         Ok(()) => Reply::Ok,
                         Err(e) => {
-                            let _ = std::fs::remove_file(&at);
+                            folder.discard_part(&at);
                             Reply::Err { kind: wire::ErrKind::Other, text: format!("the copy could not be written ({e:#})") }
                         }
                     }
