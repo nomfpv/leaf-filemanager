@@ -155,24 +155,74 @@ fn trash_for(path: &Path) -> Option<Trash> {
     top_trash(&mount_top(parent)?, dev, true)
 }
 
-/// Every trash folder that exists (none are made): the home trash, then each mount's.
+/// `t` when it is a trash that may be read, restored from and emptied: its folder, `files/` and `info/` are real folders (not links)
+/// on one device, the folder is ours, and for `$topdir/.Trash/$uid` the shared `.Trash` is a real sticky folder on that device (the
+/// rules of `top_trash`). A crafted stick whose `files` is a link to the home folder is refused here.
+pub(crate) fn checked(t: &Trash) -> Option<Trash> {
+    let m = std::fs::symlink_metadata(&t.dir).ok()?;
+    if !m.is_dir() || m.uid() != uid() {
+        return None;
+    }
+    let dev = m.dev();
+    if let Some(top) = &t.top {
+        if std::fs::metadata(top).ok()?.dev() != dev {
+            return None;
+        }
+        let shared = top.join(".Trash");
+        if t.dir.parent() == Some(shared.as_path()) {
+            let s = std::fs::symlink_metadata(&shared).ok()?;
+            if !s.is_dir() || s.mode() & libc::S_ISVTX as u32 == 0 || s.dev() != dev {
+                return None;
+            }
+        }
+    }
+    for d in [t.files(), t.info()] {
+        let x = std::fs::symlink_metadata(&d).ok()?;
+        if !x.is_dir() || x.dev() != dev {
+            return None;
+        }
+    }
+    Some(t.clone())
+}
+
+/// Every trash folder that exists and passes [`checked`] (none are made): the home trash, then each mount's.
 pub(crate) fn all_trashes() -> Vec<Trash> {
-    let mut out = Vec::new();
-    if let Some(home) = home_trash_dir().filter(|h| h.is_dir()) {
-        out.push(Trash { dir: home, top: None });
+    let mut cands = Vec::new();
+    if let Some(home) = home_trash_dir() {
+        cands.push(Trash { dir: home, top: None });
     }
     for d in crate::drives::list_drives() {
-        let Ok(m) = std::fs::metadata(&d.root) else { continue };
         let top = d.root.clone();
         for t in [top.join(".Trash").join(uid().to_string()), top.join(format!(".Trash-{}", uid()))] {
-            if matches!(std::fs::symlink_metadata(&t), Ok(x) if x.is_dir() && x.uid() == uid() && x.dev() == m.dev())
-                && !out.iter().any(|o: &Trash| o.dir == t)
-            {
-                out.push(Trash { dir: t, top: Some(top.clone()) });
+            cands.push(Trash { dir: t, top: Some(top.clone()) });
+        }
+    }
+    let mut out: Vec<Trash> = Vec::new();
+    for c in cands {
+        if let Some(t) = checked(&c) {
+            if !out.iter().any(|o| o.dir == t.dir) {
+                out.push(t);
             }
         }
     }
     out
+}
+
+/// Opens `files/` or `info/` of a checked trash through descriptors that follow no link (the trash folder, then the sub-folder),
+/// and checks it is on the trash's own device.
+fn open_part(t: &Trash, part: &str) -> anyhow::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::AsRawFd;
+    let t = checked(t).ok_or_else(|| anyhow::anyhow!("{}: not a usable trash folder", t.dir.display()))?;
+    let dev = std::fs::symlink_metadata(&t.dir)?.dev();
+    let parent = t.dir.parent().ok_or_else(|| anyhow::anyhow!("no trash folder"))?;
+    let name = t.dir.file_name().ok_or_else(|| anyhow::anyhow!("no trash folder"))?;
+    let up = crate::fastdelete::open_dir(parent)?;
+    let dir = crate::fastdelete::open_dir_at(up.as_raw_fd(), &crate::fileops::cpath(Path::new(name))?)?;
+    let sub = crate::fastdelete::open_dir_at(dir.as_raw_fd(), &crate::fileops::cpath(Path::new(part))?)?;
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: fstat into a valid out-pointer on a descriptor we hold.
+    anyhow::ensure!(unsafe { libc::fstat(sub.as_raw_fd(), &mut st) } == 0 && st.st_dev == dev, "{}: not on the trash's device", t.dir.display());
+    Ok(sub)
 }
 
 /// URI-escapes a path for `Path=` (RFC 2396: everything but unreserved characters and `/`).
@@ -462,13 +512,47 @@ pub fn restore(items: &[RecycleItem]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Deletes one trashed item for good, with its record.
+/// Deletes one trashed item for good, with its record. The item is removed relative to `files/` opened without following links.
 fn delete_one(t: &Trash, at: &Path) -> anyhow::Result<()> {
-    crate::fastdelete::remove_tree(at)?;
-    if let Some(name) = at.file_name() {
-        let _ = std::fs::remove_file(t.info_of(name));
+    use std::os::fd::AsRawFd;
+    anyhow::ensure!(at.parent() == Some(t.files().as_path()), "{}: not in the trash", at.display());
+    let name = at.file_name().ok_or_else(|| anyhow::anyhow!("not a trashed item"))?;
+    let files = open_part(t, "files")?;
+    crate::fastdelete::remove_entry_at(files.as_raw_fd(), &crate::fileops::cpath(Path::new(name))?, at)?;
+    if let Ok(info) = open_part(t, "info") {
+        let mut n = name.to_os_string();
+        n.push(".trashinfo");
+        let c = crate::fileops::cpath(Path::new(&n))?;
+        // SAFETY: `c` is NUL-terminated; unlinkat on a descriptor we hold.
+        unsafe { libc::unlinkat(info.as_raw_fd(), c.as_ptr(), 0) };
     }
     Ok(())
+}
+
+/// Empties one trash: every item in `files/` and every record in `info/`, through descriptors that follow no link. A trash that
+/// fails [`checked`] is refused and nothing in it is touched. The number of items that could not be deleted.
+pub(crate) fn empty_trash(t: &Trash) -> anyhow::Result<usize> {
+    use std::os::fd::AsRawFd;
+    let files = open_part(t, "files")?;
+    let info = open_part(t, "info")?;
+    let mut failed = 0;
+    for n in crate::fastdelete::names(files.as_raw_fd())? {
+        let at = t.files().join(std::ffi::OsStr::from_bytes(n.to_bytes()));
+        if crate::fastdelete::remove_entry_at(files.as_raw_fd(), &n, &at).is_err() {
+            failed += 1;
+        }
+    }
+    // records whose item is gone
+    let left: Vec<Vec<u8>> = crate::fastdelete::names(files.as_raw_fd())?.into_iter().map(|n| n.into_bytes()).collect();
+    for n in crate::fastdelete::names(info.as_raw_fd())? {
+        if let Some(stem) = n.to_bytes().strip_suffix(b".trashinfo") {
+            if !left.iter().any(|l| l.as_slice() == stem) {
+                // SAFETY: `n` is NUL-terminated; unlinkat on a descriptor we hold.
+                unsafe { libc::unlinkat(info.as_raw_fd(), n.as_ptr(), 0) };
+            }
+        }
+    }
+    Ok(failed)
 }
 
 /// Deletes exactly the trashed items whose keys are given, for good. A key that is not directly inside a known trash's `files/` folder
@@ -503,22 +587,11 @@ pub fn empty(confirm: bool) -> anyhow::Result<()> {
     }
     let mut failed = 0;
     for t in all_trashes() {
-        if let Ok(rd) = std::fs::read_dir(t.files()) {
-            for e in rd.flatten() {
-                if delete_one(&t, &e.path()).is_err() {
-                    failed += 1;
-                }
-            }
-        }
-        // records whose item is gone
-        if let Ok(rd) = std::fs::read_dir(t.info()) {
-            for e in rd.flatten() {
-                let n = e.file_name();
-                if let Some(stem) = n.as_bytes().strip_suffix(b".trashinfo") {
-                    if std::fs::symlink_metadata(t.files().join(std::ffi::OsStr::from_bytes(stem))).is_err() {
-                        let _ = std::fs::remove_file(e.path());
-                    }
-                }
+        match empty_trash(&t) {
+            Ok(n) => failed += n,
+            Err(e) => {
+                log::warn!("trash: {} not emptied ({e})", t.dir.display());
+                failed += 1;
             }
         }
     }
@@ -590,6 +663,26 @@ mod tests {
         assert!(list_one(&t).is_empty());
         assert_eq!(std::fs::read_dir(t.info()).unwrap().count(), 0);
         assert_eq!(parse_info("[Trash Info]\nPath=sub/f%C3%BC.txt\nDeletionDate=2026-11-21T07:00:00\n", Some(Path::new("/media/usb"))).unwrap().0, PathBuf::from("/media/usb/sub/fü.txt"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_trash_whose_files_folder_is_a_link_is_never_emptied() {
+        let root = std::env::temp_dir().join(format!("leaf-unix-trash-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let victim = root.join("victim");
+        std::fs::create_dir_all(victim.join("Documents")).unwrap();
+        std::fs::write(victim.join("Documents/thesis.txt"), b"years of work").unwrap();
+        // a crafted stick: `.Trash-$uid` of ours, `info/` real, `files` a link to someone's home folder
+        let t = Trash { dir: root.join(format!(".Trash-{}", uid())), top: Some(root.clone()) };
+        std::fs::create_dir_all(t.info()).unwrap();
+        std::os::unix::fs::symlink(&victim, t.files()).unwrap();
+        std::fs::write(t.info_of(std::ffi::OsStr::new("Documents")), "[Trash Info]\nPath=Documents\nDeletionDate=2026-11-21T07:00:00\n").unwrap();
+        assert!(checked(&t).is_none());
+        assert!(empty_trash(&t).is_err());
+        assert!(delete_one(&t, &t.files().join("Documents")).is_err());
+        assert_eq!(std::fs::read(victim.join("Documents/thesis.txt")).unwrap(), b"years of work");
+        std::fs::remove_file(t.files()).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

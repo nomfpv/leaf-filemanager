@@ -281,6 +281,16 @@ pub fn delete_permanent(paths: &[PathBuf], tracker: Arc<Tracker>, _threads: usiz
     Ok(true)
 }
 
+/// Removes the entry `name` of the open folder `dir` for good, quietly, by the same walk (the folder is not looked up again by path:
+/// the trash opens its `files/` itself, without following links). `path` is only for messages.
+pub(crate) fn remove_entry_at(dir: RawFd, name: &CStr, path: &Path) -> anyhow::Result<()> {
+    let t = Tracker::new(Box::new(|_, _, _| {}), Default::default());
+    let mut w = Walk { dev: fstat(dir)?.st_dev, tracker: &t, total: 0, done: 0, failed: Vec::new(), failed_count: 0, cancelled: false };
+    w.remove(dir, name, path);
+    anyhow::ensure!(w.failed_count == 0, "{} item(s) could not be deleted: {}", w.failed_count, w.failed.join("; "));
+    Ok(())
+}
+
 /// Removes one tree for good, quietly (the trash's own clean-up, the source of a finished move into the home trash).
 pub(crate) fn remove_tree(p: &Path) -> anyhow::Result<()> {
     let t = Tracker::new(Box::new(|_, _, _| {}), Default::default());
