@@ -150,6 +150,41 @@ pub struct ShareService {
     inner: Arc<Inner>,
     rt: Mutex<Option<tokio::runtime::Runtime>>,
 }
+/// A folder as the system resolves it (the part that exists; the rest added as it is), lower-cased on Windows, whose names are
+/// not case-sensitive: two spellings of one folder give the same key.
+fn path_key(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut cur = p;
+    let found = loop {
+        if let Ok(c) = std::fs::canonicalize(cur) {
+            break Some(c);
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => break None,
+        }
+    };
+    let mut k = match found {
+        Some(c) => c,
+        None => {
+            rest.clear();
+            p.to_path_buf()
+        }
+    };
+    for r in rest.iter().rev() {
+        k.push(r);
+    }
+    if cfg!(windows) { PathBuf::from(k.to_string_lossy().to_lowercase()) } else { k }
+}
+
+/// One folder lies in the other (or they are the same).
+fn overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
 
 impl ShareService {
     /// Reads the shares and starts what they need (the listener only when there is one).
@@ -216,10 +251,11 @@ impl ShareService {
         }
         let id = {
             let mut store = lock(&self.inner.store);
-            if let Some(s) = store.shares.iter().find(|s| s.role == Role::Host && s.folder == folder) {
+            let key = path_key(folder);
+            if let Some(s) = store.shares.iter().find(|s| s.role == Role::Host && path_key(&s.folder) == key) {
                 return Ok(s.id.clone());
             }
-            if let Some(s) = store.shares.iter().find(|s| folder.starts_with(&s.folder) || s.folder.starts_with(folder)) {
+            if let Some(s) = store.shares.iter().find(|s| overlap(&key, &path_key(&s.folder))) {
                 return Err(format!("This folder is inside a shared folder, or holds one ({})", s.folder.display()));
             }
             let name = folder.file_name().map_or_else(|| folder.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
@@ -291,7 +327,8 @@ impl ShareService {
             if store.get(&inv.share).is_some() {
                 return Err("This PC takes part in that shared folder already".into());
             }
-            if let Some(s) = store.shares.iter().find(|s| folder.starts_with(&s.folder) || s.folder.starts_with(folder)) {
+            let key = path_key(folder);
+            if let Some(s) = store.shares.iter().find(|s| overlap(&key, &path_key(&s.folder))) {
                 return Err(format!("That place is inside a shared folder, or holds one ({})", s.folder.display()));
             }
         }
