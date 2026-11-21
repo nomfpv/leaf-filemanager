@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::thumbs. Status: STUB
+﻿//! Linux backend of rf_win::thumbs. Status: REAL (inert on purpose: answers with no picture)
 //!
 //! No icons or thumbnails yet. The pool answers every request at once, on the caller's thread, with no picture (`image: None`,
 //! not `dropped`): the cache then marks the slot failed instead of waiting for it forever.
@@ -74,3 +74,4 @@ mod tests {
         assert_eq!(*got.lock().unwrap(), vec![(7, true, false), (8, true, false)]);
     }
 }
+
