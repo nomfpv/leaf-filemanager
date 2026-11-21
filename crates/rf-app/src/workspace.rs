@@ -111,6 +111,8 @@ impl Tab {
     }
 }
 
+mod worktrees;
+
 pub struct Workspace {
     tabs: Vec<Tab>,
     /// Compact overlay (small, always-on-top window): the placement to restore on exit.
@@ -221,6 +223,8 @@ pub struct Workspace {
     viewport_h: f32,
     /// The sidebar's Drives section opened or folded by a click on its heading; None: folded only when the sidebar is too short.
     drives_open: Option<bool>,
+    /// The git worktree panel's state (`worktrees.rs`).
+    wt: worktrees::WtState,
     /// The address box's width for the path as last laid out (logical px; 0 before the first layout): what the breadcrumb folds its
     /// leading folders to fit (issue 164: a guess from the window's width folded them with room to spare).
     crumb_room: std::rc::Rc<std::cell::Cell<f32>>,
@@ -931,6 +935,7 @@ impl Workspace {
             viewport_w: 1300.,
             viewport_h: 800.,
             drives_open: None,
+            wt: Default::default(),
             crumb_room: Default::default(),
             last_session: Vec::new(),
             _bulk_sub: None,
@@ -1704,6 +1709,7 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        let tabs = if mode == PaletteMode::Worktrees { self.wt_entries() } else { tabs };
         let pal = cx.new(|cx| CommandPalette::new(mode, folders, tabs, window, cx));
         self._palette_sub = Some(cx.subscribe_in(&pal, window, |this, _, ev: &PaletteEvent, window, cx| {
             this.palette = None;
@@ -3780,6 +3786,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         // (the mockups: quiet icons, the current place's in the accent; a tag keeps its colour, as a dot)
+        let wt_id = id.clone();
         let tag = matches!(icon, L::Tag);
         let icon_color = if active && !tag { p.accent } else if icon_color == p.accent || icon_color == p.text_secondary { p.text_tertiary } else { icon_color };
         let target2 = target.clone();
@@ -3800,6 +3807,7 @@ impl Workspace {
             let b = s.as_bytes();
             (b.len() <= 3 && b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()).then(|| (b[0] as char).to_ascii_uppercase())
         });
+        let is_wt = matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-wt");
         let tag_dot = target3.path().filter(|p| p.parent().is_some()).and_then(|p| crate::tags::first_color(p, cx));
         h_flex()
             .id(id)
@@ -3875,7 +3883,11 @@ impl Workspace {
                     MouseButton::Right,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.sidebar_menu(path.clone(), window, cx);
+                        if is_wt {
+                            this.wt_menu(path.clone(), window, cx);
+                        } else {
+                            this.sidebar_menu(path.clone(), window, cx);
+                        }
                     }),
                 )
             })
@@ -4097,6 +4109,7 @@ impl Workspace {
                 col = col.child(self.sidebar_item(("sb-dev", i).into(), L::Usb, p.text_secondary, d.name.clone(), loc, active, None, p, cx));
             }
         }
+        col = self.wt_sidebar(col, &cur, rail, p, cx);
         let cloud = visible_places(self.places.read(cx).cloud.clone(), &cx.global::<crate::settings::Settings>().hidden_places);
         if !cloud.is_empty() && shown("cloud") {
             col = col.child(header(t!("Cloud and Linux")));
@@ -5500,6 +5513,8 @@ impl Render for Workspace {
                     ),
                 }
             }))
+            .on_action(cx.listener(|this, _: &ShowWorktrees, window, cx| this.show_worktrees(window, cx)))
+            .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.new_worktree(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleHideIgnored, window, cx| {
                 let on = cx.global::<crate::settings::Settings>().hide_ignored;
                 let dir = this.active_tab().read(cx).location().path().map(Path::to_path_buf);

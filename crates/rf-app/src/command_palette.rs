@@ -50,6 +50,8 @@ pub enum PaletteMode {
     Folders,
     /// The window's tabs, open and recently closed (Ctrl+Shift+A).
     Tabs,
+    /// The git worktrees of the open repository (the rows are `TabEntry`s: the branch and the folder).
+    Worktrees,
 }
 
 /// One row under the typed path's row.
@@ -142,7 +144,7 @@ fn filter(mode: PaletteMode, cmds: &[Cmd], folders: &[crate::folder_history::Vis
         }
         PaletteMode::Commands { .. } => Vec::new(),
         PaletteMode::Folders => crate::folder_history::rank(folders, &q).into_iter().map(|(s, v)| (s, v.path.clone())).collect(),
-        PaletteMode::Tabs => Vec::new(),
+        PaletteMode::Tabs | PaletteMode::Worktrees => Vec::new(),
     };
     // both lists are best first: merge them by how well they match
     let mut out = Vec::with_capacity(by_cmd.len() + by_folder.len());
@@ -170,6 +172,7 @@ impl CommandPalette {
             PaletteMode::Commands { .. } => crate::t!("Search commands or type a path…"),
             PaletteMode::Folders => crate::t!("Search past folders…"),
             PaletteMode::Tabs => crate::t!("Search tabs…"),
+            PaletteMode::Worktrees => crate::t!("Search worktrees…"),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(hint));
         let sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| match ev {
@@ -178,7 +181,7 @@ impl CommandPalette {
             _ => {}
         });
         input.update(cx, |s, cx| s.focus(window, cx));
-        let cmds = if matches!(mode, PaletteMode::Folders | PaletteMode::Tabs) { Vec::new() } else { commands().into_iter().filter(|c| c.available(cx)).collect() };
+        let cmds = if matches!(mode, PaletteMode::Folders | PaletteMode::Tabs | PaletteMode::Worktrees) { Vec::new() } else { commands().into_iter().filter(|c| c.available(cx)).collect() };
         let mut this = Self { input, mode, cmds, folders, tabs, filtered: Vec::new(), path: None, selected: 0, _sub: sub };
         this.refilter(cx);
         this
@@ -187,8 +190,8 @@ impl CommandPalette {
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let raw = self.input.read(cx).value().to_string();
         // (the tab search takes no typed path)
-        self.path = as_path(&raw).filter(|_| self.mode != PaletteMode::Tabs).map(|_| PathBuf::from(raw.trim().trim_matches('"')));
-        self.filtered = if self.mode == PaletteMode::Tabs { filter_tabs(&self.tabs, &raw.trim().to_lowercase()) } else { filter(self.mode, &self.cmds, &self.folders, &raw) };
+        self.path = as_path(&raw).filter(|_| !matches!(self.mode, PaletteMode::Tabs | PaletteMode::Worktrees)).map(|_| PathBuf::from(raw.trim().trim_matches('"')));
+        self.filtered = if matches!(self.mode, PaletteMode::Tabs | PaletteMode::Worktrees) { filter_tabs(&self.tabs, &raw.trim().to_lowercase()) } else { filter(self.mode, &self.cmds, &self.folders, &raw) };
         self.selected = 0;
         cx.notify();
     }
@@ -212,7 +215,11 @@ impl CommandPalette {
             Some(Row::Folder(p)) => cx.emit(PaletteEvent::Navigate(p.clone())),
             Some(Row::Tab(ti)) => {
                 let t = &self.tabs[*ti];
-                cx.emit(PaletteEvent::Tab { closed: t.closed, id: t.id })
+                if self.mode == PaletteMode::Worktrees {
+                    cx.emit(PaletteEvent::Navigate(PathBuf::from(&t.detail)))
+                } else {
+                    cx.emit(PaletteEvent::Tab { closed: t.closed, id: t.id })
+                }
             }
             None => {}
         }
@@ -279,7 +286,7 @@ impl Render for CommandPalette {
                 Row::Tab(ti) => {
                     let t = &self.tabs[ti];
                     let detail = if t.closed { format!("{} · {}", crate::t!("Closed"), t.detail) } else { t.detail.clone() };
-                    (if t.closed { L::RotateCcw } else { L::PanelTop }, t.label.clone(), detail.into())
+                    (if t.closed { L::RotateCcw } else if self.mode == PaletteMode::Worktrees { L::GitBranch } else { L::PanelTop }, t.label.clone(), detail.into())
                 }
             };
             list = list.child(self.row(ix, icon, label, keys, &p, cx));
@@ -355,6 +362,7 @@ impl Render for CommandPalette {
                             PaletteMode::Folders if self.folders.is_empty() => crate::t!("No folders visited yet"),
                             PaletteMode::Folders => crate::t!("No matching folders"),
                             PaletteMode::Tabs => crate::t!("No matching tab"),
+                            PaletteMode::Worktrees => crate::t!("No matching worktree"),
                         };
                         d.child(div().p_3().text_sm().text_color(p.text_secondary).child(none))
                     }),
