@@ -674,3 +674,41 @@ fn other_key_type_is_refused_not_asked() {
     assert!(ans.asked().is_empty(), "no trust dialog, no password");
     assert_eq!(std::fs::read_to_string(tmp.0.join("known_hosts")).unwrap(), format!("{line}\n"), "nothing written");
 }
+
+/// Must-fix 5: secrets are bound to the host key they were typed for. After "Trust once" and a password, a reconnect to the
+/// same key asks nothing; a reconnect that shows another key is refused as changed (no dialog, the password not sent) and
+/// the password is forgotten: back on the trusted key, it is asked again.
+#[test]
+fn another_key_after_trust_once_is_refused_and_secrets_forgotten() {
+    let tmp = Temp::new("bound");
+    let served = Temp::new("bound-served");
+    let password = format!("pw-{}-bound", std::process::id());
+    let k1 = new_key();
+    let server = TestServer::start_with(&served.0, &password, new_key().public_key().clone(), vec![k1.clone()], false);
+    let root = server.addr("/");
+    let ans = Answers::with(&[HostKeyAnswer::TrustOnce, HostKeyAnswer::TrustOnce], &[Some(&password), Some(&password)]);
+    let fs = SftpFs::new(config(&tmp.0), ans.clone());
+    fs.stat(&root).unwrap();
+    assert_eq!(ans.asked(), [format!("host key [127.0.0.1]:{}", server.port), format!("password {USER}@127.0.0.1 retry=false")]);
+
+    // the line drops; the same key again: nothing asked, the kept password logs in
+    fs.drop_connections();
+    let logins = server.logins.load(Ordering::Relaxed);
+    fs.stat(&root).unwrap();
+    assert!(ans.asked().is_empty());
+    assert_eq!(server.logins.load(Ordering::Relaxed), logins + 1);
+
+    // someone else answers with another key: refused without a question, and no login happens
+    *server.keys.lock().unwrap() = vec![new_key()];
+    fs.drop_connections();
+    let e = fs.stat(&root).unwrap_err();
+    assert!(matches!(&e, FsError::Other(m) if m.contains("has changed") && m.contains("does not connect")), "{e:?}");
+    assert!(ans.asked().is_empty(), "no trust dialog, no password dialog");
+    assert_eq!(server.logins.load(Ordering::Relaxed), logins + 1, "the password was not sent");
+
+    // the real key again: still trusted for this run, but the password was forgotten and is asked again
+    *server.keys.lock().unwrap() = vec![k1];
+    fs.drop_connections();
+    fs.stat(&root).unwrap();
+    assert_eq!(ans.asked(), [format!("password {USER}@127.0.0.1 retry=false")]);
+}

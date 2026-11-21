@@ -62,6 +62,11 @@ impl SftpFs {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn drop_connections(&self) {
+        self.shared.drop_all();
+    }
+
     fn target(&self, v: &VPath) -> Result<Target, FsError> {
         conn::target(&self.cfg, v)
     }
