@@ -113,6 +113,29 @@ fn git(root: &Path) -> Command {
     c
 }
 
+/// Puts one file back to its state in HEAD (`git restore --source=HEAD --staged --worktree`, argument list). `put_away` is called
+/// first with the file's full path when it exists: it must keep the current content somewhere (leaf: the Trash) and may remove the
+/// file; when it fails nothing is touched. Blocks: off the UI thread. `Err` carries a short reason (git's own text last).
+pub fn revert_file(root: &Path, rel: &str, put_away: &dyn Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+    if rel.is_empty() || rel.starts_with('-') {
+        return Err("The file name is not valid".into());
+    }
+    let full = root.join(rel);
+    if full.symlink_metadata().is_ok() {
+        put_away(&full)?;
+    }
+    let mut c = Command::new("git");
+    c.arg("-C").arg(root).args(["--no-pager", "restore", "--source=HEAD", "--staged", "--worktree", "--"]).arg(rel);
+    c.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    let out = c.output().map_err(|e| format!("git could not be started: {e}"))?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+}
+
 /// Runs git with `args` in `dir`: the output (at most `cap` bytes) and whether it was cut, or `None` when git is missing, fails or
 /// takes longer than `timeout`.
 fn run(dir: &Path, args: &[&str], timeout: Duration, cap: usize) -> Option<(Vec<u8>, bool)> {
@@ -533,6 +556,25 @@ pub fn add_worktree(root: &Path, branch: &str, new_branch: bool, folder: &Path) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revert_keeps_the_current_content_and_restores_head() {
+        let tmp = std::env::temp_dir().join(format!("leaf-revert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let g = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&tmp).args(args).output().unwrap().status.success(), "{args:?}");
+        g(&["init", "-q"]);
+        std::fs::write(tmp.join("a.txt"), "head\n").unwrap();
+        g(&["add", "a.txt"]);
+        g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+        std::fs::write(tmp.join("a.txt"), "mine\n").unwrap();
+        let kept = tmp.join("kept.txt");
+        let k2 = kept.clone();
+        revert_file(&tmp, "a.txt", &move |p| std::fs::rename(p, &k2).map_err(|e| e.to_string())).unwrap();
+        assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap(), "head\n");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "mine\n");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn worktree_list() {

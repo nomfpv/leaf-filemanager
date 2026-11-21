@@ -1378,6 +1378,30 @@ pub fn no_trash_asker(cx: &mut App) -> NoTrashTx {
     qtx
 }
 
+/// "Revert this file" of the Changes page: the file's current content goes to the Trash (a job like any delete, undoable), then
+/// git puts the HEAD version back.
+pub fn revert_file(cx: &mut App, root: std::path::PathBuf, rel: String) {
+    let path = root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let title = format!("{} {}", t!("Reverting:"), rf_core::history::display_name(&path));
+    let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
+    let marker = mark.clone();
+    let id = start_with_id(cx, title, move |t| {
+        let put_away = |p: &std::path::Path| -> Result<(), String> {
+            fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()).map(|_| ()).map_err(|e| e.to_string())?;
+            let pairs = t.results.lock().unwrap().clone();
+            if !pairs.is_empty() {
+                *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
+                crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
+            }
+            Ok(())
+        };
+        leaf_dev::gitread::revert_file(&root, &rel, &put_away).map_err(|e| anyhow::anyhow!("{}: {e}", t!("The file could not be reverted")))?;
+        Ok(true)
+    }, None);
+    set_lock_paths(cx, id, vec![path]);
+    set_extras(cx, id, None, None, Some(mark));
+}
+
 pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, record: bool) {
     // a pinned folder that is deleted leaves the sidebar (its question was answered before this)
     for p in &paths {

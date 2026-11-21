@@ -1,7 +1,8 @@
 //! The change feed (Location::Changes): every changed, new, deleted and renamed file of the current git repository, grouped by
 //! folder, with its state, size and modified time. Selecting a file shows its diff in the preview pane (the pane asks
 //! `diff_view::hint_of`, which this page fills). It refreshes itself through the tree watcher (debounced) and has a Refresh button.
-//! Read-only: `leaf_dev::gitread` runs `status` only, off the UI thread, and nothing here writes to the repository.
+//! Reads through `leaf_dev::gitread` off the UI thread; the one write is "Revert this file" (asked first, the current content goes
+//! to the Trash, then git restores HEAD's version).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -231,6 +232,27 @@ impl ChangesView {
         }
     }
 
+    /// "Revert this file": asks, then runs the revert job (the Changes feed refreshes itself when the tree changes).
+    fn ask_revert(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(it), Some(root)) = (self.items.get(idx), self.root.clone()) else { return };
+        let rel = it.change.path.clone();
+        let name = rf_core::history::display_name(&it.path);
+        crate::prompt::show(
+            t!("Revert this file?"),
+            Some(format!("\"{name}\" {}", t!("goes back to the last commit. Your current version is moved to the Trash first."))),
+            None,
+            vec![
+                crate::prompt::Button::new(t!("Revert"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                    crate::status_center::revert_file(cx, root.clone(), rel.clone());
+                    Ok(())
+                }),
+                crate::prompt::Button::cancel(),
+            ],
+            window,
+            cx,
+        );
+    }
+
     fn select(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(it) = self.items.get(i) else { return };
         self.selected = Some(it.path.clone());
@@ -336,6 +358,7 @@ impl ChangesView {
                 let when = if it.modified_ms > 0 { format::datetime(it.modified_ms) } else { String::new() };
                 let p2 = it.path.clone();
                 let idx = *idx;
+                let can_revert = matches!(c.kind, Kind::Changed | Kind::Deleted) && !c.untracked;
                 h_flex()
                     .id(("changes-row", i))
                     .w_full()
@@ -364,6 +387,25 @@ impl ChangesView {
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_xs().text_color(p.text_tertiary).child(was.unwrap_or_default()))
                     .child(div().w(px(80.)).flex_shrink_0().text_xs().text_right().text_color(p.text).child(size))
                     .child(div().w(px(120.)).flex_shrink_0().text_xs().text_right().text_color(p.text_secondary).child(when))
+                    .child(
+                        div()
+                            .id(("changes-revert", i))
+                            .size(px(24.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(theme::RADIUS_SM)
+                            .when(can_revert, |d| {
+                                d.hover(|s| s.bg(p.pressed))
+                                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Revert this file")).build(window, cx))
+                                    .child(Icon::new(L::Undo2).size(px(14.)).text_color(p.text_secondary))
+                                    .on_click(cx.listener(move |v, _, window, cx| {
+                                        cx.stop_propagation();
+                                        v.ask_revert(idx, window, cx);
+                                    }))
+                            }),
+                    )
                     .child(
                         div()
                             .id(("changes-open", i))
