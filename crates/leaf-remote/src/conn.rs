@@ -1,0 +1,536 @@
+//! One SSH connection per server (user@host:port), shared by every pane: connecting, the host-key check, the login, and
+//! the SFTP channel on top. The async runtime lives here and starts with the first connection.
+
+use std::collections::{HashMap, HashSet};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use leaf_vfs::{FsError, VPath};
+use russh::client;
+use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::{MethodKind, MethodSet};
+use russh_sftp::client::RawSftpSession;
+use zeroize::Zeroizing;
+
+use crate::known_hosts::{self, Verdict};
+use crate::prompt::{self, HostKeyAnswer, HostKeyQuestion, Prompter, SecretQuestion};
+
+/// Where leaf looks for keys and hosts, and how long it waits.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// The user's known_hosts (read, and written by "Trust and remember").
+    pub known_hosts: Option<PathBuf>,
+    /// More files that are only read (the system-wide one).
+    pub extra_known_hosts: Vec<PathBuf>,
+    /// The folder of `hosts.toml` (a saved host's key file and user).
+    pub config_dir: Option<PathBuf>,
+    /// The folder of the default key files (`id_ed25519`, `id_ecdsa`, `id_rsa`); `~/.ssh`.
+    pub ssh_dir: Option<PathBuf>,
+    /// Ask the running SSH agent first.
+    pub agent: bool,
+    /// One request to the server (a listing batch, a read) may take this long, then the server counts as offline.
+    pub op_timeout: Duration,
+    pub connect_timeout: Duration,
+    /// A connection nothing used for this long is closed.
+    pub idle_after: Duration,
+}
+
+impl Config {
+    /// The user's own files: `~/.ssh/known_hosts` (plus the system one), `~/.ssh/id_*`, the agent, hosts.toml in `config_dir`.
+    pub fn for_user(config_dir: Option<PathBuf>) -> Config {
+        let kh = known_hosts::user_file();
+        Config {
+            ssh_dir: kh.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)),
+            known_hosts: kh,
+            extra_known_hosts: known_hosts::global_file().into_iter().collect(),
+            config_dir,
+            agent: true,
+            op_timeout: Duration::from_secs(30),
+            connect_timeout: Duration::from_secs(15),
+            idle_after: Duration::from_secs(10 * 60),
+        }
+    }
+}
+
+/// The runtime: one worker thread and at most one blocking thread (nothing here uses the blocking pool: names are
+/// resolved on the caller's thread). Started on the first connection, never at app start.
+pub(crate) fn rt() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        log::info!("remote: starting the SSH runtime");
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .thread_name("leaf-ssh")
+            .enable_io()
+            .enable_time()
+            .build()
+            .expect("the SSH runtime")
+    })
+}
+
+/// Runs `fut` on the runtime from a blocking (worker) thread, polling `cancelled` every 50 ms.
+pub(crate) fn block_on<T>(cancelled: &dyn Fn() -> bool, fut: impl std::future::Future<Output = Result<T, FsError>>) -> Result<T, FsError> {
+    rt().block_on(async {
+        let watch = async {
+            loop {
+                if cancelled() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        };
+        tokio::select! {
+            r = fut => r,
+            _ = watch => Err(FsError::Cancelled),
+        }
+    })
+}
+
+/// Who to log in as and where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Target {
+    /// `user@host:port`: the pool's key.
+    pub key: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    /// The saved host's key file (`~` expanded), tried before the default ones.
+    pub key_file: Option<PathBuf>,
+    pub jump: Option<String>,
+}
+
+fn local_user() -> String {
+    std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "root".into())
+}
+
+fn expand_home(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\"))
+        && let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()).or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    PathBuf::from(p)
+}
+
+/// The address with what `hosts.toml` says about that server (user, key file, jump host).
+pub(crate) fn target(cfg: &Config, v: &VPath) -> Result<Target, FsError> {
+    let host = v.host().to_string();
+    if host.is_empty() {
+        return Err(FsError::Other("The address has no server name".into()));
+    }
+    let port = v.port().unwrap_or(22);
+    let saved = cfg.config_dir.as_deref().map(rf_core::hosts::Hosts::load).unwrap_or_default();
+    let h = saved.hosts.into_iter().find(|h| {
+        h.scheme.eq_ignore_ascii_case("sftp")
+            && h.host.eq_ignore_ascii_case(&host)
+            && h.port.unwrap_or(22) == port
+            && match (v.user(), h.user.as_deref()) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            }
+    });
+    let user = v.user().map(str::to_string).or_else(|| h.as_ref().and_then(|h| h.user.clone())).unwrap_or_else(local_user);
+    Ok(Target {
+        key: format!("{user}@{}", known_hosts::host_name(&host, port)),
+        key_file: h.as_ref().and_then(|h| h.key_file.as_deref()).map(expand_home),
+        jump: h.and_then(|h| h.jump),
+        host,
+        port,
+        user,
+    })
+}
+
+/// What lives as long as leaf runs: the connections, keys trusted once, unlocked keys and passwords (memory only).
+#[derive(Default)]
+pub(crate) struct Shared {
+    pool: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Arc<Conn>>>>>>,
+    /// `(name, fingerprint)` of host keys the user trusted for this run.
+    trusted_once: Mutex<HashSet<(String, String)>>,
+    /// Key files unlocked with their passphrase (the decrypted key, not the passphrase).
+    keys: Mutex<HashMap<PathBuf, Arc<PrivateKey>>>,
+    passwords: Mutex<HashMap<String, Zeroizing<String>>>,
+    idle_watch: OnceLock<()>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub(crate) struct Conn {
+    pub sftp: Arc<RawSftpSession>,
+    pub statvfs: bool,
+    /// The folder the server logs the user into (`/~` in an address stands for it).
+    pub home: String,
+    handle: client::Handle<Client>,
+    last_used: AtomicU64,
+    /// Open readers (an idle close waits for them).
+    pub busy: AtomicUsize,
+    born: Instant,
+}
+
+impl Conn {
+    pub fn alive(&self) -> bool {
+        !self.handle.is_closed()
+    }
+    pub fn touch(&self) {
+        self.last_used.store(self.born.elapsed().as_secs(), Ordering::Relaxed);
+    }
+    fn idle_for(&self) -> Duration {
+        Duration::from_secs(self.born.elapsed().as_secs().saturating_sub(self.last_used.load(Ordering::Relaxed)))
+    }
+}
+
+impl Shared {
+    /// The live connection to the target, connecting (and asking the user) when there is none.
+    pub async fn conn(self: &Arc<Self>, cfg: &Config, prompter: &Arc<dyn Prompter>, t: &Target) -> Result<Arc<Conn>, FsError> {
+        let slot = lock(&self.pool).entry(t.key.clone()).or_default().clone();
+        // one connect per server at a time: a second pane waits for the first one's answer
+        let mut g = slot.lock().await;
+        if let Some(c) = g.as_ref()
+            && c.alive()
+        {
+            c.touch();
+            return Ok(c.clone());
+        }
+        *g = None;
+        let c = Arc::new(connect(cfg, prompter, self, t).await?);
+        c.touch();
+        *g = Some(c.clone());
+        drop(g);
+        self.start_idle_watch(cfg.idle_after);
+        Ok(c)
+    }
+
+    /// Forgets a connection that failed (the next call connects again).
+    pub fn drop_conn(&self, t: &Target) {
+        if let Some(slot) = lock(&self.pool).get(&t.key).cloned()
+            && let Ok(mut g) = slot.try_lock()
+            && let Some(c) = g.take()
+        {
+            close(c);
+        }
+    }
+
+    fn start_idle_watch(self: &Arc<Self>, idle_after: Duration) {
+        if self.idle_watch.set(()).is_err() {
+            return;
+        }
+        let me = Arc::downgrade(self);
+        rt().spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30).min(idle_after)).await;
+                let Some(me) = me.upgrade() else { return };
+                let slots: Vec<_> = lock(&me.pool).values().cloned().collect();
+                for slot in slots {
+                    let Ok(mut g) = slot.try_lock() else { continue };
+                    let stale = g.as_ref().is_some_and(|c| !c.alive() || (c.busy.load(Ordering::Relaxed) == 0 && c.idle_for() >= idle_after));
+                    if stale && let Some(c) = g.take() {
+                        log::info!("remote: closing an idle connection");
+                        close(c);
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn close(c: Arc<Conn>) {
+    rt().spawn(async move {
+        let _ = c.sftp.close_session();
+        let _ = c.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+    });
+}
+
+/// The answer of the host-key check, kept for the error text (russh only says "unknown key").
+type Refusal = Arc<Mutex<Option<FsError>>>;
+
+pub(crate) struct Client {
+    host: String,
+    port: u16,
+    files: Vec<PathBuf>,
+    remember_to: Option<PathBuf>,
+    prompter: Arc<dyn Prompter>,
+    shared: Arc<Shared>,
+    refusal: Refusal,
+}
+
+impl client::Handler for Client {
+    type Error = russh::Error;
+
+    async fn check_server_key(&mut self, k: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+        // a host certificate is checked by its plain key (no @cert-authority support yet)
+        let key = k.public_key();
+        let name = known_hosts::host_name(&self.host, self.port);
+        let fp = known_hosts::fingerprint(&key);
+        let refuse = |e: FsError| {
+            *lock(&self.refusal) = Some(e);
+            Ok(false)
+        };
+        match known_hosts::check(&self.files, &self.host, self.port, &key) {
+            Verdict::Known => Ok(true),
+            Verdict::Changed { file, line } => {
+                log::warn!("remote: the host key of {name} CHANGED (now {fp}); refused");
+                refuse(FsError::Other(format!(
+                    "WARNING: the key of {name} has changed. Someone may be intercepting the connection, or the server was \
+                     set up again. leaf does not connect. The server now shows {} {fp}. If you know why it changed, remove \
+                     line {line} from {} yourself and connect again.",
+                    known_hosts::key_type(&key),
+                    file.display()
+                )))
+            }
+            Verdict::Revoked { file, line } => {
+                log::warn!("remote: the host key of {name} is revoked; refused");
+                refuse(FsError::Other(format!(
+                    "WARNING: the key of {name} ({fp}) is marked as revoked (line {line} of {}). leaf does not connect.",
+                    file.display()
+                )))
+            }
+            Verdict::Unknown { other_types } => {
+                if lock(&self.shared.trusted_once).contains(&(name.clone(), fp.clone())) {
+                    return Ok(true);
+                }
+                let q = HostKeyQuestion { host: name.clone(), key_type: known_hosts::key_type(&key), fingerprint: fp.clone(), other_types };
+                match prompt::ask_host_key(&*self.prompter, q).await {
+                    HostKeyAnswer::TrustAndRemember => {
+                        match &self.remember_to {
+                            Some(p) => {
+                                if let Err(e) = known_hosts::remember(p, &self.host, self.port, &key) {
+                                    log::warn!("remote: could not add the key to {}: {e} (trusted for this run only)", p.display());
+                                }
+                            }
+                            None => log::warn!("remote: no known_hosts file to write to (trusted for this run only)"),
+                        }
+                        lock(&self.shared.trusted_once).insert((name, fp));
+                        Ok(true)
+                    }
+                    HostKeyAnswer::TrustOnce => {
+                        lock(&self.shared.trusted_once).insert((name, fp));
+                        Ok(true)
+                    }
+                    HostKeyAnswer::Cancel => refuse(FsError::Cancelled),
+                }
+            }
+        }
+    }
+}
+
+fn offline(e: impl std::fmt::Display) -> FsError {
+    FsError::Offline(e.to_string())
+}
+
+async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>, t: &Target) -> Result<Conn, FsError> {
+    if let Some(j) = &t.jump {
+        return Err(FsError::Other(format!("This host is reached through a jump host ({j}); jump hosts are not supported yet")));
+    }
+    log::info!("remote: connecting to {}", known_hosts::host_name(&t.host, t.port));
+    let addrs: Vec<SocketAddr> = (t.host.as_str(), t.port).to_socket_addrs().map_err(offline)?.collect();
+    let tcp = tokio::time::timeout(cfg.connect_timeout, tokio::net::TcpStream::connect(&addrs[..]))
+        .await
+        .map_err(|_| offline("no answer"))?
+        .map_err(offline)?;
+    let _ = tcp.set_nodelay(true);
+    let ssh_cfg = Arc::new(client::Config {
+        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_max: 3,
+        nodelay: true,
+        ..Default::default()
+    });
+    let refusal: Refusal = Arc::default();
+    let mut files: Vec<PathBuf> = cfg.known_hosts.iter().cloned().collect();
+    files.extend(cfg.extra_known_hosts.iter().cloned());
+    let handler = Client {
+        host: t.host.clone(),
+        port: t.port,
+        files,
+        remember_to: cfg.known_hosts.clone(),
+        prompter: prompter.clone(),
+        shared: shared.clone(),
+        refusal: refusal.clone(),
+    };
+    let why = |e: russh::Error| lock(&refusal).take().unwrap_or_else(|| offline(e));
+    let mut handle = client::connect_stream(ssh_cfg, tcp, handler).await.map_err(why)?;
+    login(&mut handle, cfg, prompter, shared, t).await.map_err(|e| lock(&refusal).take().unwrap_or(e))?;
+    let ch = handle.channel_open_session().await.map_err(offline)?;
+    ch.request_subsystem(true, "sftp").await.map_err(offline)?;
+    let sftp = RawSftpSession::new(ch.into_stream());
+    sftp.set_timeout(cfg.op_timeout.as_secs().max(1));
+    let version = sftp.init().await.map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
+    let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
+    let home = match sftp.realpath(".").await {
+        Ok(n) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
+        Err(_) => "/".into(),
+    };
+    log::info!("remote: connected (SFTP version {}, statvfs {statvfs})", version.version);
+    Ok(Conn { sftp: Arc::new(sftp), statvfs, home, handle, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+}
+
+fn allows(methods: &Option<MethodSet>, m: MethodKind) -> bool {
+    methods.as_ref().is_none_or(|ms| ms.contains(&m))
+}
+
+/// Logs in: the agent, the key files, then a password (or the server's own questions). Errors are `Auth` (refused),
+/// `Cancelled` (the user said no), `Offline` (the line broke).
+async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>, t: &Target) -> Result<(), FsError> {
+    let user = t.user.as_str();
+    let account = format!("{user}@{}", t.host);
+    // "none" tells which methods the server takes
+    let mut methods = match h.authenticate_none(user).await.map_err(offline)? {
+        russh::client::AuthResult::Success => return Ok(()),
+        russh::client::AuthResult::Failure { remaining_methods, .. } => Some(remaining_methods),
+    };
+    let rsa_hash = h.best_supported_rsa_hash().await.ok().flatten().flatten();
+
+    // 1. the running agent
+    if cfg.agent && allows(&methods, MethodKind::PublicKey) {
+        if let Some(mut agent) = agent().await {
+            let ids = agent.request_identities().await.unwrap_or_default();
+            for id in ids {
+                let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = id else { continue };
+                match h.authenticate_publickey_with(user, key, rsa_hash, &mut agent).await {
+                    Ok(russh::client::AuthResult::Success) => {
+                        log::info!("remote: logged in with a key of the agent");
+                        return Ok(());
+                    }
+                    Ok(russh::client::AuthResult::Failure { remaining_methods, .. }) => methods = Some(remaining_methods),
+                    Err(e) => log::debug!("remote: the agent did not sign: {e}"),
+                }
+            }
+        }
+    }
+
+    // 2. the saved host's key file, then the default ones
+    if allows(&methods, MethodKind::PublicKey) {
+        let mut files: Vec<PathBuf> = t.key_file.iter().cloned().collect();
+        if let Some(d) = &cfg.ssh_dir {
+            files.extend(["id_ed25519", "id_ecdsa", "id_rsa"].iter().map(|n| d.join(n)));
+        }
+        let mut seen = HashSet::new();
+        for f in files {
+            if !seen.insert(f.clone()) || !f.is_file() {
+                continue;
+            }
+            let Some(key) = load_key(&f, prompter, shared).await? else { continue };
+            let k = PrivateKeyWithHashAlg::new(key, rsa_hash);
+            match h.authenticate_publickey(user, k).await.map_err(offline)? {
+                russh::client::AuthResult::Success => {
+                    log::info!("remote: logged in with a key file");
+                    return Ok(());
+                }
+                russh::client::AuthResult::Failure { remaining_methods, .. } => methods = Some(remaining_methods),
+            }
+        }
+    }
+
+    // 3. a password (asked; kept in memory for this run), or the server's questions
+    if allows(&methods, MethodKind::Password) {
+        let mut retry = false;
+        for _ in 0..3 {
+            let cached = lock(&shared.passwords).get(&t.key).cloned();
+            let pw = match cached {
+                Some(p) if !retry => p,
+                _ => prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry }).await.ok_or(FsError::Cancelled)?,
+            };
+            match h.authenticate_password(user, pw.as_str()).await.map_err(offline)? {
+                russh::client::AuthResult::Success => {
+                    lock(&shared.passwords).insert(t.key.clone(), pw);
+                    log::info!("remote: logged in with a password");
+                    return Ok(());
+                }
+                russh::client::AuthResult::Failure { .. } => {
+                    lock(&shared.passwords).remove(&t.key);
+                    retry = true;
+                }
+            }
+        }
+    } else if allows(&methods, MethodKind::KeyboardInteractive) {
+        use russh::client::KeyboardInteractiveAuthResponse as R;
+        let mut r = h.authenticate_keyboard_interactive_start(user, None).await.map_err(offline)?;
+        loop {
+            match r {
+                R::Success => {
+                    log::info!("remote: logged in (keyboard-interactive)");
+                    return Ok(());
+                }
+                R::Failure { .. } => break,
+                R::InfoRequest { prompts, .. } => {
+                    let mut answers = Vec::with_capacity(prompts.len());
+                    for p in prompts {
+                        let q = SecretQuestion::Server { account: account.clone(), prompt: p.prompt, echo: p.echo };
+                        let a = prompt::ask_secret(&**prompter, q).await.ok_or(FsError::Cancelled)?;
+                        answers.push(a.as_str().to_string());
+                    }
+                    r = h.authenticate_keyboard_interactive_respond(answers).await.map_err(offline)?;
+                }
+            }
+        }
+    }
+    Err(FsError::Auth(format!("{account} did not accept any key or password")))
+}
+
+/// A key file, unlocked with its passphrase when it has one (asked; the unlocked key is kept for this run).
+/// `None`: not readable, or the user cancelled the passphrase.
+async fn load_key(f: &Path, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>) -> Result<Option<Arc<PrivateKey>>, FsError> {
+    if let Some(k) = lock(&shared.keys).get(f) {
+        return Ok(Some(k.clone()));
+    }
+    let text = match std::fs::read_to_string(f) {
+        Ok(t) => Zeroizing::new(t),
+        Err(e) => {
+            log::warn!("remote: {} is not readable: {e}", f.display());
+            return Ok(None);
+        }
+    };
+    match russh::keys::decode_secret_key(&text, None) {
+        Ok(k) => return Ok(Some(Arc::new(k))),
+        Err(russh::keys::Error::KeyIsEncrypted) => {}
+        Err(e) => {
+            log::warn!("remote: {} is not a key leaf can read: {e}", f.display());
+            return Ok(None);
+        }
+    }
+    let mut retry = false;
+    for _ in 0..3 {
+        let q = SecretQuestion::Passphrase { key_file: f.display().to_string(), retry };
+        let Some(pass) = prompt::ask_secret(&**prompter, q).await else { return Ok(None) };
+        match russh::keys::decode_secret_key(&text, Some(pass.as_str())) {
+            Ok(k) => {
+                let k = Arc::new(k);
+                lock(&shared.keys).insert(f.to_path_buf(), k.clone());
+                return Ok(Some(k));
+            }
+            Err(_) => retry = true,
+        }
+    }
+    Ok(None)
+}
+
+type Agent = russh::keys::agent::client::AgentClient<Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin + 'static>>;
+
+/// The running agent: the Windows OpenSSH agent's pipe (or `SSH_AUTH_SOCK` when it names a pipe), `SSH_AUTH_SOCK` on Unix.
+async fn agent() -> Option<Agent> {
+    #[cfg(windows)]
+    {
+        let pipe = std::env::var("SSH_AUTH_SOCK").ok().filter(|s| s.starts_with(r"\\.\pipe\")).unwrap_or_else(|| r"\\.\pipe\openssh-ssh-agent".into());
+        match russh::keys::agent::client::AgentClient::connect_named_pipe(&pipe).await {
+            Ok(a) => Some(a.dynamic()),
+            Err(e) => {
+                log::debug!("remote: no agent at {pipe}: {e}");
+                None
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        match russh::keys::agent::client::AgentClient::connect_env().await {
+            Ok(a) => Some(a.dynamic()),
+            Err(e) => {
+                log::debug!("remote: no agent: {e}");
+                None
+            }
+        }
+    }
+}

@@ -10,6 +10,8 @@
 pub mod copy;
 mod local;
 mod mem;
+#[cfg(any(test, feature = "suite"))]
+pub mod suite;
 #[cfg(test)]
 mod tests;
 

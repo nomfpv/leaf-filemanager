@@ -1,0 +1,25 @@
+﻿[package]
+name = "leaf-remote"
+description = "leaf: places on other machines (SFTP over russh) behind the leaf-vfs interface"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+rf-core.workspace = true
+leaf-vfs.workspace = true
+log.workspace = true
+# pure Rust SSH; `ring` instead of the default aws-lc-rs (that one needs cmake and nasm to build on Windows)
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh-sftp = "3.0"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
+# hashed known_hosts entries (|1|salt|hash: HMAC-SHA1)
+hmac = "0.12"
+sha1.workspace = true
+base64 = "0.22"
+# passwords and key files in memory are wiped when dropped
+zeroize = "1"
+
+[dev-dependencies]
+leaf-vfs = { workspace = true, features = ["suite"] }

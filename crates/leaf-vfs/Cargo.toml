@@ -6,6 +6,10 @@ edition.workspace = true
 license = "MIT"
 publish.workspace = true
 
+[features]
+# the shared read-only semantics checks (`leaf_vfs::suite`), for the tests of backends in other crates
+suite = []
+
 [dependencies]
 rf-core.workspace = true
 leaf-sys.workspace = true

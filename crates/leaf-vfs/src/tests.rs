@@ -238,6 +238,15 @@ fn semantics_local() {
 }
 
 #[test]
+fn read_only_part_mem_and_local() {
+    let fs = MemFs::new();
+    let root = VPath::parse("mem://ro/").unwrap();
+    crate::suite::read_only(&fs, &root, &fs, &root, &mem_link(&fs));
+    let tmp = TempDir::new("ro");
+    crate::suite::read_only(&LocalFs, &tmp.addr(), &LocalFs, &tmp.addr(), &disk_link);
+}
+
+#[test]
 fn copy_mem_to_local_and_back() {
     let mem = MemFs::new();
     let tmp = TempDir::new("copy");
