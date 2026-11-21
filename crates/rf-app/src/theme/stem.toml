@@ -59,6 +59,7 @@ tile_radius = 6
 header_rules = false
 date_style = ""
 section_rule = false
+home_row = 156
 square_marks = false
 mono_chrome = false
 

@@ -55,6 +55,7 @@ date_style = ""
 tile_width = 0
 tile_radius = 12
 section_rule = false
+home_row = 156
 square_marks = false
 mono_chrome = false
 

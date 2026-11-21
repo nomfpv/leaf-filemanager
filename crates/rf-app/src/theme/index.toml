@@ -60,6 +60,7 @@ date_style = "iso"
 tile_width = 120
 tile_radius = 0
 section_rule = true
+home_row = 156
 square_marks = true
 mono_chrome = true
 
