@@ -20,6 +20,8 @@ pub enum Kind {
 pub struct Token {
     pub key: &'static str,
     pub kind: Kind,
+    /// The key's one-line meaning, as docs/themes.md gives it (a test keeps them equal).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub doc: &'static str,
 }
 
@@ -96,6 +98,7 @@ pub fn token(key: &str) -> Option<&'static Token> {
 }
 
 /// The keys of a file that are not tokens.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const META_KEYS: &[&str] = &["name", "base", "description", "accents"];
 /// The tables of a file, in the order they apply: dark/light first, then what High changes.
 pub const LAYERS: [&str; 4] = ["dark", "light", "dark_high", "light_high"];
