@@ -19,6 +19,10 @@ pub enum UndoOp {
     Transferred { kind: Transfer, pairs: Vec<(PathBuf, PathBuf)> },
     /// (original path, path inside the Recycle Bin)
     Recycled { pairs: Vec<(PathBuf, PathBuf)> },
+    /// Items restored from the Recycle Bin page, at their original paths. Undo deletes them to the bin again: the same bin, but as a
+    /// new deletion (its date is the undo's; Windows gives it a new `$R` name), which its undo label says. Redo restores the
+    /// newest bin item of each path.
+    Restored { paths: Vec<PathBuf> },
     /// "Flatten folder" on `dir`.
     Flattened { dir: PathBuf, rec: crate::ops::Flattened },
     /// One run of the folder organizer (all its moves, renames and recycled files).
@@ -48,6 +52,8 @@ fn label(op: &UndoOp) -> &'static str {
         UndoOp::Transferred { kind: Transfer::Copy, .. } => t!("Copy"),
         UndoOp::Transferred { kind: Transfer::Move, .. } => t!("Move"),
         UndoOp::Recycled { .. } => t!("Delete"),
+        // (undoing it is a new deletion, not the old bin entry back: the label says so)
+        UndoOp::Restored { .. } => t!("Restore (back to the bin as a new deletion)"),
         UndoOp::Flattened { .. } => t!("Flatten folder"),
         UndoOp::Organized { .. } => t!("Organize"),
     }
@@ -95,6 +101,25 @@ mod tests {
         // a newer operation on top: the button would undo that one instead
         assert!(!top_made(&[copy.clone(), UndoOp::Created { path: PathBuf::from(r"C:\rf-test-card\other") }], &made));
         assert!(top_made(&[bin, copy], &made));
+    }
+
+    /// Redo of a restore takes, for each path, the newest bin item that came from exactly there (the undo deleted it again: that is
+    /// the newest), and nothing for a path the bin does not hold.
+    #[test]
+    fn redo_of_a_restore_takes_the_newest_bin_item_of_each_path() {
+        let item = |loc: &str, name: &str, ms: i64, key: &str| leaf_sys::recycle::RecycleItem {
+            name: name.into(),
+            original_location: loc.into(),
+            deleted_ms: ms,
+            size: 1,
+            parsing_path: key.into(),
+            is_dir: false,
+        };
+        let dir = std::env::temp_dir().join("rf-undo-restore");
+        let loc = dir.to_string_lossy().into_owned();
+        let bin = vec![item(&loc, "a.txt", 10, "old"), item(&loc, "a.txt", 20, "new"), item(&loc, "b.txt", 5, "b"), item("elsewhere", "a.txt", 99, "other")];
+        let got = super::newest_in_bin(bin, &[dir.join("a.txt"), dir.join("missing.txt")]);
+        assert_eq!(got.iter().map(|i| i.parsing_path.as_str()).collect::<Vec<_>>(), ["new"]);
     }
 }
 
@@ -180,6 +205,8 @@ fn undo_op(op: UndoOp, cx: &mut App) {
                 Ok(true)
             });
         }
+        // (the delete job of the list: the same bin, the same question when a drive has none; not recorded again)
+        UndoOp::Restored { paths } => crate::status_center::delete_ex(cx, paths, false, false),
         UndoOp::Flattened { dir, rec } => {
             let name = rf_core::history::display_name(&dir);
             let back: Vec<(PathBuf, PathBuf)> = rec.moves.iter().rev().map(|(old, new)| (new.clone(), old.clone())).collect();
@@ -193,6 +220,21 @@ fn undo_op(op: UndoOp, cx: &mut App) {
         }
         UndoOp::Organized { rec } => crate::organizer::undo_run(rec, None, cx),
     }
+}
+
+/// The bin item of each of `paths` (original folder + name), the newest when the bin holds several from the same place.
+fn newest_in_bin(bin: Vec<leaf_sys::recycle::RecycleItem>, paths: &[PathBuf]) -> Vec<leaf_sys::recycle::RecycleItem> {
+    let mut out: Vec<leaf_sys::recycle::RecycleItem> = Vec::new();
+    for p in paths {
+        let best = bin
+            .iter()
+            .filter(|it| std::path::Path::new(&it.original_location).join(&it.name) == *p)
+            .max_by_key(|it| it.deleted_ms);
+        if let Some(it) = best {
+            out.push(it.clone());
+        }
+    }
+    out
 }
 
 /// Renames (old, new) pairs as one batch in the Status Center (undo / redo of a bulk rename);
@@ -244,6 +286,15 @@ pub fn redo(cx: &mut App) {
         }
         UndoOp::Recycled { pairs } => {
             crate::status_center::delete_ex(cx, pairs.into_iter().map(|(orig, _)| orig).collect(), false, false)
+        }
+        UndoOp::Restored { paths } => {
+            let n = paths.len();
+            crate::status_center::start(cx, format!("{} {}", t!("Restoring from Recycle Bin:"), crate::i18n::items(n)), move |_| {
+                let items = newest_in_bin(leaf_sys::recycle::list()?, &paths);
+                anyhow::ensure!(!items.is_empty(), t!("items were not found in the Recycle Bin"));
+                leaf_sys::recycle::restore(&items)?;
+                Ok(true)
+            });
         }
         UndoOp::Flattened { dir, rec } => {
             let name = rf_core::history::display_name(&dir);

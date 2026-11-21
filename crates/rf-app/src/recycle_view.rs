@@ -171,7 +171,20 @@ impl RecycleView {
         let items: Vec<RecycleItem> = rf_core::recycle_bin::command_targets(&self.order, &self.selected).into_iter().filter_map(|i| self.items.get(i).cloned()).collect();
         if !items.is_empty() {
             self.status = None;
-            self.run(cx, move || leaf_sys::recycle::restore(&items));
+            self.run(cx, move || {
+                let r = leaf_sys::recycle::restore(&items);
+                // what is back where it came from can be put back into the bin with Ctrl+Z (before, a restore left no undo record
+                // and Ctrl+Z after it undid something older or nothing: first Linux tester); some may have failed, they stay out
+                let back: Vec<std::path::PathBuf> = items
+                    .iter()
+                    .map(|it| std::path::Path::new(&it.original_location).join(&it.name))
+                    .filter(|p| std::fs::symlink_metadata(p).is_ok())
+                    .collect();
+                if !back.is_empty() {
+                    crate::undo::push(crate::undo::UndoOp::Restored { paths: back });
+                }
+                r
+            });
         }
     }
 
