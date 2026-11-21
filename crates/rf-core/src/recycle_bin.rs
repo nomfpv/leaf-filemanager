@@ -161,7 +161,7 @@ pub struct TimedOut;
 
 impl std::fmt::Display for TimedOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("The Recycle Bin didn't answer in time")
+        f.write_str("The Trash didn't answer in time")
     }
 }
 

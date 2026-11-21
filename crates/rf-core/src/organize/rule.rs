@@ -278,7 +278,7 @@ impl RuleProblem {
             RuleProblem::UnknownVariable(_) => T!("Unknown variable"),
             RuleProblem::BadTemplate => T!("The destination template is invalid: it has a forbidden character or \"..\""),
             RuleProblem::RenameNeedsName => T!("The new name template must be a file name: it cannot contain a folder separator"),
-            RuleProblem::RecycleNeedsCondition => T!("Add at least one condition before sending files to the Recycle Bin"),
+            RuleProblem::RecycleNeedsCondition => T!("Add at least one condition before sending files to the Trash"),
         }
     }
 }

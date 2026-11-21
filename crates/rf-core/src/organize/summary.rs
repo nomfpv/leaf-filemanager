@@ -130,7 +130,7 @@ pub fn action_words(a: &Action, tr: &dyn Fn(&'static str) -> String, home: Optio
         Action::MoveTo { folder } => show_path(folder, home),
         Action::MoveToTemplate { template } => show_path(Path::new(template), home),
         Action::Rename { template } => tr(T!("rename to {x}")).replace("{x}", template),
-        Action::Recycle => tr(T!("Send to the Recycle Bin")),
+        Action::Recycle => tr(T!("Send to the Trash")),
     }
 }
 
@@ -187,7 +187,7 @@ mod tests {
         );
         assert_eq!(
             summary(&r, &id, None),
-            "files where the name starts with “IMG” and the size is over 5 MB and it was modified more than 30 days ago → Send to the Recycle Bin"
+            "files where the name starts with “IMG” and the size is over 5 MB and it was modified more than 30 days ago → Send to the Trash"
         );
         r.join = Join::Any;
         assert!(summary(&r, &id, None).contains(" or "));
@@ -228,7 +228,7 @@ mod tests {
     fn a_translator_is_used_for_every_text() {
         let marked = |s: &'static str| format!("[{s}]");
         let r = rule(vec![Condition::Kind { kinds: vec![FileKind::Audio] }], Action::Recycle);
-        assert_eq!(summary(&r, &marked, None), "[files where [the type is [audio]]] → [Send to the Recycle Bin]");
+        assert_eq!(summary(&r, &marked, None), "[files where [the type is [audio]]] → [Send to the Trash]");
     }
 
     #[test]

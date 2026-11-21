@@ -373,7 +373,7 @@ pub static MENU_ONLY: &[MenuPlace] = &[
     // ---- the Recycle Bin page (a row, or the page itself)
     place(K::BinRestore, "Restore", L::Undo2, T::RECYCLE_ITEM, S::Open, 10),
     place(K::BinDelete, "Delete permanently", L::TrashOff, T::RECYCLE_ITEM, S::Open, 20).hint("Shift+Del"),
-    place(K::BinSettings, "Recycle Bin settings…", L::Settings, T::RECYCLE_ITEM, S::Organize, 10),
+    place(K::BinSettings, "Trash settings…", L::Settings, T::RECYCLE_ITEM, S::Organize, 10),
     // ---- a folder or drive of the sidebar (no switch of Settings reaches this menu except Tags)
     place(K::Open, "Open", L::SquareArrowOutUpRight, T::SIDEBAR, S::Open, 10),
     place(K::OpenNewTab, "Open in new tab", L::SquarePlus, T::SIDEBAR, S::Open, 20),

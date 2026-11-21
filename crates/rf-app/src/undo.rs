@@ -289,9 +289,9 @@ pub fn redo(cx: &mut App) {
         }
         UndoOp::Restored { paths } => {
             let n = paths.len();
-            crate::status_center::start(cx, format!("{} {}", t!("Restoring from Recycle Bin:"), crate::i18n::items(n)), move |_| {
+            crate::status_center::start(cx, format!("{} {}", t!("Restoring from Trash:"), crate::i18n::items(n)), move |_| {
                 let items = newest_in_bin(leaf_sys::recycle::list()?, &paths);
-                anyhow::ensure!(!items.is_empty(), t!("items were not found in the Recycle Bin"));
+                anyhow::ensure!(!items.is_empty(), t!("items were not found in the Trash"));
                 leaf_sys::recycle::restore(&items)?;
                 Ok(true)
             });
