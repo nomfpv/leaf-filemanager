@@ -17,3 +17,6 @@ dirs.workspace = true
 libc = "0.2"
 chrono.workspace = true
 serde.workspace = true
+# pictures: the same decoders as on Windows' image-crate path (leaf-decode adds JPEG XL and AVIF)
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
+kamadak-exif = "0.6"

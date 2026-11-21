@@ -1,77 +1,205 @@
-﻿//! Linux backend of rf_win::thumbs. Status: REAL (inert on purpose: answers with no picture)
+//! Linux backend of rf_win::thumbs. Status: REAL for pictures, no icons
 //!
-//! No icons or thumbnails yet. The pool answers every request at once, on the caller's thread, with no picture (`image: None`,
-//! not `dropped`): the cache then marks the slot failed instead of waiting for it forever.
+//! A picture file (by extension: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, QOI, EXR, HDR, DDS, PNM, JPEG XL, AVIF) gets a
+//! thumbnail from [`crate::look::decode`] at the asked size. Everything else answers `None` / `Err` (the caller draws its generic
+//! icon): there are no type icons yet. The pool is the same shape as Windows': newest request first on worker threads, a small
+//! lane of its own for the urgent picture (preview pane, Quick Look), a bounded backlog whose oldest are answered `dropped`.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-use leaf_common::{stub, stub_err};
+use leaf_common::stub;
 pub use leaf_common::thumbs::{Bgra, Kind, Request, Response};
 
+/// Nothing to keep alive here (a Windows GDI+ detail).
 pub fn keep_gdiplus_alive() {
-    stub!("thumbs::keep_gdiplus_alive")
+    stub::hit("thumbs::keep_gdiplus_alive");
 }
 
-pub fn get_image(_path: &Path, _size: u32, _kind: Kind) -> anyhow::Result<Bgra> {
-    stub_err!("thumbs::get_image")
+const PICTURE_EXTS: &[&str] = &[
+    "png", "apng", "jpg", "jpeg", "jpe", "jfif", "gif", "webp", "bmp", "dib", "ico", "tif", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm", "pbm", "pgm", "ppm", "pam", "avif", "jxl",
+];
+
+fn is_picture(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| PICTURE_EXTS.iter().any(|p| e.eq_ignore_ascii_case(p)))
 }
 
-pub fn picture_only(_path: &Path, _size: u32) -> Option<Bgra> {
-    stub!("thumbs::picture_only")
+/// The picture of a picture file at `size` pixels on its long side (never enlarged); `None` for any other file or one that does
+/// not decode.
+fn picture(path: &Path, size: u32) -> Option<Bgra> {
+    if !is_picture(path) {
+        return None;
+    }
+    let d = crate::look::decode::decode_full(path, size.max(1)).ok()?;
+    d.frames.into_iter().next().map(|(b, _)| b)
 }
 
-pub fn folder_has_own_icon(_attrs: u32) -> bool {
-    stub!("thumbs::folder_has_own_icon")
+/// A thumbnail for a picture file; there are no icons: `Kind::Icon`, and any file that is no picture, is an `Err`.
+pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
+    match kind {
+        Kind::Thumbnail => picture(path, size).ok_or_else(|| anyhow::anyhow!("no picture for {}", path.display())),
+        Kind::Icon => anyhow::bail!("no icons on this system yet"),
+    }
 }
 
+/// The file's own picture only, never its type's icon: a picture file's, else `None`. Blocking.
+pub fn picture_only(path: &Path, size: u32) -> Option<Bgra> {
+    picture(path, size)
+}
+
+/// Same rule as Windows: a read-only or system folder may carry its own icon.
+pub fn folder_has_own_icon(attrs: u32) -> bool {
+    const READONLY: u32 = 0x1;
+    const SYSTEM: u32 = 0x4;
+    attrs & (READONLY | SYSTEM) != 0
+}
+
+/// Extensions whose icon differs per file (must not be cached by extension): none have icons here.
 pub fn has_unique_icon(_ext: &str) -> bool {
-    stub!("thumbs::has_unique_icon")
+    false
 }
 
-/// The thumbnail pool: no workers, every request is answered in [`request`](Self::request).
-// TYPE-COPY(rf-win thumbs.rs:284): the stack, the workers' wake channel and the urgent lane dropped
+/// How many urgent requests may stand waiting: the pane's picture and Quick Look's; older ones are only arrow-keying.
+const URGENT_KEEP: usize = 2;
+const LANE_THREADS: usize = 2;
+const BACKLOG: usize = 512;
+
+struct Queue {
+    stack: Mutex<Vec<Request>>,
+    cv: Condvar,
+    down: AtomicBool,
+}
+
+impl Queue {
+    fn new() -> Arc<Self> {
+        Arc::new(Queue { stack: Mutex::new(Vec::new()), cv: Condvar::new(), down: AtomicBool::new(false) })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Request>> {
+        self.stack.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The newest request; waits while there is none. `None` once the pool is gone.
+    fn take(&self) -> Option<Request> {
+        let mut s = self.lock();
+        loop {
+            if self.down.load(Ordering::Acquire) {
+                return None;
+            }
+            if let Some(r) = s.pop() {
+                return Some(r);
+            }
+            s = self.cv.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+fn serve(q: Arc<Queue>, on_done: Arc<dyn Fn(Response) + Send + Sync>, urgent: bool, name: String) {
+    let _ = std::thread::Builder::new().name(name).spawn(move || {
+        while let Some(req) = q.take() {
+            let started = std::time::Instant::now();
+            let image = if matches!(req.kind, Kind::Thumbnail) { picture(&req.path, req.size).map(Arc::new) } else { None };
+            on_done(Response { key: req.key, image, dropped: false, waited: started.saturating_duration_since(req.queued()), took: started.elapsed(), urgent });
+        }
+    });
+}
+
+/// The thumbnail pool: newest requests first; an `urgent` request goes to a lane of its own that is started by the first one.
 pub struct ThumbPool {
+    q: Arc<Queue>,
     on_done: Arc<dyn Fn(Response) + Send + Sync>,
+    lane: OnceLock<Arc<Queue>>,
 }
 
 impl ThumbPool {
-    pub fn new(_workers: usize, on_done: impl Fn(Response) + Send + Sync + 'static) -> Self {
-        stub::hit("thumbs::ThumbPool::new");
-        Self { on_done: Arc::new(on_done) }
+    pub fn new(workers: usize, on_done: impl Fn(Response) + Send + Sync + 'static) -> Self {
+        let on_done: Arc<dyn Fn(Response) + Send + Sync> = Arc::new(on_done);
+        let q = Queue::new();
+        // decoding a big picture is heavy: a few workers are plenty, and the UI keeps its cores
+        for i in 0..workers.clamp(1, 4) {
+            serve(q.clone(), on_done.clone(), false, format!("leaf-thumb-{i}"));
+        }
+        ThumbPool { q, on_done, lane: OnceLock::new() }
     }
 
-    /// Request/response: answered exactly once, now, with no picture.
     pub fn request(&self, req: Request) {
-        stub::hit("thumbs::ThumbPool::request");
-        (self.on_done)(Response {
-            key: req.key,
-            image: None,
-            dropped: false,
-            waited: req.queued().elapsed(),
-            took: std::time::Duration::ZERO,
-            urgent: req.urgent,
-        });
+        if req.urgent {
+            return self.request_urgent(req);
+        }
+        let dropped: Vec<Request> = {
+            let mut s = self.q.lock();
+            let d = if s.len() > BACKLOG { s.drain(0..BACKLOG / 2).collect() } else { Vec::new() };
+            s.push(req);
+            d
+        };
+        for d in dropped {
+            (self.on_done)(Response { key: d.key, image: None, dropped: true, waited: d.queued().elapsed(), took: std::time::Duration::ZERO, urgent: d.urgent });
+        }
+        self.q.cv.notify_one();
     }
 
+    fn request_urgent(&self, req: Request) {
+        let lane = self.lane.get_or_init(|| {
+            let q = Queue::new();
+            for i in 0..LANE_THREADS {
+                serve(q.clone(), self.on_done.clone(), true, format!("leaf-thumb-urgent-{i}"));
+            }
+            q
+        });
+        let dropped: Vec<Request> = {
+            let mut s = lane.lock();
+            let over = (s.len() + 1).saturating_sub(URGENT_KEEP);
+            let d = s.drain(0..over).collect();
+            s.push(req);
+            d
+        };
+        for d in dropped {
+            (self.on_done)(Response { key: d.key, image: None, dropped: true, waited: d.queued().elapsed(), took: std::time::Duration::ZERO, urgent: true });
+        }
+        lane.cv.notify_one();
+    }
+
+    /// Drops queued work (e.g. on navigation).
     pub fn clear(&self) {
-        stub!("thumbs::ThumbPool::clear")
+        self.q.lock().clear();
+        if let Some(l) = self.lane.get() {
+            l.lock().clear();
+        }
+    }
+}
+
+impl Drop for ThumbPool {
+    fn drop(&mut self) {
+        for q in std::iter::once(&self.q).chain(self.lane.get()) {
+            q.down.store(true, Ordering::Release);
+            q.cv.notify_all();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::time::Duration;
 
     #[test]
-    fn every_request_is_answered_once_with_no_picture() {
-        let got = Arc::new(Mutex::new(Vec::new()));
-        let g = got.clone();
-        let pool = ThumbPool::new(2, move |r| g.lock().unwrap().push((r.key, r.image.is_none(), r.dropped)));
-        pool.request(Request::new(7, "a.png".into(), 32, Kind::Thumbnail));
-        pool.request(Request::new(8, "b.png".into(), 32, Kind::Icon));
-        assert_eq!(*got.lock().unwrap(), vec![(7, true, false), (8, true, false)]);
+    fn a_picture_gets_a_thumbnail_and_other_files_none() {
+        let dir = std::env::temp_dir().join(format!("leaf-thumbs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (png, txt) = (dir.join("a.png"), dir.join("a.txt"));
+        image::RgbaImage::new(64, 32).save(&png).unwrap();
+        std::fs::write(&txt, b"hi").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        let pool = ThumbPool::new(2, move |r| {
+            let _ = tx.lock().unwrap().send((r.key, r.image.map(|i| (i.width, i.height)), r.dropped));
+        });
+        pool.request(Request::new(1, png, 16, Kind::Thumbnail));
+        pool.request(Request::new(2, txt, 16, Kind::Thumbnail));
+        let mut got: Vec<_> = (0..2).map(|_| rx.recv_timeout(Duration::from_secs(20)).unwrap()).collect();
+        got.sort_by_key(|g| g.0);
+        assert_eq!(got, vec![(1, Some((16, 8)), false), (2, None, false)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
-
