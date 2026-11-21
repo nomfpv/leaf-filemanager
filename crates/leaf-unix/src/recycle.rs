@@ -4,6 +4,11 @@ use leaf_common::stub_err;
 
 pub use leaf_common::recycle::RecycleItem;
 
+/// Moves `paths` to the trash: nothing is moved on Linux yet. A data operation, so the answer is an error, never `Ok(false)`.
+pub fn trash_tracked(_paths: &[std::path::PathBuf], _tracker: std::sync::Arc<crate::fileops::Tracker>) -> anyhow::Result<bool> {
+    stub_err!("recycle::trash_tracked")
+}
+
 /// Lists everything in the bin: nothing is listed on Linux yet.
 pub fn list() -> anyhow::Result<Vec<RecycleItem>> {
     stub_err!("recycle::list")
