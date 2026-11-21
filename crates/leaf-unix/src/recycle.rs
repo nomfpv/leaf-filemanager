@@ -702,6 +702,34 @@ mod tests {
     }
 
     #[test]
+    fn emptying_a_trash_removes_a_link_inside_it_but_never_what_it_points_at() {
+        let root = std::env::temp_dir().join(format!("leaf-unix-trash-inner-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let outside = root.join("outside");
+        std::fs::create_dir_all(outside.join("keep")).unwrap();
+        std::fs::write(outside.join("keep/a.txt"), b"mine").unwrap();
+        let dev = std::fs::metadata(&root).unwrap().dev();
+        let t = Trash { dir: root.join("Trash"), top: None };
+        ready(&t, dev).unwrap();
+        // a trashed link to a folder elsewhere, a trashed folder holding such a link, and a plain file
+        std::os::unix::fs::symlink(&outside, t.files().join("l")).unwrap();
+        std::fs::create_dir(t.files().join("d")).unwrap();
+        std::os::unix::fs::symlink(&outside, t.files().join("d/inner")).unwrap();
+        std::fs::write(t.files().join("f.txt"), b"x").unwrap();
+        for n in ["l", "d", "f.txt"] {
+            std::fs::write(t.info_of(std::ffi::OsStr::new(n)), format!("[Trash Info]
+Path=/x/{n}
+DeletionDate=2026-11-21T07:00:00
+")).unwrap();
+        }
+        assert_eq!(empty_trash(&t).unwrap(), 0);
+        assert_eq!(std::fs::read_dir(t.files()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(t.info()).unwrap().count(), 0);
+        assert_eq!(std::fs::read(outside.join("keep/a.txt")).unwrap(), b"mine", "the link's target survives");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn the_home_trash_record_stays_when_some_originals_could_not_be_removed() {
         let root = std::env::temp_dir().join(format!("leaf-unix-trash-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
