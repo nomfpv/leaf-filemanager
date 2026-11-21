@@ -83,7 +83,12 @@ impl Workspace {
         let list = gitread::worktrees(&root).unwrap_or_default();
         let main = list.first().map_or_else(|| root.clone(), |w| w.path.clone());
         // the head of the folder shown: its branch, else its commit
-        let head = gitread::current_branch(&root).or_else(|| list.iter().find(|w| leaf_dev::lanes::same_path(&w.path, &root)).map(|w| w.head.clone())).unwrap_or_else(|| "HEAD".into());
+        // (never the word HEAD: it would branch from the main worktree's head and make the lane its own base)
+        let head = gitread::current_branch(&root).or_else(|| list.iter().find(|w| leaf_dev::lanes::same_path(&w.path, &root)).map(|w| w.head.clone()).filter(|h| h.len() >= 7));
+        let Some(head) = head else {
+            crate::prompt::notice(t!("No head to start from"), t!("The branch or commit of this folder could not be read (a repository without a commit yet?). Make a first commit, then start the lane.").to_string(), window, cx);
+            return;
+        };
         let presets = agent_presets(cx);
         let pattern = cx.global::<crate::settings::Settings>().lane_folder.clone();
         let base_sel = std::rc::Rc::new(std::cell::Cell::new(0usize));
