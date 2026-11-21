@@ -2550,6 +2550,10 @@ impl FolderView {
     }
 
     pub fn row_h(&self) -> Pixels {
+        // the default size is the theme's (Index is denser, Canopy and Stem roomier); the others are the slider's fixed steps
+        if self.row_size == DEFAULT_ROW_SIZE {
+            return px(theme::default_row_h());
+        }
         px(ROW_SIZES[(self.row_size as usize).min(ROW_SIZES.len() - 1)])
     }
 

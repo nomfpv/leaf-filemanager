@@ -19,6 +19,16 @@ pub enum ThemePref {
     Black,
 }
 
+/// Settings > Appearance > Visibility: the same theme with tighter text, stronger lines and a fuller selection (High, the default), or
+/// the calmer Standard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Visibility {
+    #[default]
+    High,
+    Standard,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DefaultView {
@@ -366,7 +376,13 @@ fn is_default_preview_height(h: &f32) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// The mode of the theme: system, light, dark or pure black.
     pub theme: ThemePref,
+    /// The theme (Settings > Appearance): "canopy" (the default), "stem", "index", or a user theme by its file name.
+    pub theme_name: String,
+    pub visibility: Visibility,
+    /// The accent: a name from the theme's set ("" = its first), or "windows" (Windows' own). `accent_color`, when set, wins.
+    pub accent: String,
     pub default_view: DefaultView,
     pub show_hidden: bool,
     pub preview_open: bool,
@@ -649,6 +665,9 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: ThemePref::System,
+            theme_name: crate::theme::data::DEFAULT_THEME.into(),
+            visibility: Visibility::High,
+            accent: String::new(),
             default_view: DefaultView::Adaptive,
             show_hidden: false,
             preview_open: true,
@@ -984,6 +1003,17 @@ impl Settings {
         [self.hg_frost, self.hg_tint, self.hg_refraction, self.hg_saturation, self.hg_surface] = HG_DEFAULT;
     }
 
+    /// The theme, visibility and accent these settings choose.
+    pub fn theme_selection(&self) -> crate::theme::Selection {
+        use crate::theme::AccentChoice;
+        let accent = match rf_win::accent::parse_hex(&self.accent_color) {
+            Some(c) => AccentChoice::Custom(c),
+            None if self.accent.eq_ignore_ascii_case("windows") => AccentChoice::Windows,
+            None => AccentChoice::Theme(self.accent.clone()),
+        };
+        crate::theme::Selection { theme: self.theme_name.trim().to_ascii_lowercase(), high: self.visibility == Visibility::High, accent }
+    }
+
     /// For "Import settings".
     pub fn parse_lenient_pub(text: &str) -> Result<Settings, toml::de::Error> {
         Self::parse_lenient(text)
@@ -996,6 +1026,7 @@ impl Settings {
         rf_win::drives::set_hidden(rf_win::drives::mask_of_letters(&self.hidden_drives));
         // (a text that is no colour is no colour: Windows' accent)
         rf_win::accent::set_override(rf_win::accent::parse_hex(&self.accent_color));
+        crate::theme::select(&self.theme_selection());
         crate::background::sync_tray(self.run_in_background);
         crate::quick_search::sync(self);
         // (the system's own short date and time for the "System" style and older dates, issue 59; set once)
@@ -1064,12 +1095,21 @@ pub fn apply_component_theme(cx: &mut App) {
     // The component root paints the theme background under every window; keep it clear so
     // the Mica backdrop shows through (our own surfaces bring their own fills).
     Theme::update(cx, |t| t.background = gpui_kit::transparent_black());
-    // the chosen font, else Windows 11's own typeface (optical sizes) when present
+    // the chosen font, else the theme's (when it is installed), else Windows 11's own typeface (optical sizes) when present
+    let theme_font = crate::theme::Palette::dark().font_ui;
     if let Some(f) = cx.global::<Settings>().font.clone() {
         Theme::update(cx, |t| t.font_family = f.into());
+    } else if !theme_font.is_empty() && font_installed(theme_font, cx) {
+        Theme::update(cx, |t| t.font_family = theme_font.into());
     } else if std::path::Path::new(r"C:\Windows\Fonts\SegUIVar.ttf").exists() {
         Theme::update(cx, |t| t.font_family = "Segoe UI Variable Text".into());
     }
+}
+
+/// Whether the system has a font family of this name (the list is read once per run).
+pub fn font_installed(name: &str, cx: &App) -> bool {
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| cx.text_system().all_font_names()).iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
 /// Mutates the global settings, applies side effects, saves in the background and refreshes windows.
@@ -1152,6 +1192,28 @@ mod tests {
         // an older file still has the language setting (the UI is English only now): it loads
         let old = Settings::parse_lenient("language = \"tr\"\ntheme = \"dark\"").unwrap();
         assert_eq!(old.theme, ThemePref::Dark);
+    }
+
+    /// The look's defaults are Canopy at High with the theme's own accent; a file from before themes keeps its mode and loads.
+    #[test]
+    fn the_theme_defaults_to_canopy_high_and_old_files_still_load() {
+        use super::Visibility;
+        use crate::theme::AccentChoice;
+        let d = Settings::default();
+        assert_eq!((d.theme_name.as_str(), d.visibility, d.accent.as_str()), ("canopy", Visibility::High, ""));
+        let sel = d.theme_selection();
+        assert_eq!((sel.theme.as_str(), sel.high, sel.accent), ("canopy", true, AccentChoice::Theme(String::new())));
+        let old = Settings::parse_lenient("theme = \"black\"\naccent_color = \"\"\nshow_hidden = true").unwrap();
+        assert_eq!((old.theme, old.theme_name.as_str(), old.visibility), (ThemePref::Black, "canopy", Visibility::High));
+        let chosen = Settings::parse_lenient("theme_name = \"Index\"\nvisibility = \"standard\"\naccent = \"windows\"").unwrap();
+        let sel = chosen.theme_selection();
+        assert_eq!((sel.theme.as_str(), sel.high, sel.accent), ("index", false, AccentChoice::Windows));
+        // a colour the user wrote wins over a named accent
+        let own = Settings::parse_lenient("accent = \"Mint\"\naccent_color = \"#F7630C\"").unwrap();
+        assert_eq!(own.theme_selection().accent, AccentChoice::Custom(0xF7630C));
+        // a visibility this build does not know falls back to High alone
+        let odd = Settings::parse_lenient("visibility = \"max\"\nshow_hidden = true").unwrap();
+        assert!(odd.show_hidden && odd.visibility == Visibility::High);
     }
 
     /// The second panes of the session survive the settings file, and a file from before them has none.
