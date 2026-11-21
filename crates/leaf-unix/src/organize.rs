@@ -1,13 +1,21 @@
-//! Linux backend of rf_win::organize. Status: PARTIAL (facts are real: scan, facts_for_names, facts_for_paths, exists,
-//! folder_problem; the runner is not yet)
+//! Linux backend of rf_win::organize. Status: REAL (facts, run, undo/redo of moves, the trash as the only bin).
 //!
 //! Facts (read only, nothing is ever written): one `lstat` per item, links are never followed nor entered, names that are not
 //! UTF-8 are left out (a step for a lossy name could never find its file), only regular files become facts (FIFOs, sockets and
 //! device nodes are not files to organize). Hidden means a leading dot, for files and for the folders a scan goes into. The EXIF
 //! date (`taken_ms`) is not read here, as in rf-win: the caller fills it through the portable code when a step asks for it.
 //!
-//! The runner moves and recycles files: a data operation, so no run ever reports success while it is a stub. Every step comes back
-//! as a failure ("Not available on this system yet") and the progress callback is never called.
+//! Safety of the runner, as in rf-win (the plan itself is made by `rf_core::organize`):
+//! * nothing is ever deleted for good: a file leaves only through the trash ([`Recycler`]), or as the source of a move once its
+//!   copy is in place, durable and checked, and only while it is still the file that was copied;
+//! * nothing is ever replaced: every name is taken with a no-replace rename or `O_EXCL`; a taken name gets a number in a run and
+//!   is listed in an undo or redo;
+//! * links, folders and special files are never moved, and a link is never followed (sources are `lstat`ed, a link between the
+//!   watched folder and the file puts it out of bounds); hidden files, partial downloads, files open for writing elsewhere and
+//!   (automatic runs) files changed in the last [`SETTLE_MS`] are left alone, checked again when the step runs;
+//! * every step ends in the record, `skipped` or `failed`; one failure never stops the rest; cancel is looked at between steps.
+//!
+//! Blocking: call from a worker thread. `ORGANIZE-NOTES.md` (leaf-notes/linux) lists each place where data could be lost.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
