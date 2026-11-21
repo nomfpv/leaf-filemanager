@@ -607,6 +607,11 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                 if job.name.is_empty() {
                     return fail(t!("Give the job a name.").to_string(), cx);
                 }
+                // a run that ended while the editor was open: its time and result are the stored ones, not the editor's copy
+                if let Some(stored) = jobs(cx).into_iter().find(|j| j.id == job.id) {
+                    job.last_run_ms = stored.last_run_ms;
+                    job.last_result = stored.last_result;
+                }
                 let moved = job.left != l || job.right != r;
                 job.left = l;
                 job.right = r;
