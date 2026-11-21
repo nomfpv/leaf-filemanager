@@ -442,8 +442,24 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
     use leaf_vfs::copy::{Conflict, Copy, Progress};
     let cancelled = || tr.cancel.load(Ordering::Relaxed);
     let fs = leaf_vfs::fs_for(items[0].0.scheme()).map_err(anyhow_of)?;
+    // the server's names of the items themselves are checked before any path is made from them: `D:evil.exe` or `C:` joined
+    // to `dest` would replace it (Windows' join), `..` would leave it; a refused item is left out and counted
     let mut refused = 0usize;
-    let targets: Vec<PathBuf> = items.iter().map(|(v, _)| dest.join(v.name())).collect();
+    let mut checked = Vec::new();
+    let mut targets = Vec::new();
+    for (v, is_dir) in items {
+        match top_target(dest, v.name()) {
+            Ok(t) => {
+                checked.push((v.clone(), *is_dir));
+                targets.push(t);
+            }
+            Err(why) => {
+                log::warn!("download: an item's name is refused ({why})");
+                refused += 1;
+            }
+        }
+    }
+    let items = checked.as_slice();
     // the sizes first (folders walked), for the progress bar
     (tr.on_progress)(0, 0, Some(t!("Counting what is on the server").to_string()));
     let (mut total_files, mut total_bytes) = (0u64, 0u64);
@@ -502,6 +518,10 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
                 _ => (name, ""),
             };
             target = leaf_sys::fileops::unique_name(dest, stem, ext);
+            if target.parent() != Some(dest) {
+                refused += 1;
+                continue;
+            }
         }
         let inner = if answer == Some(Resolve::Replace) { Conflict::Replace } else { Conflict::KeepBoth };
         let mut on_conflict = |_: &VPath, _: &leaf_vfs::Meta| inner;
@@ -533,6 +553,17 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
         return Err(anyhow::anyhow!("{} {refused}", t!("Everything else arrived. Left out, because their names cannot be used on this PC:")));
     }
     Ok(true)
+}
+
+/// Where a downloaded item named `name` goes in `dest`: refused unless the name is a usable local name and the folder the
+/// result lies in is `dest` itself (also compared after resolving both on the disk).
+fn top_target(dest: &Path, name: &str) -> Result<PathBuf, &'static str> {
+    let t = leaf_vfs::names::local_child(dest, name)?;
+    let parent = t.parent().ok_or("no folder")?;
+    match (std::fs::canonicalize(dest), std::fs::canonicalize(parent)) {
+        (Ok(a), Ok(b)) if a == b => Ok(t),
+        _ => Err("the name leads out of the folder"),
+    }
 }
 
 /// Files and bytes under `v` (links are not followed, as the copy does not follow them).

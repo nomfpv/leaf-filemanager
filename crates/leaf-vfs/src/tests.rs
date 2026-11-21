@@ -259,6 +259,39 @@ fn copy_mem_to_local_and_back() {
     mem.remove(&other, false).unwrap();
 }
 
+/// Must-fix 2: a name with a drive letter (`D:evil.txt`, a folder named `C:`) never replaces the target folder: the checked
+/// join refuses it at the top (where the app makes the item's own path) and the copy refuses it inside a folder.
+#[test]
+fn drive_letter_names_stay_inside() {
+    let tmp = TempDir::new("drives");
+    let dest = tmp.0.as_path();
+    if cfg!(windows) {
+        // what the unchecked join did: a prefixed name replaces the base path
+        assert!(!dest.join("D:evil.txt").starts_with(dest));
+    }
+    for bad in ["D:evil.txt", "C:", "C:x", "..", "a\\..\\..\\b", "NUL", ""] {
+        assert!(names::local_child(dest, bad).is_err(), "{bad:?}");
+    }
+    assert_eq!(names::local_child(dest, "fine.txt").unwrap(), dest.join("fine.txt"));
+    assert!(names::vchild(&tmp.addr(), "C:").is_err());
+
+    let mem = MemFs::new();
+    let top = VPath::parse("mem://drives/top").unwrap();
+    mem.put_file(&top.join("C:").join("inner.txt"), b"in".to_vec(), 1);
+    mem.put_file(&top.join("D:evil.txt"), b"evil".to_vec(), 1);
+    mem.put_file(&top.join("fine.txt"), b"fine".to_vec(), 1);
+    let mut progress = |_: &copy::Progress| {};
+    let mut conflict = |_: &VPath, _: &Meta| Conflict::Replace;
+    let r = Copy::new(&mem, &LocalFs, &|| false, &mut progress, &mut conflict).run(&top, &tmp.addr().join("top")).unwrap();
+    let mut refused: Vec<&str> = r.refused.iter().map(|(_, n, _)| n.as_str()).collect();
+    refused.sort();
+    assert_eq!(refused, ["C:", "D:evil.txt"]);
+    assert_eq!(r.files, 1);
+    let inside: Vec<String> = std::fs::read_dir(dest.join("top")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(inside, ["fine.txt"]);
+    assert_eq!(std::fs::read_dir(dest).unwrap().count(), 1, "nothing else beside the target");
+}
+
 #[test]
 fn registry_and_test_servers() {
     assert!(has_backend("mem") && has_backend("FILE"));
