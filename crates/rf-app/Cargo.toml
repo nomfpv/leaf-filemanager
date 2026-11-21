@@ -23,6 +23,7 @@ leaf-vfs.workspace = true
 leaf-remote.workspace = true
 leaf-download.workspace = true
 leaf-sync.workspace = true
+leaf-agents.workspace = true
 # cache file names of fetched server files (a hash of the address)
 sha2.workspace = true
 # installer and auto-update (GitHub Releases)

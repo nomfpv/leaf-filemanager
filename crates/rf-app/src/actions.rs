@@ -120,6 +120,7 @@ gpui_kit::actions!(
         Checkpoint,
         ShowCheckpoints,
         SyncJobs,
+        ShowAgents,
         SyncWith,
         ShowWorktrees,
         OpenDocker,

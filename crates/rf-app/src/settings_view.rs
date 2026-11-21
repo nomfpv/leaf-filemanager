@@ -2706,6 +2706,13 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         ),
         card(
             p,
+            L::Brain,
+            t!("Agent layer"),
+            Some(t!("Shows what coding agents (Claude Code) are doing: the Agents page, a small dot on the folder and the tab of a running session, and a line in the status bar. Reads the agent's own session files on this PC, never changes them. Off: nothing is read and nothing is shown.")),
+            sw("ai-layer", p, s.ai_layer, |s, v| s.ai_layer = v),
+        ),
+        card(
+            p,
             L::ListTree,
             t!("Selection details"),
             Some(t!("The status line adds the lines of the selected text files, the play time of audio and video and the pixels of pictures; a click on it shows the breakdown by type. Read in the background, with a limit for big selections.")),

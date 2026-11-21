@@ -7521,6 +7521,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-windows",
  "image",
+ "leaf-agents",
  "leaf-decode",
  "leaf-dev",
  "leaf-download",

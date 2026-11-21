@@ -447,6 +447,7 @@ fn session_text(loc: &Location) -> String {
         Location::RecycleBin => "shell:RecycleBinFolder".into(),
         Location::Downloads => "leaf:downloads".into(),
         Location::SyncJobs => "leaf:sync".into(),
+        Location::Agents => "leaf:agents".into(),
         Location::Shell { parsing, name } => format!("{SHELL_PREFIX}{parsing}\t{name}"),
         // (an address never holds a password: VPath refuses one)
         Location::Remote(v) if crate::remote::usable(v.scheme()) => v.to_string(),
@@ -1209,7 +1210,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_) | Location::Brain(_) | Location::SyncJobs);
+                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_) | Location::Brain(_) | Location::SyncJobs | Location::Agents);
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -2491,6 +2492,8 @@ impl Workspace {
             // a tab whose folder is still being listed shows a spinner ring in place of its icon (the mockups' busy tab)
             let busy = v.busy();
             let tab_dir = v.location().path().map(Path::to_path_buf);
+            // (D2) a coding agent session works in this tab's folder or one inside it: a calm dot after the name
+            let tab_agent = tab_dir.as_deref().and_then(|d| crate::agents::tab_state(cx, d)).map(|st| crate::agents::state_color(st, &p));
             let term_dir = tab_terminal.then(|| tab_terminal_dir(v.location())).flatten();
             let tab_w = if fit_names {
                 let name = window.text_system().layout_line(&title, name_px, &[name_style.to_run(title.len())], None).width;
@@ -2583,6 +2586,7 @@ impl Workspace {
                         )
                     })
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(title))
+                    .children(tab_agent.map(|c| div().size(px(7.)).flex_shrink_0().rounded_full().bg(c)))
                     .when_some(term_dir, |d, dir| {
                         d.child(
                             div()
@@ -4814,6 +4818,20 @@ impl Workspace {
             if let Some(free) = free {
                 left = left.child(dot()).child(div().text_color(p.text_tertiary).child(free));
             }
+            // (D11) the agent layer's quiet line; a click opens the Agents page
+            if let Some(text) = crate::agents::status_line(cx) {
+                left = left.child(dot()).child(
+                    div()
+                        .id("agents-line")
+                        .cursor_pointer()
+                        .rounded(theme::RADIUS_SM)
+                        .px_1()
+                        .text_color(p.text_secondary)
+                        .hover(|s| s.bg(p.hover).text_color(p.text))
+                        .child(text)
+                        .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowAgents), cx)),
+                );
+            }
             if loading {
                 // a search says which step it is on (issue 67)
                 let text = tab.search_stage.map_or_else(|| t!("Loading…").to_string(), |s| s.text().to_string());
@@ -6161,6 +6179,9 @@ impl Render for Workspace {
                     Some(d) => crate::checkpoint_ui::show_list(d, v.downgrade(), cx),
                     None => crate::prompt::notice(t!("Checkpoints"), t!("Checkpoints are kept for folders on this computer. Open one first.").to_string(), window, cx),
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ShowAgents, _, cx| {
+                this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::Agents)));
             }))
             .on_action(cx.listener(|this, _: &SyncJobs, _, cx| {
                 this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::SyncJobs)));

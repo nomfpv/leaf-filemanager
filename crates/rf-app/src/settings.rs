@@ -712,6 +712,9 @@ pub struct Settings {
     pub count_usage: bool,
     /// Rows of files changed in the last ten minutes get a faint tint that fades.
     pub fresh_tint: bool,
+    /// The master switch of the agent layer (Settings > Developer): the Agents page, the dot on folders and tabs with a running agent session and
+    /// the status-bar line. Off: no agent file is read, no process is looked at, nothing of it is shown.
+    pub ai_layer: bool,
 
     // ---- Advanced
     pub show_flatten: bool,
@@ -920,6 +923,7 @@ impl Default for Settings {
             selection_details: false,
             count_usage: true,
             fresh_tint: false,
+            ai_layer: true,
             show_flatten: false,
             space_quicklook: false,
             look_enabled: true,
@@ -1298,6 +1302,8 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     std::thread::spawn(move || s.save());
     // (Nearby follows its settings: started, stopped, started anew, or shown to others differently)
     crate::nearby::apply(cx);
+    // (the agent layer: started or stopped by its master switch)
+    crate::agents::apply(cx);
     // (a changed download limit applies to the downloads that are running)
     crate::downloads::settings_changed(cx);
     cx.refresh_windows();

@@ -605,6 +605,8 @@ pub struct FolderView {
     junk: Option<Entity<crate::junk_view::JunkView>>,
     /// The project brain page of this tab.
     brain: Option<Entity<crate::brain_view::BrainView>>,
+    /// The Agents page of this tab.
+    agents: Option<Entity<crate::agents_view::AgentsView>>,
     /// The Sync jobs page of this tab.
     sync: Option<Entity<crate::sync_ui::SyncView>>,
     /// Follow mode (Alt+F) on a file of a server: its tail is read again every 2 seconds while this tab lives.
@@ -824,6 +826,7 @@ impl FolderView {
             dups: None,
             junk: None,
             brain: None,
+            agents: None,
             sync: None,
             remote_tail: None,
             ignored_n: 0,
@@ -921,6 +924,7 @@ impl FolderView {
             Location::Brain(_) => L::Brain,
             Location::Downloads => L::ArrowDownToLine,
             Location::SyncJobs => L::FolderSync,
+            Location::Agents => L::Brain,
             Location::Remote(_) => L::Server,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
@@ -1090,6 +1094,7 @@ impl FolderView {
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(crate::rtl::display_text(&e.name)))
                     .children(lock)
                     .children(git)
+                    .children(self.agent_dot(ei, &p, cx))
                     .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g)))
                     .when(is_dir, |d| d.child(Icon::new(L::ChevronRight).size(px(12.)).text_color(p.text_tertiary)))
                     .on_mouse_down(
@@ -4152,6 +4157,16 @@ impl FolderView {
         }
     }
 
+    /// The calm dot after a folder's name when a coding agent session works in it (D2): the success colour while it works, the warning
+    /// colour while it waits for the user. Nothing while the agent layer is off or no session is active.
+    fn agent_dot(&self, ei: u32, p: &Palette, cx: &App) -> Option<Div> {
+        if !crate::agents::any_active(cx) || !self.entries.get(ei as usize)?.is_dir() {
+            return None;
+        }
+        let state = crate::agents::folder_state(cx, &self.path_of(ei)?)?;
+        Some(div().size(px(7.)).flex_shrink_0().rounded_full().bg(crate::agents::state_color(state, p)))
+    }
+
     pub(crate) fn path_of(&self, ei: u32) -> Option<PathBuf> {
         if matches!(self.location(), Location::Shell { .. }) {
             // only items that are real files have a path; a phone's items have none
@@ -4288,6 +4303,7 @@ impl FolderView {
             Location::Changes(_) => self.changes.as_ref()?.read(cx).status_text(),
             Location::Brain(_) => self.brain.as_ref()?.read(cx).status_text(),
             Location::SyncJobs => self.sync.as_ref()?.read(cx).status_text(cx),
+            Location::Agents => self.agents.as_ref()?.read(cx).status_text(cx),
             _ => return None,
         };
         (!text.is_empty()).then_some(text)
@@ -5298,6 +5314,7 @@ impl FolderView {
                         .children(tag_dots)
                         .children(cut_mark)
                         .children(cmp_mark)
+                        .children(self.agent_dot(ei, &p, cx))
                         .children(git_badge)
                         .child(div().flex_1())
                         .children(cloud_badge),
@@ -6163,6 +6180,22 @@ impl Render for FolderView {
             }
             // (the HyperDownload page is cut: a tab restored on it shows nothing)
             Location::Downloads => div().size_full().into_any_element(),
+            Location::Agents => {
+                let av = match &self.agents {
+                    Some(av) => av.clone(),
+                    None => {
+                        let av = cx.new(crate::agents_view::AgentsView::new);
+                        cx.subscribe(&av, |this, _, ev: &crate::agents_view::AgentsEvent, cx| match ev {
+                            crate::agents_view::AgentsEvent::OpenFolder(dir) => this.navigate(Location::Path(dir.clone()), cx),
+                        })
+                        .detach();
+                        cx.observe(&av, |_, _, cx| cx.notify()).detach();
+                        self.agents = Some(av.clone());
+                        av
+                    }
+                };
+                div().size_full().child(av).into_any_element()
+            }
             Location::SyncJobs => {
                 let sv = match &self.sync {
                     Some(sv) => sv.clone(),

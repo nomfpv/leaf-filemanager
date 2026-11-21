@@ -31,6 +31,8 @@ pub enum Location {
     Downloads,
     /// The saved sync and backup jobs (`leaf-sync`): list, preview, run.
     SyncJobs,
+    /// What the coding agents on this computer are doing (`leaf-agents`): running and recent sessions.
+    Agents,
     /// A folder that is not a local one, listed through the virtual filesystem (`leaf-vfs`): `sftp://`, `mem://`...
     Remote(crate::vpath::VPath),
 }
@@ -52,6 +54,7 @@ impl Location {
             // (HyperDownload's page, as a saved session names it)
             "leaf:downloads" => Some(Location::Downloads),
             "leaf:sync" => Some(Location::SyncJobs),
+            "leaf:agents" => Some(Location::Agents),
             _ => None,
         }
     }
@@ -120,7 +123,7 @@ impl Location {
             Location::Changes(p) => Some(Location::Path(p.clone())),
             Location::Brain(p) => Some(Location::Path(p.clone())),
             Location::Duplicates(v) => Some(v.first().map_or(Location::Home, |p| Location::Path(p.clone()))),
-            Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads | Location::SyncJobs => {
+            Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads | Location::SyncJobs | Location::Agents => {
                 Some(Location::Home)
             }
             Location::Shell { parsing, .. } => Some(shell_parent(parsing)),
@@ -146,6 +149,7 @@ impl Location {
             Location::Brain(p) => format!("Project brain — {}", display_name(p)),
             Location::Downloads => "HyperDownload".into(),
             Location::SyncJobs => "Sync jobs".into(),
+            Location::Agents => "Agents".into(),
             Location::Remote(v) if v.is_root() && v.authority().is_empty() => v.scheme().to_string(),
             Location::Remote(v) if v.is_root() => v.authority().to_string(),
             Location::Remote(v) => v.name().to_string(),

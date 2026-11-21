@@ -19,6 +19,8 @@ mod conflict_dialog;
 mod ctx_menu;
 mod menu_model;
 mod basket;
+mod agents;
+mod agents_view;
 mod brain_view;
 mod mockup_demo;
 mod context_copy;
@@ -752,6 +754,7 @@ pub fn main() {
         if std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
             sync_ui::start_scheduler(cx);
         }
+        agents::init(cx);
         // leaf-look ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
         if cx.global::<settings::Settings>().look_enabled && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
             look::ipc::send(look::ipc::Msg::Wake, true);
