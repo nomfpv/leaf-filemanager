@@ -210,7 +210,6 @@ pub struct BulkRename {
     note: Option<String>,
     _subs: Vec<Subscription>,
     _plan: Option<Task<()>>,
-    _task: Option<Task<()>>,
 }
 
 impl EventEmitter<BulkRenameEvent> for BulkRename {}
@@ -280,7 +279,6 @@ impl BulkRename {
             note: None,
             _subs: Vec::new(),
             _plan: None,
-            _task: None,
         };
         this.watch_name(window, cx);
         // a new dialog starts with one "Replace text" step to fill in
@@ -550,6 +548,10 @@ impl BulkRename {
         self.loaded && !self.computing && !self.applying && self.summary.can_run(self.skip_problems)
     }
 
+    /// Runs the batch in the Status Center, like undo / redo. What has to happen afterwards
+    /// (the undo entry, tags following their files, failures being reported) runs in its
+    /// `on_done`, so it does not depend on this dialog still being there. Closing the dialog is
+    /// not offered while the batch runs.
     fn apply(&mut self, cx: &mut Context<Self>) {
         if !self.can_apply() {
             return;
@@ -557,33 +559,68 @@ impl BulkRename {
         let rows: Vec<Row> = (*self.rows).clone();
         let skip = self.skip_problems;
         self.applying = true;
-        let work = cx.background_spawn(async move { crate::rename_exec::apply_batch(&rows, skip, &mut crate::rename_exec::native_rename) });
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |v, cx| {
-                v.applying = false;
-                match result {
+        type Res = Result<crate::rename_exec::Outcome, String>;
+        let result: Arc<std::sync::Mutex<Option<Res>>> = Arc::default();
+        let slot = result.clone();
+        let me = cx.entity().downgrade();
+        let title = format!("{} {}", t!("Bulk rename:"), crate::i18n::items(self.summary.rename));
+        let id = crate::status_center::start_with_id(
+            cx,
+            title,
+            move |_| {
+                let r = crate::rename_exec::apply_batch(&rows, skip, &mut crate::rename_exec::native_rename);
+                // the Status Center keeps the failures too (the dialog may be gone by the time it ends)
+                let failure = match &r {
+                    Ok(out) if out.failed.is_empty() => None,
                     Ok(out) => {
-                        if !out.done.is_empty() {
-                            // (the tags of the renamed files follow them, all at once: names may have swapped places)
-                            crate::tags::follow(cx, &out.done);
-                            crate::undo::push(crate::undo::UndoOp::BulkRenamed { pairs: out.done.clone() });
-                        }
-                        if out.failed.is_empty() {
-                            cx.emit(BulkRenameEvent::Close);
-                        } else {
-                            v.errors = out.failed.iter().map(|f| f.line()).collect();
-                        }
+                        let lines: Vec<String> = out.failed.iter().take(8).map(|f| f.line()).collect();
+                        Some(format!("{} {}: {}", crate::i18n::items(out.failed.len()), t!("could not be renamed"), lines.join("; ")))
                     }
-                    Err(e) => {
-                        v.errors = vec![e];
-                        v.loaded = false;
-                        v.reload(cx);
-                    }
+                    Err(e) => Some(e.clone()),
+                };
+                *slot.lock().unwrap() = Some(r);
+                match failure {
+                    None => Ok(true),
+                    Some(f) => Err(anyhow::anyhow!(f)),
                 }
-                cx.notify();
-            });
-        }));
+            },
+            Some(Box::new(move |_, cx| {
+                let result = result.lock().unwrap().take();
+                if let Some(Ok(out)) = &result
+                    && !out.done.is_empty()
+                {
+                    // (the tags of the renamed files follow them, all at once: names may have swapped places)
+                    crate::tags::follow(cx, &out.done);
+                    crate::undo::push(crate::undo::UndoOp::BulkRenamed { pairs: out.done.clone() });
+                }
+                let _ = me.update(cx, |v, cx| v.finished(result, cx));
+            })),
+        );
+        if id == 0 {
+            self.applying = false;
+            self.errors = vec![t!("The rename could not be started").to_string()];
+        }
+        cx.notify();
+    }
+
+    /// The batch ended (`None`: its worker ended without a result).
+    fn finished(&mut self, result: Option<Result<crate::rename_exec::Outcome, String>>, cx: &mut Context<Self>) {
+        self.applying = false;
+        match result {
+            Some(Ok(out)) => {
+                if out.failed.is_empty() {
+                    cx.emit(BulkRenameEvent::Close);
+                } else {
+                    self.errors = out.failed.iter().map(|f| f.line()).collect();
+                }
+            }
+            Some(Err(e)) => {
+                self.errors = vec![e];
+                self.loaded = false;
+                self.reload(cx);
+            }
+            None => self.errors = vec![t!("The rename ended unexpectedly: check the folder").to_string()],
+        }
         cx.notify();
     }
 
@@ -1072,7 +1109,13 @@ impl Render for BulkRename {
                     .cursor_pointer()
                     .hover(|s| s.bg(p.hover))
                     .child(Icon::new(L::X).size(px(14.)))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(BulkRenameEvent::Close))),
+                    .when(self.applying, |d| d.opacity(0.35))
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        // (not while the batch runs: see `apply`)
+                        if !v.applying {
+                            cx.emit(BulkRenameEvent::Close)
+                        }
+                    })),
             );
 
         // presets: pick one, save the steps under a name, delete the user's own
@@ -1232,7 +1275,11 @@ impl Render for BulkRename {
                     cx.notify();
                 })))
             })
-            .child(button("br-cancel", if has_errors { t!("Close") } else { t!("Cancel") }, false, true, &p).on_click(cx.listener(|_, _, _, cx| cx.emit(BulkRenameEvent::Close))))
+            .child(button("br-cancel", if has_errors { t!("Close") } else { t!("Cancel") }, false, !self.applying, &p).on_click(cx.listener(|v, _, _, cx| {
+                if !v.applying {
+                    cx.emit(BulkRenameEvent::Close)
+                }
+            })))
             .child(button("br-apply", t!("Rename"), true, can_apply, &p).on_click(cx.listener(|this, _, _, cx| this.apply(cx))));
 
         let errors_box = has_errors.then(|| {
