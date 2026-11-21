@@ -59,6 +59,11 @@ pub fn set_small_corners(_hwnd: isize) {}
 
 pub fn set_round_corners(_hwnd: isize) {}
 
+/// The compositor's blur (KWin's) is asked for elsewhere: nothing to do here.
+pub fn set_clear_blur(_hwnd: isize) -> bool {
+    false
+}
+
 /// A client cannot raise itself on Wayland; it asks for attention with an xdg-activation token (see `activate`).
 pub fn bring_to_front(_hwnd: isize) {}
 

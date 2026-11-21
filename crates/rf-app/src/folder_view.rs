@@ -2898,7 +2898,7 @@ impl FolderView {
     fn grid_card_w(&self) -> Pixels {
         let base = self.grid_base_w();
         let gap = f32::from(GRID_GAP);
-        let avail = f32::from(self.content_width) - 12.;
+        let avail = f32::from(self.content_width) - 2. * GRID_PAD_X;
         if avail <= base {
             return px(base);
         }
@@ -2908,8 +2908,8 @@ impl FolderView {
 
     fn grid_row_h(&self) -> Pixels {
         match self.grid_style {
-            // the picture (4:3 inside the 8 px frame) and 66 px for the frame, the name and the size line
-            GridStyle::Tiles => ((self.grid_card_w() - px(16.)) * 0.75).round() + px(66.),
+            // the picture (4:3 inside the 8 px frame) and 64 px for the frame, the name and the size line and the air to the next row
+            GridStyle::Tiles => ((self.grid_card_w() - px(16.)) * 0.75).round() + px(56.) + GRID_GAP,
             GridStyle::Cards => px(84.),
             GridStyle::List => px(32.),
         }
@@ -3163,6 +3163,7 @@ impl FolderView {
                     None => div()
                         .w_full()
                         .text_size(px(p.fs_small))
+                        .when(tiles, |d| d.line_height(px((p.fs_small * 1.4).round())))
                         .text_center()
                         // (a card's name is one line, its size under it: the mockups')
                         .when(tiles, |d| d.whitespace_nowrap().overflow_hidden())
@@ -3254,7 +3255,7 @@ impl FolderView {
                                 })),
                         )
                         .child(label)
-                        .children(meta.map(|m| div().mt(px(-4.)).w_full().text_center().text_size(px(p.fs_xs)).text_color(if selected { p.text_secondary } else { p.text_tertiary }).whitespace_nowrap().overflow_hidden().text_ellipsis().child(m))),
+                        .children(meta.map(|m| div().mt(px(-4.)).w_full().text_center().text_size(px(p.fs_xs)).line_height(px((p.fs_xs * 1.4).round())).text_color(if selected { p.text_secondary } else { p.text_tertiary }).whitespace_nowrap().overflow_hidden().text_ellipsis().child(m))),
                     GridStyle::Cards => h_flex()
                         .px_2()
                         .gap_3()
@@ -3619,7 +3620,7 @@ impl FolderView {
                 }
                 ViewMode::Columns => {}
                 ViewMode::Grid => {
-                    let (pt, pl) = (8.0, 6.0);
+                    let (pt, pl) = (8.0, GRID_PAD_X);
                     let cw = f32::from(if self.grid_style == GridStyle::Tiles { self.grid_card_w() } else { self.grid_tile_w() } + GRID_GAP);
                     let rh = f32::from(self.grid_row_h());
                     let cols = self.grid_cols.max(1);
@@ -4170,6 +4171,7 @@ impl FolderView {
             let input = cx.new(|cx| gpui_kit::component::input::InputState::new(window, cx).default_value(value.to_string()));
             self.set_renaming(Some((ei, input)), None);
         }
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
         true
     }
@@ -4452,9 +4454,12 @@ impl FolderView {
                 false
             }
         };
+        // the mockups' rule for a narrow pane: Type goes at 560 px and less, Modified at 400 px and less (a half-width pane of a
+        // 1280 px window shows Name, Size and Modified; Type comes back from about 1400 px)
+        let pane = f32::from(self.content_width);
         let size = take(c.size, w[3]);
-        let modified = take(c.modified, w[0]);
-        let kind = take(c.kind, f32::from(self.type_col_w(cx)));
+        let modified = (pane > 400. || pane <= 0.) && take(c.modified, w[0]);
+        let kind = (pane > 560. || pane <= 0.) && take(c.kind, f32::from(self.type_col_w(cx)));
         let git = take(c.git && self.git.is_some(), w[5]);
         // (the tag column only where an item has a tag, as the Git column only inside a repository)
         let tags = take(c.tags && !self.is_search() && self.auto_cols.tags_any, w[4]);
@@ -4983,21 +4988,26 @@ impl FolderView {
             };
             let rename_input = self.renaming.as_ref().filter(|(i, _)| *i == ei).map(|(_, inp)| inp.clone());
             let name_el: AnyElement = match rename_input {
-                // the box grows to the left (border + padding) so the text keeps its place
+                // the mockups' box: the name column's width, 6 px shorter than the row, the field's colour, an accent edge and a soft
+                // accent ring
                 Some(inp) => div()
                     .capture_key_down({
                         let input = inp.clone();
                         cx.listener(move |_, ev: &KeyDownEvent, _, cx| crate::rtl::handle_key_down(&input, ev, cx))
                     })
-                    .flex_1()
-                    // (as tall as the row at the tightest size)
-                    .h(row_h.min(px(24.)))
-                    .ml(px(-RENAME_INSET))
-                    .px(px(RENAME_INSET - 1.))
-                    .rounded(px(4.))
-                    .bg(p.card_bg)
+                    .flex_grow(1.)
+                    .flex_shrink(1.)
+                    .w_full()
+                    .min_w_0()
+                    .h(row_h - px(6.))
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(p.control_radius - 2.))
+                    .bg(p.field_bg)
                     .border_1()
                     .border_color(p.accent)
+                    .shadow(vec![BoxShadow { color: p.accent.opacity(0.2), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }])
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(gpui_kit::component::input::Input::new(&inp).appearance(false).small().px_0())
                     .into_any_element(),
@@ -5297,7 +5307,7 @@ impl FolderView {
         } else if self.view_mode == ViewMode::Columns {
             self.render_columns(p, cx)
         } else if self.view_mode == ViewMode::Grid {
-            let avail = self.content_width - px(12.);
+            let avail = self.content_width - px(2. * GRID_PAD_X);
             let cols = (((avail + GRID_GAP) / (self.grid_tile_w() + GRID_GAP)).floor() as usize).max(1);
             self.grid_cols = cols;
             let rows = if self.grid_grouped() { self.grid_units_now().0.len() } else { count.div_ceil(cols) };
@@ -5306,7 +5316,7 @@ impl FolderView {
                 .track_scroll(&self.scroll)
                 .flex_1()
                 .py_2()
-                .px(px(6.))
+                .px(px(GRID_PAD_X))
                 .into_any_element()
         } else {
             let n_rows = if self.grouped() { self.rows.len() } else { count };
@@ -5776,12 +5786,15 @@ fn static_column(
         .child(body)
 }
 
-const GRID_GAP: Pixels = px(4.);
+/// The air between two cards, across and down (the mockups' 8 px).
+const GRID_GAP: Pixels = px(8.);
 /// Grid sizes (Ctrl+= / Ctrl+-): tile width, row height, thumbnail pixels.
 /// (Tiles are the mockups' cards: an 8 px frame round a 4:3 picture, the name and a size line under it: the row is the picture's height
 /// and 56 px.)
 const GRID_SIZES: [(f32, f32, u32); 5] = [(84., 107., 96), (104., 122., 128), (136., 146., 160), (180., 179., 224), (240., 224., 320)];
 const DEFAULT_GRID_SIZE: u8 = 2;
+/// The grid's padding left and right of the cards (the mockups' 12 px).
+const GRID_PAD_X: f32 = 12.;
 /// Details row heights for the "Size" slider (30 = the classic one; 22 = as tight as File Explorer's compact rows, asked for on Threads).
 const ROW_SIZES: [f32; 5] = [22., 30., 36., 44., 52.];
 const DEFAULT_ROW_SIZE: u8 = 1;

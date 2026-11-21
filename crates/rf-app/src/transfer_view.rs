@@ -29,6 +29,19 @@ pub(crate) fn speed_text(bytes_per_sec: f64) -> String {
     format!("{}/{}", format::size(bytes_per_sec as u64), t!("s"))
 }
 
+/// The strip's words are cut past this width (the mockups': "Copying 214 files to nas.exampl…").
+const STRIP_WORDS_W: f32 = 180.;
+
+/// The strip's time left: "1 min 7 s left" under ten minutes (the mockups'), else as the Status Center says it ("~25 min left").
+fn strip_eta(secs: f64) -> String {
+    let s = secs.max(1.).round() as u64;
+    match s {
+        0..60 => format!("{s} {} {}", t!("s"), t!("left")),
+        60..600 => format!("{} {} {} {} {}", s / 60, t!("min"), s % 60, t!("s"), t!("left")),
+        _ => eta_text(secs),
+    }
+}
+
 /// "~34 sn kaldı".
 fn eta_text(secs: f64) -> String {
     format!("{} {}", fmt_duration(secs as f32), t!("left"))
@@ -348,7 +361,8 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
     let fit = xfer::strip_fit(avail, others);
     let id = v.id;
     // (clipped: the room is an estimate of what the rest of the status bar leaves, and a wrong guess must cut the strip, not overlap its neighbours)
-    let frame = h_flex().id("transfer-strip").h(px(24.)).flex_1().min_w_0().overflow_hidden().mx_3().gap(px(6.)).items_center().text_xs().text_color(p.text_secondary);
+    // The mockups' strip stands right after the selection line, 16 px from it, as wide as what it shows.
+    let frame = h_flex().id("transfer-strip").group("strip").h(px(24.)).flex_shrink(1.).min_w_0().overflow_hidden().ml(px(16.)).gap(px(8.)).items_center().text_color(p.text_secondary);
     let center = {
         let ops = ops.clone();
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| open_center(&ops, window, cx)
@@ -357,10 +371,9 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
         h_flex()
             .id("transfer-strip-main")
             .h_full()
-            .flex_1()
+            .flex_shrink(1.)
             .min_w_0()
-            .px_2()
-            .gap(px(10.))
+            .gap(px(8.))
             .items_center()
             .rounded(theme::RADIUS_SM)
             .cursor_pointer()
@@ -418,7 +431,12 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
     let accent = if v.paused { p.text_tertiary } else { p.accent };
     let pct = v.frac.map(|f| crate::i18n::pct(f * 100.0)).unwrap_or_default();
     let speed = v.pace.speed.filter(|s| *s >= 1.0 && fit.speed).map(speed_text);
-    let eta = v.pace.eta_secs.filter(|_| fit.eta).map(eta_text);
+    let eta = v.pace.eta_secs.filter(|_| fit.eta).map(strip_eta);
+    // "38.4 MB/s · 1 min 7 s left" (the mockups' one piece of text)
+    let pace = match (speed, eta) {
+        (Some(s), Some(e)) => Some(format!("{s} · {e}")),
+        (s, e) => s.or(e),
+    };
     let text = if v.paused { format!("{} · {}", v.words, t!("Paused")) } else { v.words.clone() };
     let pause = {
         let ops = ops.clone();
@@ -459,18 +477,20 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
             })
             .into_any_element()
     };
+    // a byte-moving job (copy, move, download) shows the copy mark before its words, the others a spinner's
+    let mark = if v.pace.speed.is_some() || v.bytes.is_some() { L::Copy } else { L::LoaderCircle };
     Some(
         frame
             .child(
                 main()
-                    .when(fit.text, |d| d.child(words(text, p.text)))
-                    .child(bar(p, v.frac, accent, Some(96.)))
-                    .child(div().w(px(36.)).flex_shrink_0().text_right().text_color(p.text).child(pct))
-                    // (fixed widths: the speed and the time change every moment, and the strip must not shake)
-                    .children(speed.map(|s| div().w(px(xfer::SPEED_W)).flex_shrink_0().text_right().whitespace_nowrap().child(s)))
-                    .children(eta.map(|s| div().w(px(xfer::ETA_W)).flex_shrink_0().whitespace_nowrap().overflow_hidden().text_ellipsis().child(s))),
+                    .child(Icon::new(mark).size(px(16.)).flex_shrink_0().text_color(p.text_tertiary))
+                    .when(fit.text, |d| d.child(div().max_w(px(STRIP_WORDS_W)).min_w_0().flex_shrink(1.).overflow_hidden().text_ellipsis().whitespace_nowrap().child(text)))
+                    .child(bar(p, v.frac, accent, Some(120.)))
+                    .child(div().flex_shrink_0().whitespace_nowrap().child(pct))
+                    .children(pace.map(|s| div().flex_shrink_0().whitespace_nowrap().child(s))),
             )
-            .when(fit.buttons, |d| d.child(pause).child(cancel))
+            // (the pause button; cancelling is a hover away, and in the Status Center)
+            .when(fit.buttons, |d| d.child(pause).child(div().flex_shrink_0().invisible().group_hover("strip", |s| s.visible()).child(cancel)))
             .when(fit.chip, |d| d.child(chip))
             .into_any_element(),
     )

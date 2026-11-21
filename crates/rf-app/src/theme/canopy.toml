@@ -60,11 +60,13 @@ square_marks = false
 mono_chrome = false
 
 [dark]
-# the colour wash behind the sheets: the mockup's wall (green, teal, amber glows)
+# the colour wash behind the sheets: the mockup's wall (green, teal, amber glows). Off: under the plain blur the desktop's own colours
+# come through as the mockup's wall does, and a wash on top of a colourful desktop moved the look away from the mockup (measured on
+# screen); a theme of one's own can turn it up
 wash_1 = "#1e6a4e"
 wash_2 = "#1a5c72"
 wash_3 = "#7a5422"
-wash_strength = 0.55
+wash_strength = 0.0
 sheet_opacity_guard = 0.84
 compare_only = "#6ab7ff"
 compare_newer = "#7fdc9b"
@@ -86,8 +88,8 @@ selection_inactive = "#ffffff1a"
 header_fill = "#ffffff0f"
 seg_on = "#ffffff1f"
 place_text = "#eef5f0"
-# (the mockup's veil is .38 over its wall; Windows' Acrylic already lifts the dark parts, so the veil is thicker to land on the same tone)
-window = "#04090880"
+# (the mockup's veil: .38 over the blurred backdrop)
+window = "#060c0a61"
 content = "#101916"
 tab_active = "#101916"
 sheet_opacity = 0.62
@@ -127,7 +129,7 @@ solid_raised = "#1e2a25"
 wash_1 = "#9fd9bc"
 wash_2 = "#a6d0ea"
 wash_3 = "#f1cd9c"
-wash_strength = 0.6
+wash_strength = 0.0
 sheet_opacity_guard = 0.86
 compare_only = "#1a6fc2"
 compare_newer = "#23753f"

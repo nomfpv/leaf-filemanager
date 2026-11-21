@@ -151,6 +151,41 @@ pub fn set_round_corners(hwnd: isize) {
     }
 }
 
+/// Gives `hwnd` a plain blur of what is behind it, without the Acrylic material's grey luminosity layer and noise: the backdrop's own
+/// colours come through blurred, as under the mockups' `backdrop-filter: blur()`, and the app paints its veil over them. The system
+/// backdrop is switched off first (it would lie over the blur). False when the system refuses (then the caller keeps what it had).
+pub fn set_clear_blur(hwnd: isize) -> bool {
+    use windows::Win32::Graphics::Dwm::{DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE, DwmSetWindowAttribute};
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    #[repr(C)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        gradient: u32,
+        animation: u32,
+    }
+    #[repr(C)]
+    struct Data {
+        attrib: u32,
+        data: *mut std::ffi::c_void,
+        size: usize,
+    }
+    type SetWca = unsafe extern "system" fn(HWND, *mut Data) -> windows::core::BOOL;
+    const ACCENT_ENABLE_BLURBEHIND: u32 = 3;
+    const WCA_ACCENT_POLICY: u32 = 0x13;
+    let h = HWND(hwnd as *mut _);
+    unsafe {
+        let none = DWMSBT_NONE;
+        let _ = DwmSetWindowAttribute(h, DWMWA_SYSTEMBACKDROP_TYPE, &none as *const _ as _, std::mem::size_of_val(&none) as u32);
+        let Ok(user32) = GetModuleHandleW(windows::core::w!("user32.dll")) else { return false };
+        let Some(f) = GetProcAddress(user32, windows::core::s!("SetWindowCompositionAttribute")) else { return false };
+        let f: SetWca = std::mem::transmute(f);
+        let mut accent = AccentPolicy { state: ACCENT_ENABLE_BLURBEHIND, flags: 0, gradient: 0, animation: 0 };
+        let mut data = Data { attrib: WCA_ACCENT_POLICY, data: &mut accent as *mut _ as *mut _, size: std::mem::size_of::<AccentPolicy>() };
+        f(h, &mut data).as_bool()
+    }
+}
+
 /// Makes `owner` (a window of another process, possibly) the owner of `hwnd`: it stays above
 /// it and minimizes with it, like the owner's own dialog.
 pub fn set_owner(hwnd: isize, owner: isize) {

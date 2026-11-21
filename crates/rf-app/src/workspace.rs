@@ -4032,9 +4032,11 @@ impl Workspace {
             (b.len() <= 3 && b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()).then(|| (b[0] as char).to_ascii_uppercase())
         });
         let is_wt = matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-wt");
+        let two_lines = extra.is_some();
         let tag_dot = target3.path().filter(|p| p.parent().is_some()).and_then(|p| crate::tags::first_color(p, cx));
         h_flex()
             .id(id)
+            .flex_shrink_0()
             .min_h(px(if rail { 36. } else { p.sidebar_row }))
             .px_2()
             .py(px(2.))
@@ -4096,7 +4098,8 @@ impl Workspace {
                     v_flex()
                         .flex_1()
                         .overflow_hidden()
-                        .child(div().whitespace_nowrap().overflow_hidden().text_ellipsis().child(label))
+                        // (a row with a second line: both lines at 1.25, the mockups' two-line rows of 34 px)
+                        .child(div().when(two_lines, |d| d.line_height(px(p.fs * 1.25))).whitespace_nowrap().overflow_hidden().text_ellipsis().child(label))
                         .children(extra),
                 )
             })
@@ -4145,7 +4148,11 @@ impl Workspace {
             }
             div()
                 .h(px(28.))
-                .mt(px(10.))
+                // (never squeezed: the sidebar scrolls when its sections are taller than the window, and its rows and headings used to
+                // shrink first, the headings a few pixels each)
+                .flex_shrink_0()
+                // (the mockups' 12 px between sections)
+                .mt(px(12.))
                 .px_2()
                 .flex()
                 .items_center()
@@ -4215,6 +4222,7 @@ impl Workspace {
             col = col.child(
                 div()
                     .id(("sb-pin-wrap", i))
+                    .flex_shrink_0()
                     .on_drag(drag, |d: &PinDrag, _, _, cx| cx.new(|_| d.clone()))
                     .drag_over::<PinDrag>(move |s, d: &PinDrag, _, _| {
                         // moving down inserts after the target, moving up before it
@@ -4393,10 +4401,10 @@ impl Workspace {
         // LEAF_MOCKUP_DEMO: the mockup's two hosts (one offline), with their second line and state dot
         let demo = crate::mockup_demo::on() && !rail;
         let state_dot = |on: bool, color: Hsla| {
-            div().size(px(6.)).mr(px(4.)).flex_shrink_0().rounded_full().when(on, |d| d.bg(color)).when(!on, |d| d.border(px(1.5)).border_color(p.text_tertiary))
+            div().size(px(6.)).flex_shrink_0().rounded_full().when(on, |d| d.bg(color)).when(!on, |d| d.border(px(1.5)).border_color(p.text_tertiary))
         };
         let second_line = |text: &'static str| {
-            div().text_size(px(p.fs_xs)).line_height(px(p.fs_xs + 3.)).text_color(p.text_tertiary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(text).into_any_element()
+            div().text_size(px(p.fs_xs)).line_height(px(p.fs_xs * 1.25)).text_color(p.text_tertiary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(text).into_any_element()
         };
         if demo {
             col = col.child(header(t!("Hosts")).child(div().flex_1()).child(Icon::new(L::Plus).size(px(12.)).mr(px(4.)).text_color(p.text_tertiary)));
@@ -4675,6 +4683,7 @@ impl Workspace {
             crate::transfer_view::strip(&self.ops, p, rf_core::transfer::strip_room(bar_w, held), cx)
         });
         let perf = cx.global::<crate::settings::Settings>().show_perf_info;
+        let demo_lane = crate::mockup_demo::on() && self.viewport_w > 1280.;
         theme::sheet(p, p.status_bg)
             .flex()
             .flex_row()
@@ -4683,15 +4692,29 @@ impl Workspace {
             .pl(px(16.))
             .pr(px(12.))
             .items_center()
-            .justify_between()
             .when(p.gap <= 0., |d| d.border_t_1().border_color(p.sheet_border))
             .text_size(px(p.fs_small))
             .text_color(p.text_secondary)
             // Index: the status line is a readout in the monospace face
             .when(p.mono_chrome && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono))
             .child(left)
-            // a running operation's progress (Settings → Aktarım ilerlemesi → Durum çubuğu)
+            // LEAF_MOCKUP_DEMO, as the mockup in a window wider than 1280 px: the working lane in the middle, the copy at the right
+            .when(demo_lane, |d| {
+                d.child(div().flex_1()).child(
+                    h_flex()
+                        .ml(px(16.))
+                        .gap_2()
+                        .flex_shrink_0()
+                        .items_center()
+                        .text_size(px(p.fs_xs))
+                        .text_color(p.text_tertiary)
+                        .child(div().size(px(6.)).rounded_full().bg(p.accent))
+                        .child(format!("{}: {}", crate::mockup_demo::LANES[0].0, crate::mockup_demo::LANES[0].1)),
+                )
+            })
+            // a running operation's progress (Settings → Aktarım ilerlemesi → Durum çubuğu), right after the selection line
             .children(strip)
+            .when(!demo_lane, |d| d.child(div().flex_1()))
             .child(
                 h_flex()
                     .gap_3()
@@ -5377,9 +5400,13 @@ impl Render for Workspace {
                 // (resolved by `backdrop_in_use`; never reaches here)
                 BackdropPref::Theme => WindowBackgroundAppearance::MicaBackdrop,
             }));
-            // Acrylic is the popups' material and asks Windows for their small corners: a main window keeps its own
+            // Acrylic is the popups' material and asks Windows for their small corners: a main window keeps its own. And a main window
+            // takes the plain blur in its place: Acrylic's grey luminosity layer turned the mockups' green and teal backdrop to grey
+            // (measured on screen over the mockup's own backdrop); the theme's veil (its `window` colour) lies over the blur instead.
             if backdrop == BackdropPref::Acrylic {
-                leaf_sys::window::set_round_corners(crate::look::window::hwnd_of(window));
+                let hwnd = crate::look::window::hwnd_of(window);
+                leaf_sys::window::set_round_corners(hwnd);
+                leaf_sys::window::set_clear_blur(hwnd);
             }
             // a new material: what is behind the sheets looks different, measure again
             self.schedule_behind_sample(window, cx);
