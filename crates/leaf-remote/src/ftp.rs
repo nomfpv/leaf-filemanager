@@ -840,23 +840,66 @@ fn parse_list(line: &str) -> Option<Item> {
     Some(Item { name, kind, size: if kind == Kind::File { f.size() as u64 } else { 0 }, modified_ms, mode: None })
 }
 
+/// A listing's lines may be this long, and the whole listing this big (a server that sends without end does not fill the
+/// memory).
+const LINE_MAX: usize = 16 << 10;
+const LISTING_MAX: usize = 64 << 20;
+
+/// `MLSD path` or `LIST path`, read line by line within `LINE_MAX` and `LISTING_MAX`. Past a limit the connection is cut and
+/// the error says so in leaf's words.
+fn read_listing(l: &mut Lease, verb: &str, path: &str) -> Result<Vec<String>, Fail> {
+    use std::io::BufRead as _;
+    let (_, stream) = l.s().custom_data_command(format!("{verb} {path}"), &[Status::AboutToSend, Status::AlreadyOpen]).ftp()?;
+    let mut rd = std::io::BufReader::new(stream);
+    let mut lines = Vec::new();
+    let mut total = 0usize;
+    let mut buf = Vec::new();
+    // (the transfer is not at its end: the connection is closed, not used again)
+    let too_big = |l: &mut Lease, what: &str| {
+        l.cut();
+        Fail::Fs(FsError::Other(format!("The server's listing of this folder has {what} than leaf reads ({} MB at most)", LISTING_MAX >> 20)))
+    };
+    loop {
+        buf.clear();
+        let n = (&mut rd).take(LINE_MAX as u64 + 1).read_until(b'\n', &mut buf).map_err(|e| Fail::Lost(io_words(&e)))?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() > LINE_MAX && !buf.ends_with(b"\n") {
+            return Err(too_big(l, "a line longer"));
+        }
+        total += n;
+        if total > LISTING_MAX {
+            return Err(too_big(l, "more"));
+        }
+        let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if !line.is_empty() {
+            lines.push(String::from_utf8_lossy(line).into_owned());
+        }
+    }
+    rd.into_inner().finish().ftp()?;
+    Ok(lines)
+}
+
 /// The items of folder `path` (a server path): MLSD where the server has it, else LIST. Names that cannot be one part of an
 /// address are left out (counted in the log).
 fn list_items(l: &mut Lease, path: &str, use_list: bool) -> Result<Vec<Item>, Fail> {
     let mlsd = l.mlsx() && !use_list;
     let lines = if mlsd {
-        match l.s().mlsd(Some(path)) {
+        match read_listing(l, "MLSD", path) {
             Ok(lines) => lines,
-            Err(FtpError::UnexpectedResponse(r)) if matches!(r.status.code(), 500 | 502 | 504) => {
+            // (500, 501, 502, 504: the server has no MLSD after all)
+            Err(Fail::Fs(FsError::Unsupported)) => {
                 if let Some(s) = l.sess.as_mut() {
                     s.mlsx = false;
                 }
                 return list_items(l, path, true);
             }
-            Err(e) => return Err(fail_of(e)),
+            Err(e) => return Err(e),
         }
     } else {
-        l.s().list(Some(path)).ftp()?
+        read_listing(l, "LIST", path)?
     };
     let mut out = Vec::with_capacity(lines.len());
     let mut left_out = 0usize;
