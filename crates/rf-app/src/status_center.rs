@@ -1444,14 +1444,20 @@ pub fn revert_with_trash(
     let title = format!("{} {}", t!("Reverting:"), rf_core::history::display_name(&path));
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let marker = mark.clone();
+    let target = path.clone();
     let id = start_with_id(cx, title, move |t| {
         let put_away = |p: &std::path::Path| -> Result<(), String> {
             let pairs = trash_for_revert(p, &t)?;
             *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
-            crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
             Ok(())
         };
         what(&put_away).map_err(|e| anyhow::anyhow!("{}: {e}", t!("The change could not be reverted")))?;
+        // its own undo record: Ctrl+Z checks the file is still what the revert wrote, moves that to the Trash, then brings the
+        // previous version back (never a restore over whatever is there now)
+        if let Some(bin) = marker.lock().unwrap().clone() {
+            let wrote = leaf_dev::review::Stamp::of_file(&target);
+            crate::undo::push(crate::undo::UndoOp::Reverted { path: target.clone(), bin, wrote });
+        }
         Ok(true)
     }, on_done);
     set_lock_paths(cx, id, vec![path]);

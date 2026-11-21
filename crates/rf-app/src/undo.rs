@@ -29,6 +29,10 @@ pub enum UndoOp {
     Organized { rec: crate::organizer::Record },
     /// Items deleted on a server into leaf's trash there (B7): `home` is the login folder the trash is in.
     RemoteTrashed { home: rf_core::vpath::VPath, items: Vec<leaf_remote::trash::Trashed> },
+    /// A revert of the Review page: `path`'s previous version is in the Trash at `bin`, and `wrote` is what the revert left at
+    /// `path` (`None`: nothing, the file was only removed). Undo puts the previous version back only while the file is still
+    /// that, moving it to the Trash first. Not redone (revert again instead).
+    Reverted { path: PathBuf, bin: PathBuf, wrote: Option<leaf_dev::review::Stamp> },
 }
 
 static STACK: Mutex<Vec<UndoOp>> = Mutex::new(Vec::new());
@@ -59,6 +63,7 @@ fn label(op: &UndoOp) -> &'static str {
         UndoOp::Flattened { .. } => t!("Flatten folder"),
         UndoOp::Organized { .. } => t!("Organize"),
         UndoOp::RemoteTrashed { .. } => t!("Delete"),
+        UndoOp::Reverted { .. } => t!("Revert"),
     }
 }
 
@@ -160,7 +165,7 @@ pub fn update_organized(token: u64, change: impl FnOnce(&mut crate::organizer::R
 
 fn undo_op(op: UndoOp, cx: &mut App) {
     // creating an item can't be replayed (its contents may have changed), everything else can
-    if !matches!(op, UndoOp::Created { .. }) {
+    if !matches!(op, UndoOp::Created { .. } | UndoOp::Reverted { .. }) {
         REDO.lock().push(op.clone());
     }
     match op {
@@ -223,6 +228,24 @@ fn undo_op(op: UndoOp, cx: &mut App) {
         }
         UndoOp::Organized { rec } => crate::organizer::undo_run(rec, None, cx),
         UndoOp::RemoteTrashed { home, items } => crate::remote::undo_trashed(home, items, cx),
+        UndoOp::Reverted { path, bin, wrote } => {
+            let name = rf_core::history::display_name(&path);
+            crate::status_center::start(cx, format!("{} {name}", t!("Undoing revert:")), move |t| {
+                let now = leaf_dev::review::Stamp::of_file(&path);
+                let there = path.symlink_metadata().is_ok();
+                anyhow::ensure!(now == wrote && (there == wrote.is_some()), t!("The file changed after the revert; nothing was undone. Its previous version is still in the Trash."));
+                if there {
+                    // what the revert wrote goes to the Trash too, never overwritten
+                    let moved = leaf_sys::fileops::delete_tracked(std::slice::from_ref(&path), false, t)?;
+                    anyhow::ensure!(moved && path.symlink_metadata().is_err(), t!("The file could not be moved to the Trash; nothing was undone"));
+                }
+                let key = bin.to_string_lossy().into_owned();
+                let items: Vec<_> = leaf_sys::recycle::list()?.into_iter().filter(|it| leaf_sys::recycle::same_key(&key, &it.parsing_path)).collect();
+                anyhow::ensure!(!items.is_empty(), t!("items were not found in the Trash"));
+                leaf_sys::recycle::restore(&items)?;
+                Ok(true)
+            });
+        }
     }
 }
 
@@ -313,5 +336,6 @@ pub fn redo(cx: &mut App) {
         }
         UndoOp::Organized { rec } => crate::organizer::redo_run(rec, cx),
         UndoOp::RemoteTrashed { home, items } => crate::remote::redo_trashed(home, items, cx),
+        UndoOp::Reverted { .. } => {}
     }
 }
