@@ -319,7 +319,7 @@ mod tests {
     fn a_lists_line_says_what_a_double_click_does() {
         {
             assert_eq!(rule_line(&rule(&["dll"], &[r"C:\t\dnSpy.exe", r"C:\t\ghidraRun.bat"], true)), "Double click: dnSpy");
-            assert!(rule_line(&rule(&["exe"], &[r"C:\t\ghidraRun.bat"], false)).starts_with("A double click opens with Windows' default"));
+            assert!(rule_line(&rule(&["exe"], &[r"C:\t\ghidraRun.bat"], false)).starts_with("A double click opens with the system's default"));
             assert!(rule_line(&rule(&["dll"], &[], true)).starts_with("No program yet"));
         }
     }
