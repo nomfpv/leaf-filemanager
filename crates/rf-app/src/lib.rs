@@ -1,4 +1,5 @@
 //! leaf ve leaf-look'un ortak kodu; iki program da bu kütüphaneyi kullanır.
+#![recursion_limit = "256"]
 
 mod actions;
 mod aliases;
