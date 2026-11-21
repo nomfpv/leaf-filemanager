@@ -82,7 +82,7 @@ pub fn toggle_bookmark(v: &VPath, cx: &mut App) -> Option<bool> {
 pub fn subtitle(h: &Host) -> String {
     let mut s = h.address();
     if let Some(j) = &h.jump {
-        s.push_str(&format!("  ({} {j}: {})", t!("via"), t!("jump hosts are not supported yet")));
+        s.push_str(&format!("  ({} {j})", t!("via")));
     }
     s
 }

@@ -122,7 +122,11 @@ fn expand_home(p: &str) -> PathBuf {
 
 /// The address with what `hosts.toml` says about that server (user, key file, jump host).
 pub(crate) fn target(cfg: &Config, v: &VPath) -> Result<Target, FsError> {
-    let host = v.host().to_string();
+    target_for(cfg, v.host(), v.port().unwrap_or(22), v.user())
+}
+
+fn target_for(cfg: &Config, host: &str, port: u16, want_user: Option<&str>) -> Result<Target, FsError> {
+    let host = host.to_string();
     if host.is_empty() {
         return Err(FsError::Other("The address has no server name".into()));
     }
@@ -130,18 +134,17 @@ pub(crate) fn target(cfg: &Config, v: &VPath) -> Result<Target, FsError> {
     if !known_hosts::valid_host(&host) {
         return Err(FsError::Other("The server's name has characters a server name cannot have".into()));
     }
-    let port = v.port().unwrap_or(22);
     let saved = cfg.config_dir.as_deref().map(rf_core::hosts::Hosts::load).unwrap_or_default();
     let h = saved.hosts.into_iter().find(|h| {
         h.scheme.eq_ignore_ascii_case("sftp")
             && h.host.eq_ignore_ascii_case(&host)
             && h.port.unwrap_or(22) == port
-            && match (v.user(), h.user.as_deref()) {
+            && match (want_user, h.user.as_deref()) {
                 (Some(a), Some(b)) => a == b,
                 _ => true,
             }
     });
-    let user = v.user().map(str::to_string).or_else(|| h.as_ref().and_then(|h| h.user.clone())).unwrap_or_else(local_user);
+    let user = want_user.map(str::to_string).or_else(|| h.as_ref().and_then(|h| h.user.clone())).unwrap_or_else(local_user);
     Ok(Target {
         key: format!("{user}@{}", known_hosts::host_name(&host, port)),
         key_file: h.as_ref().and_then(|h| h.key_file.as_deref()).map(expand_home),
@@ -181,6 +184,8 @@ pub(crate) struct Conn {
     /// The folder the server logs the user into (`/~` in an address stands for it).
     pub home: String,
     handle: client::Handle<Client>,
+    /// The sessions of the jump hosts this connection runs through (the connection lives only as long as they do).
+    _jumps: Vec<client::Handle<Client>>,
     last_used: AtomicU64,
     /// Open readers (an idle close waits for them).
     pub busy: AtomicUsize,
@@ -415,12 +420,51 @@ fn offline(e: impl std::fmt::Display) -> FsError {
 }
 
 async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>, t: &Target) -> Result<Conn, FsError> {
-    if let Some(j) = &t.jump {
-        return Err(FsError::Other(format!("This host is reached through a jump host ({j}); jump hosts are not supported yet")));
-    }
-    log::info!("remote: connecting to {}", known_hosts::host_name(&t.host, t.port));
-    // the name is looked up on the runtime's blocking thread, with the connect timeout (a stalled lookup does not hold this
-    // worker)
+    let hops = match &t.jump {
+        Some(j) => jump_targets(cfg, j)?,
+        None => Vec::new(),
+    };
+    log::info!("remote: connecting to {}{}", known_hosts::host_name(&t.host, t.port), if hops.is_empty() { String::new() } else { format!(" through {} jump host(s)", hops.len()) });
+    // the first machine is reached over TCP, every next one through a direct-tcpip channel of the one before (the name of the
+    // next one is looked up by the jump host, as OpenSSH does); each has its own host-key check and login
+    let mut jumps: Vec<client::Handle<Client>> = Vec::new();
+    let handle = match hops.first() {
+        None => session(cfg, prompter, shared, t, dial(cfg, t).await?).await?,
+        Some(first) => {
+            let mut h = session(cfg, prompter, shared, first, dial(cfg, first).await?).await?;
+            for next in hops.iter().skip(1).chain(std::iter::once(t)) {
+                let ch = tokio::time::timeout(cfg.op_timeout, h.channel_open_direct_tcpip(next.host.clone(), u32::from(next.port), "127.0.0.1", 0))
+                    .await
+                    .map_err(|_| offline("the jump host did not answer in time"))?
+                    .map_err(|e| offline(format!("the jump host could not reach {}: {e}", known_hosts::host_name(&next.host, next.port))))?;
+                let nh = session(cfg, prompter, shared, next, ch.into_stream()).await?;
+                jumps.push(h);
+                h = nh;
+            }
+            h
+        }
+    };
+    let ch = step(cfg.op_timeout, handle.channel_open_session()).await?;
+    step(cfg.op_timeout, ch.request_subsystem(true, "sftp")).await?;
+    let sftp = RawSftpSession::new(ch.into_stream());
+    sftp.set_timeout(cfg.op_timeout.as_secs().max(1));
+    let version = tokio::time::timeout(cfg.op_timeout, sftp.init())
+        .await
+        .map_err(|_| offline("the server did not start SFTP in time"))?
+        .map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
+    let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
+    let posix_rename = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
+    let home = match tokio::time::timeout(cfg.op_timeout, sftp.realpath(".")).await {
+        Ok(Ok(n)) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
+        _ => "/".into(),
+    };
+    log::info!("remote: connected (SFTP version {}, statvfs {statvfs}, posix-rename {posix_rename})", version.version);
+    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+}
+
+/// The TCP connection to a machine, its name looked up on the runtime's blocking thread with the connect timeout (a stalled
+/// lookup does not hold this worker).
+async fn dial(cfg: &Config, t: &Target) -> Result<tokio::net::TcpStream, FsError> {
     let addrs: Vec<SocketAddr> = step(cfg.connect_timeout, tokio::net::lookup_host((t.host.as_str(), t.port))).await?.collect();
     if addrs.is_empty() {
         return Err(offline("the server's name has no address"));
@@ -430,6 +474,15 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         .map_err(|_| offline("no answer"))?
         .map_err(offline)?;
     let _ = tcp.set_nodelay(true);
+    Ok(tcp)
+}
+
+/// The SSH session with one machine over `stream`: the key exchange with the host-key check (known_hosts, the same dialogs),
+/// then the login (agent, keys, saved or typed password).
+async fn session<S>(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>, t: &Target, stream: S) -> Result<client::Handle<Client>, FsError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let refusal: Refusal = Arc::default();
     let accepted: Arc<Mutex<Option<(String, bool)>>> = Arc::default();
     let asking: Arc<AtomicBool> = Arc::default();
@@ -456,27 +509,49 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     let why = |e: russh::Error| lock(&refusal).take().unwrap_or_else(|| offline(e));
     // the version exchange and the key exchange get the request timeout, not counting the time the user looks at the
     // host-key dialog
-    let handshake = paused_timeout(cfg.op_timeout, &asking, client::connect_stream(ssh_cfg, tcp, handler));
+    let handshake = paused_timeout(cfg.op_timeout, &asking, client::connect_stream(ssh_cfg, stream, handler));
     let mut handle = handshake.await.ok_or_else(|| offline("the server did not finish the handshake in time"))?.map_err(why)?;
     // (connect_stream returns only after the key exchange, which called check_server_key)
     let (host_fp, host_known) = lock(&accepted).clone().ok_or_else(|| offline("the server's key was not checked"))?;
     login(&mut handle, cfg, prompter, shared, t, &host_fp, host_known).await.map_err(|e| lock(&refusal).take().unwrap_or(e))?;
-    let ch = step(cfg.op_timeout, handle.channel_open_session()).await?;
-    step(cfg.op_timeout, ch.request_subsystem(true, "sftp")).await?;
-    let sftp = RawSftpSession::new(ch.into_stream());
-    sftp.set_timeout(cfg.op_timeout.as_secs().max(1));
-    let version = tokio::time::timeout(cfg.op_timeout, sftp.init())
-        .await
-        .map_err(|_| offline("the server did not start SFTP in time"))?
-        .map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
-    let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
-    let posix_rename = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
-    let home = match tokio::time::timeout(cfg.op_timeout, sftp.realpath(".")).await {
-        Ok(Ok(n)) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
-        _ => "/".into(),
-    };
-    log::info!("remote: connected (SFTP version {}, statvfs {statvfs}, posix-rename {posix_rename})", version.version);
-    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+    Ok(handle)
+}
+
+/// The machines of a `ProxyJump` value (`a,b`), in the order they are crossed. Each is `[user@]host[:port]`, an `ssh://` address, or
+/// the name of a saved host. A jump host's own `ProxyJump` is not followed: the list says the whole route.
+pub(crate) fn jump_targets(cfg: &Config, spec: &str) -> Result<Vec<Target>, FsError> {
+    let mut out = Vec::new();
+    for entry in spec.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let entry = entry.strip_prefix("ssh://").unwrap_or(entry).trim_end_matches('/');
+        let saved = cfg.config_dir.as_deref().map(rf_core::hosts::Hosts::load).unwrap_or_default();
+        let mut t = match saved.hosts.iter().find(|h| h.scheme.eq_ignore_ascii_case("sftp") && h.name.eq_ignore_ascii_case(entry)) {
+            Some(h) => target_for(cfg, &h.host, h.port.unwrap_or(22), h.user.as_deref())?,
+            None => {
+                let (user, rest) = match entry.rsplit_once('@') {
+                    Some((u, r)) => (Some(u), r),
+                    None => (None, entry),
+                };
+                let bad = || FsError::Other(format!("The jump host \"{entry}\" is not written as [user@]host[:port]"));
+                let (host, port) = if let Some(v6) = rest.strip_prefix('[') {
+                    let (h, after) = v6.split_once(']').ok_or_else(bad)?;
+                    match after.strip_prefix(':') {
+                        Some(p) => (h, p.parse::<u16>().map_err(|_| bad())?),
+                        None if after.is_empty() => (h, 22),
+                        None => return Err(bad()),
+                    }
+                } else {
+                    match rest.rsplit_once(':') {
+                        Some((h, p)) if !h.contains(':') => (h, p.parse::<u16>().map_err(|_| bad())?),
+                        _ => (rest, 22),
+                    }
+                };
+                target_for(cfg, host, port, user)?
+            }
+        };
+        t.jump = None;
+        out.push(t);
+    }
+    Ok(out)
 }
 
 /// The OpenSSH extension of a rename that replaces the target atomically.
