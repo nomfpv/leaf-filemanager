@@ -122,7 +122,49 @@ pub fn list_drives() -> Vec<Drive> {
     let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
     let mut v = from_mountinfo(&text);
     v.sort_by_key(|d| d.root != Path::new("/"));
+    v.extend(phones(&text));
     v
+}
+
+/// Phones and cameras that the desktop exposes as folders: GNOME's gvfs (`/run/user/<uid>/gvfs/mtp:host=...`, `gphoto2:...`) and
+/// KDE's kio-fuse (`/run/user/<uid>/kio-fuse-*/mtp/...`, only once a program asked kio-fuse for the device). A phone that KDE reaches
+/// only through its own KIO `mtp:/` worker (no kio-fuse installed) has no path and is not listed: leaf would need an MTP client
+/// (libmtp) or kio-fuse for it. Their space is not asked (a phone answers slowly), so no bar.
+fn phones(mountinfo: &str) -> Vec<Drive> {
+    let mut out = Vec::new();
+    for line in mountinfo.lines() {
+        let Some((mount, fs, _)) = parse_mount_line(line) else { continue };
+        let dirs: Vec<PathBuf> = match fs.as_str() {
+            "fuse.gvfsd-fuse" => read_dirs(Path::new(&mount)).into_iter().filter(|p| is_device_name(p)).collect(),
+            "fuse.kio-fuse" => read_dirs(&Path::new(&mount).join("mtp")),
+            _ => continue,
+        };
+        for root in dirs {
+            let label = root.file_name().map(|n| device_label(&n.to_string_lossy())).unwrap_or_default();
+            out.push(Drive { kind: DriveKind::Removable, root, letter: None, label, total: 0, free: 0, fs: fs.clone() });
+        }
+    }
+    out
+}
+
+fn read_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    v.sort();
+    v
+}
+
+fn is_device_name(p: &Path) -> bool {
+    p.file_name().is_some_and(|n| {
+        let n = n.to_string_lossy();
+        n.starts_with("mtp:") || n.starts_with("gphoto2:") || n.starts_with("afc:")
+    })
+}
+
+/// "mtp:host=SAMSUNG_Android_R58M" -> "SAMSUNG Android R58M"; a kio-fuse folder name is kept.
+fn device_label(name: &str) -> String {
+    let v = name.split_once("host=").map_or(name, |(_, h)| h);
+    v.replace('_', " ").replace("%20", " ")
 }
 
 // No letters on Linux: the mask functions are inert, so settings that store a mask keep working.
