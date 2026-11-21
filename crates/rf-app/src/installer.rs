@@ -52,6 +52,8 @@ fn after_install_or_update() {
     if leaf_sys::dialogs::starts_with_windows_as("leaf-look") {
         let _ = leaf_sys::dialogs::set_start_with_windows_as("leaf-look", &me.with_file_name(leaf_sys::exe_name(leaf_sys::LOOK_EXE_STEM)), &["--background"], true);
     }
+    // the browsers' download hand-over, when it was connected: to this install's leaf-nmhost
+    crate::capture::refresh();
 }
 
 /// Everything leaf changed in Windows goes back (settings in %APPDATA% stay).
@@ -64,6 +66,7 @@ fn before_uninstall() {
     let none = Path::new("");
     let _ = leaf_sys::dialogs::set_start_with_windows_as("leaf-look", none, &[], false);
     let _ = leaf_sys::dialogs::set_start_with_windows(none, false);
+    crate::capture::unregister();
     // leaf-look holds its exe open
     leaf_sys::single_instance::send_to(&crate::look::ipc::app_name(), &crate::look::ipc::Msg::Quit.encode());
     std::thread::sleep(Duration::from_millis(500));

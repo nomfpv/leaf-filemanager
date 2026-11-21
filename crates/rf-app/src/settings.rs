@@ -650,6 +650,10 @@ pub struct Settings {
     pub download_per_host: u32,
     /// Where `leaf download <address>` saves without a folder; empty: the Downloads folder.
     pub download_folder: String,
+    /// Downloads the browser starts are taken over by leaf (through the leaf extension and `leaf-nmhost`).
+    pub capture_browser: bool,
+    /// Below this many MB (when the browser knows the size) the browser keeps the download.
+    pub capture_min_mb: u32,
     /// Where a running operation's progress is shown (see [`TransferProgress`]).
     pub transfer_progress: TransferProgress,
     /// The thumbnail cache's limit in MB (the cache is in memory); `None` = the default, 64 MB, and no key in the file.
@@ -887,6 +891,8 @@ impl Default for Settings {
             download_parallel: 3,
             download_per_host: 32,
             download_folder: String::new(),
+            capture_browser: true,
+            capture_min_mb: 1,
             transfer_progress: TransferProgress::StatusBar,
             thumb_cache_mb: None,
             show_libraries: false,

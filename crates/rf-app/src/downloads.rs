@@ -150,11 +150,16 @@ pub struct Request {
     pub paused: bool,
     /// The key of the saved list entry (a restored download keeps it).
     key: Option<u64>,
+    /// The browser's request headers for this download (see `capture`): memory only, never in the saved list.
+    pub headers: dl::Headers,
+    /// It came from the browser with the browser's sign-in (Cookie / Authorization): after a restart those are gone and it has to
+    /// be started from the browser again.
+    pub browser: bool,
 }
 
 impl Request {
     pub fn new(url: String, dest: PathBuf) -> Self {
-        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None }
+        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false }
     }
 }
 
@@ -232,7 +237,7 @@ pub fn restore(cx: &mut App) {
             continue;
         }
         NEXT_KEY.fetch_max(s.key + 1, Ordering::Relaxed);
-        let req = Request { url: s.url, dest: s.dest, sha256: s.sha256, verify: s.verify, paused: s.paused, key: Some(s.key) };
+        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, ..Request::new(s.url, s.dest) };
         start_with(cx, req, None);
     }
 }
@@ -254,7 +259,8 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     {
         let mut st = store();
         st.forget(key);
-        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused });
+        // (the headers are not saved: `browser` says the download needs the browser again after a restart)
+        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser });
     }
     persist_soon();
     let title = format!("{} {} → {}", t!("Downloading"), dl::file_name(None, &req.url), rf_core::history::display_name(&req.dest));
@@ -359,10 +365,15 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel): (usize, 
     let Some(_turn) = dl::queue::wait_turn(parallel, &tr.cancel, |place| (tr.on_progress)(0, 0, Some(format!("{} ({place})", t!("Waiting for the downloads before it"))))) else {
         return Ok(false);
     };
+    // a browser download whose sign-in was not kept over a restart: the server would refuse it, or send a login page
+    if req.browser && !req.headers.has_credentials() {
+        failed.store(true, Ordering::Relaxed);
+        return Err(anyhow::anyhow!("{}", t!("This download came from the browser with your sign-in, which leaf does not keep after a restart. Start it again from the browser: leaf carries on from the part already downloaded.")));
+    }
     (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
     let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false) };
     let ctl = dl::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
-    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), ..dl::Options::default() };
+    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), ..dl::Options::default() };
     if opts.sha256.is_none() && req.verify {
         match dl::fetch_sidecar(&req.url, &opts) {
             Some(sha) => opts.sha256 = Some(sha),

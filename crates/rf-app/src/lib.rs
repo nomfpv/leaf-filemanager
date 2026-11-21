@@ -76,6 +76,7 @@ mod shelf_view;
 mod status_center;
 mod sync_ui;
 mod mcp_host;
+mod capture;
 mod space_check;
 mod downloads;
 mod transfer_view;
@@ -383,6 +384,12 @@ pub fn main() {
     if std::env::args().nth(1).as_deref().is_some_and(retired_arg) {
         return;
     }
+    // `leaf nmhost --register` / `--unregister`: the browser hand-over host (see capture), then out
+    if std::env::args().nth(1).as_deref() == Some("nmhost")
+        && let Some(a) = std::env::args().nth(2).filter(|a| matches!(a.as_str(), "--register" | "--unregister"))
+    {
+        std::process::exit(capture::cli(&a));
+    }
     // Velopack (installer / updater): first, it may run an install hook and exit
     installer::startup();
     // the id Velopack gives the Start menu / taskbar shortcuts: a pin survives updates
@@ -554,6 +561,10 @@ pub fn main() {
                     log::warn!("default file manager: archive registration updated");
                 }
             }
+        }
+        // the browsers' host registration follows a moved or updated leaf
+        if registers {
+            crate::capture::refresh();
         }
         DEFAULT_FM.store(
             leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES),
@@ -775,6 +786,13 @@ pub fn main() {
                 if let Some(req) = msg.strip_prefix(mcp_host::PREFIX) {
                     let req = req.to_string();
                     cx.update(|cx| mcp_host::handle(req, ack, cx));
+                    continue;
+                }
+                // a download the browser started, from leaf-nmhost (see capture); its text may hold the browser's cookies: not traced
+                if let Some(req) = msg.strip_prefix(capture::PREFIX) {
+                    let req = req.to_string();
+                    drop(msg);
+                    cx.update(|cx| capture::handle(req, ack, cx));
                     continue;
                 }
                 leaf_sys::handover::trace("first: acting on a request");

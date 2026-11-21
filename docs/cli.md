@@ -4,6 +4,7 @@
     leaf [--new-tab] reveal <file>
     leaf --new-tab
     leaf download <address> [<folder>]
+    leaf nmhost --register | --unregister
 
 - `leaf <folder>` opens the folder. When leaf is already running, the running window takes it over as a new tab (or as a new
   window when "open folders from other programs in a new window" is on). A relative path is read from the folder the command
@@ -15,4 +16,7 @@
   folder when none is given). It is a job in the Status Center like a copy: several connections to the file when the server allows byte
   ranges, pause and cancel there, and the same address into the same folder carries on from the partial file (`name.leaf-part`) after a
   cut line or a restart. The window shows the folder and selects the finished file. When leaf is already running, that window takes it.
+- `leaf nmhost --register` connects the browsers (Chrome, Edge, Brave, Firefox; on Linux also Chromium and Vivaldi) to `leaf-nmhost`, the
+  small program next to leaf that the leaf browser extension talks to, for this user only (no admin); `--unregister` takes that back. It
+  is the same as "Connect browsers" in Settings > Advanced > Downloads. See `extension/README.md`.
 - Also understood: `rclone://remote/path` (needs rclone installed; WebDAV and other storage come through an rclone remote), `docker://local/` (containers and their mounts), `sftp://`, `ftp://` addresses, `shell:` names and `::{...}` namespaces, `--settings=<page>`.

@@ -3217,6 +3217,37 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         ),
         card(
             p,
+            L::Globe,
+            t!("Capture browser downloads"),
+            Some(t!("Downloads started in Chrome, Edge, Brave or Firefox go to leaf instead, with the browser's sign-in for that one download. Needs the leaf extension in the browser.")),
+            sw("capture-browser", p, s.capture_browser, |s, v| s.capture_browser = v),
+        ),
+        card(
+            p,
+            L::Globe,
+            t!("Connect browsers"),
+            Some(crate::capture::status_text().as_str()),
+            h_flex()
+                .gap_2()
+                .children((!crate::capture::registered().is_empty()).then(|| button("capture-disconnect", p, t!("Disconnect"), |_, cx| crate::capture::disconnect(cx))))
+                .child(button("capture-connect", p, t!("Connect browsers"), |_, cx| crate::capture::connect(cx)))
+                .into_any_element(),
+        ),
+        card(
+            p,
+            L::Gauge,
+            t!("Smallest download to capture"),
+            Some(t!("Smaller files stay with the browser (when the browser knows the size).")),
+            dropdown(
+                "capture-min",
+                p,
+                s.capture_min_mb,
+                std::iter::once((0, t!("Every size").to_string())).chain([1u32, 5, 10, 50, 100].into_iter().map(|m| (m, format!("{m} MB")))).collect(),
+                |s, v| s.capture_min_mb = v,
+            ),
+        ),
+        card(
+            p,
             L::Clock,
             t!("Download history"),
             Some(format!("{} {}", crate::downloads::history_len(), t!("finished or failed downloads are remembered (the last 50)")).as_str()),
