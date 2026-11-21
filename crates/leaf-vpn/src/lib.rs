@@ -471,10 +471,15 @@ pub fn dial_blocking(host: &str, port: u16, timeout: Duration) -> io::Result<Blo
     Ok(BlockingStream { stream, rt, read_timeout: None, write_timeout: None })
 }
 
-/// [`dial`] for a client that takes only a plain socket of its own (the FTP client): a listener on 127.0.0.1 that takes ONE
-/// connection within 10 s (from this PC only) and joins it to `host:port` through [`dial`]. The kill switch refuses here, before
-/// anything is opened. The address to connect to is returned.
-pub fn loopback_bridge(host: &str, port: u16, timeout: Duration) -> io::Result<SocketAddr> {
+/// How long a bridge waits for its one connection.
+const BRIDGE_WAIT: Duration = Duration::from_secs(10);
+
+/// [`dial`] for a client that takes only a plain socket of its own (the FTP client): a listener on 127.0.0.1 that joins ONE
+/// connection (within 10 s) to `host:port` through [`dial`]. Which one: [`Bridge::connect`] connects and tells the bridge its
+/// socket's port, and the bridge drops any other connection that comes first (another program on this PC); only a client that
+/// connects by itself ([`Bridge::any_local`], implicit FTPS's control connection) gets the first one from this PC. The kill
+/// switch refuses here, before anything is opened.
+pub fn loopback_bridge(host: &str, port: u16, timeout: Duration) -> io::Result<Bridge> {
     if route(host) == Route::Blocked {
         return Err(blocked());
     }
@@ -483,13 +488,29 @@ pub fn loopback_bridge(host: &str, port: u16, timeout: Duration) -> io::Result<S
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
     let host = host.to_string();
+    let (tx, mut rx) = tokio::sync::oneshot::channel::<u16>();
     rt.spawn(async move {
         let Ok(l) = tokio::net::TcpListener::from_std(listener) else { return };
-        let Ok(Ok((mut local, peer))) = tokio::time::timeout(Duration::from_secs(10), l.accept()).await else { return };
+        let deadline = tokio::time::Instant::now() + BRIDGE_WAIT;
+        // the port of the socket to take (0: the first one from this PC), once the caller has said it
+        let mut want: Option<u16> = None;
+        let mut local = loop {
+            let Ok(Ok((s, peer))) = tokio::time::timeout_at(deadline, l.accept()).await else { return };
+            if !peer.ip().is_loopback() {
+                continue;
+            }
+            if want.is_none() {
+                match tokio::time::timeout_at(deadline, &mut rx).await {
+                    Ok(Ok(p)) => want = Some(p),
+                    _ => return,
+                }
+            }
+            if want.is_some_and(|w| w == 0 || w == peer.port()) {
+                break s;
+            }
+            log::warn!("vpn: a connection to a bridge from another socket of this PC was dropped");
+        };
         drop(l);
-        if !peer.ip().is_loopback() {
-            return;
-        }
         match dial(&host, port, timeout).await {
             Ok(mut remote) => {
                 let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
@@ -497,7 +518,34 @@ pub fn loopback_bridge(host: &str, port: u16, timeout: Duration) -> io::Result<S
             Err(e) => log::info!("vpn: the bridge to port {port} could not connect: {e}"),
         }
     });
-    Ok(addr)
+    Ok(Bridge { addr, tell: Some(tx) })
+}
+
+/// A bridge waiting for its connection (see [`loopback_bridge`]).
+#[derive(Debug)]
+pub struct Bridge {
+    addr: SocketAddr,
+    tell: Option<tokio::sync::oneshot::Sender<u16>>,
+}
+
+impl Bridge {
+    /// Connects to the bridge; only this socket is let through it.
+    pub fn connect(mut self, timeout: Duration) -> io::Result<std::net::TcpStream> {
+        let s = std::net::TcpStream::connect_timeout(&self.addr, timeout)?;
+        let me = s.local_addr()?.port();
+        if let Some(t) = self.tell.take() {
+            let _ = t.send(me);
+        }
+        Ok(s)
+    }
+
+    /// The address, for a client that connects by itself: the bridge takes the first connection from this PC.
+    pub fn any_local(mut self) -> SocketAddr {
+        if let Some(t) = self.tell.take() {
+            let _ = t.send(0);
+        }
+        self.addr
+    }
 }
 
 /// A [`Stream`] with blocking `Read` and `Write`.

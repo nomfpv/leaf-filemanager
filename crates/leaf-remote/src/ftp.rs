@@ -432,8 +432,8 @@ impl Inner {
             tries += 1;
             let check = self.cert_check(t)?;
             // (through the VPN: each try gets its own bridge, which takes one connection)
-            let addrs = if through { vec![bridge(t, t.port, self.cfg.connect_timeout).map_err(|e| FsError::Offline(e.to_string()))?] } else { addrs.clone() };
-            match self.open(t, &addrs, through, check.clone()) {
+            let via = if through { Some(bridge(t, t.port, self.cfg.connect_timeout).map_err(|e| FsError::Offline(e.to_string()))?) } else { None };
+            match self.open(t, &addrs, via, check.clone()) {
                 Ok(s) => return self.login(t, s),
                 Err(e) => {
                     // a certificate the system does not trust: asked (once per connect)
@@ -451,16 +451,25 @@ impl Inner {
     }
 
     /// The control connection, TLS as the scheme says, with the timeouts on every socket.
-    fn open(&self, t: &Target, addrs: &[SocketAddr], through: bool, check: Arc<CertCheck>) -> Result<RustlsFtpStream, FsError> {
+    fn open(&self, t: &Target, addrs: &[SocketAddr], via: Option<leaf_vpn::Bridge>, check: Arc<CertCheck>) -> Result<RustlsFtpStream, FsError> {
         let (op, ct) = (self.cfg.op_timeout, self.cfg.connect_timeout);
+        let through = via.is_some();
         let timeouts = move |s: &TcpStream| {
             let _ = s.set_read_timeout(Some(op));
             let _ = s.set_write_timeout(Some(op));
             let _ = s.set_nodelay(true);
         };
         let connector = || -> Result<RustlsConnector, FsError> { Ok(RustlsConnector::from(Arc::new(tls_config(check.clone())?))) };
-        let s = match t.tls {
-            Tls::Implicit => {
+        let s = match (t.tls, via) {
+            (Tls::Implicit, Some(b)) => {
+                // through the VPN: suppaftp connects to the bridge itself (no stream can be handed in), so no test connection
+                // first: the bridge takes the first connection from this PC
+                let a = b.any_local();
+                let s = RustlsFtpStream::connect_secure_implicit(a, Timed { inner: connector()?, op }, &t.host).map_err(|e| connect_error(e, "connecting"))?;
+                timeouts(&s.get_ref());
+                s
+            }
+            (Tls::Implicit, None) => {
                 // suppaftp connects itself here (no stream can be handed in): each address is first tried with the connect
                 // timeout and the first one that answers is used; the socket gets its read and write timeouts in the TLS
                 // connector, before the handshake and the greeting
@@ -483,8 +492,11 @@ impl Inner {
                 timeouts(&s.get_ref());
                 s
             }
-            Tls::None | Tls::Explicit => {
-                let tcp = connect_any(addrs, ct)?;
+            (Tls::None | Tls::Explicit, via) => {
+                let tcp = match via {
+                    Some(b) => b.connect(ct).map_err(|e| FsError::Offline(io_words(&e)))?,
+                    None => connect_any(addrs, ct)?,
+                };
                 timeouts(&tcp);
                 let s = RustlsFtpStream::connect_with_stream(tcp).map_err(|e| connect_error(e, "greeting"))?;
                 if t.tls == Tls::Explicit {
@@ -498,9 +510,12 @@ impl Inner {
         let vt = t.clone();
         let mut s = s.passive_stream_builder(move |addr| {
             // through the VPN the control connection's peer is the bridge on this PC: the data connection goes through a bridge
-            // of its own to the server's name, at the port the server named
-            let addr = if through { bridge(&vt, addr.port(), ct).map_err(FtpError::ConnectionError)? } else { addr };
-            let d = TcpStream::connect_timeout(&addr, ct).map_err(FtpError::ConnectionError)?;
+            // of its own to the server's name, at the port the server named; only our own socket is let through it
+            let d = if through {
+                bridge(&vt, addr.port(), ct).and_then(|b| b.connect(ct)).map_err(FtpError::ConnectionError)?
+            } else {
+                TcpStream::connect_timeout(&addr, ct).map_err(FtpError::ConnectionError)?
+            };
             timeouts(&d);
             Ok(d)
         });
@@ -656,7 +671,7 @@ impl suppaftp::TlsConnector for Timed {
 
 /// A connection through leaf's VPN as a socket on this PC (the FTP client takes only a plain socket): see
 /// `leaf_vpn::loopback_bridge`.
-fn bridge(t: &Target, port: u16, limit: Duration) -> std::io::Result<SocketAddr> {
+fn bridge(t: &Target, port: u16, limit: Duration) -> std::io::Result<leaf_vpn::Bridge> {
     let r = leaf_vpn::loopback_bridge(&t.host, port, limit);
     if let Err(e) = &r
         && leaf_vpn::is_blocked(e)

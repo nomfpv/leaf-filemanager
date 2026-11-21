@@ -68,3 +68,60 @@ fn an_idle_tunnel_is_not_declared_lost() {
     let d = dead_at.expect("a silent server is noticed");
     assert!((100..=130).contains(&d), "lost after {d} s");
 }
+
+/// A runtime for the tests, driven on a thread of its own (as leaf-remote's is in the app).
+fn test_runtime() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let h = rt.handle().clone();
+        std::thread::spawn(move || rt.block_on(std::future::pending::<()>()));
+        init(move || h.clone());
+    });
+}
+
+/// An echo server on 127.0.0.1 (a LAN address: the bridge joins it directly, no tunnel needed).
+fn echo() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut r = s.try_clone().unwrap();
+                let mut w = s;
+                let _ = std::io::copy(&mut r, &mut w);
+            });
+        }
+    });
+    port
+}
+
+fn round_trip(mut s: std::net::TcpStream) -> Vec<u8> {
+    use std::io::{Read, Write};
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.write_all(b"leaf").unwrap();
+    let mut b = [0u8; 4];
+    s.read_exact(&mut b).unwrap();
+    b.to_vec()
+}
+
+#[test]
+fn the_bridge_serves_implicit_ftps_connection_and_only_its_own_caller() {
+    test_runtime();
+    let port = echo();
+    // implicit FTPS: the client connects by itself to the address (no test connection takes the bridge's one accept first)
+    let b = loopback_bridge("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+    let addr = b.any_local();
+    let s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)).unwrap();
+    assert_eq!(round_trip(s), b"leaf");
+    // the caller's own socket: another program's connection that comes first is dropped, the caller's is served
+    let b = loopback_bridge("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+    let addr = b.addr;
+    let mut stray = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)).unwrap();
+    let mine = b.connect(Duration::from_secs(5)).unwrap();
+    assert_eq!(round_trip(mine), b"leaf");
+    use std::io::Read;
+    stray.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut buf = [0u8; 1];
+    assert!(matches!(stray.read(&mut buf), Ok(0) | Err(_)), "the stray connection was not served");
+}
