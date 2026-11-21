@@ -30,18 +30,36 @@ pub enum HostKeyAnswer {
 pub enum SecretQuestion {
     /// The passphrase of an encrypted key file.
     Passphrase { key_file: String, retry: bool },
-    /// The password of `user@host`.
-    Password { account: String, retry: bool },
+    /// The password of `user@host`. `unencrypted`: it will cross the network as plain text (plain `ftp://`).
+    Password { account: String, retry: bool, unencrypted: bool },
     /// A question of the server's (keyboard-interactive login), with the server's own text.
     Server { account: String, prompt: String, echo: bool },
 }
 
 pub type Secret = Zeroizing<String>;
 
+/// An FTPS server whose certificate the system does not trust (self-signed, another name, expired...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertQuestion {
+    /// `host:port`.
+    pub host: String,
+    /// `SHA256:...` of the certificate.
+    pub fingerprint: String,
+    /// Why the system refused it, in leaf's words.
+    pub reason: String,
+    /// The user trusted another certificate for this server before.
+    pub changed: bool,
+}
+
 pub trait Prompter: Send + Sync {
     fn host_key(&self, q: HostKeyQuestion, reply: Box<dyn FnOnce(HostKeyAnswer) + Send>);
     /// `None`: the user cancelled.
     fn secret(&self, q: SecretQuestion, reply: Box<dyn FnOnce(Option<Secret>) + Send>);
+    /// `TrustAndRemember`: keep the fingerprint for this server; `TrustOnce`: for this run. A prompter that does not ask
+    /// answers Cancel.
+    fn certificate(&self, _q: CertQuestion, reply: Box<dyn FnOnce(HostKeyAnswer) + Send>) {
+        reply(HostKeyAnswer::Cancel)
+    }
 }
 
 /// Answers nothing (every question is cancelled): what a connection gets when no app has set a prompter.
@@ -77,4 +95,27 @@ pub(crate) async fn ask_secret(p: &dyn Prompter, q: SecretQuestion) -> Option<Se
         }),
     );
     rx.await.ok().flatten()
+}
+
+/// Asks and waits on this (worker) thread; a dropped reply is "Cancel".
+pub(crate) fn ask_secret_blocking(p: &dyn Prompter, q: SecretQuestion) -> Option<Secret> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    p.secret(
+        q,
+        Box::new(move |s| {
+            let _ = tx.send(s);
+        }),
+    );
+    rx.recv().ok().flatten()
+}
+
+pub(crate) fn ask_certificate_blocking(p: &dyn Prompter, q: CertQuestion) -> HostKeyAnswer {
+    let (tx, rx) = std::sync::mpsc::channel();
+    p.certificate(
+        q,
+        Box::new(move |a| {
+            let _ = tx.send(a);
+        }),
+    );
+    rx.recv().unwrap_or(HostKeyAnswer::Cancel)
 }

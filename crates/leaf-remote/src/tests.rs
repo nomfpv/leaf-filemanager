@@ -443,7 +443,7 @@ impl Prompter for Answers {
     fn secret(&self, q: SecretQuestion, reply: Box<dyn FnOnce(Option<Secret>) + Send>) {
         self.asked.lock().unwrap().push(match &q {
             SecretQuestion::Passphrase { retry, .. } => format!("passphrase retry={retry}"),
-            SecretQuestion::Password { account, retry } => format!("password {account} retry={retry}"),
+            SecretQuestion::Password { account, retry, .. } => format!("password {account} retry={retry}"),
             SecretQuestion::Server { prompt, .. } => format!("server {prompt}"),
         });
         let a = self.secrets.lock().unwrap().pop().flatten().map(Secret::new);

@@ -570,7 +570,7 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
             let cached = lock(&shared.passwords).get(&t.key).filter(|(fp, _)| fp == host_fp).map(|(_, p)| p.clone());
             let pw = match cached {
                 Some(p) if !retry => p,
-                _ => prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry }).await.ok_or(FsError::Cancelled)?,
+                _ => prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry, unencrypted: false }).await.ok_or(FsError::Cancelled)?,
             };
             match step(limit, h.authenticate_password(user, pw.as_str())).await? {
                 russh::client::AuthResult::Success => {

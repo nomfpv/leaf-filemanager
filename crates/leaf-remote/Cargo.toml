@@ -1,6 +1,6 @@
 [package]
 name = "leaf-remote"
-description = "leaf: places on other machines (SFTP over russh) behind the leaf-vfs interface"
+description = "leaf: places on other machines (SFTP over russh, FTP/FTPS over suppaftp) behind the leaf-vfs interface"
 version.workspace = true
 edition.workspace = true
 license = "MIT"
@@ -24,6 +24,13 @@ sha1.workspace = true
 base64 = "0.22"
 # passwords and key files in memory are wiped when dropped
 zeroize = "1"
+# FTP and FTPS (W1c): the blocking client on leaf's own worker threads; TLS through rustls with ring (as rf-nearby has it)
+suppaftp = { version = "13", default-features = false, features = ["rustls-ring", "deprecated"] }
+# (`deprecated`: implicit TLS on port 990)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+# FTPS certificates are checked against the system's store (Windows: CryptoAPI)
+rustls-platform-verifier = "0.7"
+sha2.workspace = true
 
 [dev-dependencies]
 leaf-vfs = { workspace = true, features = ["suite"] }

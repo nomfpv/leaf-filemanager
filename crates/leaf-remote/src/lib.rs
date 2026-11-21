@@ -1,7 +1,8 @@
-﻿//! leaf-remote: places on other machines behind the `leaf-vfs` interface (PLAN 2.2, W1a). Today: SFTP (read and write),
-//! editing a file on a server (`edit`, H10), Docker and rclone views.
+﻿//! leaf-remote: places on other machines behind the `leaf-vfs` interface (PLAN 2.2, W1a, W1c). Today: SFTP and FTP/FTPS (read
+//! and write), editing a file on a server (`edit`, H10), Docker and rclone views.
 //!
 //! - `SftpFs` serves `sftp://user@host:port/path` over `russh` + `russh-sftp` (pure Rust).
+//! - `FtpFs` serves `ftp://` and `ftps://` over `suppaftp` (blocking, on the caller's worker thread; see `ftp.rs`).
 //! - One connection per server, shared by every pane; it is opened again when it broke, and closed after a while unused.
 //! - The async runtime lives in this crate (one worker thread) and starts with the first connection, never at app start.
 //! - Host keys are checked against `~/.ssh/known_hosts`; an unknown key is asked about, a changed or revoked one refused.
@@ -15,6 +16,9 @@ pub mod docker;
 pub mod edit;
 #[cfg(unix)]
 mod gvfs;
+mod ftp;
+#[cfg(test)]
+mod ftp_tests;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
@@ -26,7 +30,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub use conn::{Config, ExecOut};
 pub use leaf_vfs::{FsError, VPath};
-pub use prompt::{HostKeyAnswer, HostKeyQuestion, NoPrompter, Prompter, Secret, SecretQuestion};
+pub use ftp::{FtpFs, QUIET_LOG_TARGETS, TRUSTED_CERTS_FILE};
+pub use prompt::{CertQuestion, HostKeyAnswer, HostKeyQuestion, NoPrompter, Prompter, Secret, SecretQuestion};
 pub use sftp::SftpFs;
 
 fn setup() -> &'static Mutex<Option<(Config, Arc<dyn Prompter>)>> {
@@ -49,10 +54,27 @@ fn sftp_backend() -> Arc<SftpFs> {
     .clone()
 }
 
-/// Serves `sftp://` from now on. Nothing connects here; the backend is made on its first use.
+fn the_ftp() -> &'static Mutex<Option<Arc<FtpFs>>> {
+    static F: OnceLock<Mutex<Option<Arc<FtpFs>>>> = OnceLock::new();
+    F.get_or_init(|| Mutex::new(None))
+}
+
+/// The one `FtpFs` (both `ftp://` and `ftps://`; the scheme of each address decides the TLS), made on first use.
+fn ftp_backend() -> Arc<FtpFs> {
+    let mut f = the_ftp().lock().unwrap_or_else(|e| e.into_inner());
+    f.get_or_insert_with(|| {
+        let (cfg, p) = setup().lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| (Config::for_user(None), Arc::new(NoPrompter)));
+        Arc::new(FtpFs::new(cfg, p))
+    })
+    .clone()
+}
+
+/// Serves `sftp://`, `ftp://` and `ftps://` from now on. Nothing connects here; the backend is made on its first use.
 pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
     *setup().lock().unwrap_or_else(|e| e.into_inner()) = Some((cfg, prompter));
     leaf_vfs::register("sftp", || sftp_backend() as Arc<dyn leaf_vfs::Fs>);
+    leaf_vfs::register("ftp", || ftp_backend() as Arc<dyn leaf_vfs::Fs>);
+    leaf_vfs::register("ftps", || ftp_backend() as Arc<dyn leaf_vfs::Fs>);
     // `docker://local/` and `docker://user@host/`: the containers and their mounts, read-only (nothing runs until opened)
     leaf_vfs::register("docker", || Arc::new(docker::DockerFs) as Arc<dyn leaf_vfs::Fs>);
     // `smb://host/share` and `nfs://host/export` on Linux: mounted through gio, read through the gvfs folder
@@ -74,13 +96,18 @@ pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
 pub fn home(v: &VPath) -> Result<VPath, FsError> {
     match v.scheme() {
         "sftp" => sftp_backend().home(v),
+        "ftp" | "ftps" => ftp_backend().home(v),
         _ => Ok(v.root()),
     }
 }
 
-/// Whether a connection to the server of this `sftp://` address is open now (never connects).
+/// Whether a connection to the server of this `sftp://`, `ftp://` or `ftps://` address is open now (never connects).
 pub fn is_connected(v: &VPath) -> bool {
-    v.scheme() == "sftp" && sftp_backend().target_connected(v)
+    match v.scheme() {
+        "sftp" => sftp_backend().target_connected(v),
+        "ftp" | "ftps" => ftp_backend().target_connected(v),
+        _ => false,
+    }
 }
 
 /// Free bytes on the server, only while it is connected already (never connects; `None` when unknown).
