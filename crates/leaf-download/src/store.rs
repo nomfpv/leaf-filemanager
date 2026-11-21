@@ -31,6 +31,10 @@ pub struct Saved {
     /// Sorted into a category subfolder by the settings (the folder is the download folder).
     #[serde(default)]
     pub sort: bool,
+    /// The subfolder of `dest` the file was put in (`""`: none), once known: a part file is looked for there when the download is
+    /// taken up again, whatever the categories say by then.
+    #[serde(default)]
+    pub subfolder: Option<String>,
 }
 
 /// A download that ended.

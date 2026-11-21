@@ -199,7 +199,7 @@ fn a_saved_queue_comes_back_and_resumes_byte_identical() {
     assert!(download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth)).is_err());
     let file = dir.join("downloads.json");
     let mut store = store::Store::default();
-    store.active.push(store::Saved { key: 7, url: url(&srv, "/f.bin"), dest: dir.clone(), sha256: None, verify: false, paused: true, browser: false, sort: false });
+    store.active.push(store::Saved { key: 7, url: url(&srv, "/f.bin"), dest: dir.clone(), sha256: None, verify: false, paused: true, browser: false, sort: false, subfolder: None });
     for i in 0..60 {
         store.remember(store::Past { url: format!("http://h/{i}"), dest: dir.clone(), ok: i % 2 == 0, when: i });
     }
@@ -271,7 +271,7 @@ fn browser_credentials_never_reach_a_file() {
     assert!(download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)).is_err());
     let state = std::fs::read_to_string(dir.join("c.bin.leaf-part.state")).expect("the part state is written");
     // the saved list entry leaf writes for the same download
-    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: true, sort: false }], history: Vec::new() };
+    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: true, sort: false, subfolder: None }], history: Vec::new() };
     let saved = serde_json::to_string(&saved).unwrap();
     let shown = format!("{headers:?} {headers} {:?}", o.headers);
     for text in [&state, &saved, &shown] {
@@ -353,7 +353,7 @@ fn proxy_password_is_sent_to_the_proxy_and_never_reaches_a_file() {
     let u = url(&srv, "/p.bin");
     assert!(download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)).is_err());
     let state = std::fs::read_to_string(dir.join("p.bin.leaf-part.state")).expect("the part state is written");
-    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: false, sort: false }], history: Vec::new() };
+    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: false, sort: false, subfolder: None }], history: Vec::new() };
     let saved = serde_json::to_string(&saved).unwrap();
     let shown = format!("{server:?} {:?}", ProxyMode::Manual(server.clone()));
     for text in [&state, &saved, &shown] {
@@ -424,7 +424,7 @@ fn web_sign_in_is_asked_for_and_never_reaches_a_file() {
     srv.cut_after.store(100 << 10, Ordering::SeqCst);
     assert!(matches!(download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)), Err(e) if !matches!(e, Error::Auth(_))), "the server took the sign-in");
     let state = std::fs::read_to_string(dir.join("w.bin.leaf-part.state")).expect("the part state is written");
-    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: false, sort: false }], history: Vec::new() };
+    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: false, sort: false, subfolder: None }], history: Vec::new() };
     let saved = serde_json::to_string(&saved).unwrap();
     let b64 = sent.trim_start_matches("Basic ");
     let shown = format!("{:?} {} {:?} {:?}", o.headers, o.headers, WebAuth::new(&ch, USER, PASSWORD), Error::Auth(ch.clone()));

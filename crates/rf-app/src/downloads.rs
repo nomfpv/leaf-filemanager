@@ -272,11 +272,13 @@ pub struct Request {
     /// The folder is the download folder: the settings' categories sort the file into a subfolder ("Download here…" and a folder
     /// given on the command line never do).
     pub sort: bool,
+    /// The subfolder an earlier run chose (kept in the saved list): reused when the download is taken up again.
+    subfolder: Option<String>,
 }
 
 impl Request {
     pub fn new(url: String, dest: PathBuf) -> Self {
-        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false, sort: false }
+        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false, sort: false, subfolder: None }
     }
 }
 
@@ -380,7 +382,7 @@ pub fn restore(cx: &mut App) {
             continue;
         }
         NEXT_KEY.fetch_max(s.key + 1, Ordering::Relaxed);
-        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, sort: s.sort, ..Request::new(s.url, s.dest) };
+        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, sort: s.sort, subfolder: s.subfolder, ..Request::new(s.url, s.dest) };
         start_with(cx, req, None);
     }
 }
@@ -406,7 +408,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
         let mut st = store();
         st.forget(key);
         // (the headers are not saved: `browser` says the download needs the browser again after a restart)
-        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser, sort: req.sort });
+        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser, sort: req.sort, subfolder: req.subfolder.clone() });
     }
     persist_soon();
     let title = format!("{} {} → {}", t!("Downloading"), dl::file_name(None, &req.url), rf_core::history::display_name(&req.dest));
@@ -521,9 +523,9 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
         return Err(anyhow::anyhow!("{}", t!("This download came from the browser with your sign-in, which leaf does not keep after a restart. Start it again from the browser: leaf carries on from the part already downloaded.")));
     }
     (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
-    let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false), no_resume: LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|l| l.key == key).map(|l| l.no_resume.clone()).unwrap_or_default(), keep: Mutex::new(None) };
+    let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false), key, no_resume: LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|l| l.key == key).map(|l| l.no_resume.clone()).unwrap_or_default(), keep: Mutex::new(None) };
     let ctl = dl::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
-    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), categories: categories.clone(), ..dl::Options::default() };
+    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), categories: categories.clone(), subfolder: req.subfolder.clone(), ..dl::Options::default() };
     if let Some(ua) = agent {
         opts.user_agent = ua;
     }
@@ -597,6 +599,7 @@ struct Link<'a> {
     asked_cancel: AtomicBool,
     /// Set when the download runs on one connection that cannot be resumed (the schedule does not pause it).
     no_resume: Arc<AtomicBool>,
+    key: u64,
     /// A sign-in the user asked to remember: kept in the keyring once the server has taken it.
     keep: Mutex<Option<(leaf_remote::SecretId, leaf_remote::Secret)>>,
 }
@@ -641,6 +644,21 @@ impl dl::Host for Link<'_> {
                 }
             },
             None => dl::Resolve::KeepBoth,
+        }
+    }
+
+    fn subfolder(&self, name: &str) {
+        let changed = {
+            let mut st = store();
+            st.active.iter_mut().find(|a| a.key == self.key).is_some_and(|a| {
+                let new = Some(name.to_string());
+                let differs = a.subfolder != new;
+                a.subfolder = new;
+                differs
+            })
+        };
+        if changed {
+            persist_soon();
         }
     }
 

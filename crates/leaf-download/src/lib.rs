@@ -72,6 +72,9 @@ pub struct Options {
     /// Sort by file type: (subfolder of the download folder, extensions without the dot, lower case). A file whose extension is
     /// listed goes into that subfolder (made when needed); the others stay in the folder. Empty: no sorting.
     pub categories: Vec<(String, Vec<String>)>,
+    /// The subfolder an earlier run of this download chose (`""` = the download folder itself): reused, so a part file is found again
+    /// whatever the categories or the file name say now. `None`: not chosen yet, the categories decide.
+    pub subfolder: Option<String>,
     /// How the requests reach the net.
     pub proxy: ProxyMode,
 }
@@ -111,7 +114,7 @@ pub enum ProxyMode {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default(), categories: Vec::new(), proxy: ProxyMode::System }
+        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default(), categories: Vec::new(), subfolder: None, proxy: ProxyMode::System }
     }
 }
 
@@ -155,6 +158,9 @@ pub trait Host {
     /// The download is running on one connection that cannot be taken up again where it stopped (the server takes no byte ranges):
     /// pausing it would lose what is downloaded.
     fn no_resume(&self) {}
+    /// The subfolder of the download folder this download goes into (`""` = none), told when it is known: kept by the caller and
+    /// given back in [`Options::subfolder`] when the download is taken up again.
+    fn subfolder(&self, _name: &str) {}
     /// The server took the sign-in this download carries (its first answer was not a 401).
     fn signed_in(&self) {}
 }
@@ -426,18 +432,16 @@ pub fn download(url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn
 
 /// `dir` or, when `name`'s extension is in a category, that category's subfolder of it (made here). A folder name that is not one
 /// plain name (a path, `..`) is ignored.
-fn category_dir(dir: &Path, name: &str, categories: &[(String, Vec<String>)]) -> Result<PathBuf, Error> {
-    let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
-    let Some(ext) = ext else { return Ok(dir.to_path_buf()) };
+fn category_dir(dir: &Path, name: &str, categories: &[(String, Vec<String>)]) -> Option<String> {
+    let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase())?;
     let hit = categories.iter().find(|(f, exts)| exts.iter().any(|e| *e == ext) && !f.is_empty() && sanitize(f) == *f && f != "." && f != "..");
-    match hit {
-        Some((f, _)) => {
-            let sub = dir.join(f);
-            std::fs::create_dir_all(&sub)?;
-            Ok(sub)
-        }
-        None => Ok(dir.to_path_buf()),
-    }
+    let _ = dir;
+    hit.map(|(f, _)| f.clone())
+}
+
+/// Whether `f` is one plain folder name (what `category_dir` only ever returns): a saved subfolder is checked the same way.
+fn plain_folder(f: &str) -> bool {
+    f.is_empty() || (sanitize(f) == f && f != "." && f != "..")
 }
 
 fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn Host) -> Result<Outcome, Error> {
@@ -450,7 +454,15 @@ fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control
     if name == "download" && probe.disposition.is_none() {
         name = name::file_name(None, &probe.uri);
     }
-    let sorted = category_dir(dir, &name, &opts.categories)?;
+    let sub = match opts.subfolder.as_deref().filter(|f| plain_folder(f)) {
+        Some(f) => f.to_string(),
+        None => category_dir(dir, &name, &opts.categories).unwrap_or_default(),
+    };
+    host.subfolder(&sub);
+    let sorted = if sub.is_empty() { dir.to_path_buf() } else { dir.join(&sub) };
+    if !sub.is_empty() {
+        std::fs::create_dir_all(&sorted)?;
+    }
     let dir = sorted.as_path();
     let mut target = dir.join(&name);
     let mut replace = false;
