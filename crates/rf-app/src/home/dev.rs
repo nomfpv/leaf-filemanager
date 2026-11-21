@@ -124,6 +124,7 @@ pub struct Data {
     cal: Cell<Cal>,
     reclaim: Cell<Reclaim>,
     rings: Cell<Rings>,
+    growth: Cell<GrowthData>,
     reclaim_progress: Option<Arc<dupes::Progress>>,
 }
 
@@ -960,6 +961,123 @@ pub fn age_rings(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>)
             .gap_2()
             .child(folder_line(p, &folder, &extra))
             .child(h_flex().gap_4().items_center().child(div().relative().size(px(size)).flex_shrink_0().child(paint)).child(legend))
+            .into_any_element(),
+    )
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// S4 Growth line
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct GrowthData {
+    /// (day since 1970, bytes), oldest first; today's is the last when it could be measured.
+    samples: Vec<(i64, u64)>,
+}
+
+fn growth_file() -> Option<PathBuf> {
+    crate::settings::app_dir().map(|d| d.join("growth.json"))
+}
+
+/// Reads the samples of `folder`; when today has none, measures the folder (a plain walk, no caps beyond `stop`) and keeps the
+/// sample. This is the only place a sample is made: once a day, and only while the widget is drawn.
+fn compute_growth(folder: &Path, stop: &AtomicBool) -> GrowthData {
+    let Some(file) = growth_file() else { return GrowthData { samples: Vec::new() } };
+    let mut all = rf_core::growth::Samples::load(&file);
+    let today = now_secs() / 86_400;
+    if !all.has_day(folder, today) {
+        let mut total = 0u64;
+        let mut todo = vec![folder.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for e in rd.flatten() {
+                if stop.load(Ordering::Relaxed) {
+                    return GrowthData { samples: all.of(folder).to_vec() };
+                }
+                let Ok(ft) = e.file_type() else { continue };
+                if ft.is_dir() {
+                    todo.push(e.path());
+                } else if ft.is_file() {
+                    total = total.saturating_add(e.metadata().map_or(0, |m| m.len()));
+                }
+            }
+        }
+        all.add(folder, today, total);
+        all.save(&file);
+    }
+    GrowthData { samples: all.of(folder).to_vec() }
+}
+
+pub fn growth_header(p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
+    refresh_btn("growth-refresh", p, cx, |d| d.growth.clear())
+}
+
+pub fn growth_line(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
+    let p = &w.p;
+    let Some(folder) = folder_of(v, "growth", cx) else { return Some(hint_no_folder(p)) };
+    let c = &mut v.home_data.growth;
+    c.sync(&folder);
+    c.poll();
+    if c.idle() {
+        let f = folder.clone();
+        c.begin(cx, move |stop| compute_growth(&f, stop));
+    }
+    let Some(got) = c.value.clone() else { return Some(note(p, "Measuring the folder...")) };
+    let Some(&(last_day, last_bytes)) = got.samples.last() else { return Some(note(p, "No size could be taken here.")) };
+    let fc = rf_core::growth::forecast(&got.samples);
+    let size_now = format::size(last_bytes);
+    // the forecast sentence is marked as an estimate
+    let sentence = match fc {
+        Some(f) if f.per_day.abs() >= 1.0 => format!(
+            "{}{}/day \u{b7} about {} in 30 days (estimate)",
+            if f.per_day > 0.0 { "+" } else { "-" },
+            format::size(f.per_day.abs() as u64),
+            format::size(f.in_30_days)
+        ),
+        Some(_) => "Size is steady (estimate)".to_string(),
+        None => "One sample a day: a forecast shows after the second day".to_string(),
+    };
+    // the line: one point per sample, and a lighter stretch for the 30 days ahead
+    let mut pts: Vec<(f32, f32)> = got.samples.iter().map(|&(d, b)| ((d - got.samples[0].0) as f32, b as f32)).collect();
+    let ahead = fc.map(|f| ((last_day + 30 - got.samples[0].0) as f32, f.in_30_days as f32));
+    let max_x = ahead.map_or(pts.last().map_or(1.0, |p| p.0), |a| a.0).max(1.0);
+    let (lo, hi) = pts.iter().chain(ahead.iter()).fold((f32::MAX, f32::MIN), |a, p| (a.0.min(p.1), a.1.max(p.1)));
+    let span = (hi - lo).max(1.0);
+    let n_real = pts.len();
+    if let Some(a) = ahead {
+        pts.push(a);
+    }
+    let (line, faint) = (p.accent, p.accent.opacity(0.4));
+    let paint = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let at = |p: (f32, f32)| (f32::from(bounds.origin.x) + 3.0 + (w - 6.0) * p.0 / max_x, f32::from(bounds.origin.y) + 3.0 + (h - 6.0) * (1.0 - (p.1 - lo) / span));
+            let mut seg = |a: (f32, f32), b: (f32, f32), color: Hsla| {
+                let (a, b) = (at(a), at(b));
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let (nx, ny) = (-dy / len * 1.1, dx / len * 1.1);
+                let q = |x: f32, y: f32| point(px(x), px(y));
+                let mut pb = PathBuilder::fill();
+                pb.add_polygon(&[q(a.0 + nx, a.1 + ny), q(b.0 + nx, b.1 + ny), q(b.0 - nx, b.1 - ny), q(a.0 - nx, a.1 - ny)], true);
+                if let Ok(path) = pb.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            for i in 1..pts.len() {
+                seg(pts[i - 1], pts[i], if i < n_real { line } else { faint });
+            }
+        },
+    )
+    .absolute()
+    .size_full();
+    Some(
+        v_flex()
+            .gap_2()
+            .child(folder_line(p, &folder, &format!("{size_now}, {} sample{}", got.samples.len(), if got.samples.len() == 1 { "" } else { "s" })))
+            .child(div().relative().w_full().h(px(64.)).child(paint))
+            .child(div().text_xs().text_color(p.text_secondary).child(sentence))
             .into_any_element(),
     )
 }
