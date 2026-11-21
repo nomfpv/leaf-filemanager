@@ -576,24 +576,29 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
 
     // 3. a password (kept in memory for this run; saved in the keyring when asked; else asked), or the server's questions
     if allows(&methods, MethodKind::Password) {
-        // (the keyring calls are short and local: made right here)
+        // (the keyring calls run off the runtime's worker: a locked Secret Service waits for the user's unlock answer)
         let id = SecretId::password("sftp", user, &t.host, t.port);
         let mut retry = false;
         for _ in 0..3 {
             // a password in memory only goes to the host key it was typed for
             let cached = lock(&shared.passwords).get(&t.key).filter(|(fp, _)| fp == host_fp).map(|(_, p)| p.clone());
             // a saved one only to a host key known_hosts has (not to one trusted once, whatever key that was)
-            let known = if retry { None } else { cached.or_else(|| host_known.then(|| cfg.vault.get(&id)).flatten()) };
+            let known = match cached {
+                _ if retry => None,
+                Some(p) => Some(p),
+                None if host_known => cfg.vault.get_async(&id).await,
+                None => None,
+            };
             let pw = match known {
                 Some(p) => p,
                 None => {
-                    let keyring = cfg.vault.state();
+                    let keyring = cfg.vault.state_async().await;
                     prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry, unencrypted: false, keyring }).await.ok_or(FsError::Cancelled)?
                 }
             };
             match step(limit, h.authenticate_password(user, pw.as_str())).await? {
                 russh::client::AuthResult::Success => {
-                    cfg.vault.keep_if_asked(&id, &pw);
+                    cfg.vault.keep_if_asked_async(&id, &pw).await;
                     lock(&shared.passwords).insert(t.key.clone(), (host_fp.to_string(), pw.remembered(false)));
                     log::info!("remote: logged in with a password");
                     return Ok(());
@@ -601,7 +606,7 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
                 russh::client::AuthResult::Failure { .. } => {
                     lock(&shared.passwords).remove(&t.key);
                     // a saved password the server refuses is deleted from the keyring (then asked)
-                    cfg.vault.refused(&id, &pw);
+                    cfg.vault.refused_async(&id, &pw).await;
                     retry = true;
                 }
             }
@@ -664,22 +669,22 @@ async fn load_key(f: &Path, cfg: &Config, prompter: &Arc<dyn Prompter>, shared: 
     }
     // a passphrase saved in the keyring first; a wrong one is deleted there and asked
     let id = SecretId::passphrase(f);
-    if let Some(pass) = cfg.vault.get(&id) {
+    if let Some(pass) = cfg.vault.get_async(&id).await {
         if let Ok(k) = russh::keys::decode_secret_key(&text, Some(pass.as_str())) {
             let k = Arc::new(k);
             lock(&shared.keys).insert(f.to_path_buf(), k.clone());
             return Ok(Some(k));
         }
-        cfg.vault.refused(&id, &pass);
+        cfg.vault.refused_async(&id, &pass).await;
     }
     let mut retry = false;
     for _ in 0..3 {
-        let keyring = cfg.vault.state();
+        let keyring = cfg.vault.state_async().await;
         let q = SecretQuestion::Passphrase { key_file: f.display().to_string(), retry, keyring };
         let Some(pass) = prompt::ask_secret(&**prompter, q).await else { return Ok(None) };
         match russh::keys::decode_secret_key(&text, Some(pass.as_str())) {
             Ok(k) => {
-                cfg.vault.keep_if_asked(&id, &pass);
+                cfg.vault.keep_if_asked_async(&id, &pass).await;
                 let k = Arc::new(k);
                 lock(&shared.keys).insert(f.to_path_buf(), k.clone());
                 return Ok(Some(k));

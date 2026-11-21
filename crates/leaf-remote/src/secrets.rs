@@ -203,6 +203,37 @@ impl Vault {
     }
 }
 
+/// The same calls for code on leaf-remote's tokio runtime: each runs on the runtime's blocking threads, because a keyring
+/// can wait for the user (the Secret Service's unlock prompt on a locked collection) and the runtime's worker drives every
+/// SFTP connection and timeout meanwhile.
+impl Vault {
+    async fn off_runtime<T: Send + 'static>(&self, f: impl FnOnce(Vault) -> T + Send + 'static) -> Option<T> {
+        let v = self.clone();
+        tokio::task::spawn_blocking(move || f(v)).await.ok()
+    }
+    pub(crate) async fn get_async(&self, id: &SecretId) -> Option<Secret> {
+        let id = id.clone();
+        self.off_runtime(move |v| v.get(&id)).await.flatten()
+    }
+    pub(crate) async fn state_async(&self) -> KeyringState {
+        self.off_runtime(|v| v.state()).await.unwrap_or_else(|| KeyringState::Missing(NOT_SAVED.into()))
+    }
+    pub(crate) async fn keep_if_asked_async(&self, id: &SecretId, secret: &Secret) {
+        if !secret.wants_remember() || self.0.is_none() {
+            return;
+        }
+        let (id, secret) = (id.clone(), secret.clone());
+        self.off_runtime(move |v| v.keep_if_asked(&id, &secret)).await;
+    }
+    pub(crate) async fn refused_async(&self, id: &SecretId, secret: &Secret) {
+        if self.0.is_none() {
+            return;
+        }
+        let (id, secret) = (id.clone(), secret.clone());
+        self.off_runtime(move |v| v.refused(&id, &secret)).await;
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ the system's keyring
 
 /// The service name every entry of leaf's has in the keyring.
