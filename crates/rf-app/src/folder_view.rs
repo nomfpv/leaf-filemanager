@@ -6187,6 +6187,10 @@ impl Render for FolderView {
                         let av = cx.new(crate::agents_view::AgentsView::new);
                         cx.subscribe(&av, |this, _, ev: &crate::agents_view::AgentsEvent, cx| match ev {
                             crate::agents_view::AgentsEvent::OpenFolder(dir) => this.navigate(Location::Path(dir.clone()), cx),
+                            crate::agents_view::AgentsEvent::Review(dir) => {
+                                let (dir, tab) = (dir.clone(), cx.entity().downgrade());
+                                cx.defer(move |cx| crate::review_view::show(dir, tab, cx));
+                            }
                         })
                         .detach();
                         cx.observe(&av, |_, _, cx| cx.notify()).detach();

@@ -178,3 +178,33 @@ pub fn state_text(state: State) -> &'static str {
         State::Ended => t!("Ended"),
     }
 }
+
+/// The agent's program has a way to resume this session (F4).
+pub fn can_resume(s: &Session) -> bool {
+    leaf_agents::adapters().iter().find(|a| a.id() == s.agent).is_some_and(|a| a.resume(&s.id).is_some())
+}
+
+/// "Resume in terminal": the agent's resume command in the session's folder, in the terminal of the settings. The session id goes
+/// to the program as one argument, never as text typed into a shell.
+pub fn resume(s: &Session, cx: &App) {
+    let Some((program, args)) = leaf_agents::adapters().iter().find(|a| a.id() == s.agent).and_then(|a| a.resume(&s.id)) else { return };
+    let kind = cx.global::<Settings>().terminal;
+    let folder = s.folder.clone();
+    std::thread::spawn(move || {
+        let Some(dir) = crate::terminal::target(&folder) else { return };
+        let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+        if let Err(e) = leaf_sys::shell::open_terminal_running(kind, &dir, std::path::Path::new(program), &args, &[]) {
+            log::warn!("resume: {e:#}");
+        }
+    });
+}
+
+/// A session of the list works in this folder or in one above `path`: the file is inside a project that has sessions.
+pub fn in_project_with_sessions(cx: &App, path: &Path) -> bool {
+    let Some(s) = cx.try_global::<AgentsState>().filter(|s| !s.sessions.is_empty()) else { return false };
+    let key = folder_key(path);
+    s.sessions.iter().any(|x| {
+        let f = folder_key(&x.folder);
+        key.strip_prefix(f.as_str()).is_some_and(|rest| rest.starts_with('/'))
+    })
+}

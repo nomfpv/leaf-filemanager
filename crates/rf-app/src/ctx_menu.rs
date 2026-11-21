@@ -533,7 +533,18 @@ impl FolderView {
             // (Windows' share sheet needs real files)
             quick.retain(|q| q.icon != L::Share2);
         }
-        Menu { quick, items: generate(&build) }
+        let mut menu_items = generate(&build);
+        // (F4) only while the agent layer is on, on one file inside a project that has agent sessions
+        if let [one] = items {
+            if crate::review_view::enabled(cx) && !self.selected_is_single_dir() && !in_archive && crate::agents::in_project_with_sessions(cx, one) {
+                let file = one.clone();
+                menu_items.push(Item::action(t!("Which session changed this?"), icon(L::Brain), act(me, move |_, _, cx| {
+                    crate::agents_view::want_who(file.clone());
+                    cx.emit(FolderEvent::OpenInNewTab(Location::Agents));
+                })));
+            }
+        }
+        Menu { quick, items: menu_items }
     }
 
     /// The folder background's menu: made from the rows of `menu_model` for this context.

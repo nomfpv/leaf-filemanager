@@ -21,6 +21,7 @@ mod menu_model;
 mod basket;
 mod agents;
 mod agents_view;
+mod session_view;
 mod brain_view;
 mod mockup_demo;
 mod context_copy;

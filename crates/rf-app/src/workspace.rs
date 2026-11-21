@@ -4606,6 +4606,11 @@ impl Workspace {
                 col = col.child(item.child(state_dot(working, p.accent)));
             }
         }
+        // (F4) the Agents page, only while the agent layer is on
+        if cx.global::<crate::settings::Settings>().ai_layer {
+            let active = cur == Location::Agents;
+            col = col.child(self.sidebar_item("sb-agents".into(), L::Brain, p.text_secondary, t!("Agents").into(), Location::Agents, active, None, p, cx));
+        }
         let settings = self.sidebar_item(
             "sb-settings".into(),
             L::Settings,

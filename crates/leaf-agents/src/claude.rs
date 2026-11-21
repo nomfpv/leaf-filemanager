@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::procs::Live;
-use crate::{Adapter, Session, State, folder_key, ms_of, title_of, worktree_repo};
+use crate::{Adapter, Session, SessionFile, State, folder_key, ms_of, title_of, worktree_repo};
 
 const HEAD: u64 = 96 * 1024;
 const TAIL: u64 = 192 * 1024;
@@ -202,6 +202,16 @@ pub(crate) fn state_by_file(phase: Phase, age_secs: i64) -> State {
     }
 }
 
+/// A session id as a file name and as one argument: letters, digits, `-` and `_` only.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The name of a folder's session folder: every character that is not a letter or digit becomes `-`.
+fn slug(folder: &Path) -> String {
+    folder.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
 fn read_window(path: &Path, len: u64) -> Option<(String, String)> {
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = vec![0u8; HEAD.min(len) as usize];
@@ -247,6 +257,44 @@ impl Adapter for Claude {
             }),
             _ => false,
         }
+    }
+
+    fn session_file(&self, id: &str) -> Option<PathBuf> {
+        if !valid_id(id) {
+            return None;
+        }
+        std::fs::read_dir(&self.root).ok()?.flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|p| p.is_file())
+    }
+
+    fn folder_sessions(&self, folder: &Path) -> Vec<SessionFile> {
+        let want = slug(folder);
+        let Ok(dirs) = std::fs::read_dir(&self.root) else { return Vec::new() };
+        let mut out = Vec::new();
+        for d in dirs.flatten() {
+            let name = d.file_name().to_string_lossy().into_owned();
+            let same = if cfg!(windows) { name.eq_ignore_ascii_case(&want) } else { name == want };
+            if !same {
+                continue;
+            }
+            let Ok(rd) = std::fs::read_dir(d.path()) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                let Some(id) = p.file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|i| valid_id(i)) else { continue };
+                if p.extension().is_none_or(|x| x != "jsonl") {
+                    continue;
+                }
+                let Ok(m) = e.metadata() else { continue };
+                if m.is_file() && m.len() > 0 {
+                    out.push(SessionFile { id, path: p, modified_ms: m.modified().ok().map_or(0, ms_of) });
+                }
+            }
+        }
+        out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+        out
+    }
+
+    fn resume(&self, id: &str) -> Option<(&'static str, Vec<String>)> {
+        valid_id(id).then(|| ("claude", vec!["--resume".to_string(), id.to_string()]))
     }
 
     fn sessions(&self, live: &Live, max_age: Duration, limit: usize) -> Vec<Session> {

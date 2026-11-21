@@ -12,6 +12,7 @@
 
 pub mod claude;
 pub mod procs;
+pub mod transcript;
 mod watch;
 
 use std::path::{Path, PathBuf};
@@ -80,6 +81,26 @@ pub trait Adapter: Send + Sync {
     fn is_agent_process(&self, name: &str, args: &[String]) -> bool;
     /// The sessions touched within `max_age`, newest first, at most `limit`. `live` says which folders have a running agent program.
     fn sessions(&self, live: &procs::Live, max_age: std::time::Duration, limit: usize) -> Vec<Session>;
+    /// The file holding the session `id` (read only), if there is one.
+    fn session_file(&self, _id: &str) -> Option<PathBuf> {
+        None
+    }
+    /// Every session file of the sessions that worked in exactly `folder`, newest first, however old.
+    fn folder_sessions(&self, _folder: &Path) -> Vec<SessionFile> {
+        Vec::new()
+    }
+    /// The program and arguments that resume the session `id` in its folder (the id is one argument, never text for a shell).
+    fn resume(&self, _id: &str) -> Option<(&'static str, Vec<String>)> {
+        None
+    }
+}
+
+/// A session's file, as [`Adapter::folder_sessions`] finds it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionFile {
+    pub id: String,
+    pub path: PathBuf,
+    pub modified_ms: i64,
 }
 
 /// The adapters this build has.
