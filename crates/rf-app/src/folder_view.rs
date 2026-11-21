@@ -985,12 +985,14 @@ impl FolderView {
         let hover_select = cx.global::<crate::settings::Settings>().select_on_hover;
         let p = Palette::for_window(window);
         let mut out = Vec::with_capacity(range.len());
+        let pack = chosen_pack(cx.global::<crate::settings::Settings>());
         for vi in range {
             let Some(&ei) = self.visible.get(vi) else { break };
             let e = &self.entries[ei as usize];
             let selected = self.selected.contains(&ei);
             let cat = icons::category(e);
-            let shell_icon = self.parent_of(ei).map(|d| d.to_path_buf()).and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx)));
+            let packed = pack.as_ref().and_then(|pk| self.images.update(cx, |c, cx| c.pack_icon(pk, e, 32, tint_bytes(theme::kind_color(cat, p.dark)), cx)));
+            let shell_icon = packed.or_else(|| self.parent_of(ei).map(|d| d.to_path_buf()).and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx))));
             let overlay = self.overlay_of(ei, px(16.), cx);
             let e = &self.entries[ei as usize];
             let is_dir = e.is_dir();
@@ -2846,6 +2848,7 @@ impl FolderView {
         let show_ext = cx.global::<crate::settings::Settings>().show_extensions;
         let secret_marks = cx.global::<crate::settings::Settings>().secret_marks;
         let system_icons = cx.global::<crate::settings::Settings>().system_icons;
+        let pack = chosen_pack(cx.global::<crate::settings::Settings>());
         let any_cut = crate::cut_marks::any();
         let renamed = self.renamed.clone();
         let mut out = Vec::with_capacity(range.len());
@@ -2904,6 +2907,11 @@ impl FolderView {
                 let thumb = ask.then(|| self.parent_of(ei).map(|d| d.to_path_buf())).flatten().and_then(|d| {
                     self.images.update(cx, |c, cx| if thumbs_on { c.thumbnail(&d, e, thumb_px, cx) } else { c.icon(&d, e, cx) })
                 });
+                // an icon pack's picture for what has no thumbnail (a pack never replaces a photo's own preview)
+                let packed = pack.as_ref().filter(|_| thumb.is_none()).and_then(|pk| {
+                    let px = ((f32::from(visual_px) * if style == GridStyle::Tiles { 0.45 } else { 0.6 }) * 2.).round().clamp(16., 256.) as u32;
+                    self.images.update(cx, |c, cx| c.pack_icon(pk, e, px, tint_bytes(theme::kind_color(cat, p.dark)), cx))
+                });
                 let is_cut = any_cut && self.path_of(ei).is_some_and(|p| crate::cut_marks::contains(&p));
                 let tiles = style == GridStyle::Tiles;
                 // a photo or a video fills its card's picture (the mockups'); a document's page and an icon sit inside it
@@ -2917,6 +2925,10 @@ impl FolderView {
                         .object_fit(ObjectFit::Contain)
                         .when(is_thumb, |i| i.rounded(px(4.)))
                         .into_any_element(),
+                    None if packed.is_some() => {
+                        let side = if tiles { visual_px * 0.45 } else { visual_px * 0.6 };
+                        img(packed.clone().unwrap()).size(side).object_fit(ObjectFit::Contain).into_any_element()
+                    }
                     None => Icon::new(icons::icon_for(cat))
                         .size(if tiles { visual_px * 0.45 } else { visual_px * 0.6 })
                         .text_color(theme::kind_color(cat, p.dark))
@@ -4318,6 +4330,7 @@ impl FolderView {
         let show_ext = prefs.show_extensions;
         let secret_marks = prefs.secret_marks;
         let system_icons = prefs.system_icons;
+        let pack = chosen_pack(prefs);
         let any_cut = crate::cut_marks::any();
         let renamed = self.renamed.clone();
         let checkboxes = prefs.show_checkboxes;
@@ -4417,10 +4430,13 @@ impl FolderView {
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
             // (Windows' icons only when asked for: the line icons are the default look)
-            let shell_icon = system_icons
-                .then(|| self.parent_of(ei).map(|d| d.to_path_buf()))
-                .flatten()
-                .and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx)));
+            let packed = pack.as_ref().and_then(|pk| self.images.update(cx, |c, cx| c.pack_icon(pk, e, 32, tint_bytes(kind_c), cx)));
+            let shell_icon = packed.or_else(|| {
+                system_icons
+                    .then(|| self.parent_of(ei).map(|d| d.to_path_buf()))
+                    .flatten()
+                    .and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx)))
+            });
             // cut and waiting for a paste: greyed, with a small "cut" mark after the name
             let is_cut = any_cut && self.path_of(ei).is_some_and(|p| crate::cut_marks::contains(&p));
             let overlay = self.overlay_of(ei, px(16.), cx);
@@ -5164,6 +5180,17 @@ fn shown_new_name(name: &str, is_dir: bool, show_ext: bool) -> String {
 
 /// The name a row shows: the entry's own, or the name it is getting while its rename is under way (`FolderView::renamed`).
 /// The lock after the name of a file the secret guard flags by its name (leaf_dev::secrets).
+/// The icon pack the user chose (none while "Icons from the system" is on or when the pack cannot be loaded).
+fn chosen_pack(prefs: &crate::settings::Settings) -> Option<Arc<crate::icon_pack::Loaded>> {
+    (!prefs.system_icons && !prefs.icon_pack.is_empty()).then(|| crate::icon_pack::get(&prefs.icon_pack)).flatten()
+}
+
+/// A kind colour as the bytes a tinted pack icon is painted with.
+fn tint_bytes(c: Hsla) -> [u8; 3] {
+    let c: gpui_kit::Rgba = c.into();
+    [(c.r * 255.).round() as u8, (c.g * 255.).round() as u8, (c.b * 255.).round() as u8]
+}
+
 fn secret_lock(e: &Entry, p: &Palette) -> Option<Icon> {
     (e.kind == rf_core::EntryKind::File && leaf_dev::secrets::looks_secret(&e.name).is_some()).then(|| Icon::new(L::Lock).size(px(12.)).flex_shrink_0().text_color(p.secret_mark))
 }

@@ -465,6 +465,12 @@ pub struct Settings {
     /// File icons from Windows (the colourful system icons, a program's own picture). Off (the default, the mockups' look): quiet line
     /// icons in the theme's kind colours.
     pub system_icons: bool,
+    /// The icon pack in use (a folder's name in `<config>/icons`, see `icon_pack`); empty: the built-in line icons. Ignored while
+    /// `system_icons` is on.
+    pub icon_pack: String,
+    /// The version whose "What's new" page the user has opened (empty: never); the Settings entry carries a dot until it is the
+    /// running version.
+    pub whats_new_seen: String,
     /// Custom shortcuts: keystroke → action, e.g. `"ctrl-k" = "NewFolder"` (names as in the
     /// command palette's actions; `leaf::` prefix optional). Applied at startup.
     pub keybindings: std::collections::BTreeMap<String, String>,
@@ -726,6 +732,8 @@ impl Default for Settings {
             adaptive_offered: false,
             show_extensions: true,
             system_icons: false,
+            icon_pack: String::new(),
+            whats_new_seen: String::new(),
             keybindings: Default::default(),
             window: None,
             window_display: None,

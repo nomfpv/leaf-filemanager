@@ -1031,6 +1031,56 @@ fn theme_card(p: &Palette, s: &Settings) -> AnyElement {
 }
 
 /// Where user themes go, and a button that opens that folder (made when it is not there yet).
+/// Settings > Appearance > Icons: the built-in line icons, the system's own, or an installed icon pack; and the folder packs go in.
+fn icons_card(p: &Palette, s: &Settings) -> AnyElement {
+    const SYSTEM: &str = "@system";
+    let packs = crate::icon_pack::installed();
+    let current: String = if s.system_icons {
+        SYSTEM.into()
+    } else if packs.iter().any(|(id, _)| *id == s.icon_pack) {
+        s.icon_pack.clone()
+    } else {
+        String::new()
+    };
+    let mut options: Vec<(String, String)> = vec![(String::new(), t!("Line icons (built in)").to_string()), (SYSTEM.into(), t!("Icons from the system").to_string())];
+    options.extend(packs);
+    let label = options.iter().find(|(id, _)| *id == current).map(|(_, l)| l.clone()).unwrap_or_default();
+    let dir = crate::icon_pack::icons_dir();
+    let shown = dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+    let desc = format!("Line icons are quiet shapes in the theme's colours. Icons from the system are Windows' own. An icon pack is a folder in {shown} (see docs/icon-packs.md); what it has no picture for keeps the line icon.");
+    let pick = select_box("icon-source", p, label, move |_| {
+        options
+            .iter()
+            .map(|(id, l)| {
+                let id = id.clone();
+                Choice::new(l.clone(), id == current, move |_, cx| {
+                    crate::icon_pack::forget();
+                    settings::update(cx, |s| {
+                        s.system_icons = id == SYSTEM;
+                        s.icon_pack = if id == SYSTEM { String::new() } else { id.clone() };
+                    });
+                    cx.refresh_windows();
+                })
+            })
+            .collect()
+    });
+    let open = button("open-icons", p, t!("Open icons folder"), move |_, cx| {
+        if let Some(d) = dir.clone() {
+            if let Err(e) = std::fs::create_dir_all(&d) {
+                log::warn!("icons folder: {e}");
+                return;
+            }
+            if let Err(e) = leaf_sys::shell::open(&d) {
+                log::warn!("icons folder: {e:#}");
+            }
+            cx.refresh_windows();
+        }
+    });
+    shell(p)
+        .child(card_body(p, L::Shapes, t!("Icons").into(), Some(desc.into()), Some(h_flex().gap_2().items_center().child(open).child(pick).into_any_element())))
+        .into_any_element()
+}
+
 fn themes_folder_card(p: &Palette) -> AnyElement {
     let dir = theme::data::user_dir();
     let shown = dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
@@ -1549,13 +1599,7 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             dropdown("visibility", p, s.visibility, vec![(Visibility::High, t!("High").into()), (Visibility::Standard, t!("Standard").into())], |s, v| s.visibility = v),
         ),
         accent_card(p, s),
-        card(
-            p,
-            L::Shapes,
-            t!("Icons from the system"),
-            Some(t!("Off: quiet line icons in the theme's colours. On: the system's own file icons and the pictures of programs and shortcuts.")),
-            sw("system-icons", p, s.system_icons, |s, v| s.system_icons = v),
-        ),
+        icons_card(p, s),
         backdrop_card(p, s),
         themes_folder_card(p),
         card(

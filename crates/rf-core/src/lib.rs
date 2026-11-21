@@ -9,6 +9,7 @@ pub mod entry;
 pub mod format;
 pub mod history;
 pub mod hotkey;
+pub mod iconpack;
 pub mod navtree;
 pub mod openrules;
 pub mod organize;

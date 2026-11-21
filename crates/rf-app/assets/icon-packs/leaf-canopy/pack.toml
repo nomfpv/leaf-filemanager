@@ -1,0 +1,51 @@
+# A small example icon pack, written for leaf. Copy this folder to <config>/icons/<your pack>/ and change it (docs/icon-packs.md).
+[pack]
+name = "Canopy leaves"
+author = "leaf"
+licence = "CC0-1.0"
+tint = false
+
+[folder]
+default = "folder.svg"
+
+[file]
+default = "file.svg"
+
+[ext]
+rs = "rust.svg"
+js = "js.svg"
+mjs = "js.svg"
+cjs = "js.svg"
+ts = "js.svg"
+tsx = "js.svg"
+jsx = "js.svg"
+py = "python.svg"
+json = "data.svg"
+toml = "data.svg"
+yaml = "data.svg"
+yml = "data.svg"
+md = "markdown.svg"
+markdown = "markdown.svg"
+png = "image.svg"
+jpg = "image.svg"
+jpeg = "image.svg"
+gif = "image.svg"
+webp = "image.svg"
+svg = "image.svg"
+zip = "archive.svg"
+7z = "archive.svg"
+rar = "archive.svg"
+tar = "archive.svg"
+gz = "archive.svg"
+pdf = "pdf.svg"
+lock = "lock.svg"
+key = "lock.svg"
+pem = "lock.svg"
+
+[name]
+".gitignore" = "git.svg"
+".gitattributes" = "git.svg"
+"Cargo.lock" = "lock.svg"
+
+[folder_name]
+".git" = "git.svg"

@@ -301,6 +301,48 @@ impl ImageCache {
         r
     }
 
+    /// The icon an installed icon pack has for `e`, drawn at `px` (made on the first ask, then kept per picture, size and colour; the
+    /// pictures are small, so they are made on the spot). `None`: the pack has nothing for this item, or its picture is broken, and the
+    /// row draws the built-in line icon. `tint` is the theme's icon colour, used only when the pack says `tint = true`.
+    pub fn pack_icon(&mut self, pack: &crate::icon_pack::Loaded, e: &Entry, px: u32, tint: [u8; 3], cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
+        let file = pack.file_for(e)?;
+        let tint = pack.pack.tint.then_some(tint);
+        let key = key_of(&[&"pack", &&*pack.id, &file, &px, &tint]);
+        self.tick += 1;
+        let tick = self.tick;
+        match self.map.get(&key) {
+            Some(Slot::Ready(im)) => {
+                if let Some(u) = self.thumb_use.get_mut(&key) {
+                    u.0 = tick;
+                }
+                return Some(im.clone());
+            }
+            Some(_) => return None,
+            None => {}
+        }
+        let made = pack
+            .read(file)
+            .and_then(|b| crate::icon_pack::render(&b, file, px, tint))
+            .and_then(|b| to_render_image(&b).map(|im| (im, b.data.len())));
+        let slot = match made {
+            Some((im, bytes)) => {
+                self.thumb_use.insert(key, (tick, bytes));
+                self.thumb_cost += cost(bytes);
+                self.thumb_ready += 1;
+                Slot::Ready(im)
+            }
+            None => {
+                log::warn!("icon pack {}: cannot draw {file}", pack.id);
+                Slot::Failed
+            }
+        };
+        let r = if let Slot::Ready(im) = &slot { Some(im.clone()) } else { None };
+        self.map.insert(key, slot);
+        self.evict_over_budget();
+        self.release_evicted(cx);
+        r
+    }
+
     /// Another program's overlay picture `index` (`leaf_sys::overlays`) at `px`. Few and small (one per kind of mark): kept for good.
     pub fn overlay(&mut self, index: i32, px: u32, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         let key = key_of(&[&"overlay", &index, &px]);

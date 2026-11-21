@@ -24,6 +24,7 @@ rf-archive.workspace = true
 rf-nearby.workspace = true
 rf-player.workspace = true
 rustdecoder.workspace = true
+resvg = { version = "0.46", default-features = false }
 gpui-kit.workspace = true
 anyhow.workspace = true
 log.workspace = true
