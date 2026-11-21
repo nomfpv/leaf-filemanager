@@ -68,16 +68,21 @@ fn is_hex(s: &str, lens: &[usize]) -> bool {
 /// The hash a `sha256sum`/`xxhsum` run printed (`hash  name`), in lower case; none when the output is not one.
 pub fn parse_output(algo: Algo, out: &str) -> Option<String> {
     let line = out.lines().find(|l| !l.trim().is_empty())?;
-    // (the BSD tools without `-r` print `SHA256 (name) = hash`; the others `hash  name`)
-    let first = match line.split_once(") = ") {
-        Some((head, hash)) if head.contains(" (") => hash.split_whitespace().next()?,
-        _ => line.split_whitespace().next()?,
-    };
     let lens: &[usize] = match algo {
         Algo::Sha256 => &[64],
         Algo::Xxh => &[8, 16, 32],
     };
-    is_hex(first, lens).then(|| first.to_ascii_lowercase())
+    // (`hash  name` first: a file name that looks like the BSD form must not be read as one; the BSD tools without `-r` print
+    // `SHA256 (name) = hash`, and the hash is what follows the last `) = `)
+    let first = line.split_whitespace().next()?;
+    if is_hex(first, lens) {
+        return Some(first.to_ascii_lowercase());
+    }
+    if line.starts_with("SHA256 (") && let Some((_, hash)) = line.rsplit_once(") = ") {
+        let hash = hash.trim();
+        return is_hex(hash, lens).then(|| hash.to_ascii_lowercase());
+    }
+    None
 }
 
 /// The SHA-256 a side file (`file.sha256`) holds for the file called `name`: GNU lines (`hash  name`, `hash *name`), BSD lines
@@ -135,6 +140,12 @@ mod tests {
         assert_eq!(parse_output(Algo::Sha256, &format!("{H} /srv/f\n")).as_deref(), Some(H));
         assert_eq!(parse_output(Algo::Sha256, &format!("SHA256 (/srv/f) = {H}\n")).as_deref(), Some(H));
         assert_eq!(parse_output(Algo::Sha256, "Enter an option: "), None);
+        // a file named like the tagged form does not choose the hash
+        let fake = "f".repeat(64);
+        assert_eq!(parse_output(Algo::Sha256, &format!("{H}  /dir/x (y) = {fake}
+")).as_deref(), Some(H));
+        assert_eq!(parse_output(Algo::Sha256, &format!("SHA256 (x) = {fake}) = {H}
+")).as_deref(), Some(H));
         assert_eq!(parse_output(Algo::Xxh, "0123456789ABCDEF  f").as_deref(), Some("0123456789abcdef"));
         assert_eq!(parse_sidecar(&format!("{H} *f.iso\n"), "f.iso").as_deref(), Some(H));
         assert_eq!(parse_sidecar(&format!("SHA256 (f.iso) = {H}"), "f.iso").as_deref(), Some(H));
