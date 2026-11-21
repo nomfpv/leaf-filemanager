@@ -263,6 +263,12 @@ fn candidate(name: &std::ffi::OsStr, i: u32) -> std::ffi::OsString {
 
 /// Moves one item into `t`: info file first (`O_EXCL`), then the no-replace rename. The item's place in `files/`.
 pub(crate) fn put(t: &Trash, path: &Path) -> io::Result<PathBuf> {
+    put_with(t, path, &|from, to| crate::fileops::renameat2(from, to, libc::RENAME_NOREPLACE))
+}
+
+/// [`put`] with another way of moving the item into `files/` (`mover` must never replace, and answers `AlreadyExists` for a taken
+/// name).
+fn put_with(t: &Trash, path: &Path, mover: &dyn Fn(&Path, &Path) -> io::Result<()>) -> io::Result<PathBuf> {
     let orig = absolute(path)?;
     let name = orig.file_name().ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?.to_os_string();
     let shown = match &t.top {
@@ -285,7 +291,7 @@ pub(crate) fn put(t: &Trash, path: &Path) -> io::Result<PathBuf> {
         }
         drop(f);
         let dst = t.files().join(&cand);
-        match crate::fileops::renameat2(path, &dst, libc::RENAME_NOREPLACE) {
+        match mover(path, &dst) {
             Ok(()) => return Ok(dst),
             Err(e) => {
                 let _ = std::fs::remove_file(&info);
@@ -333,10 +339,38 @@ pub fn trash_tracked(paths: &[PathBuf], tracker: Arc<Tracker>) -> anyhow::Result
     Ok(true)
 }
 
-/// Moves `paths` (items on a device without a usable trash, see [`NoTrash`]) into the home trash: the user's second choice of D1.
-/// Not available yet: the cross-device copy comes with the copy engine.
-pub fn to_home_trash(_paths: &[PathBuf], _tracker: Arc<Tracker>) -> anyhow::Result<bool> {
-    leaf_common::stub_err!("recycle::to_home_trash")
+/// Moves `paths` (items on a device without a usable trash, see [`NoTrash`]) into the home trash: the user's second choice of D1,
+/// only after the app asked. Each item is copied across, fsynced and checked, and only then removed from its device; an item that
+/// cannot be copied whole stays where it is (its partial copy is removed). `Tracker.results` as for [`trash_tracked`].
+pub fn to_home_trash(paths: &[PathBuf], tracker: Arc<Tracker>) -> anyhow::Result<bool> {
+    let home = home_trash_dir().ok_or_else(|| anyhow::anyhow!("no home folder"))?;
+    let dev = home.ancestors().find_map(|a| std::fs::metadata(a).ok()).map(|m| m.dev()).ok_or_else(|| anyhow::anyhow!("no home folder"))?;
+    let t = Trash { dir: home, top: None };
+    ready(&t, dev)?;
+    let total = paths.len() as u32;
+    let mut failed = Vec::new();
+    for (i, p) in paths.iter().enumerate() {
+        while tracker.paused.load(Ordering::Relaxed) && !tracker.cancel.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if tracker.cancel.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        (tracker.on_progress)(total, i as u32, p.file_name().map(|n| n.to_string_lossy().into_owned()));
+        let mover = |from: &Path, to: &Path| -> io::Result<()> {
+            if std::fs::symlink_metadata(to).is_ok() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            crate::fastcopy::move_across(from, to).map_err(io::Error::other)
+        };
+        match put_with(&t, p, &mover) {
+            Ok(dst) => tracker.results.lock().unwrap().push((p.clone(), dst)),
+            Err(e) => failed.push(format!("{}: {e}", p.display())),
+        }
+    }
+    (tracker.on_progress)(total, total, None);
+    anyhow::ensure!(failed.is_empty(), "{} item(s) could not be moved to the trash: {}", failed.len(), failed.join("; "));
+    Ok(true)
 }
 
 /// The items of one trash.
@@ -390,7 +424,12 @@ fn restore_one(t: &Trash, at: &Path) -> anyhow::Result<()> {
     if let Some(parent) = orig.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    crate::fileops::renameat2(at, &orig, libc::RENAME_NOREPLACE).map_err(|e| anyhow::anyhow!("{}: {e}", orig.display()))?;
+    match crate::fileops::renameat2(at, &orig, libc::RENAME_NOREPLACE) {
+        Ok(()) => {}
+        // an item that came into the home trash from another device: copied back whole, then removed from the trash
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => crate::fastcopy::move_across(at, &orig)?,
+        Err(e) => anyhow::bail!("{}: {e}", orig.display()),
+    }
     // (the item is back; a record that cannot be removed only leaves a hidden orphan)
     if let Err(e) = std::fs::remove_file(&info) {
         log::warn!("trash: {} not removed ({e})", info.display());
