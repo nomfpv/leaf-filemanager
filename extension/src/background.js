@@ -286,11 +286,47 @@ async function clearProxy() {
   await quietly(IS_FIREFOX ? api.proxy.settings.clear({}) : api.proxy.settings.clear({ scope: "regular" }));
 }
 
-// WebRTC would otherwise reach out over UDP past the proxy and show the real address
-async function webRtcThroughProxy(on) {
-  const policy = api.privacy?.network?.webRTCIPHandlingPolicy;
-  if (!policy) return;
-  await quietly(on ? policy.set({ value: "disable_non_proxied_udp" }) : policy.clear({}));
+// While on, two privacy settings are held too: WebRTC would otherwise reach out over UDP past the proxy and show the real address;
+// network prediction (DNS prefetch, preconnect) would ask the PC's resolver for names on the page. Turning on sets them (a
+// failure is a refusal); turning off gives them back.
+const WEBRTC = "disable_non_proxied_udp";
+
+async function holdPrivacy(on) {
+  const net = api.privacy?.network;
+  if (!net) return;
+  if (on) {
+    if (net.webRTCIPHandlingPolicy) await net.webRTCIPHandlingPolicy.set({ value: WEBRTC });
+    if (net.networkPredictionEnabled) await net.networkPredictionEnabled.set({ value: false });
+  } else {
+    await quietly(net.webRTCIPHandlingPolicy?.clear({}));
+    await quietly(net.networkPredictionEnabled?.clear({}));
+  }
+}
+
+// whether `setting` is still this extension's, with a value `matches` takes (a setting this browser does not have: fine)
+async function ours(setting, matches) {
+  if (!setting) return true;
+  try {
+    const s = await setting.get({});
+    return s.levelOfControl === "controlled_by_this_extension" && matches(s.value);
+  } catch {
+    return false;
+  }
+}
+
+// what another extension or a policy took over from this switch ("the proxy", "WebRTC", ...), or null; `p`: leaf's proxy as set
+async function takenOver(p) {
+  // (Firefox per request: no proxy setting is held, the listener answers)
+  if (!perRequest && p) {
+    const proxyIsLeafs = IS_FIREFOX
+      ? (v) => v?.proxyType === "manual" && v?.socks === `${p.host}:${p.port}`
+      : (v) => v?.mode === "fixed_servers" && v?.rules?.singleProxy?.host === p.host && v?.rules?.singleProxy?.port === p.port;
+    if (!(await ours(api.proxy.settings, proxyIsLeafs))) return "the proxy";
+  }
+  const net = api.privacy?.network;
+  if (!(await ours(net?.webRTCIPHandlingPolicy, (v) => v === WEBRTC))) return "WebRTC";
+  if (!(await ours(net?.networkPredictionEnabled, (v) => v === false))) return "network prediction";
+  return null;
 }
 
 function showBadge(text, title) {
@@ -337,7 +373,18 @@ async function mullvadOn() {
   } catch (e) {
     return { ok: false, why: `The browser did not take the proxy setting (${e?.message ?? e}).` };
   }
-  await webRtcThroughProxy(true);
+  let lost;
+  try {
+    await holdPrivacy(true);
+    lost = await takenOver(vpn.proxy);
+  } catch {
+    lost = "WebRTC";
+  }
+  if (lost) {
+    await clearProxy();
+    await holdPrivacy(false);
+    return { ok: false, why: `Another extension or a policy controls this browser's ${lost} setting, so pages could leave past Mullvad. Turn that one off first.` };
+  }
   await api.storage.local.set({ mullvad: true, mullvadProxy: kept(vpn.proxy), mullvadNote: "", mullvadAlerted: false, mullvadCountry: vpn.country ?? "" });
   showBadge("VPN", `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}`);
   api.alarms.create(VPN_ALARM, { periodInMinutes: VPN_EVERY_MIN });
@@ -347,7 +394,7 @@ async function mullvadOn() {
 // only the user turns it off (the popup's "Turn off (browse without VPN)")
 async function mullvadOff() {
   await clearProxy();
-  await webRtcThroughProxy(false);
+  await holdPrivacy(false);
   await api.storage.local.set({ mullvad: false, mullvadProxy: null, mullvadPerRequest: false, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" });
   await quietly(api.alarms.clear(VPN_ALARM));
   showBadge("", "leaf");
@@ -359,8 +406,11 @@ const HELD = "Pages fail until leaf's VPN is back or you turn Browse through Mul
 
 // one notice per outage, the red badge and the popup's note
 async function hold(why) {
+  await alarmUser(HELD.replace("{why}", why));
+}
+
+async function alarmUser(note) {
   const cfg = await vpnConfig();
-  const note = HELD.replace("{why}", why);
   showBadge("!", note);
   await api.storage.local.set({ mullvadNote: note, mullvadAlerted: true });
   if (!cfg.mullvadAlerted) notify(note);
@@ -370,6 +420,9 @@ async function hold(why) {
 async function checkVpn() {
   const cfg = await vpnConfig();
   if (!cfg.mullvad) return;
+  // (also while leaf is not there: the settings this switch holds are looked at first)
+  const lost = await takenOver(cfg.mullvadProxy);
+  if (lost) return alarmUser(`Another extension or a policy took over the browser's ${lost} setting: pages are not going through Mullvad. Turn that one off, then turn Browse through Mullvad off and on.`);
   const vpn = await vpnState();
   if (!vpn) return hold("leaf is not running or did not answer");
   if (!vpn.proxy) return hold("leaf's proxy for other programs is turned off");

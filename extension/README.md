@@ -66,7 +66,9 @@ then Firefox's own sites (addons.mozilla.org, accounts.firefox.com, ...) and its
 popup says so. After a Firefox restart the per-request proxy is set up from storage before the first request, without the password
 until leaf answers (leaf refuses meanwhile: pages fail, never direct).
 While it is on, WebRTC is kept to the proxy (`webRTCIPHandlingPolicy` = `disable_non_proxied_udp`) so it does not show the real
-address; turning it off puts the browser's own settings back.
+address, and network prediction is off (DNS prefetch and preconnect would ask the PC's resolver); turning it off puts the browser's own
+settings back. These settings and the proxy must stay this extension's: when another extension or a policy controls one of them, the
+switch does not turn on, and when one takes it over later, the badge turns red and a notice says pages are not going through Mullvad.
 
 The extension asks leaf (through the native host, message `{"v":1,"type":"vpn"}`, leaf is not started for it) for the VPN's state and
 the proxy's address every half minute. The switch never turns itself off: while leaf's VPN is off, connecting or failed, while leaf is
@@ -80,7 +82,7 @@ New permissions for it:
 | Permission | Why |
 |---|---|
 | `proxy` | set the browser's proxy to leaf's (and back) |
-| `privacy` | keep WebRTC to the proxy while it is on |
+| `privacy` | keep WebRTC to the proxy and turn network prediction (DNS prefetch, preconnect) off while it is on |
 | `alarms` | ask leaf for the VPN's state every half minute |
 | `notifications` | the notice when the switch turned itself off |
 | `ws://*/*`, `wss://*/*` (Firefox) | WebSocket connections get the per-request proxy too |
