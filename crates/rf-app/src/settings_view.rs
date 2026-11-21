@@ -2992,11 +2992,8 @@ pub(crate) fn check_updates_now(cx: &mut App) {
     .detach();
 }
 
-const REPO_URL: &str = "https://github.com/gelenmedya/rustyfiles";
-const SITE_URL: &str = "https://leaf.com";
-const DISCORD_URL: &str = "https://discord.gg/K2banZ36zJ";
-const ISSUES_URL: &str = "https://github.com/gelenmedya/rustyfiles/issues/new";
-const RELEASES_URL: &str = "https://github.com/gelenmedya/rustyfiles/releases";
+const REPO_URL: &str = "https://github.com/nomfpv/leaf-filemanager";
+const ISSUES_URL: &str = "https://github.com/nomfpv/leaf-filemanager/issues";
 
 fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let ver = crate::installer::version_full();
@@ -3012,19 +3009,9 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             button("copy-ver", p, t!("Copy"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("leaf {ver}")))),
         ),
         update_card(p, &s),
-        section(p, "GitHub"),
-        link_row(p, "gh-star", L::Star, t!("Star it on GitHub"), Some(t!("If leaf is useful to you, it helps others find it.")), |_, _| open_url(REPO_URL)),
+        section(p, t!("Project")),
+        link_row(p, "gh-repo", L::Code, t!("Source code"), Some("github.com/nomfpv/leaf-filemanager"), |_, _| open_url(REPO_URL)),
         link_row(p, "gh-issue", L::MessageSquare, t!("Report a bug or suggest something"), None, |_, _| open_url(ISSUES_URL)),
-        link_row(p, "gh-notes", L::ScrollText, t!("Release notes"), None, |_, _| open_url(RELEASES_URL)),
-        section(p, t!("Community")),
-        link_row(p, "site", L::Globe, t!("Website"), Some("leaf.com"), |_, _| open_url(SITE_URL)),
-        link_row(p, "discord", L::Users, t!("Discord server"), Some(t!("Ask questions, share ideas, hear about new versions.")), |_, _| open_url(DISCORD_URL)),
-        div()
-            .px_1()
-            .text_xs()
-            .text_color(p.text_secondary)
-            .child(t!("A lightweight file manager written in Rust + GPUI that never freezes."))
-            .into_any_element(),
         section(p, t!("Help and support")),
         link_row(p, "open-log", L::FolderOpen, t!("Open log and settings folder"), settings::app_dir().map(|d| d.display().to_string()).as_deref(), |_, _| {
             if let Some(d) = settings::app_dir() {
@@ -3033,7 +3020,19 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                 });
             }
         }),
-        section(p, t!("Open source")),
+        section(p, t!("License")),
+        div()
+            .px_1()
+            .text_xs()
+            .text_color(p.text_secondary)
+            .child(t!("leaf is free software under the MIT License."))
+            .into_any_element(),
+        div()
+            .px_1()
+            .text_xs()
+            .text_color(p.text_secondary)
+            .child("Based on rustyfiles by Özer Güzel (MIT)")
+            .into_any_element(),
         expander(
             "libs",
             p,

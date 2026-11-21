@@ -401,7 +401,7 @@ pub struct Settings {
     /// The pane's height at the bottom (drag its top edge). Written only once the user has moved it.
     #[serde(skip_serializing_if = "is_default_preview_height")]
     pub preview_height: f32,
-    /// The file's details under its preview (type, size, dates, location, the hash button). Asked for on the leaf Discord: "Hope
+    /// The file's details under its preview (type, size, dates, location, the hash button). Asked for on the upstream Discord: "Hope
     /// the Properties can have an option to hide".
     pub preview_details: bool,
     pub renderer: RendererPref,
