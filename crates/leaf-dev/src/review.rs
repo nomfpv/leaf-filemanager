@@ -29,11 +29,16 @@ pub struct RHunk {
     pub new_count: u32,
     /// The `@@ -a,b +c,d @@ section` line.
     pub header: String,
-    /// Line texts without their line end.
+    /// Line texts without their line end (decoded for display: a byte that is not UTF-8 shows as U+FFFD).
     pub lines: Vec<DiffLine>,
-    /// The hunk exactly as git printed it (header, lines, "\ No newline" markers): the patch for `git apply --cached`. `None` for a
-    /// hunk not made by `git diff` (a new file, a checkpoint comparison).
-    pub raw: Option<String>,
+    /// The same lines as the file's own bytes (without the line end and a CR before it): what a revert compares and writes.
+    pub bytes: Vec<Vec<u8>>,
+    /// `bytes` are the file's exact bytes. `false` for a hunk decoded from text that was not valid UTF-8 (a checkpoint comparison
+    /// of such a file): it is shown but never reverted.
+    pub exact: bool,
+    /// The hunk exactly as git printed it, byte for byte (header, lines, "\ No newline" markers): the patch for
+    /// `git apply --cached`. `None` for a hunk not made by `git diff` (a new file, a checkpoint comparison).
+    pub raw: Option<Vec<u8>>,
     /// All its lines were read (a diff cut short leaves its last hunk incomplete: nothing may be done with it).
     pub complete: bool,
 }
@@ -82,13 +87,16 @@ fn parse_range(s: &str) -> Option<(u32, u32)> {
 
 /// Parses `git diff` output of one file into hunks that keep git's own text. At most `max_lines` lines; then `truncated` is set and
 /// the hunk that was cut is marked incomplete.
-pub fn parse_hunks(text: &str, max_lines: usize) -> RDiff {
+pub fn parse_hunks(text: &[u8], max_lines: usize) -> RDiff {
     let mut d = RDiff::default();
     let mut kept = 0usize;
     let (mut old_no, mut new_no) = (0u32, 0u32);
     let mut in_hunk = false;
-    for raw_line in text.split_inclusive('\n') {
-        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+    for raw_line in text.split_inclusive(|&b| b == b'\n') {
+        let line_b = raw_line.strip_suffix(b"\n").unwrap_or(raw_line);
+        // (only for the header lines and the display; the bytes of a line are kept as they are)
+        let line_s = String::from_utf8_lossy(line_b);
+        let line: &str = &line_s;
         if let Some(rest) = line.strip_prefix("@@ -") {
             let mut parts = rest.split_whitespace();
             let o = parts.next().and_then(parse_range);
@@ -104,7 +112,18 @@ pub fn parse_hunks(text: &str, max_lines: usize) -> RDiff {
             old_no = os;
             new_no = ns;
             in_hunk = true;
-            d.hunks.push(RHunk { old_start: os, old_count: oc, new_start: ns, new_count: nc, header: line.to_string(), lines: Vec::new(), raw: Some(raw_line.to_string()), complete: true });
+            d.hunks.push(RHunk {
+                old_start: os,
+                old_count: oc,
+                new_start: ns,
+                new_count: nc,
+                header: line.to_string(),
+                lines: Vec::new(),
+                bytes: Vec::new(),
+                exact: true,
+                raw: Some(raw_line.to_vec()),
+                complete: true,
+            });
             continue;
         }
         if line.starts_with("diff --git ") {
@@ -127,7 +146,7 @@ pub fn parse_hunks(text: &str, max_lines: usize) -> RDiff {
             Some(b' ') => LineKind::Context,
             Some(b'\\') => {
                 if let Some(r) = h.raw.as_mut() {
-                    r.push_str(raw_line);
+                    r.extend_from_slice(raw_line);
                 }
                 continue;
             }
@@ -140,10 +159,12 @@ pub fn parse_hunks(text: &str, max_lines: usize) -> RDiff {
         }
         kept += 1;
         if let Some(r) = h.raw.as_mut() {
-            r.push_str(raw_line);
+            r.extend_from_slice(raw_line);
         }
-        let body = &line[1..];
-        let body = body.strip_suffix('\r').unwrap_or(body).to_string();
+        let body_b = &line_b[1..];
+        let body_b = body_b.strip_suffix(b"\r").unwrap_or(body_b);
+        h.bytes.push(body_b.to_vec());
+        let body = String::from_utf8_lossy(body_b).into_owned();
         let (o, n) = match kind {
             LineKind::Context => {
                 old_no += 1;
@@ -198,7 +219,10 @@ pub fn from_file_diff(f: FileDiff, swap: bool) -> RDiff {
         d.added += lines.iter().filter(|l| l.kind == LineKind::Added).count() as u32;
         d.removed += lines.iter().filter(|l| l.kind == LineKind::Removed).count() as u32;
         let header = format!("@@ -{os},{oc} +{ns},{nc} @@");
-        d.hunks.push(RHunk { old_start: os, old_count: oc, new_start: ns, new_count: nc, header, lines, raw: None, complete: !(f.truncated && i == last) });
+        let bytes: Vec<Vec<u8>> = lines.iter().map(|l| l.text.as_bytes().to_vec()).collect();
+        // (text decoded with replacement characters is not the file's bytes)
+        let exact = !lines.iter().any(|l| l.text.contains('\u{FFFD}'));
+        d.hunks.push(RHunk { old_start: os, old_count: oc, new_start: ns, new_count: nc, header, lines, bytes, exact, raw: None, complete: !(f.truncated && i == last) });
     }
     d
 }
@@ -235,7 +259,7 @@ fn run_write(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String,
 
 fn read_diff(root: &Path, args: &[&str]) -> Option<RDiff> {
     let (raw, cut) = gitread::run(root, args, gitread::TIMEOUT, gitread::MAX_OUT)?;
-    let mut d = parse_hunks(&String::from_utf8_lossy(&raw), MAX_LINES);
+    let mut d = parse_hunks(&raw, MAX_LINES);
     d.truncated |= cut;
     if cut && let Some(h) = d.hunks.last_mut() {
         h.complete = false;
@@ -342,12 +366,13 @@ fn patch_name(prefix: &str, rel: &str) -> String {
 }
 
 /// The patch of one hunk of `rel` (for `git apply`).
-pub fn hunk_patch(rel: &str, hunk: &RHunk) -> Option<String> {
+pub fn hunk_patch(rel: &str, hunk: &RHunk) -> Option<Vec<u8>> {
     let raw = hunk.raw.as_ref()?;
     let (a, b) = (patch_name("a/", rel), patch_name("b/", rel));
-    let mut p = format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n{raw}");
-    if !p.ends_with('\n') {
-        p.push('\n');
+    let mut p = format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n").into_bytes();
+    p.extend_from_slice(raw);
+    if !p.ends_with(b"\n") {
+        p.push(b'\n');
     }
     Some(p)
 }
@@ -359,7 +384,7 @@ pub fn stage_hunk(root: &Path, rel: &str, hunk: &RHunk) -> Result<(), String> {
         return Err("This part of the diff was not read in full".into());
     }
     let patch = hunk_patch(rel, hunk).ok_or("This part can only be accepted with the whole file")?;
-    run_write(root, &["apply", "--cached", "--whitespace=nowarn", "-"], Some(patch.as_bytes())).map(|_| ())
+    run_write(root, &["apply", "--cached", "--whitespace=nowarn", "-"], Some(&patch)).map(|_| ())
 }
 
 /// Commits what is staged with `message` as it is (`git commit -F -`, so hooks and the author from git's config apply). Never
@@ -373,6 +398,9 @@ pub fn commit(root: &Path, message: &str) -> Result<String, String> {
 
 /// The work file's text with one hunk taken back. `None` when the hunk's new side is not where the hunk says (the file changed).
 pub fn reverted_bytes(bytes: &[u8], hunk: &RHunk) -> Option<Vec<u8>> {
+    if !hunk.exact || hunk.bytes.len() != hunk.lines.len() {
+        return None;
+    }
     // the file's lines with their own ends
     let mut lines: Vec<&[u8]> = Vec::new();
     let mut at = 0;
@@ -394,12 +422,12 @@ pub fn reverted_bytes(bytes: &[u8], hunk: &RHunk) -> Option<Vec<u8>> {
         return None;
     }
     // the new side must be in the file exactly there
-    let new_side: Vec<&DiffLine> = hunk.lines.iter().filter(|l| l.kind != LineKind::Removed).collect();
+    let new_side: Vec<&[u8]> = hunk.lines.iter().zip(&hunk.bytes).filter(|(l, _)| l.kind != LineKind::Removed).map(|(_, b)| b.as_slice()).collect();
     if new_side.len() != hunk.new_count as usize {
         return None;
     }
     for (l, f) in new_side.iter().zip(&lines[start..end]) {
-        if strip(f) != l.text.as_bytes() {
+        if strip(f) != *l {
             return None;
         }
     }
@@ -408,7 +436,7 @@ pub fn reverted_bytes(bytes: &[u8], hunk: &RHunk) -> Option<Vec<u8>> {
         out.extend_from_slice(l);
     }
     let mut ptr = start;
-    for l in &hunk.lines {
+    for (l, b) in hunk.lines.iter().zip(&hunk.bytes) {
         match l.kind {
             LineKind::Context => {
                 out.extend_from_slice(lines[ptr]);
@@ -416,7 +444,7 @@ pub fn reverted_bytes(bytes: &[u8], hunk: &RHunk) -> Option<Vec<u8>> {
             }
             LineKind::Added => ptr += 1,
             LineKind::Removed => {
-                out.extend_from_slice(l.text.as_bytes());
+                out.extend_from_slice(b);
                 out.extend_from_slice(eol);
             }
         }
@@ -466,6 +494,9 @@ pub fn revert_hunk(path: &Path, stamp: Stamp, hunk: &RHunk, put_away: &dyn Fn(&P
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     if Stamp::of_bytes(&bytes) != stamp {
         return Err("The file changed after the difference was shown. Look at it again first".into());
+    }
+    if !hunk.exact {
+        return Err("This file's text is not UTF-8 and the difference was read as text: revert the whole file instead".into());
     }
     let new = reverted_bytes(&bytes, hunk).ok_or("The file does not match the difference shown. Look at it again first")?;
     let (tmp, mut file) = temp_beside(path).map_err(|e| e.to_string())?;
@@ -522,7 +553,31 @@ mod tests {
         std::fs::write(dir.join("b"), new).unwrap();
         let out = Command::new("git").current_dir(&dir).args(["diff", "--no-index", "--no-color", "-U1", "--", "a", "b"]).output().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        parse_hunks(&String::from_utf8_lossy(&out.stdout), MAX_LINES)
+        parse_hunks(&out.stdout, MAX_LINES)
+    }
+
+    fn diff_of_bytes(old: &[u8], new: &[u8]) -> RDiff {
+        let dir = temp(&format!("b{}", Stamp::of_bytes(new).hash));
+        std::fs::write(dir.join("a"), old).unwrap();
+        std::fs::write(dir.join("b"), new).unwrap();
+        let out = Command::new("git").current_dir(&dir).args(["diff", "--no-index", "--no-color", "-U1", "--", "a", "b"]).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        parse_hunks(&out.stdout, MAX_LINES)
+    }
+
+    #[test]
+    fn a_latin1_file_keeps_its_bytes_through_a_hunk_revert() {
+        // Latin-1: "caf\xe9" (not UTF-8) on a removed line and on untouched lines of another hunk
+        let old: &[u8] = b"caf\xe9\nb\nc\nd\ne\nf\ng\nna\xefve\n";
+        let new: &[u8] = b"cafe\nb\nc\nd\ne\nf\ng\nNA\xcfVE\n";
+        let d = diff_of_bytes(old, new);
+        assert_eq!(d.hunks.len(), 2);
+        let dir = temp("latin1");
+        let f = dir.join("f.txt");
+        std::fs::write(&f, new).unwrap();
+        revert_hunk(&f, Stamp::of_file(&f).unwrap(), &d.hunks[0], &trash_into(&dir)).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"caf\xe9\nb\nc\nd\ne\nf\ng\nNA\xcfVE\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

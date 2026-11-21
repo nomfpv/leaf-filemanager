@@ -1065,6 +1065,7 @@ impl ReviewView {
         let headers: Vec<SharedString> = s.diff.hunks.iter().map(|h| SharedString::from(h.header.clone())).collect();
         let reviewed: Vec<bool> = s.diff.hunks.iter().map(|h| self.reviewed_hunks.contains(&(s.rel.clone(), h.header.clone()))).collect();
         let complete: Vec<bool> = s.diff.hunks.iter().map(|h: &RHunk| h.complete).collect();
+        let exact: Vec<bool> = s.diff.hunks.iter().map(|h| h.exact).collect();
         let actionable = !staged_view && !s.diff.binary;
         let can_revert = actionable && s.stamp.is_some();
         let sel = self.hunk;
@@ -1106,7 +1107,7 @@ impl ReviewView {
                                     });
                                 }))
                             })
-                            .when(can_revert && complete[hi], |d| {
+                            .when(can_revert && complete[hi] && exact[hi], |d| {
                                 d.child(small(("review-hunk-revert", hi), t!("Revert"), &p).on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     let _ = m3.update(cx, |v, cx| {
