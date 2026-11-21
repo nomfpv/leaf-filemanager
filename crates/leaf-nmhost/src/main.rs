@@ -93,6 +93,28 @@ fn start_leaf() -> bool {
 
 const NOT_RUNNING: &str = "leaf is not running";
 
+/// leaf's settings folder, as leaf finds it (`rf-app/src/settings.rs` `app_dir`).
+fn settings_dir() -> Option<std::path::PathBuf> {
+    if let Some(d) = std::env::var_os("LEAF_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(d.into());
+    }
+    leaf_sys::portable::data_dir().or_else(|| dirs::config_dir().map(|d| d.join("leaf")))
+}
+
+/// Held while this host starts leaf and waits for it: a page that starts two downloads at once runs two hosts, and only one of them
+/// may start leaf (the second start would land in the first as a launch without a folder and open another window).
+fn start_lock(until: Instant) -> Option<std::fs::File> {
+    let dir = settings_dir()?;
+    let _ = std::fs::create_dir_all(&dir);
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("nmhost-start.lock")).ok()?;
+    loop {
+        match f.try_lock() {
+            Ok(()) => return Some(f),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < until => std::thread::sleep(Duration::from_millis(100)),
+            _ => return None,
+        }
+    }
+}
 
 /// Hands `line` to leaf; starts leaf first when `start` and it is not running. Ends within [`DEADLINE`].
 fn ask(line: &str, start: bool) -> Result<(), String> {
@@ -101,6 +123,13 @@ fn ask(line: &str, start: bool) -> Result<(), String> {
     let try_once = || leaf_sys::handover::ask(line, left()).map(drop);
     match try_once() {
         Err(e) if e == NOT_RUNNING && start => {}
+        r => return r,
+    }
+    // (another host may be starting leaf this moment, or leaf may be coming up already: wait for that one, then look again)
+    let _lock = start_lock(until);
+    std::thread::sleep(Duration::from_millis(500));
+    match try_once() {
+        Err(e) if e == NOT_RUNNING && left() > Duration::from_secs(1) => {}
         r => return r,
     }
     if !start_leaf() {
