@@ -115,20 +115,23 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
 /// patterns expanded. The second number is how many words were left out (not a web address, a password in it, a pattern that
 /// makes too many).
 pub fn expand_many(text: &str) -> (Vec<String>, usize) {
-    let (mut urls, mut skipped) = (Vec::new(), 0);
+    let (mut urls, mut seen, mut skipped) = (Vec::new(), std::collections::HashSet::new(), 0);
     for word in text.split_whitespace() {
+        // (the whole paste is capped, not each word: a long list of patterns stays a list a person can look at)
+        if urls.len() >= dl::pattern::MAX {
+            skipped += 1;
+            continue;
+        }
         let word = word.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | ','));
         let Some(list) = dl::pattern::expand(word) else {
             skipped += 1;
             continue;
         };
         for u in list {
-            if dl::is_http_url(&u) && !dl::has_password(&u) {
-                if !urls.contains(&u) {
-                    urls.push(u);
-                }
-            } else {
+            if !dl::is_http_url(&u) || dl::has_password(&u) || urls.len() >= dl::pattern::MAX {
                 skipped += 1;
+            } else if seen.insert(u.clone()) {
+                urls.push(u);
             }
         }
     }
