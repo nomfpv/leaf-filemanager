@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: run.sh [seconds]   (as neo)  headless leaf in a private kwin --virtual
 # env: VW VH (screen size), BIN (leaf binary), DEMO (folder copied in as the shown folder), OPEN (name inside it to start with),
-#      SETTINGS (a settings.toml for the throwaway config), LEAF_RUST_LOG, LEAF_WLDEBUG, LEAF_TRACE_START
+#      SETTINGS (a settings.toml for the throwaway config), KDEGLOBALS (a kdeglobals file there: its [Icons] Theme is the icon theme), LEAF_RUST_LOG, LEAF_WLDEBUG, LEAF_TRACE_START
 #      ACTIONS (an actions.toml for the throwaway config; $BASE in it is the temp folder),
 #      X11 (set: leaf runs as an X11 client of the private KWin's rootless Xwayland, no WAYLAND_DISPLAY), BIN
 #      SCRIPT (a LEAF_CHECK_SCRIPT file, see tools/TESTING.md: $FOLDER, $OTHER (an empty second folder), $DATA (the private
@@ -15,6 +15,7 @@ mkdir -p $BASE/{rt,cfg,data,cache,home,folder,other} && chmod 700 $BASE $BASE/rt
 for i in a b c; do echo hi > $BASE/folder/$i.txt; done; mkdir $BASE/folder/sub
 [ -n "$DEMO" ] && { rm -rf $BASE/folder; cp -a "$DEMO" $BASE/folder; }
 [ -n "$SETTINGS" ] && cp "$SETTINGS" $BASE/cfg/settings.toml
+[ -n "$KDEGLOBALS" ] && cp "$KDEGLOBALS" $BASE/cfg/kdeglobals   # [Icons] Theme=... picks the system icon theme
 [ -n "$ACTIONS" ] && sed "s|\$BASE|$BASE|g" "$ACTIONS" > $BASE/cfg/actions.toml
 SHOTS=${SHOTS:-$ROOT/shots}
 if [ -n "$SCRIPT" ]; then

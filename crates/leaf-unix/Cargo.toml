@@ -20,3 +20,5 @@ serde.workspace = true
 # pictures: the same decoders as on Windows' image-crate path (leaf-decode adds JPEG XL and AVIF)
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
 kamadak-exif = "0.6"
+# SVG icons of the system icon theme (already in the tree through rf-win)
+resvg = { version = "0.46", default-features = false }

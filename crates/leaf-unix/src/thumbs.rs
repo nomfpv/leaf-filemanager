@@ -1,8 +1,8 @@
-//! Linux backend of rf_win::thumbs. Status: REAL for pictures, no icons
+//! Linux backend of rf_win::thumbs. Status: REAL for pictures, type icons from the system icon theme (`crate::icontheme`)
 //!
 //! A picture file (by extension: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, QOI, EXR, HDR, DDS, PNM, JPEG XL, AVIF) gets a
-//! thumbnail from [`crate::look::decode`] at the asked size. Everything else answers `None` / `Err` (the caller draws its generic
-//! icon): there are no type icons yet. The pool is the same shape as Windows': newest request first on worker threads, a small
+//! thumbnail from [`crate::look::decode`] at the asked size. A `Kind::Icon` request gets the system icon theme's picture for the file's type. Everything else answers `None` / `Err` (the caller
+//! draws its generic icon). The pool is the same shape as Windows': newest request first on worker threads, a small
 //! lane of its own for the urgent picture (preview pane, Quick Look), a bounded backlog whose oldest are answered `dropped`.
 
 use std::path::Path;
@@ -35,11 +35,11 @@ fn picture(path: &Path, size: u32) -> Option<Bgra> {
     d.frames.into_iter().next().map(|(b, _)| b)
 }
 
-/// A thumbnail for a picture file; there are no icons: `Kind::Icon`, and any file that is no picture, is an `Err`.
+/// A thumbnail for a picture file; `Kind::Icon` is the system theme's icon of the file's type; any other file is an `Err`.
 pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
     match kind {
         Kind::Thumbnail | Kind::ThumbnailOnly => picture(path, size).ok_or_else(|| anyhow::anyhow!("no picture for {}", path.display())),
-        Kind::Icon => anyhow::bail!("no icons on this system yet"),
+        Kind::Icon => crate::icontheme::icon_for(path, size).ok_or_else(|| anyhow::anyhow!("no system icon for {}", path.display())),
     }
 }
 
@@ -99,7 +99,12 @@ fn serve(q: Arc<Queue>, on_done: Arc<dyn Fn(Response) + Send + Sync>, urgent: bo
     let _ = std::thread::Builder::new().name(name).spawn(move || {
         while let Some(req) = q.take() {
             let started = std::time::Instant::now();
-            let image = if matches!(req.kind, Kind::Thumbnail) { picture(&req.path, req.size).map(Arc::new) } else { None };
+            let image = match req.kind {
+                Kind::Thumbnail => picture(&req.path, req.size),
+                Kind::Icon => crate::icontheme::icon_for(&req.path, req.size),
+                Kind::ThumbnailOnly => None,
+            }
+            .map(Arc::new);
             on_done(Response { key: req.key, image, dropped: false, waited: started.saturating_duration_since(req.queued()), took: started.elapsed(), urgent });
         }
     });

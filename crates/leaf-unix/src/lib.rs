@@ -39,6 +39,7 @@ pub mod git;
 pub mod glass;
 pub mod handover;
 pub mod hotkey;
+pub mod icontheme;
 pub mod indexer;
 pub mod input;
 pub mod jumplist;

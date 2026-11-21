@@ -4533,6 +4533,7 @@ dependencies = [
  "leaf-decode",
  "libc",
  "log",
+ "resvg 0.46.0",
  "rf-core",
  "serde",
 ]
