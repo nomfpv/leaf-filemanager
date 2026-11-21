@@ -20,6 +20,8 @@ serde.workspace = true
 # the name index: inotify watchers and locks (both already in the tree through rf-win)
 notify.workspace = true
 parking_lot.workspace = true
+# notifications and the launcher progress go over the session bus (already in the tree through the toolkit's portal crates)
+zbus = "5"
 # pictures: the same decoders as on Windows' image-crate path (leaf-decode adds JPEG XL and AVIF)
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
 kamadak-exif = "0.6"

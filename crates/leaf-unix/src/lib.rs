@@ -92,6 +92,7 @@ pub mod syncroots;
 pub mod sysparams;
 pub mod taskbar_progress;
 pub mod thumbs;
+mod bus;
 pub mod toast_post;
 pub mod tray;
 pub mod vfiles;
