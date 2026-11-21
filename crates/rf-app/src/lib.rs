@@ -25,6 +25,7 @@ mod prop_chooser;
 mod hash_panel;
 mod i18n;
 mod folder_history;
+mod full_path;
 mod folder_view;
 mod icons;
 mod keymap_editor;

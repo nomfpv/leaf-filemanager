@@ -528,6 +528,12 @@ pub struct Settings {
     pub tabs_fit_names: bool,
     /// The terminal button on each folder's tab. Issue 119: it was in the way of clicks on narrow tabs.
     pub tab_terminal_button: bool,
+    /// The address bar shows the full path as text (one click edits it) instead of the clickable folder parts.
+    pub address_full_path: bool,
+    /// A tab is titled with the folder's full path (the middle left out when it is long) instead of the folder's name.
+    pub tab_full_path: bool,
+    /// The window's title shows the folder's full path.
+    pub title_full_path: bool,
     /// Typing in a folder's list filters it by name (the filter bar opens with the letters); off: typing selects the item whose
     /// name starts with them. Issue 106.
     pub type_to_filter: bool,
@@ -725,6 +731,9 @@ impl Default for Settings {
             select_on_hover: false,
             tabs_fit_names: false,
             tab_terminal_button: true,
+            address_full_path: false,
+            tab_full_path: false,
+            title_full_path: false,
             preview_details: true,
             type_to_filter: false,
             double_click_up: true,

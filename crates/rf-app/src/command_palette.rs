@@ -62,6 +62,7 @@ fn commands() -> Vec<Cmd> {
         cmd!("Full screen", "F11", L::Maximize, ToggleFullscreen),
         cmd!("Always on top", "", L::Pin, ToggleAlwaysOnTop),
         cmd!("Compact overlay", "", L::PictureInPicture2, ToggleCompactOverlay),
+        cmd!("Show full path in address bar", "", L::TextCursorInput, ToggleAddressFullPath),
         cmd!("Go to folder alias", "@", L::AtSign, GoToFolderAlias),
         cmd!("Search past folders", "Ctrl+P", L::Clock, SearchFolderHistory),
         cmd!("Search tabs", "Ctrl+Shift+A", L::PanelTop, SearchTabs),

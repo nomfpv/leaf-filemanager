@@ -2198,7 +2198,12 @@ impl Workspace {
         let mut tab_claimed = false;
         for (i, tab) in self.tabs.iter().enumerate() {
             let v = tab.view().read(cx);
-            let title = v.title(cx);
+            let name = v.title(cx);
+            let tab_full = cx.global::<crate::settings::Settings>().tab_full_path;
+            // (the room in characters for a full path, about 7 px each; the tab's own width is only known further down)
+            let room_w = if fit_names { TAB_MAX_W } else { tab_w };
+            let title = crate::full_path::tab_text(v.location(), &name, tab_full, ((room_w - TAB_CHROME_W) / 7.).max(8.) as usize);
+            let tab_tip = crate::full_path::path_text(v.location()).unwrap_or_else(|| name.clone());
             let icon = v.tab_icon();
             let tab_dir = v.location().path().map(Path::to_path_buf);
             let term_dir = tab_terminal.then(|| tab_terminal_dir(v.location())).flatten();
@@ -2220,6 +2225,7 @@ impl Workspace {
             let anim = self.tab_anim.as_ref().filter(|(v, _)| *v == tab.left).map(|(_, s)| *s);
             let el = h_flex()
                     .id(("tab", i))
+                    .when(!popups_open, |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tab_tip.clone()).build(w, cx)))
                     .group("tab")
                     .flex_shrink_0()
                     .h(px(32.))
@@ -2831,10 +2837,14 @@ impl Workspace {
         };
 
         let suggestions = if self.search_mode { self.render_search_history(p, cx) } else { self.render_suggestions(p, cx) };
+        let full_text = if cx.global::<crate::settings::Settings>().address_full_path { crate::full_path::path_text(&loc) } else { None };
         let field: AnyElement = if searching {
             Input::new(&self.search).appearance(false).cleanable(true).into_any_element()
         } else if self.editing_address {
             Input::new(&self.address).appearance(false).into_any_element()
+        } else if let Some(text) = full_text {
+            // the full path as plain text; the omnibar's click edits it
+            div().id("address-text").flex_1().min_w_0().px_1p5().py_0p5().text_sm().whitespace_nowrap().truncate().child(crate::rtl::display_text(&text)).into_any_element()
         } else {
             self.render_breadcrumb(&loc, p, cx).into_any_element()
         };
@@ -4506,7 +4516,11 @@ impl Render for Workspace {
             .flatten();
         let status = self.render_statusbar(&p, strip_bar_w, cx);
         // Taskbar title follows the active folder.
-        let title = format!("{} - leaf", self.active_tab().read(cx).title(cx));
+        let title = {
+            let v = self.active_tab().read(cx);
+            let full = cx.global::<crate::settings::Settings>().title_full_path;
+            format!("{} - leaf", crate::full_path::window_text(v.location(), &v.title(cx), full))
+        };
         if title != self.last_title {
             window.set_window_title(&title);
             self.last_title = title;
@@ -4773,6 +4787,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &ToggleAlwaysOnTop, window, _| this.toggle_always_on_top(window)))
             .on_action(cx.listener(|this, _: &ToggleCompactOverlay, window, cx| this.toggle_compact(window, cx)))
+            .on_action(cx.listener(|_, _: &ToggleAddressFullPath, _, cx| crate::settings::update(cx, |s| s.address_full_path = !s.address_full_path)))
             .on_action(cx.listener(|this, _: &GoToFolderAlias, window, cx| {
                 // Files: the address box opens with "@" and lists the aliases
                 this.begin_address_edit(window, cx);

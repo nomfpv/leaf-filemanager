@@ -81,6 +81,7 @@ gpui_kit::actions!(
         ToggleFullscreen,
         ToggleAlwaysOnTop,
         ToggleCompactOverlay,
+        ToggleAddressFullPath,
         GoToFolderAlias,
         RotateRight,
         RotateLeft,

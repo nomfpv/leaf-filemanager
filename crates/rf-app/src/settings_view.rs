@@ -2008,6 +2008,27 @@ fn files(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     v.push(card(p, L::FolderUp, t!("Select the previous folder when going up"), None, sw("prev-sel", p, s.select_previous_on_up, |s, v| s.select_previous_on_up = v)));
     v.push(card(
         p,
+        L::TextCursorInput,
+        t!("Show the full path in the address bar"),
+        Some(t!("The address bar shows the path as text instead of clickable folder parts; one click still edits it")),
+        sw("addr-full", p, s.address_full_path, |s, v| s.address_full_path = v),
+    ));
+    v.push(card(
+        p,
+        L::PanelTop,
+        t!("Show the full path on tabs"),
+        Some(t!("Tabs are titled with the whole path instead of the folder name; long paths are shortened in the middle. The tooltip always shows the full path")),
+        sw("tab-full", p, s.tab_full_path, |s, v| s.tab_full_path = v),
+    ));
+    v.push(card(
+        p,
+        L::AppWindow,
+        t!("Show the full path in the window title"),
+        None,
+        sw("title-full", p, s.title_full_path, |s, v| s.title_full_path = v),
+    ));
+    v.push(card(
+        p,
         L::SquareTerminal,
         t!("Run commands from the address bar"),
         Some(t!("Text typed into the address bar that is not an existing place is looked up as a program (cmd, powershell, wt…) and started in the open folder; confirmed with Enter")),
