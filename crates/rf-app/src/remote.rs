@@ -1548,7 +1548,12 @@ fn offer_copy(remote: VPath, local: PathBuf, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use rf_core::Location;
+
+    use super::upgrade_address_path;
 
     #[test]
     fn old_ftp_path_with_a_password_upgrades_without_it() {
