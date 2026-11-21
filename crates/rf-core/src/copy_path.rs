@@ -160,19 +160,19 @@ mod tests {
 
     #[test]
     fn variants() {
-        let p = r"C:\Users\Me\My Repo\src\a b.txt";
-        let root = Some(r"C:\Users\Me\My Repo");
+        let p = r"C:\Work\Me\My Repo\src\a b.txt";
+        let root = Some(r"C:\Work\Me\My Repo");
         let f = |k, p, r| format_path(k, p, r);
         assert_eq!(f(Full, p, root).unwrap(), p);
         assert_eq!(f(Name, p, root).unwrap(), "a b.txt");
-        assert_eq!(f(Folder, p, root).unwrap(), r"C:\Users\Me\My Repo\src");
-        assert_eq!(f(Slashes, p, root).unwrap(), "C:/Users/Me/My Repo/src/a b.txt");
+        assert_eq!(f(Folder, p, root).unwrap(), r"C:\Work\Me\My Repo\src");
+        assert_eq!(f(Slashes, p, root).unwrap(), "C:/Work/Me/My Repo/src/a b.txt");
         assert_eq!(f(Relative, p, root).unwrap(), "src/a b.txt");
         assert_eq!(f(Relative, p, None), None);
         assert_eq!(f(At, p, root).unwrap(), "@src/a b.txt");
-        assert_eq!(f(At, p, None).unwrap(), "@C:/Users/Me/My Repo/src/a b.txt");
-        assert_eq!(f(Wsl, p, root).unwrap(), "/mnt/c/Users/Me/My Repo/src/a b.txt");
-        assert_eq!(f(Url, p, root).unwrap(), "file:///C:/Users/Me/My%20Repo/src/a%20b.txt");
+        assert_eq!(f(At, p, None).unwrap(), "@C:/Work/Me/My Repo/src/a b.txt");
+        assert_eq!(f(Wsl, p, root).unwrap(), "/mnt/c/Work/Me/My Repo/src/a b.txt");
+        assert_eq!(f(Url, p, root).unwrap(), "file:///C:/Work/Me/My%20Repo/src/a%20b.txt");
         assert_eq!(f(Quoted, p, root).unwrap(), format!("\"{p}\""));
         // UNC into WSL, and a plain UNC share
         let u = r"\\wsl.localhost\Ubuntu\home\u\x y";
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(f(Folder, r"C:\x", None).unwrap(), r"C:\");
         assert_eq!(f(Wsl, r"C:\", None).unwrap(), "/mnt/c");
         assert_eq!(f(Url, r"C:\", None).unwrap(), "file:///C:/");
-        assert_eq!(f(Relative, r"c:\users\me\my repo", root).unwrap(), ".");
+        assert_eq!(f(Relative, r"c:\work\me\my repo", root).unwrap(), ".");
         // several items: one per line
         let items = vec![(p.to_string(), None), (r"C:\b".to_string(), None)];
         assert_eq!(format_all(Name, &items, "\n").unwrap(), "a b.txt\nb");
