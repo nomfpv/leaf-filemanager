@@ -190,8 +190,11 @@ impl FolderView {
             return;
         }
         if matches!(self.location(), rf_core::Location::Remote(_)) {
-            // items on a server: Paste in a local folder downloads them; cut becomes copy (nothing is removed from a server yet)
-            crate::remote::copy_to_clipboard(self.selection_remote(), cx);
+            // items on a server: Paste in a local folder downloads them (a cut becomes a copy there); Paste in a folder on the
+            // same server moves what was cut
+            let cut = kind == Transfer::Move && self.remote_writable_dir().is_some();
+            let items = if cut { self.selection_remote_all() } else { self.selection_remote() };
+            crate::remote::copy_to_clipboard(items, cut, cx);
             return;
         }
         let paths = self.selection_paths();
@@ -311,6 +314,10 @@ impl FolderView {
         if self.shell_read_only(cx) {
             return;
         }
+        if let Some(dir) = self.remote_writable_dir() {
+            self.paste_remote(dir, cx);
+            return;
+        }
         let Some(dir) = self.current_dir() else { return };
         self.paste_to(dir, window, cx);
     }
@@ -318,6 +325,11 @@ impl FolderView {
     /// Ctrl+Shift+V: paste into the selected folder (falls back to the current one).
     pub fn paste_into_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.shell_read_only(cx) {
+            return;
+        }
+        if let Some(dir) = self.remote_writable_dir() {
+            let into = if self.selected_is_single_dir() { self.selection_remote().into_iter().next().map(|(v, _)| v) } else { None };
+            self.paste_remote(into.unwrap_or(dir), cx);
             return;
         }
         let target = if self.selected_is_single_dir() { self.selection_paths().into_iter().next() } else { None };
@@ -360,6 +372,29 @@ impl FolderView {
             });
             work.await;
             let _ = this.update(cx, |v, cx| v.refresh(cx));
+        })
+        .detach();
+    }
+
+    /// Paste in a folder on a server: items copied on a server are copied there (what was cut on the same server is moved);
+    /// files of this PC on the clipboard are uploaded.
+    fn paste_remote(&mut self, dir: rf_core::vpath::VPath, cx: &mut Context<Self>) {
+        let after = crate::remote::refresh_when_done(cx.entity().downgrade());
+        if let Some((items, cut)) = crate::remote::clipboard_items_cut(cx) {
+            let same = items.iter().all(|(v, _)| v.scheme() == dir.scheme() && v.authority() == dir.authority());
+            if cut && same {
+                crate::remote::clear_clipboard();
+            }
+            crate::remote::transfer(cx, items, dir, cut && same, Some(after));
+            return;
+        }
+        let (tx, rx) = oneshot::channel();
+        leaf_sys::sta::run(move |owner| {
+            let _ = tx.send(leaf_sys::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
+        });
+        cx.spawn(async move |_, cx| {
+            let Ok(Some((paths, _))) = rx.await else { return };
+            cx.update(|cx| crate::remote::upload(cx, paths, dir, Some(after)));
         })
         .detach();
     }
@@ -488,10 +523,11 @@ impl FolderView {
             return;
         }
         if matches!(self.location(), rf_core::Location::Remote(_)) {
-            // from a server: copied down (moving would delete on the server, which is not built yet)
-            let items = self.selection_remote();
-            if kind == Transfer::Copy && !items.is_empty() {
-                cx.emit(crate::folder_view::FolderEvent::DownloadToOtherPane(items));
+            // from a server: copied down or across; moved only within the same server (the workspace checks)
+            let mv = kind == Transfer::Move && self.remote_writable_dir().is_some();
+            let items = if mv { self.selection_remote_all() } else { self.selection_remote() };
+            if !items.is_empty() && (kind == Transfer::Copy || mv) {
+                cx.emit(crate::folder_view::FolderEvent::DownloadToOtherPane(items, mv));
             }
             return;
         }
@@ -504,6 +540,11 @@ impl FolderView {
     /// Deletes the selection, asking first per Settings → "Confirm before deleting".
     pub fn delete_selected(&mut self, permanent: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.shell_read_only(cx) {
+            return;
+        }
+        if self.remote_writable_dir().is_some() {
+            // on a server: always permanent (no Trash there), asked first as leaf asks
+            crate::remote::delete(self.selection_remote_all(), cx.entity().downgrade(), window, cx);
             return;
         }
         let paths = self.selection_paths();
@@ -581,6 +622,13 @@ impl FolderView {
 
     pub fn create_new(&mut self, folder: bool, cx: &mut Context<Self>) {
         if self.shell_read_only(cx) {
+            return;
+        }
+        if let Some(dir) = self.remote_writable_dir() {
+            let view = cx.entity().downgrade();
+            if let Some(w) = cx.active_window().or_else(|| crate::workspace::main_windows(cx).first().copied()) {
+                let _ = w.update(cx, |_, window, cx| crate::remote::new_item(dir, folder, view, window, cx));
+            }
             return;
         }
         let Some(dir) = self.current_dir() else { return };
@@ -751,6 +799,14 @@ impl FolderView {
             }
         }
         if !new_name.is_empty() && new_name != old {
+            if let rf_core::Location::Remote(dir) = self.location().clone() {
+                // on a server: renamed there (never over something that has the name)
+                self.set_reselect(new_name.clone());
+                let view = cx.entity().downgrade();
+                crate::remote::rename(cx, dir.join(&old), new_name, view);
+                cx.notify();
+                return;
+            }
             if let Some(dir) = self.parent_of(ei).map(|d| d.to_path_buf()) {
                 let from = dir.join(&old);
                 let to = dir.join(&new_name);

@@ -315,8 +315,8 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
 }
 
 impl FolderView {
-    /// The menu in a folder on a server (`Location::Remote`): opening, copying down to this PC and refreshing work; moving,
-    /// pasting onto the server, renaming and deleting are not built yet and say so.
+    /// The menu in a folder on a server (`Location::Remote`): opening, copying down to this PC, and where the place can be
+    /// written to: cut, paste (uploads), edit, rename, delete (permanent: a server has no Trash), new folder.
     fn show_remote_menu(&mut self, background: bool, window: &mut Window, cx: &mut Context<Self>) {
         let me = cx.entity().downgrade();
         let chosen = if background { Vec::new() } else { self.selection_remote() };
@@ -332,19 +332,33 @@ impl FolderView {
         }
         if !chosen.is_empty() {
             let c = chosen.clone();
-            items.push(Item::action(t!("Copy"), icon(L::Copy), act(&me, move |_, _, cx| crate::remote::copy_to_clipboard(c.clone(), cx))).hint("Ctrl+C"));
+            items.push(Item::action(t!("Copy"), icon(L::Copy), act(&me, move |_, _, cx| crate::remote::copy_to_clipboard(c.clone(), false, cx))).hint("Ctrl+C"));
             let c = chosen.clone();
             items.push(Item::action(t!("Copy to..."), icon(L::FolderInput), act(&me, move |_, _, cx| cx.emit(FolderEvent::CopyRemoteTo(c.clone())))));
             if self.dual {
                 let c = chosen.clone();
-                items.push(Item::action(t!("Copy to other pane"), icon(L::CopyPlus), act(&me, move |_, _, cx| cx.emit(FolderEvent::DownloadToOtherPane(c.clone())))).hint("Shift+F5"));
+                items.push(Item::action(t!("Copy to other pane"), icon(L::CopyPlus), act(&me, move |_, _, cx| cx.emit(FolderEvent::DownloadToOtherPane(c.clone(), false)))).hint("Shift+F5"));
             }
         }
-        let off = [(t!("Cut"), L::Scissors), (t!("Paste"), L::Clipboard), (t!("Rename"), L::PencilLine), (t!("Delete"), L::Trash)];
-        for (label, l) in off {
-            items.push(Item::action(label, icon(l), |_, _| {}).enabled(false));
+        if self.remote_writable_dir().is_some() {
+            let all = if background { Vec::new() } else { self.selection_remote_all() };
+            if !all.is_empty() {
+                items.push(Item::action(t!("Cut"), icon(L::Scissors), act(&me, |v, window, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, window, cx))).hint("Ctrl+X"));
+            }
+            items.push(Item::action(t!("Paste"), icon(L::Clipboard), act(&me, |v, window, cx| v.paste(window, cx))).hint("Ctrl+V"));
+            if !background && self.selected.len() == 1 {
+                items.push(Item::action(t!("Rename"), icon(L::PencilLine), act(&me, |v, window, cx| v.begin_rename(window, cx))).hint("F2"));
+            }
+            if !all.is_empty() {
+                items.push(Item::action(t!("Delete"), icon(L::Trash), act(&me, |v, window, cx| v.delete_selected(true, window, cx))).hint("Del"));
+            }
+            items.push(Item::action(t!("New folder"), icon(L::FolderPlus), act(&me, |v, _, cx| v.create_new(true, cx))).hint("Ctrl+Shift+N"));
+        } else {
+            for (label, l) in [(t!("Cut"), L::Scissors), (t!("Paste"), L::Clipboard), (t!("Rename"), L::PencilLine), (t!("Delete"), L::Trash)] {
+                items.push(Item::action(label, icon(l), |_, _| {}).enabled(false));
+            }
+            items.push(Item::action(crate::i18n::td(crate::remote::NOT_WIRED), icon(L::Info), |_, _| {}).enabled(false));
         }
-        items.push(Item::action(crate::i18n::td(crate::remote::NOT_WIRED), icon(L::Info), |_, _| {}).enabled(false));
         items.push(Item::Separator);
         items.push(Item::action(t!("Refresh"), icon(L::RefreshCw), act(&me, |v, _, cx| v.refresh(cx))));
         fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);

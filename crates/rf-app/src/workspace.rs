@@ -1153,17 +1153,36 @@ impl Workspace {
                     };
                     if let Some(dest) = dest {
                         crate::status_center::transfer(cx, *kind, paths.clone(), dest);
+                    } else if let Some(dir) = other.read(cx).remote_writable_dir() {
+                        // into a folder on a server: uploaded (a move would delete here what was sent; it is not offered)
+                        if *kind == leaf_sys::fileops::Transfer::Move {
+                            crate::prompt::notice(t!("Move to other pane"), t!("Moving onto a server is not offered: copy the items, then delete them here.").to_string(), window, cx);
+                        } else {
+                            let after = crate::remote::refresh_when_done(other.downgrade());
+                            crate::remote::upload(cx, paths.clone(), dir, Some(after));
+                        }
                     }
                 }
             }
-            FolderEvent::DownloadToOtherPane(items) => {
+            FolderEvent::DownloadToOtherPane(items, mv) => {
                 if let Some(other) = this.other_pane(emitter) {
-                    match other.read(cx).download_dir() {
-                        Some(dest) => {
+                    let remote = other.read(cx).remote_writable_dir();
+                    match (other.read(cx).download_dir(), remote) {
+                        (Some(dest), _) if !*mv => {
                             let after = other.update(cx, |v, cx| v.select_arrived(dest.clone(), cx));
                             crate::remote::download(cx, items.clone(), dest, Some(after));
                         }
-                        None => crate::prompt::notice(t!("Copy to other pane"), t!("The other pane shows no folder on this PC; uploading to a server is coming next.").to_string(), window, cx),
+                        (_, Some(dir)) if !*mv || items.iter().all(|(v, _)| v.scheme() == dir.scheme() && v.authority() == dir.authority()) => {
+                            let after = crate::remote::refresh_when_done(other.downgrade());
+                            let me = crate::remote::refresh_when_done(emitter.downgrade());
+                            let both: crate::status_center::OnDone = Box::new(move |ok, cx| {
+                                after(ok, cx);
+                                me(ok, cx);
+                            });
+                            crate::remote::transfer(cx, items.clone(), dir, *mv, Some(both));
+                        }
+                        _ if *mv => crate::prompt::notice(t!("Move to other pane"), t!("Moving works within one server; copy the items instead.").to_string(), window, cx),
+                        _ => crate::prompt::notice(t!("Copy to other pane"), t!("The other pane shows no folder leaf can copy into.").to_string(), window, cx),
                     }
                 }
             }

@@ -6,7 +6,9 @@
 //! - Opening or looking at a file fetches a size-capped copy into a cache folder first (as archives do), then opens that.
 //! - Copy, Copy to other pane, Copy to..., a drag onto a local pane and Paste in a local folder download through
 //!   `leaf_vfs::copy` as a Status Center job (progress, pause, cancel, names that exist asked; a cut-off file is removed).
-//! - Uploading, renaming and deleting on a server are not built yet ("coming next").
+//! - Changes on a server (W1a part 2): paste, a drop, Copy to other pane and "Copy to..." upload (or, within one server, move);
+//!   new folder, rename, delete (asked first, always permanent: a server has no Trash) as Status Center jobs. A big upload
+//!   offers "Verify on server" (the server's SHA-256 against this PC's).
 //! - `mem://demo/` (the in-memory demo tree; `mem://offline/` and `mem://locked/` show the error banner) in debug builds, or in
 //!   any build with `LEAF_VFS_DEMO=1`. Schemes without a backend (`ftp://` is still the old WinINet path) stay paths as before.
 
@@ -27,8 +29,8 @@ use crate::t;
 /// Marks a listing error that is the server's (offline, login refused): the pane shows it quietly with a Retry button.
 const RETRY_MARK: &str = "\u{1}retry\u{1}";
 
-/// Why moving, pasting onto, renaming and deleting are off in a folder on a server (the menus show it).
-pub const NOT_WIRED: &str = "Uploading, renaming and deleting on a server: coming next";
+/// Why moving, pasting onto, renaming and deleting are off in a place that cannot be written to (the menus show it).
+pub const NOT_WIRED: &str = "This place is read-only in leaf";
 
 /// Files bigger than this are not opened straight from a server (copy them to this PC first).
 const OPEN_MAX: u64 = 512 << 20;
@@ -374,28 +376,39 @@ pub fn look(v: VPath, size: u64) {
 
 /// What Copy put on the clipboard from a server: the addresses (also on the clipboard as text, so a later copy of anything
 /// else replaces it as the clipboard's content).
-static CLIP: Mutex<Option<(String, Vec<(VPath, bool)>)>> = Mutex::new(None);
+/// The flag: the items were cut (Paste in a folder on the same server moves them).
+static CLIP: Mutex<Option<(String, Vec<(VPath, bool)>, bool)>> = Mutex::new(None);
 
 fn clip_text(items: &[(VPath, bool)]) -> String {
     items.iter().map(|(v, _)| v.to_string()).collect::<Vec<_>>().join("\n")
 }
 
-/// Copy in a folder on a server: remembered for Paste in a local folder.
-pub fn copy_to_clipboard(items: Vec<(VPath, bool)>, cx: &mut App) {
+/// Copy (or Cut) in a folder on a server: remembered for Paste in a local folder or in a folder on a server.
+pub fn copy_to_clipboard(items: Vec<(VPath, bool)>, cut: bool, cx: &mut App) {
     if items.is_empty() {
         return;
     }
     let text = clip_text(&items);
     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-    *CLIP.lock().unwrap_or_else(|e| e.into_inner()) = Some((text, items));
+    *CLIP.lock().unwrap_or_else(|e| e.into_inner()) = Some((text, items, cut));
 }
 
 /// The server items the clipboard holds (Copy in a remote folder, and nothing copied since).
 pub fn clipboard_items(cx: &App) -> Option<Vec<(VPath, bool)>> {
-    let (text, items) = CLIP.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    clipboard_items_cut(cx).map(|(items, _)| items)
+}
+
+/// The server items the clipboard holds, and whether they were cut.
+pub fn clipboard_items_cut(cx: &App) -> Option<(Vec<(VPath, bool)>, bool)> {
+    let (text, items, cut) = CLIP.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
     // (the clipboard is read only after a Copy on a server: a normal paste does not wait on it here)
     let now = cx.read_from_clipboard().and_then(|c| c.text())?;
-    (now == text).then_some(items)
+    (now == text).then_some((items, cut))
+}
+
+/// Forgets what was cut (it was moved: a second Paste must not try again).
+pub fn clear_clipboard() {
+    *CLIP.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// What a drag of items on a server carries (dropped on a local pane: downloaded there).
@@ -629,11 +642,20 @@ pub fn copy_to_dialog(items: Vec<(VPath, bool)>, initial: Option<PathBuf>, windo
     let start = initial.or_else(dirs::download_dir).map(|p| p.display().to_string()).unwrap_or_default();
     crate::prompt::show(
         t!("Copy to"),
-        Some(t!("The folder on this PC the items are copied into.").to_string()),
+        Some(t!("The folder the items are copied into: on this PC, or on a server as sftp://user@host/path.").to_string()),
         Some((start, t!("A folder on this PC").to_string())),
         vec![
             Button::new(t!("Copy"), Kind::Primary, move |text, _, cx| {
-                let dir = PathBuf::from(text.unwrap_or_default().trim().trim_matches('"'));
+                let text = text.unwrap_or_default();
+                // a folder on a server (typed as its address): copied there
+                if let Some(Location::Remote(v)) = parse_typed(&text) {
+                    if !writable(&v) {
+                        return Err(t!("leaf cannot write to that place").to_string());
+                    }
+                    transfer(cx, items.clone(), v, false, None);
+                    return Ok(());
+                }
+                let dir = PathBuf::from(text.trim().trim_matches('"'));
                 if !dir.is_absolute() || !dir.is_dir() {
                     return Err(t!("That is not a folder on this PC").to_string());
                 }
@@ -644,5 +666,404 @@ pub fn copy_to_dialog(items: Vec<(VPath, bool)>, initial: Option<PathBuf>, windo
         ],
         window,
         cx,
+    );
+}
+
+// ------------------------------------------------------------------------------------------------ changes on a server
+
+/// Uploads of one file at least this big offer "Verify on server" when they are done.
+const VERIFY_MIN: u64 = 64 << 20;
+
+/// Whether the place of `v` can be written to (uploads, new folders, renames, deletes).
+pub fn writable(v: &VPath) -> bool {
+    leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
+}
+
+/// A server's address as people read it in a title (`host:/path`, no user, never a secret: addresses carry none).
+fn place_name(v: &VPath) -> String {
+    format!("{}:{}", v.host(), v.path())
+}
+
+/// What the conflict dialog shows for an address (a local path as a path).
+fn shown_path(v: &VPath) -> PathBuf {
+    if v.scheme() == "file" { LocalFs::native(v) } else { PathBuf::from(v.to_string()) }
+}
+
+/// Refreshes `view` when the work is done (whatever came of it: a part may have arrived).
+pub fn refresh_when_done(view: WeakEntity<crate::folder_view::FolderView>) -> crate::status_center::OnDone {
+    Box::new(move |_, cx| {
+        let _ = view.update(cx, |v, cx| v.refresh(cx));
+    })
+}
+
+/// Local files and folders into the folder `dest` on a server (paste, a drop, Copy to other pane): a Status Center job.
+pub fn upload(cx: &mut App, paths: Vec<PathBuf>, dest: VPath, after: Option<crate::status_center::OnDone>) {
+    let items: Vec<(VPath, bool)> = paths.iter().map(|p| (LocalFs::address(p), std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()))).collect();
+    transfer(cx, items, dest, false, after);
+}
+
+/// Copies (or, on the same server, moves) `items` into the folder `dest` through `leaf_vfs::copy` as a Status Center job:
+/// sizes counted first, pause and cancel, names that are there asked once in the conflict dialog. A move within one server is a
+/// rename there (nothing is copied). An upload of one big file offers "Verify on server" when it is done.
+pub fn transfer(cx: &mut App, items: Vec<(VPath, bool)>, dest: VPath, mv: bool, after: Option<crate::status_center::OnDone>) {
+    if items.is_empty() {
+        return;
+    }
+    let what = match items.as_slice() {
+        [(v, _)] => v.name().to_string(),
+        _ => crate::i18n::items(items.len()),
+    };
+    let verb = if mv {
+        t!("Moving")
+    } else if items[0].0.scheme() == "file" {
+        t!("Uploading")
+    } else {
+        t!("Copying")
+    };
+    let title = format!("{verb} {what} → {}", place_name(&dest));
+    let offer: Arc<Mutex<Option<(PathBuf, VPath)>>> = Arc::default();
+    let check = offer.clone();
+    let done: crate::status_center::OnDone = Box::new(move |ok, cx| {
+        if let Some(after) = after {
+            after(ok, cx);
+        }
+        let verify = check.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if ok && let Some((local, remote)) = verify {
+            offer_verify(local, remote, cx);
+        }
+    });
+    crate::status_center::start_with(cx, title, move |tr| transfer_work(&tr, &items, &dest, mv, &offer), Some(done));
+}
+
+fn transfer_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest: &VPath, mv: bool, offer: &Mutex<Option<(PathBuf, VPath)>>) -> anyhow::Result<bool> {
+    use leaf_sys::fastcopy::{Conflict as Asked, Resolve};
+    use leaf_vfs::copy::{Conflict, Copy, Progress};
+    let cancelled = || tr.cancel.load(Ordering::Relaxed);
+    let from_fs = leaf_vfs::fs_for(items[0].0.scheme()).map_err(anyhow_of)?;
+    let to_fs = leaf_vfs::fs_for(dest.scheme()).map_err(anyhow_of)?;
+    let same_server = |v: &VPath| v.scheme() == dest.scheme() && v.authority() == dest.authority();
+    // a move is offered within one server only (from anywhere else it would delete what was copied)
+    if mv && !items.iter().all(|(v, _)| same_server(v)) {
+        return Err(anyhow::anyhow!(t!("Moving works within one server; copy the items instead")));
+    }
+    // the items' own names, checked before they become part of the target (the copy checks the names inside folders)
+    let mut targets = Vec::new();
+    for (v, is_dir) in items {
+        let t = leaf_vfs::names::vchild(dest, v.name()).map_err(|why| anyhow::anyhow!("{}: {why}", v.name()))?;
+        if same_server(v) && dest.starts_with(v) && *is_dir {
+            return Err(anyhow::anyhow!("{}: {}", v.name(), t!("a folder cannot go into itself")));
+        }
+        targets.push(t);
+    }
+    let (mut total_files, mut total_bytes) = (0u64, 0u64);
+    if !mv {
+        (tr.on_progress)(0, 0, Some(t!("Counting").to_string()));
+        for (v, is_dir) in items {
+            count(&*from_fs, v, *is_dir, &cancelled, &mut total_files, &mut total_bytes).map_err(anyhow_of)?;
+            if cancelled() {
+                return Ok(false);
+            }
+        }
+        tr.bytes.set(0, total_bytes.max(1));
+    }
+
+    // names that are there already: asked once, for the items themselves (moving an item onto itself is no conflict)
+    let mut asked = Vec::new();
+    let mut at = Vec::new();
+    for ((v, is_dir), target) in items.iter().zip(&targets) {
+        match to_fs.stat(target) {
+            Ok(m) if !(mv && target == v) => {
+                let src = from_fs.stat(v).map_err(anyhow_of)?;
+                at.push(asked.len());
+                let time = |ms: i64| (ms > 0).then(|| std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64));
+                asked.push(Asked {
+                    src: shown_path(v),
+                    dst: shown_path(target),
+                    src_dir: *is_dir,
+                    dst_dir: m.is_dir(),
+                    src_size: src.size,
+                    dst_size: m.size,
+                    src_time: time(src.modified_ms),
+                    dst_time: time(m.modified_ms),
+                });
+            }
+            Ok(_) | Err(FsError::NotFound) => at.push(usize::MAX),
+            Err(e) => return Err(anyhow_of(e)),
+        }
+    }
+    let answers: Vec<Resolve> = if asked.is_empty() {
+        Vec::new()
+    } else {
+        match tr.ask.as_ref() {
+            Some(ask) => match ask(&asked) {
+                Some(a) => a,
+                None => return Ok(false),
+            },
+            None => vec![Resolve::KeepBoth; asked.len()],
+        }
+    };
+
+    let (mut base_bytes, mut base_files) = (0u64, 0u64);
+    let mut left_out = 0usize;
+    for (i, (v, is_dir)) in items.iter().enumerate() {
+        if cancelled() {
+            return Ok(false);
+        }
+        let answer = answers.get(at[i]).copied();
+        if answer == Some(Resolve::Skip) || (mv && targets[i] == *v) {
+            continue;
+        }
+        let target = if answer == Some(Resolve::KeepBoth) { free_name(&*to_fs, &targets[i], *is_dir).map_err(anyhow_of)? } else { targets[i].clone() };
+        if mv {
+            (tr.on_progress)(items.len() as u32, i as u32, Some(v.name().to_string()));
+            match to_fs.rename(v, &target, answer == Some(Resolve::Replace)) {
+                Ok(()) => {}
+                Err(FsError::Exists) => return Err(anyhow::anyhow!("{}: {}", v.name(), t!("a folder of that name is there; it is not replaced"))),
+                Err(e) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
+            }
+            continue;
+        }
+        let inner = if answer == Some(Resolve::Replace) { Conflict::Replace } else { Conflict::KeepBoth };
+        let mut on_conflict = |_: &VPath, _: &leaf_vfs::Meta| inner;
+        let mut on_progress = |p: &Progress| {
+            while tr.paused.load(Ordering::Relaxed) && !cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            tr.bytes.set(base_bytes.saturating_add(p.bytes_done), total_bytes.max(1));
+            let done = (base_files + p.files_done).min(u32::MAX as u64) as u32;
+            let cur = (p.file_done == p.file_size || p.file_done <= 256 * 1024).then(|| p.file.name().to_string());
+            (tr.on_progress)(total_files.max(1) as u32, done, cur);
+        };
+        let r = Copy::new(&*from_fs, &*to_fs, &cancelled, &mut on_progress, &mut on_conflict).run(v, &target);
+        match r {
+            Ok(rep) => {
+                base_bytes = base_bytes.saturating_add(rep.bytes);
+                base_files += rep.files;
+                left_out += rep.refused.len() + rep.skipped.iter().filter(|(_, why)| *why == "link").count();
+                if items.len() == 1 && !is_dir && v.scheme() == "file" && dest.scheme() == "sftp" && rep.bytes >= VERIFY_MIN {
+                    *offer.lock().unwrap_or_else(|e| e.into_inner()) = Some((LocalFs::native(v), target.clone()));
+                }
+            }
+            Err(FsError::Cancelled) => return Ok(false),
+            Err(e) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
+        }
+    }
+    if left_out > 0 {
+        return Err(anyhow::anyhow!("{} {left_out}", t!("Everything else arrived. Left out (links, or names that cannot be used there):")));
+    }
+    Ok(true)
+}
+
+/// `name (2).ext`, `name (3).ext`... the first name not taken in the folder of `to` (a folder's name keeps its dots).
+fn free_name(fs: &dyn Fs, to: &VPath, is_dir: bool) -> Result<VPath, FsError> {
+    let parent = to.parent().ok_or(FsError::Denied)?;
+    let name = to.name();
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 && !is_dir => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    for n in 2..10_000 {
+        let cand = parent.join(&format!("{stem} ({n}){ext}"));
+        match fs.stat(&cand) {
+            Err(FsError::NotFound) => return Ok(cand),
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+    }
+    Err(FsError::Exists)
+}
+
+/// After a big upload: the user may have the server compute the file's SHA-256 (`remote_sum`) and compare it with this PC's.
+fn offer_verify(local: PathBuf, remote: VPath, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let Some(w) = crate::workspace::main_windows(cx).first().copied() else { return };
+    let _ = w.update(cx, |_, window, cx| {
+        let msg = format!("{}\n\n{}", remote.name(), t!("The upload is done. The server can compute the file's SHA-256 and leaf compares it with the file on this PC; nothing is sent again."));
+        crate::prompt::show(
+            t!("Verify on server?"),
+            Some(msg),
+            None,
+            vec![
+                Button::new(t!("Verify on server"), Kind::Primary, move |_, _, cx| {
+                    verify(local.clone(), remote.clone(), cx);
+                    Ok(())
+                }),
+                Button::new(t!("Not now"), Kind::Normal, |_, _, _| Ok(())),
+            ],
+            window,
+            cx,
+        );
+    });
+}
+
+fn verify(local: PathBuf, remote: VPath, cx: &mut App) {
+    let title = format!("{} {}", t!("Verifying on the server:"), remote.name());
+    crate::status_center::start(cx, title, move |tr| {
+        use sha2::Digest as _;
+        use std::io::Read as _;
+        let cancelled = || tr.cancel.load(Ordering::Relaxed);
+        (tr.on_progress)(0, 0, Some(t!("The server computes its sum").to_string()));
+        let theirs = leaf_remote::remote_sum(&remote, leaf_remote::checksum::Algo::Sha256, &cancelled);
+        let mut f = std::fs::File::open(&local)?;
+        let total = f.metadata()?.len();
+        let mut h = sha2::Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        let mut done = 0u64;
+        loop {
+            if cancelled() {
+                return Ok(false);
+            }
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+            done += n as u64;
+            tr.bytes.set(done, total.max(1));
+        }
+        let ours: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let theirs = match theirs {
+            Ok(t) => t,
+            Err(FsError::Cancelled) => return Ok(false),
+            Err(e) => return Err(anyhow_of(e)),
+        };
+        if theirs.eq_ignore_ascii_case(&ours) {
+            log::info!("remote: {} verified on the server", remote.name());
+            Ok(true)
+        } else {
+            Err(anyhow::anyhow!(t!("The copy on the server is NOT the same as the file on this PC (SHA-256 differs). Upload it again.")))
+        }
+    });
+}
+
+/// A new folder (or an empty file) in `dir` on a server: its name asked, then made; a name that is taken is said plainly,
+/// nothing is replaced.
+pub fn new_item(dir: VPath, folder: bool, view: WeakEntity<crate::folder_view::FolderView>, window: &mut Window, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let (title, start) = if folder { (t!("New folder"), t!("New folder").to_string()) } else { (t!("New text document"), format!("{}.txt", t!("New text document"))) };
+    crate::prompt::show(
+        title,
+        Some(format!("{} {}", t!("In"), place_name(&dir))),
+        Some((start, t!("Name").to_string())),
+        vec![
+            Button::new(t!("Create"), Kind::Primary, move |text, _, cx| {
+                let name = text.unwrap_or_default().trim().to_string();
+                let to = leaf_vfs::names::vchild(&dir, &name).map_err(|why| format!("{} ({why})", t!("This name cannot be used")))?;
+                let title = format!("{} {name}", t!("Creating"));
+                let (view, done_name) = (view.clone(), name.clone());
+                let done: crate::status_center::OnDone = Box::new(move |_, cx| {
+                    let _ = view.update(cx, |v, cx| {
+                        v.refresh(cx);
+                        v.select_when_listed(vec![done_name], cx);
+                    });
+                });
+                crate::status_center::start_with(
+                    cx,
+                    title,
+                    move |_| {
+                        let fs = leaf_vfs::fs_for(to.scheme()).map_err(anyhow_of)?;
+                        let made = if folder { fs.mkdir(&to) } else { fs.open_write(&to, leaf_vfs::WriteOpts::CREATE_NEW).and_then(|w| w.finish()) };
+                        match made {
+                            Ok(()) => Ok(true),
+                            Err(FsError::Exists) => Err(anyhow::anyhow!(t!("An item with this name already exists. Try another name."))),
+                            Err(e) => Err(anyhow_of(e)),
+                        }
+                    },
+                    Some(done),
+                );
+                Ok(())
+            }),
+            Button::cancel(),
+        ],
+        window,
+        cx,
+    );
+}
+
+/// Renames `from` to `name` in the same folder on a server (never over something that is there).
+pub fn rename(cx: &mut App, from: VPath, name: String, view: WeakEntity<crate::folder_view::FolderView>) {
+    let Ok(to) = leaf_vfs::names::vchild(&from.parent().unwrap_or_else(|| from.root()), &name) else {
+        crate::status_center::start(cx, format!("{} {}", t!("Rename"), from.name()), |_| Err(anyhow::anyhow!(t!("This name cannot be used"))));
+        return;
+    };
+    let title = format!("{} {} → {name}", t!("Renaming"), from.name());
+    crate::status_center::start_with(
+        cx,
+        title,
+        move |_| {
+            let fs = leaf_vfs::fs_for(from.scheme()).map_err(anyhow_of)?;
+            match fs.rename(&from, &to, false) {
+                Ok(()) => Ok(true),
+                Err(FsError::Exists) => Err(anyhow::anyhow!(t!("An item with this name already exists. Try another name."))),
+                Err(e) => Err(anyhow_of(e)),
+            }
+        },
+        Some(refresh_when_done(view)),
+    );
+}
+
+/// Deletes items on a server, after leaf's usual question (Settings → "Confirm before deleting", as a permanent delete): a
+/// server has no Trash, so the dialog says the delete cannot be undone. Folders go with everything in them; a link is
+/// unlinked, what it points to is left alone.
+pub fn delete(items: Vec<(VPath, bool)>, view: WeakEntity<crate::folder_view::FolderView>, window: &mut Window, cx: &mut App) {
+    use crate::settings::DeletePref;
+    if items.is_empty() {
+        return;
+    }
+    let ask = !matches!(cx.global::<crate::settings::Settings>().confirm_delete, DeletePref::Never);
+    if !ask {
+        delete_now(items, view, cx);
+        return;
+    }
+    let what = match items.as_slice() {
+        [(v, _)] => format!("\"{}\"", v.name()),
+        _ => crate::i18n::items(items.len()),
+    };
+    let msg = format!(
+        "{what} {} {}\n\n{}",
+        t!("will be deleted on"),
+        items[0].0.host(),
+        t!("A server has no Trash: this cannot be undone. Folders are deleted with everything in them.")
+    );
+    crate::prompt::show(
+        t!("Delete permanently?"),
+        Some(msg),
+        None,
+        vec![
+            crate::prompt::Button::new(t!("Delete"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                delete_now(items.clone(), view.clone(), cx);
+                Ok(())
+            }),
+            crate::prompt::Button::cancel(),
+        ],
+        window,
+        cx,
+    );
+}
+
+fn delete_now(items: Vec<(VPath, bool)>, view: WeakEntity<crate::folder_view::FolderView>, cx: &mut App) {
+    let what = match items.as_slice() {
+        [(v, _)] => v.name().to_string(),
+        _ => crate::i18n::items(items.len()),
+    };
+    let title = format!("{} {what} ({})", t!("Deleting"), items[0].0.host());
+    crate::status_center::start_with(
+        cx,
+        title,
+        move |tr| {
+            let fs = leaf_vfs::fs_for(items[0].0.scheme()).map_err(anyhow_of)?;
+            for (i, (v, _)) in items.iter().enumerate() {
+                if tr.cancel.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                (tr.on_progress)(items.len() as u32, i as u32, Some(v.name().to_string()));
+                match fs.remove(v, true) {
+                    Ok(()) | Err(FsError::NotFound) => {}
+                    Err(e) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
+                }
+            }
+            Ok(true)
+        },
+        Some(refresh_when_done(view)),
     );
 }

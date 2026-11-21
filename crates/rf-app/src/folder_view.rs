@@ -248,8 +248,9 @@ pub enum FolderEvent {
     AddToShelf(Vec<PathBuf>),
     /// Dual pane: copy/move the items into the other pane's folder.
     ToOtherPane(leaf_sys::fileops::Transfer, Vec<PathBuf>),
-    /// Dual pane: download items of a server into the other pane's (local) folder.
-    DownloadToOtherPane(Vec<(rf_core::vpath::VPath, bool)>),
+    /// Dual pane: items of a server into the other pane's folder (downloaded to a local one; copied, or with `true` moved,
+    /// to a folder on a server).
+    DownloadToOtherPane(Vec<(rf_core::vpath::VPath, bool)>, bool),
     /// "Copy to..." in a folder on a server (the workspace knows the other pane's folder to offer).
     CopyRemoteTo(Vec<(rf_core::vpath::VPath, bool)>),
     /// Dual pane: show a folder in the other pane.
@@ -3802,6 +3803,22 @@ impl FolderView {
             .collect()
     }
 
+    /// The selection in a folder on a server with links too (they are moved, renamed or unlinked, never followed).
+    pub(crate) fn selection_remote_all(&self) -> Vec<(rf_core::vpath::VPath, bool)> {
+        let Location::Remote(dir) = self.location() else { return Vec::new() };
+        let mut v: Vec<u32> = self.selected.iter().copied().collect();
+        v.sort_unstable();
+        v.into_iter().filter_map(|i| self.entries.get(i as usize)).map(|e| (dir.join(&e.name), !e.link && e.is_dir())).collect()
+    }
+
+    /// The folder on a server this view shows, when it can be written to.
+    pub(crate) fn remote_writable_dir(&self) -> Option<rf_core::vpath::VPath> {
+        match self.location() {
+            Location::Remote(v) if crate::remote::writable(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
     /// A local folder that downloads may go into (not an archive, FTP, a server's share list or any other special place).
     pub(crate) fn download_dir(&self) -> Option<PathBuf> {
         match self.location() {
@@ -5531,13 +5548,22 @@ impl FolderView {
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                         if let Some(dir) = this.current_dir() {
                             crate::workspace::drop_files(paths, dir, cx);
+                        } else if let Some(dir) = this.remote_writable_dir() {
+                            // files of this PC dropped on a folder on a server: uploaded
+                            let after = crate::remote::refresh_when_done(cx.entity().downgrade());
+                            crate::remote::upload(cx, paths.paths().to_vec(), dir, Some(after));
                         }
                     }))
-                    // items dragged from a folder on a server: downloaded into this local folder
+                    // items dragged from a folder on a server: downloaded into this local folder; onto a folder on a server,
+                    // moved within the same server, copied from another one
                     .on_drop(cx.listener(|this, d: &crate::remote::RemoteDrag, _, cx| {
                         if let Some(dir) = this.download_dir() {
                             let after = this.select_arrived(dir.clone(), cx);
                             crate::remote::download(cx, d.0.clone(), dir, Some(after));
+                        } else if let Some(dir) = this.remote_writable_dir() {
+                            let same = d.0.iter().all(|(v, _)| v.scheme() == dir.scheme() && v.authority() == dir.authority());
+                            let after = crate::remote::refresh_when_done(cx.entity().downgrade());
+                            crate::remote::transfer(cx, d.0.clone(), dir, same, Some(after));
                         }
                     }))
                     .child(body)
