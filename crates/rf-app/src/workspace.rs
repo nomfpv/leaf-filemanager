@@ -2435,7 +2435,7 @@ impl Workspace {
         }
         // Equal-width tabs that share the strip (like Files / WinUI TabView "Equal"): wide
         // while there are few, shrinking as more open, scrolling only below the minimum.
-        let strip = (self.viewport_w - 150. - TITLEBAR_LEAD - 40. - 40.).max(120.);
+        let strip = (self.viewport_w - 150. - if pill { TITLEBAR_LEAD_PILL } else { TITLEBAR_LEAD } - 40. - 40.).max(120.);
         let n = self.tabs.len().max(1) as f32;
         let tab_max = p.tab_w.max(TAB_MIN_W);
         let tab_w = ((strip - 4.) / n - 4.).clamp(TAB_MIN_W, tab_max);
@@ -2586,7 +2586,8 @@ impl Workspace {
                             .justify_center()
                             .rounded(theme::RADIUS_SM)
                             // like Files: every tab shows its close button while there is room
-                            .when(!roomy && !active, |d| d.invisible())
+                            // (pill tabs, the mockups': a tab in the back shows its close button on hover only)
+                            .when((!roomy || pill) && !active, |d| d.invisible())
                             .group_hover("tab", |s| s.visible())
                             .hover(|s| s.bg(p.pressed))
                             .child(Icon::new(L::X).size(px(12.)))
@@ -2703,10 +2704,11 @@ impl Workspace {
                         // sidebar toggle in the corner (Files has the pane button here, no app name)
                         // same size and baseline as the "+" button; centered over the Back
                         // button below (title bar pads 12 px, the nav row 8 px)
-                        h_flex().flex_shrink_0().w(px(TITLEBAR_LEAD)).h_full().when(pill, |d| d.items_center()).when(!pill, |d| d.items_end()).child(
+                        // (pill tabs: the mockups' 44 px brand box with the mark in its middle)
+                        h_flex().flex_shrink_0().w(px(if pill { TITLEBAR_LEAD_PILL } else { TITLEBAR_LEAD })).h_full().when(pill, |d| d.items_center().justify_center()).when(!pill, |d| d.items_end()).child(
                             div()
                                 .id("tab-actions")
-                                .ml(px(-2.))
+                                .when(!pill, |d| d.ml(px(-2.)))
                                 .when(!pill, |d| d.mb(px(2.)))
                                 .size(px(28.))
                                 .flex()
@@ -4788,6 +4790,8 @@ impl Workspace {
 
 /// Title bar: width of the leading corner button, tab width range.
 const TITLEBAR_LEAD: f32 = 32.;
+/// The brand box left of pill tabs (Canopy): the mockups' 44 px.
+const TITLEBAR_LEAD_PILL: f32 = 44.;
 /// New tab: the "+" box grows to a tab, then the next "+" slides out from behind it.
 const TAB_ANIM_MS: u64 = 200;
 const PLUS_ANIM_MS: u64 = 160;
