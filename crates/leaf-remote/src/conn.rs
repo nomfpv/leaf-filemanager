@@ -2,9 +2,9 @@
 //! the SFTP channel on top. The async runtime lives here and starts with the first connection.
 
 use std::collections::{HashMap, HashSet};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -55,8 +55,8 @@ impl Config {
     }
 }
 
-/// The runtime: one worker thread and at most one blocking thread (nothing here uses the blocking pool: names are
-/// resolved on the caller's thread). Started on the first connection, never at app start.
+/// The runtime: one worker thread and at most one blocking thread (the name lookups run there, with a timeout). Started on
+/// the first connection, never at app start.
 pub(crate) fn rt() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| {
@@ -121,6 +121,10 @@ pub(crate) fn target(cfg: &Config, v: &VPath) -> Result<Target, FsError> {
     let host = v.host().to_string();
     if host.is_empty() {
         return Err(FsError::Other("The address has no server name".into()));
+    }
+    // the name is written into known_hosts later, where `,` `*` `!` or a space would make it a pattern for other hosts
+    if !known_hosts::valid_host(&host) {
+        return Err(FsError::Other("The server's name has characters a server name cannot have".into()));
     }
     let port = v.port().unwrap_or(22);
     let saved = cfg.config_dir.as_deref().map(rf_core::hosts::Hosts::load).unwrap_or_default();
@@ -284,6 +288,8 @@ pub(crate) struct Client {
     refusal: Refusal,
     /// The fingerprint of the key this connection was accepted with (the login binds a remembered password to it).
     accepted: Arc<Mutex<Option<String>>>,
+    /// Set while the host-key dialog is open (the handshake's time limit waits).
+    asking: Arc<AtomicBool>,
 }
 
 impl client::Handler for Client {
@@ -352,7 +358,10 @@ impl client::Handler for Client {
                     return accept();
                 }
                 let q = HostKeyQuestion { host: name.clone(), key_type: known_hosts::key_type(&key), fingerprint: fp.clone() };
-                match prompt::ask_host_key(&*self.prompter, q).await {
+                self.asking.store(true, Ordering::Relaxed);
+                let answer = prompt::ask_host_key(&*self.prompter, q).await;
+                self.asking.store(false, Ordering::Relaxed);
+                match answer {
                     HostKeyAnswer::TrustAndRemember => {
                         match &self.remember_to {
                             Some(p) => {
@@ -385,7 +394,12 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         return Err(FsError::Other(format!("This host is reached through a jump host ({j}); jump hosts are not supported yet")));
     }
     log::info!("remote: connecting to {}", known_hosts::host_name(&t.host, t.port));
-    let addrs: Vec<SocketAddr> = (t.host.as_str(), t.port).to_socket_addrs().map_err(offline)?.collect();
+    // the name is looked up on the runtime's blocking thread, with the connect timeout (a stalled lookup does not hold this
+    // worker)
+    let addrs: Vec<SocketAddr> = step(cfg.connect_timeout, tokio::net::lookup_host((t.host.as_str(), t.port))).await?.collect();
+    if addrs.is_empty() {
+        return Err(offline("the server's name has no address"));
+    }
     let tcp = tokio::time::timeout(cfg.connect_timeout, tokio::net::TcpStream::connect(&addrs[..]))
         .await
         .map_err(|_| offline("no answer"))?
@@ -393,6 +407,7 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     let _ = tcp.set_nodelay(true);
     let refusal: Refusal = Arc::default();
     let accepted: Arc<Mutex<Option<String>>> = Arc::default();
+    let asking: Arc<AtomicBool> = Arc::default();
     let mut files: Vec<PathBuf> = cfg.known_hosts.iter().cloned().collect();
     files.extend(cfg.extra_known_hosts.iter().cloned());
     let ssh_cfg = Arc::new(client::Config {
@@ -411,24 +426,59 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         shared: shared.clone(),
         refusal: refusal.clone(),
         accepted: accepted.clone(),
+        asking: asking.clone(),
     };
     let why = |e: russh::Error| lock(&refusal).take().unwrap_or_else(|| offline(e));
-    let mut handle = client::connect_stream(ssh_cfg, tcp, handler).await.map_err(why)?;
+    // the version exchange and the key exchange get the request timeout, not counting the time the user looks at the
+    // host-key dialog
+    let handshake = paused_timeout(cfg.op_timeout, &asking, client::connect_stream(ssh_cfg, tcp, handler));
+    let mut handle = handshake.await.ok_or_else(|| offline("the server did not finish the handshake in time"))?.map_err(why)?;
     // (connect_stream returns only after the key exchange, which called check_server_key)
     let host_fp = lock(&accepted).clone().ok_or_else(|| offline("the server's key was not checked"))?;
     login(&mut handle, cfg, prompter, shared, t, &host_fp).await.map_err(|e| lock(&refusal).take().unwrap_or(e))?;
-    let ch = handle.channel_open_session().await.map_err(offline)?;
-    ch.request_subsystem(true, "sftp").await.map_err(offline)?;
+    let ch = step(cfg.op_timeout, handle.channel_open_session()).await?;
+    step(cfg.op_timeout, ch.request_subsystem(true, "sftp")).await?;
     let sftp = RawSftpSession::new(ch.into_stream());
     sftp.set_timeout(cfg.op_timeout.as_secs().max(1));
-    let version = sftp.init().await.map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
+    let version = tokio::time::timeout(cfg.op_timeout, sftp.init())
+        .await
+        .map_err(|_| offline("the server did not start SFTP in time"))?
+        .map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
     let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
-    let home = match sftp.realpath(".").await {
-        Ok(n) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
-        Err(_) => "/".into(),
+    let home = match tokio::time::timeout(cfg.op_timeout, sftp.realpath(".")).await {
+        Ok(Ok(n)) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
+        _ => "/".into(),
     };
     log::info!("remote: connected (SFTP version {}, statvfs {statvfs})", version.version);
     Ok(Conn { sftp: Arc::new(sftp), statvfs, home, handle, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+}
+
+/// One step of the conversation with the server, with a time limit: a stalled server becomes "offline", never a hang.
+async fn step<T, E: std::fmt::Display>(limit: Duration, fut: impl std::future::Future<Output = Result<T, E>>) -> Result<T, FsError> {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(r) => r.map_err(offline),
+        Err(_) => Err(offline("the server did not answer in time")),
+    }
+}
+
+/// `fut` with a time limit that does not run while `paused` is set (while the user is asked something). `None`: too late.
+async fn paused_timeout<T>(limit: Duration, paused: &AtomicBool, fut: impl std::future::Future<Output = T>) -> Option<T> {
+    let tick = Duration::from_millis(250);
+    let mut waited = Duration::ZERO;
+    let mut fut = std::pin::pin!(fut);
+    loop {
+        tokio::select! {
+            r = &mut fut => return Some(r),
+            _ = tokio::time::sleep(tick) => {
+                if !paused.load(Ordering::Relaxed) {
+                    waited += tick;
+                    if waited >= limit {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// russh's algorithms with the host key types known_hosts has for this server first (as OpenSSH orders them): an honest
@@ -450,25 +500,28 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
     let user = t.user.as_str();
     let account = format!("{user}@{}", t.host);
     // "none" tells which methods the server takes
-    let mut methods = match h.authenticate_none(user).await.map_err(offline)? {
+    // every request to the server (and to the agent) has the request timeout; the user's dialogs are outside it
+    let limit = cfg.op_timeout;
+    let mut methods = match step(limit, h.authenticate_none(user)).await? {
         russh::client::AuthResult::Success => return Ok(()),
         russh::client::AuthResult::Failure { remaining_methods, .. } => Some(remaining_methods),
     };
-    let rsa_hash = h.best_supported_rsa_hash().await.ok().flatten().flatten();
+    let rsa_hash = tokio::time::timeout(limit, h.best_supported_rsa_hash()).await.ok().and_then(|r| r.ok()).flatten().flatten();
 
     // 1. the running agent
     if cfg.agent && allows(&methods, MethodKind::PublicKey) {
-        if let Some(mut agent) = agent().await {
-            let ids = agent.request_identities().await.unwrap_or_default();
+        if let Ok(Some(mut agent)) = tokio::time::timeout(limit, agent()).await {
+            let ids = tokio::time::timeout(limit, agent.request_identities()).await.ok().and_then(|r| r.ok()).unwrap_or_default();
             for id in ids {
                 let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = id else { continue };
-                match h.authenticate_publickey_with(user, key, rsa_hash, &mut agent).await {
-                    Ok(russh::client::AuthResult::Success) => {
+                match tokio::time::timeout(limit, h.authenticate_publickey_with(user, key, rsa_hash, &mut agent)).await {
+                    Ok(Ok(russh::client::AuthResult::Success)) => {
                         log::info!("remote: logged in with a key of the agent");
                         return Ok(());
                     }
-                    Ok(russh::client::AuthResult::Failure { remaining_methods, .. }) => methods = Some(remaining_methods),
-                    Err(e) => log::debug!("remote: the agent did not sign: {e}"),
+                    Ok(Ok(russh::client::AuthResult::Failure { remaining_methods, .. })) => methods = Some(remaining_methods),
+                    Ok(Err(e)) => log::debug!("remote: the agent did not sign: {e}"),
+                    Err(_) => return Err(offline("the server or the agent did not answer in time")),
                 }
             }
         }
@@ -487,7 +540,7 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
             }
             let Some(key) = load_key(&f, prompter, shared).await? else { continue };
             let k = PrivateKeyWithHashAlg::new(key, rsa_hash);
-            match h.authenticate_publickey(user, k).await.map_err(offline)? {
+            match step(limit, h.authenticate_publickey(user, k)).await? {
                 russh::client::AuthResult::Success => {
                     log::info!("remote: logged in with a key file");
                     return Ok(());
@@ -507,7 +560,7 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
                 Some(p) if !retry => p,
                 _ => prompt::ask_secret(&**prompter, SecretQuestion::Password { account: account.clone(), retry }).await.ok_or(FsError::Cancelled)?,
             };
-            match h.authenticate_password(user, pw.as_str()).await.map_err(offline)? {
+            match step(limit, h.authenticate_password(user, pw.as_str())).await? {
                 russh::client::AuthResult::Success => {
                     lock(&shared.passwords).insert(t.key.clone(), (host_fp.to_string(), pw));
                     log::info!("remote: logged in with a password");
@@ -521,8 +574,14 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
         }
     } else if allows(&methods, MethodKind::KeyboardInteractive) {
         use russh::client::KeyboardInteractiveAuthResponse as R;
-        let mut r = h.authenticate_keyboard_interactive_start(user, None).await.map_err(offline)?;
+        let mut r = step(limit, h.authenticate_keyboard_interactive_start(user, None)).await?;
+        // a server that asks without end (empty questions too) is given up on after a few rounds
+        let mut rounds = 0;
         loop {
+            rounds += 1;
+            if rounds > 10 {
+                return Err(FsError::Auth(format!("{account} kept asking questions; leaf stopped")));
+            }
             match r {
                 R::Success => {
                     log::info!("remote: logged in (keyboard-interactive)");
@@ -530,13 +589,17 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
                 }
                 R::Failure { .. } => break,
                 R::InfoRequest { prompts, .. } => {
+                    if prompts.len() > 16 {
+                        return Err(FsError::Auth(format!("{account} asked too many questions at once")));
+                    }
+                    // (russh takes the answers as plain Strings: that copy is not wiped, a limit of its API)
                     let mut answers = Vec::with_capacity(prompts.len());
                     for p in prompts {
                         let q = SecretQuestion::Server { account: account.clone(), prompt: p.prompt, echo: p.echo };
                         let a = prompt::ask_secret(&**prompter, q).await.ok_or(FsError::Cancelled)?;
                         answers.push(a.as_str().to_string());
                     }
-                    r = h.authenticate_keyboard_interactive_respond(answers).await.map_err(offline)?;
+                    r = step(limit, h.authenticate_keyboard_interactive_respond(answers)).await?;
                 }
             }
         }

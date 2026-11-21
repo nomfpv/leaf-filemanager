@@ -66,6 +66,8 @@ pub struct Copy<'a> {
     pub cancelled: &'a dyn Fn() -> bool,
     pub on_progress: &'a mut dyn FnMut(&Progress),
     pub on_conflict: &'a mut dyn FnMut(&VPath, &Meta) -> Conflict,
+    /// Called with the part file once its bytes are written, before it gets its name (the app marks downloads there).
+    pub on_written: Option<&'a mut dyn FnMut(&VPath)>,
     report: CopyReport,
     depth: usize,
 }
@@ -92,7 +94,7 @@ impl<'a> Copy<'a> {
         on_progress: &'a mut dyn FnMut(&Progress),
         on_conflict: &'a mut dyn FnMut(&VPath, &Meta) -> Conflict,
     ) -> Copy<'a> {
-        Copy { from_fs, to_fs, opts: CopyOpts::default(), cancelled, on_progress, on_conflict, report: CopyReport::default(), depth: 0 }
+        Copy { from_fs, to_fs, opts: CopyOpts::default(), cancelled, on_progress, on_conflict, on_written: None, report: CopyReport::default(), depth: 0 }
     }
 
     /// Copies `from` (a file or a folder) to `to` (the new item's own path, not the folder it goes into). A folder that is
@@ -197,6 +199,10 @@ impl<'a> Copy<'a> {
         let part = parent.join(&part_name(target.name()));
         let r = self.write_part(from, m, &part);
         let r = r.and_then(|_| {
+            // (before the time is set: writing a stream may touch it)
+            if let Some(f) = self.on_written.as_mut() {
+                f(&part);
+            }
             if self.opts.keep_mtime && self.to_fs.caps().set_times && m.modified_ms > 0 {
                 self.to_fs.set_meta(&part, &MetaChange { modified_ms: Some(m.modified_ms), mode: None })?;
             }
@@ -314,15 +320,16 @@ pub fn fetch_file(
         }
         out.flush()?;
         drop(out);
-        if m.modified_ms > 0
-            && let Ok(f) = std::fs::OpenOptions::new().write(true).open(&part)
-        {
-            let _ = f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(m.modified_ms as u64));
-        }
+        // the mark first: writing a stream may touch the time
         if let Some(from) = mark_from
             && let Err(e) = leaf_sys::fileinfo::mark_downloaded(&part, from)
         {
             log::debug!("fetch: no download mark on {}: {e}", part.display());
+        }
+        if m.modified_ms > 0
+            && let Ok(f) = std::fs::OpenOptions::new().write(true).open(&part)
+        {
+            let _ = f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(m.modified_ms as u64));
         }
         if let Ok(old) = std::fs::symlink_metadata(dest) {
             if !old.is_file() {

@@ -469,6 +469,15 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
         }
     }
     tr.bytes.set(0, total_bytes.max(1));
+    // the disk must hold what the server says it sends, and the copy stops when what really arrives would not fit
+    let free = leaf_sys::fileattr::free_space(dest);
+    let room = if free == 0 { u64::MAX } else { free.saturating_sub(leaf_vfs::copy::KEEP_FREE) };
+    let no_room = || anyhow::anyhow!(t!("There is not enough free space on this PC for this download"));
+    if total_bytes > room {
+        return Err(no_room());
+    }
+    let full = std::sync::atomic::AtomicBool::new(false);
+    let stop = || cancelled() || full.load(Ordering::Relaxed);
 
     // names that are here already: asked once, for the items themselves
     let mut asked = Vec::new();
@@ -528,15 +537,29 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
             while tr.paused.load(Ordering::Relaxed) && !cancelled() {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            tr.bytes.set(base_bytes + p.bytes_done, total_bytes.max(1));
+            let got = base_bytes.saturating_add(p.bytes_done);
+            if got > room {
+                full.store(true, Ordering::Relaxed);
+            }
+            tr.bytes.set(got, total_bytes.max(1));
             let done = (base_files + p.files_done).min(u32::MAX as u64) as u32;
             let cur = (p.file_done == p.file_size || p.file_done <= 256 * 1024).then(|| p.file.name().to_string());
             (tr.on_progress)(total_files.max(1) as u32, done, cur);
         };
-        let r = Copy::new(&*fs, &LocalFs, &cancelled, &mut on_progress, &mut on_conflict).run(v, &LocalFs::address(&target));
+        // every file that arrives carries the download mark (SmartScreen, Office's Protected View)
+        let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(22)));
+        let mut mark = |part: &VPath| {
+            if let Err(e) = leaf_sys::fileinfo::mark_downloaded(&LocalFs::native(part), &from) {
+                log::debug!("download: no download mark: {e}");
+            }
+        };
+        let mut c = Copy::new(&*fs, &LocalFs, &stop, &mut on_progress, &mut on_conflict);
+        c.on_written = Some(&mut mark);
+        let r = c.run(v, &LocalFs::address(&target));
         match r {
+            Err(FsError::Cancelled) if full.load(Ordering::Relaxed) => return Err(no_room()),
             Ok(rep) => {
-                base_bytes += rep.bytes;
+                base_bytes = base_bytes.saturating_add(rep.bytes);
                 base_files += rep.files;
                 arrived.lock().unwrap_or_else(|e| e.into_inner()).push(target);
                 if !rep.skipped.is_empty() {

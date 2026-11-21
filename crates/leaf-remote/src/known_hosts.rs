@@ -219,8 +219,17 @@ pub fn check(paths: &[PathBuf], host: &str, port: u16, key: &PublicKey) -> Verdi
     check_texts(&files, host, port, key)
 }
 
+/// A host name or address that can be written into known_hosts as itself and never as a pattern: letters, digits and
+/// `. _ - : %` only (`:` and `%` for IPv6 addresses and their zone), no more than 253 characters.
+pub fn valid_host(host: &str) -> bool {
+    !host.is_empty() && host.len() <= 253 && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '%'))
+}
+
 /// The line "Trust and remember" adds: `name keytype base64`, the name in plain text (OpenSSH's default on Windows).
 pub fn line_for(host: &str, port: u16, key: &PublicKey) -> Result<String, String> {
+    if !valid_host(host) {
+        return Err("the server's name cannot be written into known_hosts".into());
+    }
     let k = key.to_openssh().map_err(|e| e.to_string())?;
     // `to_openssh` adds the comment when there is one; a server key has none, but keep only type and data
     let mut parts = k.split_whitespace();
@@ -228,17 +237,40 @@ pub fn line_for(host: &str, port: u16, key: &PublicKey) -> Result<String, String
     Ok(format!("{} {t} {b}", host_name(host, port)))
 }
 
-/// Appends the line for `host:port` to `path` (made, with its folder, when missing), on a line of its own.
+/// Adds the line for `host:port` to `path` (made, with its folder, when missing), on a line of its own. Atomic: the whole
+/// new text is written to a file beside it, given the old file's permissions, and moved over it, so a crash leaves the old
+/// file or the new one, never half a line.
 pub fn remember(path: &Path, host: &str, port: u16, key: &PublicKey) -> Result<(), String> {
     use std::io::Write;
     let line = line_for(host, port, key)?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let dir = path.parent().ok_or("known_hosts has no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut text = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    if !text.is_empty() && !text.ends_with(b"\n") {
+        text.push(b'\n');
     }
-    let needs_newline = std::fs::read(path).is_ok_and(|b| !b.is_empty() && !b.ends_with(b"\n"));
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
-    let text = if needs_newline { format!("\n{line}\n") } else { format!("{line}\n") };
-    f.write_all(text.as_bytes()).map_err(|e| e.to_string())
+    text.extend_from_slice(line.as_bytes());
+    text.push(b'\n');
+    let tmp = dir.join(format!(".known_hosts.leaf-{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let r = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        f.write_all(&text)?;
+        f.sync_all()?;
+        drop(f);
+        if let Ok(m) = std::fs::metadata(path) {
+            std::fs::set_permissions(&tmp, m.permissions())?;
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r.map_err(|e| e.to_string())
 }
 
 /// `~/.ssh/known_hosts` of the user running leaf (`%USERPROFILE%\.ssh\known_hosts` on Windows).
