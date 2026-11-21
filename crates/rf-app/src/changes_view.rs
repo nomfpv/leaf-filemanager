@@ -733,7 +733,7 @@ impl ChangesView {
         } else if self.cps.list.is_empty() {
             t!("No checkpoints yet. A checkpoint saves how the folder is now, to put it back later.").to_string()
         } else {
-            format!("{} \u{00b7} {kind}", self.status_text())
+            format!("{} \u{00b7} {kind}{}", self.status_text(), self.scope_note().map(|n| format!(" \u{00b7} {n}")).unwrap_or_default())
         };
         let (dir, tab) = (self.dir.clone(), self.tab.clone());
         let top = h_flex()
@@ -801,6 +801,16 @@ impl ChangesView {
         }
         let rows: Vec<AnyElement> = (0..self.cps.list.len()).map(|i| self.render_checkpoint(i, p, cx)).collect();
         page.child(v_flex().id("checkpoint-rows").flex_1().min_h_0().overflow_y_scroll().p_1().children(rows)).into_any_element()
+    }
+
+    /// In a subfolder of a repository the checkpoints are of the whole repository: "Whole repository: <its top>".
+    fn scope_note(&self) -> Option<String> {
+        let Some(Store::Git { root, .. }) = self.cps.store.as_deref() else { return None };
+        let norm = |p: &Path| {
+            let s = p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_string();
+            if cfg!(windows) { s.to_lowercase() } else { s }
+        };
+        (norm(root) != norm(&self.dir)).then(|| format!("{} {}", t!("Whole repository:"), root.display()))
     }
 
     fn bar(&self, icon: L, text: String, color: Hsla, p: &Palette) -> Div {
@@ -879,7 +889,12 @@ impl ChangesView {
     fn render_preview(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         use checkpoint::Change as C;
         let Some(pv) = self.cps.preview.as_ref() else { return div().into_any_element() };
-        let title = format!("{} {}", t!("Restore the checkpoint of"), when_text(pv.cp.time_ms));
+        let title = format!(
+            "{} {}{}",
+            t!("Restore the checkpoint of"),
+            when_text(pv.cp.time_ms),
+            self.scope_note().map(|n| format!(" \u{2014} {n}")).unwrap_or_default()
+        );
         let (line, ready) = match (&pv.plan, &pv.error) {
             (_, Some(e)) => (e.clone(), false),
             (None, None) => (t!("Comparing with the files now…").to_string(), false),
