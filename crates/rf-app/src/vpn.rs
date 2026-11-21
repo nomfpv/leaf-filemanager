@@ -443,6 +443,9 @@ pub fn describe(state: &leaf_vpn::State) -> (SharedString, Option<String>) {
         leaf_vpn::State::Off => (t!("VPN off").into(), None),
         leaf_vpn::State::Connecting { place } if place.is_empty() => (t!("VPN connecting").into(), None),
         leaf_vpn::State::Connecting { place } => (t!("VPN connecting").into(), Some(place.clone())),
+        leaf_vpn::State::On { country, city, unverified: Some(why), .. } => {
+            (t!("VPN connected, not verified").into(), Some(format!("{country}, {city}\n{} {why}", t!("The exit could not be confirmed:"))))
+        }
         leaf_vpn::State::On { country, city, exit_ip, .. } => {
             let ip = exit_ip.map(|i| i.to_string()).unwrap_or_default();
             (t!("VPN on").into(), Some(format!("{country}, {city}{}", if ip.is_empty() { String::new() } else { format!(" · {ip}") })))

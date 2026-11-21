@@ -79,7 +79,9 @@ fn vpn_dot(p: &Palette, popups_open: bool) -> AnyElement {
     let fill: Option<Hsla> = match state {
         leaf_vpn::State::Off => None,
         leaf_vpn::State::Connecting { .. } => Some(p.warning),
-        leaf_vpn::State::On { .. } => Some(p.success),
+        // (green only after the handshake AND Mullvad's own check that the traffic leaves through it)
+        leaf_vpn::State::On { unverified: None, .. } => Some(p.success),
+        leaf_vpn::State::On { .. } => Some(p.warning),
         leaf_vpn::State::Failed(_) => Some(p.danger),
     };
     let dot = div().size(px(12.)).rounded_full().border_1();

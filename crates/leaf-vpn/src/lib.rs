@@ -38,7 +38,9 @@ pub enum State {
     Off,
     /// `place`: "Sweden, Gothenburg" once the server is chosen, empty before.
     Connecting { place: String },
-    On { country: String, city: String, server: String, exit_ip: Option<IpAddr> },
+    /// The handshake is done. `exit_ip` only when the provider's own check confirmed the traffic leaves through it; else
+    /// `unverified` says why it could not be confirmed (the tunnel may still pass no traffic).
+    On { country: String, city: String, server: String, exit_ip: Option<IpAddr>, unverified: Option<String> },
     /// leaf's sentence (the details after a line break).
     Failed(String),
 }
@@ -65,9 +67,10 @@ pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
     /// The tunnel to open now (may ask the provider's API; runs on the runtime).
     fn prepare(&self) -> BoxFuture<'_, Result<Prepared, String>>;
-    /// After the tunnel is up: where the traffic comes out (through the tunnel). `None`: no check.
-    fn exit_check<'a>(&'a self, _tunnel: &'a Tunnel) -> BoxFuture<'a, Option<Exit>> {
-        Box::pin(async { None })
+    /// After the tunnel is up: where the traffic comes out, asked through the tunnel; `Err(why)` when that could not be
+    /// confirmed.
+    fn exit_check<'a>(&'a self, _tunnel: &'a Tunnel) -> BoxFuture<'a, Result<Exit, String>> {
+        Box::pin(async { Err("this provider has no exit check".to_string()) })
     }
 }
 
@@ -223,7 +226,6 @@ enum Refusal {
 async fn up_once(provider: &dyn Provider, generation: u64) -> Result<Option<Arc<Tunnel>>, Refusal> {
     let prepared = provider.prepare().await.map_err(Refusal::Provider)?;
     set_state(generation, State::Connecting { place: format!("{}, {}", prepared.country, prepared.city) });
-    let server_ip = prepared.config_endpoint_ip();
     let Prepared { config, country, city, server } = prepared;
     let t = Arc::new(Tunnel::start(config, tunnel::HANDSHAKE_WAIT).await.map_err(|e| Refusal::Tunnel(e.to_string()))?);
     {
@@ -235,17 +237,15 @@ async fn up_once(provider: &dyn Provider, generation: u64) -> Result<Option<Arc<
         m.tunnel = Some(t.clone());
     }
     bump_route();
-    let exit = provider.exit_check(&t).await.unwrap_or_default();
-    set_state(
-        generation,
-        State::On {
-            country: exit.country.unwrap_or(country),
-            city: exit.city.unwrap_or(city),
-            server,
-            // (without the provider's check: the server's own address, which is where Mullvad's traffic leaves)
-            exit_ip: exit.ip.or(Some(IpAddr::V4(server_ip))),
-        },
-    );
+    // (the address shown is the one the check confirmed, never the server's entry address standing in for it)
+    let state = match provider.exit_check(&t).await {
+        Ok(exit) => State::On { country: exit.country.unwrap_or(country), city: exit.city.unwrap_or(city), server, exit_ip: exit.ip, unverified: None },
+        Err(why) => {
+            log::warn!("vpn: the exit could not be confirmed: {why}");
+            State::On { country, city, server, exit_ip: None, unverified: Some(why) }
+        }
+    };
+    set_state(generation, state);
     Ok(Some(t))
 }
 
@@ -259,15 +259,6 @@ pub fn generation() -> u64 {
 
 fn bump_route() {
     ROUTE_GEN.fetch_add(1, Ordering::AcqRel);
-}
-
-impl Prepared {
-    fn config_endpoint_ip(&self) -> Ipv4Addr {
-        match self.config.endpoint {
-            SocketAddr::V4(a) => *a.ip(),
-            SocketAddr::V6(_) => Ipv4Addr::UNSPECIFIED,
-        }
-    }
 }
 
 pub fn disconnect() {

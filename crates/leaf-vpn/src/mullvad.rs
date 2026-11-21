@@ -289,19 +289,39 @@ impl Provider for Mullvad {
         })
     }
 
-    fn exit_check<'a>(&'a self, tunnel: &'a Tunnel) -> BoxFuture<'a, Option<Exit>> {
+    fn exit_check<'a>(&'a self, tunnel: &'a Tunnel) -> BoxFuture<'a, Result<Exit, String>> {
         Box::pin(async move {
-            let ip = tunnel.resolve("am.i.mullvad.net").await.ok()?.into_iter().next()?;
-            let s = tunnel.connect(ip, 443, Duration::from_secs(10)).await.ok()?;
-            let a = crate::http::request(s, "am.i.mullvad.net", "GET", "/json", None, None, Duration::from_secs(10)).await.ok()?;
+            const HOST: &str = "am.i.mullvad.net";
+            let ips = tunnel.resolve(HOST).await.map_err(|e| format!("the check's name could not be looked up through the VPN ({e})"))?;
+            let mut last = String::from("no address");
+            let mut answer = None;
+            for ip in ips {
+                match tunnel.connect(ip, 443, Duration::from_secs(10)).await {
+                    Ok(s) => match crate::http::request(s, HOST, "GET", "/json", None, None, Duration::from_secs(10)).await {
+                        Ok(a) if a.status == 200 => {
+                            answer = Some(a);
+                            break;
+                        }
+                        Ok(a) => last = format!("HTTP {}", a.status),
+                        Err(e) => last = e,
+                    },
+                    Err(e) => last = e.to_string(),
+                }
+            }
+            let a = answer.ok_or_else(|| format!("the check through the VPN did not answer ({last})"))?;
             #[derive(Deserialize)]
             struct Am {
                 ip: Option<IpAddr>,
                 country: Option<String>,
                 city: Option<String>,
+                mullvad_exit_ip: Option<bool>,
             }
-            let am: Am = serde_json::from_slice(&a.body).ok()?;
-            Some(Exit { ip: am.ip, country: am.country, city: am.city })
+            let am: Am = serde_json::from_slice(&a.body).map_err(|_| "the check's answer could not be read".to_string())?;
+            // (only Mullvad's own word that the request came from one of its exits confirms it)
+            if am.mullvad_exit_ip != Some(true) {
+                return Err("the check says the traffic does not leave through Mullvad".to_string());
+            }
+            Ok(Exit { ip: am.ip, country: am.country, city: am.city })
         })
     }
 }
