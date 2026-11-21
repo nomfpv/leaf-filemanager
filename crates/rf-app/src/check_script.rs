@@ -146,7 +146,12 @@ impl Workspace {
                 let names: Vec<String> = arg.split('|').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
                 self.active_tab().clone().update(cx, |v, cx| v.select_when_listed(names, cx));
             }
-            "run" => match crate::registry::by_id(arg).or_else(|| crate::registry::all().find(|c| c.id == arg)) {
+            // `run action:<name>`: one of the user's own actions (actions.toml), as the palette would run it
+            "run" if arg.starts_with(crate::custom_actions::ID_PREFIX) => {
+                let name = arg.trim_start_matches(crate::custom_actions::ID_PREFIX).to_string();
+                window.dispatch_action(Box::new(crate::actions::RunCustomAction { name, keys: String::new() }), cx);
+            }
+            "run" => match crate::registry::by_id(arg) {
                 Some(spec) => window.dispatch_action((spec.action)(), cx),
                 None => return false,
             },
