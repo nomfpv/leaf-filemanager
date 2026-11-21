@@ -59,10 +59,13 @@ impl Target {
     fn scheme(&self) -> &'static str {
         if self.tls { "davs" } else { "dav" }
     }
-    /// `http://host:port` / `https://host:port` (an IPv6 name in brackets).
+    /// `http://host[:port]` / `https://host[:port]` (an IPv6 name in brackets, the port left out when it is the scheme's own: the
+    /// same authority the `Host` header carries, which servers compare with `Destination` as text).
     fn base(&self) -> String {
         let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
-        format!("{}://{host}:{}", if self.tls { "https" } else { "http" }, self.port)
+        let default = if self.tls { 443 } else { 80 };
+        let auth = if self.port == default { host } else { format!("{host}:{}", self.port) };
+        format!("{}://{auth}", if self.tls { "https" } else { "http" })
     }
     /// `host:port` as the certificate file names it.
     fn cert_name(&self) -> String {
