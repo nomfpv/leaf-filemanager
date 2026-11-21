@@ -146,6 +146,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Find duplicates | Looks for files with identical content in this folder or the selected folders. |  |
 | Find build junk | Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin. |  |
 | Show changes | Lists every changed, new, deleted and renamed file of the git repository this folder is in, grouped by folder, with the difference of each in the preview pane. It only reads: nothing in the repository is changed. |  |
+| Worktrees | Lists the worktrees of the git repository this folder is in, by branch, to jump to one. It only reads. |  |
+| New worktree | Adds a second working folder to the git repository this folder is in, on a new branch from the current head or on an existing branch, and opens it in a new tab. Nothing that exists is changed. |  |
 | Organize folder | Sorts the folder's files into folders by kind. |  |
 
 ## leaf itself

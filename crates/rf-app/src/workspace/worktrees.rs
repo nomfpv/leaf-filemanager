@@ -318,7 +318,8 @@ fn folder_dialog(root: PathBuf, main: PathBuf, branch: String, existing: bool, m
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Worktree, current_of, default_folder};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn folder_and_membership() {
