@@ -341,18 +341,27 @@ pub fn sign_out(cx: &mut App) {
             },
             None => None,
         };
-        let _ = forget_sign_in(&v);
-        note
+        // (the entries must really be gone: otherwise the account number would stay in the keyring unseen)
+        let gone = forget_sign_in(&v);
+        (note, gone)
     });
     cx.spawn(async move |cx| {
-        let note = work.await;
+        let (note, gone) = work.await;
+        let left = gone.is_err();
         with_ui(|u| {
             u.busy = false;
-            u.account = AccountView::default();
-            u.message = note;
+            u.message = match gone {
+                Ok(()) => note,
+                Err(e) => Some(format!("{}\n{e}", t!("The account number could not be deleted from the system keyring; it is still there. Unlock the keyring, then Sign out again."))),
+            };
+            if !left {
+                u.account = AccountView::default();
+            }
         });
         ui_changed();
-        let _ = cx.update(|cx| crate::settings::update(cx, |s| s.vpn_signed_in = false));
+        if !left {
+            let _ = cx.update(|cx| crate::settings::update(cx, |s| s.vpn_signed_in = false));
+        }
     })
     .detach();
 }
