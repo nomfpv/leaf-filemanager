@@ -4951,6 +4951,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-download"
+version = "0.9.4"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "leaf-mcp"
 version = "0.9.4"
 dependencies = [
@@ -7381,6 +7391,7 @@ dependencies = [
  "image",
  "leaf-decode",
  "leaf-dev",
+ "leaf-download",
  "leaf-remote",
  "leaf-sys",
  "leaf-vfs",

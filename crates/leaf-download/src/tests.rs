@@ -1,0 +1,189 @@
+//! Against an in-process HTTP server on 127.0.0.1 only: nothing here touches the internet.
+
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use super::*;
+
+fn data(len: usize) -> Vec<u8> {
+    let mut x = 0x2545F4914F6CDD1Du64;
+    (0..len)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 24) as u8
+        })
+        .collect()
+}
+
+struct Server {
+    port: u16,
+    /// Bytes after which every ranged answer is cut off (usize::MAX = never).
+    cut_after: Arc<AtomicUsize>,
+}
+
+fn serve(body: Vec<u8>) -> Server {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let cut_after = Arc::new(AtomicUsize::new(usize::MAX));
+    let hits = Arc::new(AtomicUsize::new(0));
+    let cut = cut_after.clone();
+    let body = Arc::new(body);
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let (body, cut, hit) = (body.clone(), cut.clone(), hits.clone());
+            std::thread::spawn(move || {
+                let _ = handle(s, &body, &cut, &hit);
+            });
+        }
+    });
+    Server { port, cut_after }
+}
+
+fn handle(mut s: TcpStream, body: &[u8], cut: &AtomicUsize, hits: &AtomicUsize) -> std::io::Result<()> {
+    let mut r = BufReader::new(s.try_clone()?);
+    let mut first = String::new();
+    r.read_line(&mut first)?;
+    let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let mut range = None;
+    loop {
+        let mut line = String::new();
+        r.read_line(&mut line)?;
+        if line.trim().is_empty() {
+            break;
+        }
+        if let Some(v) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+            let (a, b) = v.trim().split_once('-').unwrap();
+            range = Some((a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap()));
+        }
+    }
+    hits.fetch_add(1, Ordering::SeqCst);
+    let disposition = path.strip_prefix("/cd/").map(|enc| format!("Content-Disposition: attachment; filename=\"{}\"\r\n", name::percent_decode(enc)));
+    let extra = format!("ETag: \"v1\"\r\nAccept-Ranges: bytes\r\n{}", disposition.unwrap_or_default());
+    let (status, from, to) = match range {
+        Some((a, b)) => ("206 Partial Content", a, b.min(body.len() - 1)),
+        None => ("200 OK", 0, body.len() - 1),
+    };
+    let slice = &body[from..=to];
+    let cr = if range.is_some() { format!("Content-Range: bytes {from}-{to}/{}\r\n", body.len()) } else { String::new() };
+    write!(s, "HTTP/1.1 {status}\r\n{extra}{cr}Content-Length: {}\r\nConnection: close\r\n\r\n", slice.len())?;
+    // a cut line: only the first bytes of a long answer arrive, then the connection drops
+    let limit = cut.load(Ordering::SeqCst);
+    if slice.len() > 16 && limit != usize::MAX {
+        s.write_all(&slice[..limit.min(slice.len())])?;
+        s.flush()?;
+        return Ok(());
+    }
+    s.write_all(slice)?;
+    s.flush()
+}
+
+struct Quiet(Resolve, std::sync::Mutex<u64>);
+
+impl Host for Quiet {
+    fn progress(&self, p: &Progress) {
+        *self.1.lock().unwrap() = p.resumed;
+    }
+    fn exists(&self, _: &Path, _: Option<u64>) -> Resolve {
+        self.0
+    }
+}
+
+fn host(r: Resolve) -> Quiet {
+    Quiet(r, Default::default())
+}
+
+fn opts(retries: u32) -> Options {
+    Options { segments: 4, retries, backoff: Duration::from_millis(20), ..Options::default() }
+}
+
+fn tmp(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("leaf-download-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn url(s: &Server, p: &str) -> String {
+    format!("http://127.0.0.1:{}{p}", s.port)
+}
+
+#[test]
+fn resume_after_a_cut_is_byte_identical() {
+    let body = data(6 << 20);
+    let srv = serve(body.clone());
+    let dir = tmp("resume");
+    let ctl = Control::default();
+    // the line is cut after 300 KiB of each answer and there are no retries: the first run fails and leaves a partial file
+    srv.cut_after.store(300 << 10, Ordering::SeqCst);
+    let first = download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth));
+    assert!(first.is_err(), "the cut must fail the first run");
+    assert!(!dir.join("f.bin").exists(), "an incomplete file is never renamed");
+    assert!(dir.join("f.bin.leaf-part").exists() && dir.join("f.bin.leaf-part.state").exists());
+    // the line is whole again: the same address carries on from the state file
+    srv.cut_after.store(usize::MAX, Ordering::SeqCst);
+    let h = host(Resolve::KeepBoth);
+    let out = download(&url(&srv, "/f.bin"), &dir, &opts(2), &ctl, &h).unwrap();
+    assert!(matches!(out, Outcome::Saved(ref p) if p == &dir.join("f.bin")));
+    assert!(*h.1.lock().unwrap() > 0, "the second run started from what the first had");
+    assert_eq!(std::fs::read(dir.join("f.bin")).unwrap(), body);
+    assert!(!dir.join("f.bin.leaf-part").exists() && !dir.join("f.bin.leaf-part.state").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_hostile_name_stays_in_the_folder() {
+    let srv = serve(data(4096));
+    let outer = tmp("names");
+    let dir = outer.join("in");
+    std::fs::create_dir(&dir).unwrap();
+    let ctl = Control::default();
+    for (path, want) in [("/cd/..%5C..%5Cx", "x"), ("/cd/CON", "_CON"), ("/cd/a%2Fb", "b"), ("/..%5C..%5Cy", "y"), ("/cd/..", "download"), ("/cd/nul.txt", "_nul.txt")] {
+        let out = download(&url(&srv, path), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth)).unwrap();
+        let Outcome::Saved(p) = out else { panic!("{path} skipped") };
+        assert_eq!(p.parent().unwrap(), dir, "{path} left the folder");
+        assert_eq!(p.file_name().unwrap().to_string_lossy(), want, "{path}");
+    }
+    assert_eq!(std::fs::read_dir(&outer).unwrap().count(), 1, "something was written next to the folder");
+    let _ = std::fs::remove_dir_all(&outer);
+}
+
+#[test]
+fn an_existing_file_is_not_overwritten_without_the_choice() {
+    let body = data(100_000);
+    let srv = serve(body.clone());
+    let dir = tmp("exists");
+    let ctl = Control::default();
+    std::fs::write(dir.join("f.bin"), b"old").unwrap();
+    // skip: nothing is written
+    let out = download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::Skip)).unwrap();
+    assert!(matches!(out, Outcome::Skipped));
+    assert_eq!(std::fs::read(dir.join("f.bin")).unwrap(), b"old");
+    assert!(!dir.join("f.bin.leaf-part").exists());
+    // keep both: the old one stays, the new one has another name
+    let out = download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth)).unwrap();
+    assert!(matches!(out, Outcome::Saved(ref p) if p == &dir.join("f (2).bin")));
+    assert_eq!(std::fs::read(dir.join("f.bin")).unwrap(), b"old");
+    assert_eq!(std::fs::read(dir.join("f (2).bin")).unwrap(), body);
+    // replace: only now is the old one gone
+    download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::Replace)).unwrap();
+    assert_eq!(std::fs::read(dir.join("f.bin")).unwrap(), body);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancel_stops_and_removes_the_partial_file() {
+    let srv = serve(data(2 << 20));
+    let dir = tmp("cancel");
+    let ctl = Control::default();
+    ctl.cancel.store(true, Ordering::SeqCst);
+    let r = download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth));
+    assert!(matches!(r, Err(Error::Cancelled)));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
