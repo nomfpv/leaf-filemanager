@@ -1,15 +1,43 @@
-//! Linux backend of rf_win::shell. Status: STUB
+﻿//! Linux backend of rf_win::shell. Status: REAL for open (xdg-open) and the terminal; open-with, properties and the
+//! admin terminal stay stubs.
 
 use crate::Owner;
 use leaf_common::{stub, stub_err};
-use std::path::Path;
+use rf_core::terminal::Terminal;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 pub fn ensure_com() {
     stub!("shell::ensure_com")
 }
 
-pub fn open(_path: &Path) -> anyhow::Result<()> {
-    stub_err!("shell::open")
+/// Start a program detached from our streams; a thread waits for it so it never stays a zombie.
+fn spawn_reaped(mut cmd: Command) -> anyhow::Result<()> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = cmd.spawn()?;
+    std::thread::Builder::new().name("reaper".into()).spawn(move || {
+        let _ = child.wait();
+    })?;
+    Ok(())
+}
+
+/// A program on `PATH` (or an absolute path that is executable).
+fn which(name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let is_exe = |p: &Path| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+    if name.contains('/') {
+        let p = PathBuf::from(name);
+        return is_exe(&p).then_some(p);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| is_exe(p))
+}
+
+pub fn open(path: &Path) -> anyhow::Result<()> {
+    let exe = which("xdg-open").ok_or_else(|| anyhow::anyhow!("xdg-open is not installed"))?;
+    let mut c = Command::new(exe);
+    c.arg(path);
+    spawn_reaped(c)
 }
 
 pub fn open_with(_path: &Path) -> anyhow::Result<()> {
@@ -20,8 +48,8 @@ pub fn properties(_path: &Path) -> anyhow::Result<()> {
     stub_err!("shell::properties")
 }
 
-pub fn open_terminal(_dir: &Path) -> anyhow::Result<()> {
-    stub_err!("shell::open_terminal")
+pub fn open_terminal(dir: &Path) -> anyhow::Result<()> {
+    open_terminal_with(Terminal::Auto, "", dir)
 }
 
 pub fn open_terminal_admin(_dir: &Path) -> anyhow::Result<()> {
@@ -40,18 +68,105 @@ pub fn open_with_dialog(_owner: Owner, _path: &Path) -> anyhow::Result<()> {
     stub_err!("shell::open_with_dialog")
 }
 
-pub fn terminal_exe(_kind: rf_core::terminal::Terminal) -> Option<std::path::PathBuf> {
-    None
+/// The program of a terminal kind, when installed (`$TERMINAL` for [`Terminal::EnvTerminal`]).
+pub fn terminal_exe(kind: Terminal) -> Option<PathBuf> {
+    match kind {
+        Terminal::Konsole => which("konsole"),
+        Terminal::Kitty => which("kitty"),
+        Terminal::Alacritty => which("alacritty"),
+        Terminal::Foot => which("foot"),
+        Terminal::WezTerm => which("wezterm"),
+        Terminal::Ghostty => which("ghostty"),
+        Terminal::EnvTerminal => {
+            let t = std::env::var("TERMINAL").ok()?;
+            which(t.split_whitespace().next()?)
+        }
+        _ => None,
+    }
 }
 
-pub fn installed_terminals() -> &'static [rf_core::terminal::Terminal] {
-    &[]
+/// The Linux terminals that can be started here, in the list's order.
+pub fn installed_terminals() -> &'static [Terminal] {
+    static CACHE: std::sync::OnceLock<Vec<Terminal>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        [Terminal::Konsole, Terminal::Kitty, Terminal::Alacritty, Terminal::Foot, Terminal::WezTerm, Terminal::Ghostty, Terminal::EnvTerminal]
+            .into_iter()
+            .filter(|k| terminal_exe(*k).is_some())
+            .collect()
+    })
 }
 
-pub fn open_terminal_with(
-    _kind: rf_core::terminal::Terminal,
-    _custom: &str,
-    _dir: &Path,
-) -> anyhow::Result<()> {
-    stub_err!("shell::open_terminal_with")
+/// The command that opens `exe` in `dir`.
+fn terminal_command(kind: Terminal, exe: &Path, dir: &Path) -> Command {
+    let mut c = Command::new(exe);
+    match kind {
+        Terminal::Konsole => {
+            c.arg("--workdir").arg(dir);
+        }
+        Terminal::Kitty => {
+            c.arg("--directory").arg(dir);
+        }
+        Terminal::Alacritty => {
+            c.arg("--working-directory").arg(dir);
+        }
+        Terminal::Foot => {
+            let mut a = OsString::from("--working-directory=");
+            a.push(dir);
+            c.arg(a);
+        }
+        Terminal::WezTerm => {
+            c.arg("start").arg("--cwd").arg(dir);
+        }
+        Terminal::Ghostty => {
+            let mut a = OsString::from("--working-directory=");
+            a.push(dir);
+            c.arg(a);
+        }
+        _ => {}
+    }
+    // every terminal also inherits the folder as its working directory
+    c.current_dir(dir);
+    c
 }
+
+pub fn open_terminal_with(kind: Terminal, custom: &str, dir: &Path) -> anyhow::Result<()> {
+    if kind == Terminal::Custom {
+        if custom.trim().is_empty() {
+            anyhow::bail!("no custom terminal command is set");
+        }
+        let line = custom.replace("{path}", &dir.to_string_lossy());
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(line).current_dir(dir);
+        return spawn_reaped(c);
+    }
+    if kind == Terminal::EnvTerminal {
+        let t = std::env::var("TERMINAL").map_err(|_| anyhow::anyhow!("$TERMINAL is not set"))?;
+        let mut parts = t.split_whitespace();
+        let exe = which(parts.next().unwrap_or("")).ok_or_else(|| anyhow::anyhow!("$TERMINAL names no installed program"))?;
+        let mut c = Command::new(exe);
+        c.args(parts).current_dir(dir);
+        return spawn_reaped(c);
+    }
+    if let Some(exe) = terminal_exe(kind) {
+        return spawn_reaped(terminal_command(kind, &exe, dir));
+    }
+    // automatic: $TERMINAL, then the installed ones, then gnome-terminal and xterm
+    if std::env::var_os("TERMINAL").is_some() && terminal_exe(Terminal::EnvTerminal).is_some() {
+        return open_terminal_with(Terminal::EnvTerminal, "", dir);
+    }
+    if let Some(k) = installed_terminals().iter().find(|k| **k != Terminal::EnvTerminal) {
+        return open_terminal_with(*k, "", dir);
+    }
+    if let Some(exe) = which("gnome-terminal") {
+        let mut c = Command::new(exe);
+        c.arg("--working-directory").arg(dir).current_dir(dir);
+        return spawn_reaped(c);
+    }
+    if let Some(exe) = which("xterm") {
+        let mut c = Command::new(exe);
+        c.current_dir(dir);
+        return spawn_reaped(c);
+    }
+    anyhow::bail!("no terminal program found")
+}
+
