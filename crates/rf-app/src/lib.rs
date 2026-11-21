@@ -14,6 +14,8 @@ mod command_palette;
 mod compare_mode;
 mod conflict_dialog;
 mod ctx_menu;
+mod custom_actions;
+mod custom_actions_page;
 mod cut_marks;
 mod disk_usage;
 mod fluent_menu;
@@ -625,6 +627,7 @@ pub fn main() {
         actions::bind(cx);
         actions::bind_user(cx);
         features_page::init(cx);
+        custom_actions::init(cx);
         home::init(cx);
         keymap_editor::init(cx);
         if let Some(page) = &settings_arg {

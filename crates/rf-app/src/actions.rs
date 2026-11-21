@@ -113,6 +113,14 @@ gpui_kit::actions!(
     ]
 );
 
+/// Runs one of the user's own actions (`actions.toml`) by name. Not one of the registry's fixed rows: those of the user's are made
+/// when the file is read (`custom_actions`).
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = leaf, no_json)]
+pub struct RunCustomAction {
+    pub name: String,
+}
+
 pub const FOLDER_CTX: &str = "FolderView";
 /// The folder tree's key context. Tab is bound in it (to [`LeaveTree`]) because the component library binds Tab at the window's
 /// root to "focus the next tab stop": a binding is matched before any key listener is asked, so the tree's own key handler never
@@ -128,6 +136,13 @@ pub fn bind_user(cx: &mut App) {
     let map = cx.global::<crate::settings::Settings>().keybindings.clone();
     let mut bindings = Vec::new();
     for (keys, action) in map {
+        if let Some(n) = action.strip_prefix(crate::custom_actions::ID_PREFIX) {
+            match KeyBinding::load(&keys, Box::new(RunCustomAction { name: n.to_string() }), None, false, None, cx) {
+                Ok(b) => bindings.push(b),
+                Err(e) => log::warn!("keybinding {keys:?}: {e}"),
+            }
+            continue;
+        }
         let name = if action.contains("::") { action.clone() } else { format!("leaf::{action}") };
         match cx.build_action(&name, None) {
             Ok(a) => match KeyBinding::load(&keys, a, None, false, None, cx) {

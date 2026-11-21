@@ -65,11 +65,23 @@ pub enum Category {
     Panes,
     Tools,
     App,
+    /// The user's own actions (`actions.toml`); only ever run-time rows.
+    Custom,
 }
 
 impl Category {
-    pub const ALL: [Category; 9] =
-        [Category::Tabs, Category::Navigation, Category::Selection, Category::Files, Category::CopyPath, Category::View, Category::Panes, Category::Tools, Category::App];
+    pub const ALL: [Category; 10] = [
+        Category::Tabs,
+        Category::Navigation,
+        Category::Selection,
+        Category::Files,
+        Category::CopyPath,
+        Category::View,
+        Category::Panes,
+        Category::Tools,
+        Category::App,
+        Category::Custom,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -82,6 +94,7 @@ impl Category {
             Category::Panes => "Panes",
             Category::Tools => "Tools",
             Category::App => "leaf itself",
+            Category::Custom => "Your actions",
         }
     }
 }
@@ -157,9 +170,16 @@ pub struct CommandSpec {
     #[allow(dead_code)]
     pub since: &'static str,
     pub platforms: Platforms,
+    /// The name of the user's own action (`actions.toml`) when this row is one; empty for the built-in rows.
+    pub custom: &'static str,
 }
 
 impl CommandSpec {
+    /// The action to run: for a user's action one carrying its name, else the row's own.
+    pub fn make_action(&self) -> Box<dyn Action> {
+        if self.custom.is_empty() { (self.action)() } else { Box::new(crate::actions::RunCustomAction { name: self.custom.to_string() }) }
+    }
+
     /// The shortcut as shown ("Ctrl+Shift+N", "Alt+←", "Del"); empty when it has none.
     pub fn shown_keys(&self) -> String {
         if !self.hint.is_empty() {
@@ -205,6 +225,7 @@ const BASE: CommandSpec = CommandSpec {
     bind: |k, c| KeyBinding::new(k, crate::actions::ToggleCommandPalette, c),
     since: "0.9.0",
     platforms: Platforms::ALL,
+    custom: "",
 };
 
 /// One row: `c!(Action, Category, "Title", "Description.", Icon, [keys] , field: value ...)`.
@@ -348,9 +369,56 @@ pub fn by_id(id: &str) -> Option<&'static CommandSpec> {
     COMMANDS.iter().find(|c| c.id == id)
 }
 
-/// The commands the palette lists, in its order.
+/// The user's own actions as rows, set by `custom_actions` when `actions.toml` is read. The rows are made once per change of the
+/// file and live to the end of the program (a few hundred bytes each time the file changes).
+static CUSTOM: std::sync::RwLock<Vec<&'static CommandSpec>> = std::sync::RwLock::new(Vec::new());
+
+pub fn set_custom(rows: Vec<&'static CommandSpec>) {
+    *CUSTOM.write().unwrap_or_else(|e| e.into_inner()) = rows;
+}
+
+/// The row of one of the user's own actions (`actions.toml`). Leaked: it lives as long as the program.
+pub fn custom_row(name: &str, description: &str, shortcut: Option<&str>, icon: L, palette: bool, toolbar: bool) -> &'static CommandSpec {
+    fn leak(s: &str) -> &'static str {
+        Box::leak(s.to_string().into_boxed_str())
+    }
+    let keys: &'static [Key] = match shortcut {
+        Some(k) => Box::leak(Box::new([Key { keys: leak(k), ctx: KeyCtx::Window }])),
+        None => &[],
+    };
+    let mut places = Places::PAGE;
+    if palette {
+        places = Places(places.0 | Places::PALETTE.0);
+    }
+    if toolbar {
+        places = Places(places.0 | Places::TOOLBAR.0);
+    }
+    Box::leak(Box::new(CommandSpec {
+        id: leak(&format!("{}{name}", crate::custom_actions::ID_PREFIX)),
+        title: leak(name),
+        description: leak(description),
+        category: Category::Custom,
+        icon,
+        default_keys: keys,
+        places,
+        custom: leak(name),
+        ..BASE
+    }))
+}
+
+/// The rows of the user's own actions (every one, whether the palette lists it or not).
+pub fn custom() -> Vec<&'static CommandSpec> {
+    CUSTOM.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The built-in rows, then the user's own.
+pub fn all() -> impl Iterator<Item = &'static CommandSpec> {
+    COMMANDS.iter().chain(custom())
+}
+
+/// The commands the palette lists, in its order: the built-in ones, then the user's own that asked for the palette.
 pub fn palette() -> impl Iterator<Item = &'static CommandSpec> {
-    COMMANDS.iter().filter(|c| c.places.contains(Places::PALETTE))
+    all().filter(|c| c.places.contains(Places::PALETTE))
 }
 
 /// The default key bindings, every row's keys in table order.
@@ -366,7 +434,8 @@ pub fn default_bindings() -> Vec<KeyBinding> {
 
 /// Every command for the shortcut editor: (title, default keys as shown, action id).
 pub fn shortcut_entries() -> Vec<(&'static str, String, String)> {
-    palette().map(|c| (c.title, c.shown_keys(), c.id.to_string())).collect()
+    // (the user's own actions are all here, even those the palette does not list: their shortcut is edited here)
+    COMMANDS.iter().filter(|c| c.places.contains(Places::PALETTE)).chain(custom()).map(|c| (c.title, c.shown_keys(), c.id.to_string())).collect()
 }
 
 /// `FEATURES.md`: the listed commands grouped as on the page.

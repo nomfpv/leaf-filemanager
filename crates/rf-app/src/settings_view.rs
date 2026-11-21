@@ -29,6 +29,7 @@ pub enum Page {
     Files,
     FileTypes,
     Actions,
+    YourActions,
     Tags,
     Look,
     Nearby,
@@ -40,13 +41,14 @@ pub enum Page {
     About,
 }
 
-const PAGES: [(Page, L, &str); 15] = [
+const PAGES: [(Page, L, &str); 16] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
     (Page::Files, L::Folder, "Files and folders"),
     (Page::FileTypes, L::FileType, "File types"),
     (Page::Actions, L::Keyboard, "Actions"),
+    (Page::YourActions, L::Zap, "Your actions"),
     (Page::Tags, L::Tag, "Tags"),
     (Page::Look, L::Eye, "Preview"),
     (Page::Search, L::Search, "HyperSearch"),
@@ -208,6 +210,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Files => files(p, s, cx),
         Page::FileTypes => crate::open_rules_page::page(p, s),
         Page::Actions => actions(p, s, cx),
+        Page::YourActions => crate::custom_actions_page::page(p, cx),
         Page::Tags => tags(p, cx),
         Page::Look => look(p, s, cx),
         Page::Nearby => crate::nearby::page(p, s, cx),
@@ -2282,9 +2285,9 @@ fn actions(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     let mut grid = div().px_4().py_3().flex().flex_wrap().gap_x_6().gap_y_0p5();
     let capturing = crate::keymap_editor::capturing(cx);
     let entries = crate::registry::shortcut_entries();
-    let conflicts = crate::keymap_editor::conflicts(&entries, &|a| crate::keymap_editor::custom_keys(a, cx));
+    let conflicts = crate::keymap_editor::conflicts(&entries, &|a| crate::keymap_editor::custom_keys(a, cx).or_else(|| crate::custom_actions::file_shortcut(a, cx)));
     for (i, (label, keys, action)) in entries.into_iter().enumerate() {
-        let custom = crate::keymap_editor::custom_keys(&action, cx);
+        let custom = crate::keymap_editor::custom_keys(&action, cx).or_else(|| crate::custom_actions::file_shortcut(&action, cx));
         // another command has the same keys: both are marked, hovering says which
         let clash = conflicts.get(&action).map(|other| format!("{} {}", t!("Same shortcut:"), crate::i18n::t(other)));
         let waiting = capturing.as_deref() == Some(action.as_str());

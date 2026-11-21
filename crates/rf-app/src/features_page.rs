@@ -8,7 +8,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::registry::{COMMANDS, Category, CommandSpec, Places};
+use crate::registry::{Category, CommandSpec, Places};
 use crate::settings_view::{section, shell};
 use crate::t;
 use crate::theme::{self, Palette};
@@ -133,7 +133,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let mut any = false;
     for cat in Category::ALL {
         let rows: Vec<&'static CommandSpec> =
-            COMMANDS.iter().filter(|c| c.category == cat && c.places.contains(Places::PAGE) && c.available(cx) && matches(c, &words)).collect();
+            crate::registry::all().filter(|c| c.category == cat && c.places.contains(Places::PAGE) && c.available(cx) && matches(c, &words)).collect();
         if rows.is_empty() {
             continue;
         }

@@ -208,7 +208,7 @@ impl CommandPalette {
             ix -= 1;
         }
         match self.filtered.get(ix) {
-            Some(Row::Cmd(ci)) => cx.emit(PaletteEvent::Run((self.cmds[*ci].action)())),
+            Some(Row::Cmd(ci)) => cx.emit(PaletteEvent::Run(self.cmds[*ci].make_action())),
             Some(Row::Folder(p)) => cx.emit(PaletteEvent::Navigate(p.clone())),
             Some(Row::Tab(ti)) => {
                 let t = &self.tabs[*ti];

@@ -420,6 +420,10 @@ impl FolderView {
             let d = target_dir.clone();
             v.push(Item::action(t!("Open in terminal"), icon(L::SquareTerminal), move |_, cx| open_terminal(d.clone(), cx)).hint("Ctrl+Shift+`"));
         }
+        if let Some(own) = crate::custom_actions::menu_section(&self.selection_with_kind(), dir, false, cx) {
+            v.push(Item::Separator);
+            v.push(own);
+        }
         v.push(Item::Separator);
         v.push(Item::Sub { label: t!("Show more options").into(), icon: icon(L::Ellipsis), items: Sub::Pending { key: "more", fallback: None }, click: None });
         let mut quick = self.quick_clipboard(me, true);
@@ -487,6 +491,10 @@ impl FolderView {
             let (m, d) = (me.clone(), dir.to_path_buf());
             git_items.push(Item::action(t!("Clone repository…"), icon(L::GitFork), move |w, cx| crate::git_ui::clone_dialog(m.clone(), d.clone(), w, cx)));
             v.push(Item::sub("Git", icon(L::GitBranch), git_items));
+        }
+        if let Some(own) = crate::custom_actions::menu_section(&[], dir, true, cx) {
+            v.push(Item::Separator);
+            v.push(own);
         }
         v.push(Item::Separator);
         v.push(Item::Sub { label: t!("Show more options").into(), icon: icon(L::Ellipsis), items: Sub::Pending { key: "more", fallback: None }, click: None });
