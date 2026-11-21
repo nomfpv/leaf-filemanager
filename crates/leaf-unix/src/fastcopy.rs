@@ -1349,7 +1349,14 @@ pub fn discard(journal: &Path) {
 /// the source are as the journal left them, else that file is copied again; moves remove an original only after its copy is
 /// complete, fsynced and checked.
 pub fn resume(journal: &Path, tracker: Arc<Tracker>) -> anyhow::Result<bool> {
+    // (taken before it is read: a second Resume of the same job is refused, never run beside this one)
+    let held = match jrn::hold(journal) {
+        Ok(h) => h,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(_) => anyhow::bail!("this job is already being carried on"),
+    };
     let Some(l) = load(journal) else {
+        drop(held);
         discard(journal);
         return Ok(true);
     };
@@ -1396,6 +1403,7 @@ pub fn resume(journal: &Path, tracker: Arc<Tracker>) -> anyhow::Result<bool> {
     tracker.set_verify(l.info.verify);
     // a clean journal (no torn tail) to go on recording into
     let w = jrn::rewrite(journal, &l.records)?;
+    drop(held);
     let jr = Jr { w, last_sync: Instant::now(), path: journal.to_path_buf() };
     run(l.info.kind, &l.info.sources, &l.info.dest, tracker, false, Start::Resumed(jr, rs, decide))
 }
@@ -1697,6 +1705,22 @@ mod tests {
         std::fs::rename(root.join("away"), root.join("src")).unwrap();
         assert!(resume(&journal, quiet()).unwrap());
         assert_eq!(std::fs::read(root.join("dest/big.bin")).unwrap(), big);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_second_resume_of_a_running_job_is_refused() {
+        let (root, jobs) = fresh("twice");
+        std::fs::write(root.join("src/big.bin"), pattern(9 << 20, 12)).unwrap();
+        let journal = copy_and_die(&[root.join("src/big.bin")], &root.join("dest"), &jobs, "big.bin");
+        let first = jrn::hold(&journal).unwrap();
+        assert!(resume(&journal, quiet()).is_err(), "refused while the first one has it");
+        assert_eq!(parts_in(&root.join("dest")).len(), 1, "its part untouched");
+        // the first one's rewrite keeps it: the new journal is locked from its creation
+        let w = jrn::rewrite(&journal, &jrn::read(&journal).unwrap()).unwrap();
+        drop(first);
+        assert!(jrn::in_use(&journal) && resume(&journal, quiet()).is_err());
+        drop(w);
+        assert!(resume(&journal, quiet()).unwrap());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

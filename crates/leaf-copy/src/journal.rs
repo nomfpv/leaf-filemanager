@@ -114,19 +114,45 @@ pub fn read(path: &Path) -> std::io::Result<Vec<Vec<String>>> {
 
 /// Replaces the journal with exactly `records` (dropping a corrupt tail before more is appended)
 /// and returns a writer that appends to it. The new file is synced before it takes the old one's
-/// place, so a crash here leaves either the old journal or the new one, never neither.
+/// place, so a crash here leaves either the old journal or the new one, never neither. On Linux
+/// the returned writer is the new file's own, locked from its creation, so no other process can
+/// take the job between the rename and the next record (the caller holds the old file, see
+/// [`hold`], until this returns).
 pub fn rewrite(path: &Path, records: &[Vec<String>]) -> std::io::Result<Writer> {
     let tmp = path.with_extension("jrn-new");
     let _ = std::fs::remove_file(&tmp);
-    {
-        let mut w = Writer::create(&tmp)?;
-        for r in records {
-            w.record(&r.iter().map(String::as_str).collect::<Vec<_>>())?;
-        }
-        w.sync()?;
+    let mut w = Writer::create(&tmp)?;
+    for r in records {
+        w.record(&r.iter().map(String::as_str).collect::<Vec<_>>())?;
     }
-    std::fs::rename(&tmp, path)?;
-    Writer::append(path)
+    w.sync()?;
+    #[cfg(unix)]
+    {
+        std::fs::rename(&tmp, path)?;
+        Ok(w)
+    }
+    #[cfg(not(unix))]
+    {
+        drop(w);
+        std::fs::rename(&tmp, path)?;
+        Writer::append(path)
+    }
+}
+
+/// Takes an interrupted journal for carrying it on, before it is read: the lock a writer holds,
+/// so a second resume (another window, another process) is refused (`WouldBlock`) instead of
+/// running the same job twice. Kept until [`rewrite`] returned the new writer. Fails as well when
+/// the name no longer is the file locked (rewritten by another resume meanwhile).
+#[cfg(unix)]
+pub fn hold(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let f = OpenOptions::new().read(true).custom_flags(libc::O_CLOEXEC).open(path)?;
+    lock(&f)?;
+    let (a, b) = (f.metadata()?, std::fs::metadata(path)?);
+    if (a.dev(), a.ino()) != (b.dev(), b.ino()) {
+        return Err(std::io::ErrorKind::WouldBlock.into());
+    }
+    Ok(f)
 }
 
 /// True while a writer has the journal open (its job is running, maybe in another process).
