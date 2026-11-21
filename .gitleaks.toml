@@ -18,3 +18,10 @@ condition = "AND"
 paths = ['''^vendor/velopack/src/process_win\.rs$''']
 regexTarget = "line"
 regexes = ['''VP_INHERIT_TEST_12345''']
+
+[[allowlists]]
+description = "Chromium extension public key that pins the extension id (public by design, not a secret)"
+condition = "AND"
+paths = ['''^extension/manifest\.chromium\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"key":\s*"MII''']
