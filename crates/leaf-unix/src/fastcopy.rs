@@ -766,7 +766,8 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
             Ok(Ident::of(&sm))
         }
         Err(e) => {
-            if !is_cut(&e) && still_ours() {
+            // (kept for a resume only when there is a journal to resume from)
+            if (!is_cut(&e) || job.jr.is_none()) && still_ours() {
                 let _ = std::fs::remove_file(&part);
             }
             Err(e)
@@ -1184,9 +1185,9 @@ fn run(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: Arc<Tracke
             let _ = j.w.sync();
             log::info!("copy: cut off, resumable: {}", j.path.display());
         } else {
-            // done, failed or cancelled by the user: nothing to resume
+            // done, failed or cancelled by the user: nothing to resume, and the parts a cut before left behind go with the journal
             drop(j.w);
-            let _ = std::fs::remove_file(&j.path);
+            discard(&j.path);
         }
     }
     if cancelled {
@@ -1721,6 +1722,23 @@ mod tests {
         assert!(jrn::in_use(&journal) && resume(&journal, quiet()).is_err());
         drop(w);
         assert!(resume(&journal, quiet()).unwrap());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_cancel_after_a_cut_removes_the_parts_it_left() {
+        let (root, jobs) = fresh("cutcancel");
+        std::fs::write(root.join("src/a.bin"), pattern(2 << 20, 13)).unwrap();
+        std::fs::write(root.join("src/b.bin"), pattern(9 << 20, 14)).unwrap();
+        let journal = copy_and_die(&[root.join("src/a.bin"), root.join("src/b.bin")], &root.join("dest"), &jobs, "b.bin");
+        assert_eq!(parts_in(&root.join("dest")).len(), 1);
+        // carried on, then cancelled at the finished first file, before the second is touched
+        let cancel = Arc::new(AtomicBool::new(false));
+        let c = cancel.clone();
+        let t = Arc::new(Tracker::new(Box::new(move |_, done, _| if done > 0 { c.store(true, Ordering::Relaxed) }), cancel));
+        assert!(!resume(&journal, t).unwrap(), "cancelled");
+        assert!(!journal.exists(), "not kept");
+        assert!(parts_in(&root.join("dest")).is_empty(), "its parts went with it");
+        assert_eq!(std::fs::read(root.join("dest/a.bin")).unwrap(), pattern(2 << 20, 13), "what was finished stays");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
