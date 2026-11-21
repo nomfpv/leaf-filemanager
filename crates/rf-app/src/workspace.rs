@@ -3651,7 +3651,9 @@ impl Workspace {
             }))
             // the mockups' "Move": straight into the other pane's folder; only while the tab is split
             .children((on("cut") && split).then(|| {
-                cmd("cb-to-pane", L::MoveRight, Some("To other pane"), "Move to other pane  (Shift+F6)", writable_sel, cx, |_, w, cx| {
+                // (its name from 1400 px on: in a narrower window the bar keeps the search field whole, the mockups', and this button
+                // its arrow and tooltip)
+                cmd("cb-to-pane", L::MoveRight, (self.viewport_w >= 1400.).then_some("To other pane"), "Move to other pane  (Shift+F6)", writable_sel, cx, |_, w, cx| {
                     w.dispatch_action(Box::new(crate::actions::MoveToOtherPane), cx)
                 })
             }))
