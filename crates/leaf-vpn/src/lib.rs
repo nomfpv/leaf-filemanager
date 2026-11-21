@@ -496,6 +496,15 @@ pub fn dial_blocking(host: &str, port: u16, timeout: Duration) -> io::Result<Blo
     Ok(BlockingStream { stream, rt, read_timeout: None, write_timeout: None })
 }
 
+/// One HTTPS GET of `host` `path` through `tunnel` (for checks: the self-test). The status and the body's length; never the body.
+pub async fn https_get(tunnel: &Tunnel, host: &str, path: &str) -> Result<(u16, usize), String> {
+    let ips = tunnel.resolve(host).await.map_err(|e| format!("lookup: {e}"))?;
+    let ip = *ips.first().ok_or("lookup: no address")?;
+    let s = tunnel.connect(ip, 443, Duration::from_secs(15)).await.map_err(|e| format!("connect: {e}"))?;
+    let a = http::request(s, host, "GET", path, None, None, Duration::from_secs(30)).await?;
+    Ok((a.status, a.body.len()))
+}
+
 /// How long a bridge waits for its one connection.
 const BRIDGE_WAIT: Duration = Duration::from_secs(10);
 
