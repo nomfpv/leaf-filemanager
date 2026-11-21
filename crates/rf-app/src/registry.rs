@@ -307,6 +307,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(OpenTerminalAdmin, Tools, "Open in Terminal as administrator", "Opens an elevated terminal in this folder.", ShieldCheck, [], keywords: &["elevated", "admin"], platforms: Platforms::WINDOWS),
     c!(OpenInIde, Tools, "Open in editor", "Opens this folder in your code editor.", Code, [], keywords: &["ide", "vscode"]),
     c!(CompareFolders, Tools, "Compare folders", "Marks what differs between the two panes' folders: only here, newer, older, other size.", Columns2, [], keywords: &["diff", "difference", "sync", "dual pane"], since: "0.9.5"),
+    c!(FindDuplicates, Tools, "Find duplicates", "Looks for files with identical content in this folder or the selected folders.", Copy, [], keywords: &["duplicate", "same files", "identical", "free space", "clean up"], since: "0.9.5"),
     c!(OrganizeFolder, Tools, "Organize folder", "Sorts the folder's files into folders by kind.", WandSparkles, [], keywords: &["tidy", "sort", "clean up"]),
     c!(ToggleTheme, View, "Light / dark theme", "Switches between the light and the dark theme.", SunMoon, [w("ctrl-alt-t")], keywords: &["dark mode"]),
     c!(OpenInNewWindow, Tabs, "Open in new window", "Opens the selected folder in a new window.", AppWindow, [f("ctrl-alt-enter")]),
@@ -384,7 +385,7 @@ pub fn custom_row(name: &str, description: &str, shortcut: Option<&str>, icon: L
     }
     // the same row again (the file was read again, nothing in this action changed): the row made before, nothing leaked
     static MADE: std::sync::Mutex<Vec<(String, &'static CommandSpec)>> = std::sync::Mutex::new(Vec::new());
-    let sig = format!("{name} {description} {} {icon:?} {palette}{toolbar}", shortcut.unwrap_or(""));
+    let sig = format!("{name}\0{description}\0{}\0{icon:?}\0{palette}{toolbar}", shortcut.unwrap_or(""));
     let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, spec)) = made.iter().find(|(s, _)| *s == sig) {
         return spec;
