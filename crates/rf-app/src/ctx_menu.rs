@@ -65,7 +65,7 @@ fn cursor() -> (i32, i32) {
 
 /// The targets whose menu is made from the rows of `menu_model`; the archive, Recycle Bin and sidebar menus are still by hand.
 fn generated(t: Target) -> bool {
-    matches!(t, Target::Background | Target::File)
+    matches!(t, Target::Background | Target::File | Target::Folder)
 }
 
 /// What the builders of a menu's entries read: the view, the folder the menu acts on, the user's own actions.

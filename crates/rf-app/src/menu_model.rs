@@ -485,4 +485,24 @@ mod tests {
         );
         check("file inside an archive", MenuContext { in_archive: true, send_to_fits: false, ..file() }, "file");
     }
+
+    fn folder() -> MenuContext {
+        MenuContext { target: Target::Folder, single_dir: true, has_files: false, ..file() }
+    }
+
+    #[test]
+    fn folder_menu_is_as_recorded() {
+        assert_eq!(cases("folder").len(), 3);
+        check("folder plain", folder(), "folder");
+        check(
+            "folder in search results, dual pane, with an alias and your actions",
+            MenuContext { in_search: true, dual: true, alias: Some("docs".into()), own_actions: true, show_flatten: false, ..folder() },
+            "folder",
+        );
+        check(
+            "folder inside an archive",
+            MenuContext { in_archive: true, archive_path: true, send_to_fits: false, ..folder() },
+            "folder",
+        );
+    }
 }
