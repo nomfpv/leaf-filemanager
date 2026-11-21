@@ -754,8 +754,8 @@ impl Fs for WebDavFs {
             }
             206 => {
                 let starts = r.header("content-range").and_then(|v| v.strip_prefix("bytes ")).and_then(|v| v.split(['-', '/']).next()).and_then(|v| v.trim().parse::<u64>().ok());
-                if starts.is_some_and(|s| s != offset) {
-                    return Err(FsError::Other("The server sent another part of the file than asked for".into()));
+                if starts != Some(offset) {
+                    return Err(FsError::Other("The server sent part of the file that cannot be placed (another part, or no Content-Range)".into()));
                 }
                 Ok(Box::new(r.body))
             }
