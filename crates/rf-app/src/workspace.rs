@@ -4052,7 +4052,9 @@ impl Workspace {
             .relative()
             // the current place: the theme's fill and outline (the selection pill where the theme has a marker)
             .when(fluent, |d| d.bg(p.place).child(theme::selection_pill(p)))
-            .when(fluent && p.place_border.a > 0., |d| d.border_1().border_color(p.place_border))
+            // (the outline's pixel comes off the padding: the icon and the label stay where the other rows have theirs, as under the
+            // mockups' inset ring)
+            .when(fluent && p.place_border.a > 0., |d| d.border_1().border_color(p.place_border).px(px(7.)))
             // while the row moves (the sidebar scrolls) the scene paints the pill itself: the engine's lens would trail the row
             .when(lens_key.is_some() && crate::glass::lens_phase(self.glass_hwnd, crate::glass::SLOT_SIDEBAR) != crate::glass::LensPhase::Rest, |d| {
                 d.child(crate::glass::lens_stand_in(p.dark, 32.))

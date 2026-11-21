@@ -839,7 +839,8 @@ pub fn selection_pill(p: &Palette) -> Div {
 pub fn selection_pill_joined(p: &Palette, above: bool, below: bool) -> Div {
     // (the theme's marker width: Stem's stem; 0 in a theme that marks a selection otherwise)
     if p.marker_width <= 0.0 {
-        return div();
+        // (out of the flow: an empty child of a row with a gap moved the row's icon and label by that gap)
+        return div().absolute();
     }
     let (top, bottom) = pill_insets(above, below);
     div().absolute().left(px(0.)).top(px(top)).bottom(px(bottom)).w(px(p.marker_width)).rounded_full().bg(p.accent)
