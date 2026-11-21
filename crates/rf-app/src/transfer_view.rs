@@ -245,9 +245,9 @@ fn bar(p: &Palette, frac: Option<f32>, color: Hsla, w: Option<f32>) -> Div {
                 .h_full()
                 .rounded_full()
                 .bg(color)
-                .w(relative(f))
-                // (Canopy, as the mockup's transfer bar: a soft glow of its own colour)
-                .when(p.backdrop, |d| d.shadow(vec![BoxShadow::new(px(0.), px(0.), color.opacity(0.6)).blur_radius(px(8.))])),
+                // (no glow: the mockups' bar has one in its style, but the track clips it, and on screen it is not there; drawn here it
+                // lay round the bar as a lighter box)
+                .w(relative(f)),
         )
 }
 
