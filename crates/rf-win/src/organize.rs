@@ -57,6 +57,10 @@ pub enum Why {
     BinRefuses,
     /// Not the file that was planned any more (a different size or time since the plan).
     Changed,
+    /// Redo: the file at the path is not the one the undo put back there (a different size or time).
+    NotPutBack,
+    /// Redo: the record does not say what the undo put back at the path, so it cannot be checked.
+    Unverified,
 }
 
 impl Why {
@@ -73,6 +77,8 @@ impl Why {
             Why::NoRecycleBin => tx("This drive has no Recycle Bin"),
             Why::BinRefuses => tx("The Recycle Bin is off or too small for this file"),
             Why::Changed => tx("Changed since it was planned"),
+            Why::NotPutBack => tx("Not the file the undo put back: left alone"),
+            Why::Unverified => tx("Cannot tell whether it is the file the undo put back: left alone"),
         }
     }
 
@@ -105,12 +111,38 @@ pub struct Record {
     pub recycled: Vec<(PathBuf, PathBuf)>,
     /// Folders the run had to create, outermost first.
     pub created_dirs: Vec<PathBuf>,
+    /// (path, stamp) of every file the last undo put back at its old path (moved back, or restored
+    /// from the bin). Redo touches only a file that still has its stamp; a path without one is
+    /// skipped (it cannot be checked).
+    pub put_back: Vec<(PathBuf, Stamp)>,
 }
 
 impl Record {
     pub fn count(&self) -> usize {
         self.moves.len() + self.recycled.len()
     }
+}
+
+/// Size and modified time of a file: what redo compares to know it has the very file the undo put back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub size: u64,
+    pub modified_ms: i64,
+}
+
+/// The stamp of the regular file at `p` (a link is not followed); `None` for anything else, or nothing.
+pub fn stamp(p: &Path) -> Option<Stamp> {
+    let m = std::fs::symlink_metadata(verbatim(p)).ok().filter(|m| m.file_type().is_file())?;
+    Some(Stamp { size: m.len(), modified_ms: time_ms(m.modified()) })
+}
+
+/// Is the item at `p` the file the last undo put back there? `Err`: why redo leaves it alone.
+pub fn check_put_back(rec: &Record, p: &Path) -> Result<(), Why> {
+    if !exists(p) {
+        return Err(Why::Gone);
+    }
+    let Some((_, want)) = rec.put_back.iter().find(|(q, _)| norm(q) == norm(p)) else { return Err(Why::Unverified) };
+    if stamp(p) == Some(*want) { Ok(()) } else { Err(Why::NotPutBack) }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -570,6 +602,8 @@ fn move_into(src: &Path, dest: &Path, created: &mut Vec<PathBuf>) -> Result<Path
 pub struct UndoReport {
     pub restored: usize,
     pub failed: Vec<Failure>,
+    /// (old path, stamp) of each file put back: for [`Record::put_back`].
+    pub put_back: Vec<(PathBuf, Stamp)>,
 }
 
 /// Puts the moved files back (newest first) and removes the folders the run made, when they are
@@ -591,7 +625,12 @@ pub fn undo_moves(rec: &Record) -> UndoReport {
             let _ = std::fs::create_dir_all(verbatim(dir));
         }
         match move_no_replace(to, from) {
-            Ok(()) => out.restored += 1,
+            Ok(()) => {
+                out.restored += 1;
+                if let Some(s) = stamp(from) {
+                    out.put_back.push((from.clone(), s));
+                }
+            }
             Err(e) => out.failed.push(Failure { path: to.clone(), message: e.to_string() }),
         }
     }
@@ -602,12 +641,28 @@ pub fn undo_moves(rec: &Record) -> UndoReport {
     out
 }
 
-/// Does the moves of the record again (after an undo).
-pub fn redo_moves(rec: &Record) -> UndoReport {
-    let mut out = UndoReport::default();
+/// What a redo did: `record` holds only what was done again (the moves made, the files' new
+/// places in the bin), so the next undo puts back exactly those.
+#[derive(Debug, Clone, Default)]
+pub struct RedoReport {
+    pub record: Record,
+    pub skipped: Vec<Skip>,
+    pub failed: Vec<Failure>,
+}
+
+/// Does the record again (after an undo): the same moves to the same paths, the same files to
+/// the bin. Only a file that is still the one the undo put back ([`check_put_back`]) is moved or
+/// recycled; anything else is skipped with the reason. Only ever the bin: a file on a drive
+/// without one (or one the bin would not take) is skipped, never deleted.
+pub fn redo(rec: &Record, recycler: &dyn Recycler) -> RedoReport {
+    let mut out = RedoReport { record: Record { token: rec.token, created_dirs: rec.created_dirs.clone(), ..Record::default() }, ..RedoReport::default() };
     let mut created = Vec::new();
     for (from, to) in &rec.moves {
-        if std::fs::symlink_metadata(verbatim(from)).is_err() || std::fs::symlink_metadata(verbatim(to)).is_ok() {
+        if let Err(why) = check_put_back(rec, from) {
+            out.skipped.push(Skip { path: from.clone(), why });
+            continue;
+        }
+        if exists(to) {
             out.failed.push(Failure { path: from.clone(), message: tx("The file could not be moved").to_string() });
             continue;
         }
@@ -616,8 +671,43 @@ pub fn redo_moves(rec: &Record) -> UndoReport {
             None => move_no_replace(from, to),
         };
         match r {
-            Ok(()) => out.restored += 1,
+            Ok(()) => out.record.moves.push((from.clone(), to.clone())),
             Err(e) => out.failed.push(Failure { path: from.clone(), message: e.to_string() }),
+        }
+    }
+    for d in created {
+        if !out.record.created_dirs.iter().any(|c| norm(c) == norm(&d)) {
+            out.record.created_dirs.push(d);
+        }
+    }
+    let mut send = Vec::new();
+    for (orig, _) in &rec.recycled {
+        let why = match check_put_back(rec, orig) {
+            Err(why) => Some(why),
+            Ok(()) if !recycler.can_recycle(orig) => Some(Why::NoRecycleBin),
+            Ok(()) if !recycler.bin_takes(orig) => Some(Why::BinRefuses),
+            Ok(()) => None,
+        };
+        match why {
+            Some(why) => out.skipped.push(Skip { path: orig.clone(), why }),
+            None => send.push(orig.clone()),
+        }
+    }
+    if !send.is_empty() {
+        match recycler.recycle(&send) {
+            Ok(pairs) => {
+                for p in &send {
+                    if !pairs.iter().any(|(orig, _)| norm(orig) == norm(p)) {
+                        out.failed.push(Failure { path: p.clone(), message: tx("Could not be sent to the Recycle Bin").to_string() });
+                    }
+                }
+                out.record.recycled = pairs;
+            }
+            Err(e) => {
+                for p in send {
+                    out.failed.push(Failure { path: p, message: format!("{e:#}") });
+                }
+            }
         }
     }
     out
@@ -1115,10 +1205,117 @@ mod tests {
         let mut want = before.clone();
         want.retain(|n| n != "d.tmpx");
         assert_eq!(now_names, want);
-        // and again (redo)
-        let r = redo_moves(&rep.record);
-        assert_eq!((r.restored, r.failed.len()), (3, 0), "{r:?}");
+        // and again (redo), with what the undo put back
+        let rec = Record { put_back: u.put_back.clone(), recycled: Vec::new(), ..rep.record.clone() };
+        let r = redo(&rec, &bin);
+        assert!(r.failed.is_empty() && r.skipped.is_empty(), "{r:?}");
+        assert_eq!(r.record.moves.len(), 3);
         assert!(d.p(r"hedef\Arşiv\jpg\a.jpg").exists() && d.p("yeni c.pdf").exists());
+    }
+
+    /// What the app's undo does with the fake bin: the moves go back, the recycled files come
+    /// back out of the bin, and the record learns what was put back.
+    fn undo_all(rec: &Record) -> Record {
+        let u = undo_moves(rec);
+        assert!(u.failed.is_empty(), "{u:?}");
+        let mut put_back = u.put_back;
+        for (orig, bin) in &rec.recycled {
+            std::fs::rename(bin, orig).unwrap();
+            put_back.push((orig.clone(), stamp(orig).unwrap()));
+        }
+        Record { put_back, ..rec.clone() }
+    }
+
+    /// A run that moves a.txt and recycles b.tmpx, then its undo.
+    fn run_and_undo(d: &Dir, bin: &FakeBin) -> Record {
+        d.write("a.txt", "A");
+        d.write("b.tmpx", "B");
+        let rules = [
+            rule(&d.p(""), "r", vec![ext(&["txt"])], Action::MoveTo { folder: d.p("hedef") }),
+            Rule { id: 2, ..rule(&d.p(""), "çöp", vec![ext(&["tmpx"])], Action::Recycle) },
+        ];
+        let p = make_plan(&rules, &d.0, false);
+        let rep = go(&p.steps, &RunOptions::manual(now()), bin);
+        assert_eq!((rep.record.moves.len(), rep.record.recycled.len()), (1, 1), "{rep:?}");
+        let rec = undo_all(&rep.record);
+        assert_eq!(rec.put_back.len(), 2);
+        rec
+    }
+
+    #[test]
+    fn redo_acts_only_on_the_files_the_undo_put_back() {
+        let d = Dir::new("redo-same");
+        let bin = FakeBin::new(&d);
+        let rec = run_and_undo(&d, &bin);
+        // the same files: done again
+        let r = redo(&rec, &bin);
+        assert!(r.skipped.is_empty() && r.failed.is_empty(), "{r:?}");
+        assert_eq!(std::fs::read_to_string(d.p(r"hedef\a.txt")).unwrap(), "A");
+        assert!(!d.p("b.tmpx").exists());
+        // a record that does not say what the undo put back (older code): nothing is touched
+        let d = Dir::new("redo-unverified");
+        let bin = FakeBin::new(&d);
+        let rec = Record { put_back: Vec::new(), ..run_and_undo(&d, &bin) };
+        let r = redo(&rec, &bin);
+        assert_eq!(r.skipped, [Skip { path: d.p("a.txt"), why: Why::Unverified }, Skip { path: d.p("b.tmpx"), why: Why::Unverified }]);
+        assert_eq!(r.record.count(), 0);
+        assert!(d.p("a.txt").exists() && d.p("b.tmpx").exists() && !d.p(r"hedef\a.txt").exists());
+    }
+
+    #[test]
+    fn redo_leaves_a_file_that_appeared_at_the_path_alone() {
+        let d = Dir::new("redo-newcomer");
+        let bin = FakeBin::new(&d);
+        let rec = run_and_undo(&d, &bin);
+        // after the undo the user replaces both with files of their own
+        std::fs::remove_file(d.p("a.txt")).unwrap();
+        std::fs::remove_file(d.p("b.tmpx")).unwrap();
+        d.write("a.txt", "mine, longer");
+        d.write("b.tmpx", "mine too");
+        let r = redo(&rec, &bin);
+        assert_eq!(r.skipped, [Skip { path: d.p("a.txt"), why: Why::NotPutBack }, Skip { path: d.p("b.tmpx"), why: Why::NotPutBack }]);
+        assert!(r.failed.is_empty() && r.record.count() == 0, "{r:?}");
+        assert!(bin.sent.borrow().len() == 1, "only the run's own recycle reached the bin");
+        assert_eq!(std::fs::read_to_string(d.p("a.txt")).unwrap(), "mine, longer");
+        assert_eq!(std::fs::read_to_string(d.p("b.tmpx")).unwrap(), "mine too");
+    }
+
+    #[test]
+    fn redo_on_a_drive_without_a_bin_skips_and_never_deletes() {
+        struct NoBin;
+        impl Recycler for NoBin {
+            fn can_recycle(&self, _: &Path) -> bool {
+                false
+            }
+            fn recycle(&self, _: &[PathBuf]) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
+                panic!("must not be asked")
+            }
+        }
+        let d = Dir::new("redo-nobin");
+        let rec = run_and_undo(&d, &FakeBin::new(&d));
+        let r = redo(&rec, &NoBin);
+        assert_eq!(r.skipped, [Skip { path: d.p("b.tmpx"), why: Why::NoRecycleBin }]);
+        assert!(r.record.recycled.is_empty() && r.record.moves.len() == 1, "{r:?}");
+        assert_eq!(std::fs::read_to_string(d.p("b.tmpx")).unwrap(), "B");
+    }
+
+    #[test]
+    fn redo_records_the_new_places_in_the_bin_for_the_next_undo() {
+        let d = Dir::new("redo-newbin");
+        let rec = run_and_undo(&d, &FakeBin::new(&d));
+        let old_place = rec.recycled[0].1.clone();
+        let bin2 = FakeBin { dir: d.p("$bin2"), sent: RefCell::new(Vec::new()), fail: false };
+        let r = redo(&rec, &bin2);
+        assert!(r.skipped.is_empty() && r.failed.is_empty(), "{r:?}");
+        assert_eq!(r.record.token, rec.token);
+        assert_eq!(r.record.recycled, [(d.p("b.tmpx"), d.p(r"$bin2\0-b.tmpx"))]);
+        assert_ne!(r.record.recycled[0].1, old_place);
+        assert!(r.record.put_back.is_empty(), "what the undo put back is gone again");
+        // the next undo finds exactly those
+        let again = undo_all(&r.record);
+        assert_eq!(std::fs::read_to_string(d.p("b.tmpx")).unwrap(), "B");
+        assert_eq!(std::fs::read_to_string(d.p("a.txt")).unwrap(), "A");
+        assert_eq!(again.put_back.len(), 2);
     }
 
     #[test]
