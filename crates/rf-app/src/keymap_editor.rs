@@ -92,6 +92,18 @@ pub fn init(cx: &mut App) {
             window.refresh();
             return;
         }
+        // the keys the command had until now stop working at once: its defaults and an earlier custom key of this session
+        let mut off: Vec<KeyBinding> = crate::registry::unbind_defaults(&action, &keys);
+        let earlier: Vec<String> =
+            cx.global::<crate::settings::Settings>().keybindings.iter().filter(|(k, a)| **a == action && !k.eq_ignore_ascii_case(&keys)).map(|(k, _)| k.clone()).collect();
+        if !action.starts_with(crate::custom_actions::ID_PREFIX) {
+            for k in &earlier {
+                if let Ok(b) = KeyBinding::load(k, Box::new(NoAction), None, false, None, cx) {
+                    off.push(b);
+                }
+            }
+            cx.bind_keys(off);
+        }
         crate::settings::update(cx, |s| {
             // one custom shortcut per command: replace an earlier one
             s.keybindings.retain(|_, a| *a != action);

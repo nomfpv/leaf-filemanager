@@ -447,6 +447,13 @@ pub fn default_bindings() -> Vec<KeyBinding> {
     out
 }
 
+/// Bindings that switch off the default keys of the command `id` (a shortcut of the user's replaces them), except `keep`. They come
+/// after the defaults, and a `NoAction` binding in the same context blocks the ones before it.
+pub fn unbind_defaults(id: &str, keep: &str) -> Vec<KeyBinding> {
+    let Some(c) = COMMANDS.iter().find(|c| c.id == id) else { return Vec::new() };
+    c.default_keys.iter().filter(|k| !k.keys.eq_ignore_ascii_case(keep)).map(|k| KeyBinding::new(k.keys, gpui_kit::NoAction, k.ctx.context())).collect()
+}
+
 /// Every command for the shortcut editor: (title, default keys as shown, action id).
 pub fn shortcut_entries() -> Vec<(&'static str, String, String)> {
     // (the user's own actions are all here, even those the palette does not list: their shortcut is edited here)

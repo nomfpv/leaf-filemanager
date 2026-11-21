@@ -154,6 +154,8 @@ pub fn bind_user(cx: &mut App) {
             continue;
         }
         let name = if action.contains("::") { action.clone() } else { format!("leaf::{action}") };
+        // the command's own default keys stop working once the user gave it another shortcut
+        bindings.extend(crate::registry::unbind_defaults(&action, &keys));
         match cx.build_action(&name, None) {
             Ok(a) => match KeyBinding::load(&keys, a, None, false, None, cx) {
                 Ok(b) => bindings.push(b),
