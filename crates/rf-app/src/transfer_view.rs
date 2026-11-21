@@ -310,6 +310,12 @@ fn failure_text(v: &OpView) -> String {
     }
 }
 
+/// The failure on one line for the strip: line breaks of the reason become spaces, so the reason stays on the visible line
+/// (the whole text is in the tooltip and the flyout).
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 // ---------------------------------------------------------------------------------------------
 // The status bar's strip
 // ---------------------------------------------------------------------------------------------
@@ -358,6 +364,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
 
     // a failure nobody has looked at
     if matches!(v.phase, OpPhase::Failed(_)) {
+        let full = failure_text(v);
         let dismiss = {
             let ops = ops.clone();
             icon_button(("strip-dismiss", id as usize), p, L::X, t!("Close"), move |_, cx| ops.update(cx, |o, cx| o.dismiss(id, cx)))
@@ -366,8 +373,9 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
             frame
                 .child(
                     main()
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
                         .child(Icon::new(L::CircleAlert).size(px(14.)).text_color(p.danger))
-                        .child(words(failure_text(v), p.text)),
+                        .child(words(one_line(&failure_text(v)), p.text)),
                 )
                 .child(dismiss)
                 .into_any_element(),
