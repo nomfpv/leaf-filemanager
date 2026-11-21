@@ -1,6 +1,9 @@
 //! rf-win: Windows platform layer (fast enumeration, Shell COM, icons/thumbnails, file ops, watcher).
 //!
 //! Every function here may block (disk, network, shell extensions). Never call them on the UI thread.
+//!
+//! Windows only: on other systems this crate is empty and `leaf-unix` is the backend (through `leaf-sys`).
+#![cfg(windows)]
 
 /// The file manager's program (its file name without the extension).
 pub const APP_EXE_STEM: &str = "leaf";
