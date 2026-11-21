@@ -1,6 +1,6 @@
 //! Test driver (tools/TESTING.md): `LEAF_CHECK_SCRIPT=<file>` runs the file's lines, in order, on the UI thread once the first
 //! folder is listed. Off (and free) unless the variable is set. Lines: `select a|b|c`, `run <CommandId>` (the action is dispatched
-//! like a key press), `type <text>`, `key <name>` (enter, escape, tab, ...), `wait <ms>`, `wait-idle`, `goto <path|home>`, `usage <path>` (storage usage view), `bin restore`,
+//! like a key press), `type <text>`, `key <name>` (enter, escape, tab, ...), `wait <ms>`, `wait-idle`, `goto <path|home>`, `usage <path>` (storage usage view), `bin restore`, `bulk apply`, `settings <page>`,
 //! `pane left|right`, `shot <name>` (prints `LEAF_SHOT <name>` on stdout and waits for the wrapper's picture), `quit`.
 //! Blank lines and lines starting with `#` are ignored; an unknown line is logged and skipped.
 
@@ -80,6 +80,20 @@ pub(super) fn start(window: &mut Window, cx: &mut Context<Workspace>) {
                     let _ = this.update_in(cx, |_, _, cx| crate::quit_when_idle(cx));
                     return;
                 }
+                "type" | "key" => {
+                    // outside the workspace's own update: the keystroke reaches the workspace again (the focused field is its child)
+                    match keystrokes(cmd, arg) {
+                        Some(ks) => {
+                            let _ = cx.update(|window, cx| {
+                                for k in ks {
+                                    window.dispatch_keystroke(k, cx);
+                                }
+                            });
+                        }
+                        None => log::warn!("check script: unknown line: {line}"),
+                    }
+                    sleep(350).await;
+                }
                 _ => {
                     let (cmd, arg) = (cmd.to_string(), arg.to_string());
                     let Ok(known) = this.update_in(cx, |ws, window, cx| ws.script_step(&cmd, &arg, window, cx)) else { return };
@@ -94,6 +108,36 @@ pub(super) fn start(window: &mut Window, cx: &mut Context<Workspace>) {
     .detach();
 }
 
+/// The keystrokes of a `type` or `key` line (None: not one of those, or a key that is not known).
+fn keystrokes(cmd: &str, arg: &str) -> Option<Vec<Keystroke>> {
+    match cmd {
+        "type" => Some(
+            arg.chars()
+                .map(|c| {
+                    let s = c.to_string();
+                    let key = if c == ' ' { "space".to_string() } else { s.to_lowercase() };
+                    Keystroke { modifiers: if c.is_uppercase() { Modifiers::shift() } else { Modifiers::default() }, key, key_char: Some(s) }
+                })
+                .collect(),
+        ),
+        // `enter`, `escape`, `tab`, `ctrl-a`, `shift-delete`
+        "key" => {
+            let mut modifiers = Modifiers::default();
+            let mut key = String::new();
+            for part in arg.split('-').filter(|p| !p.is_empty()) {
+                match part {
+                    "ctrl" => modifiers.control = true,
+                    "shift" => modifiers.shift = true,
+                    "alt" => modifiers.alt = true,
+                    k => key = k.to_string(),
+                }
+            }
+            (!key.is_empty()).then(|| vec![Keystroke { modifiers, key, key_char: None }])
+        }
+        _ => None,
+    }
+}
+
 impl Workspace {
     /// One line of the script that acts on the window; false when the line is not known.
     fn script_step(&mut self, cmd: &str, arg: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -106,31 +150,6 @@ impl Workspace {
                 Some(spec) => window.dispatch_action((spec.action)(), cx),
                 None => return false,
             },
-            "type" => {
-                for c in arg.chars() {
-                    let s = c.to_string();
-                    let key = if c == ' ' { "space".to_string() } else { s.to_lowercase() };
-                    let k = Keystroke { modifiers: if c.is_uppercase() { Modifiers::shift() } else { Modifiers::default() }, key, key_char: Some(s) };
-                    window.dispatch_keystroke(k, cx);
-                }
-            }
-            "key" => {
-                // `enter`, `escape`, `tab`, `ctrl-a`, `shift-delete`
-                let mut modifiers = Modifiers::default();
-                let mut key = String::new();
-                for part in arg.split('-').filter(|p| !p.is_empty()) {
-                    match part {
-                        "ctrl" => modifiers.control = true,
-                        "shift" => modifiers.shift = true,
-                        "alt" => modifiers.alt = true,
-                        k => key = k.to_string(),
-                    }
-                }
-                if key.is_empty() {
-                    return false;
-                }
-                window.dispatch_keystroke(Keystroke { modifiers, key, key_char: None }, cx);
-            }
             "goto" => {
                 let loc = if arg.eq_ignore_ascii_case("home") { rf_core::Location::Home } else { super::parse_launch(arg).0 };
                 self.navigate(loc, window, cx);
@@ -140,6 +159,36 @@ impl Workspace {
             "bin" if arg == "restore" => {
                 if let Some(rv) = self.active_tab().read(cx).recycle_view() {
                     rv.update(cx, |rv, cx| rv.restore_selected(cx));
+                }
+            }
+            // Settings on one page: `settings appearance`
+            "settings" => {
+                use crate::settings_view::Page;
+                let page = match arg.to_ascii_lowercase().as_str() {
+                    "general" => Page::General,
+                    "appearance" => Page::Appearance,
+                    "layout" => Page::Layout,
+                    "files" => Page::Files,
+                    "filetypes" => Page::FileTypes,
+                    "actions" => Page::Actions,
+                    "tags" => Page::Tags,
+                    "preview" => Page::Look,
+                    "search" => Page::Search,
+                    "nearby" => Page::Nearby,
+                    "advanced" => Page::Advanced,
+                    "speed" => Page::Speed,
+                    "organizer" => Page::Organizer,
+                    "features" => Page::Features,
+                    "about" => Page::About,
+                    _ => return false,
+                };
+                crate::settings_view::open_page(page, cx);
+                window.dispatch_action(Box::new(crate::actions::GoSettings), cx);
+            }
+            // the open bulk rename dialog: the Rename button
+            "bulk" if arg == "apply" => {
+                if let Some(br) = self.bulk.clone() {
+                    br.update(cx, |br, cx| br.apply(cx));
                 }
             }
             "pane" => {

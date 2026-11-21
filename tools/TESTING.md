@@ -41,11 +41,12 @@ Close only what you started, with the window's own close, never by process name:
 when unset; code in `crates/rf-app/src/check_script.rs`). One line per step, `#` starts a comment:
 
 - `select a|b|c`: select these names in the focused pane's folder
-- `run <CommandId>`: any id from `registry.rs` (`NewFolder`, `Rename`, ...), dispatched like the key press would be
+- `run <CommandId>`: any id from `registry.rs` (`NewFolder`, `RenameItem`, ...), dispatched like the key press would be
 - `type <text>`, `key enter|escape|tab|...`: keystrokes into whatever has the focus (a text field, a dialog)
 - `wait <ms>`, `wait-idle` (no file operation running, no folder loading)
 - `goto <path|home>`, `usage <path>` (the storage usage view), `pane left|right` (dual pane), `bin restore` (the Recycle Bin
-  page: restores the selected rows; select them with `run SelectAll`)
+  page: restores the selected rows; select them with `run SelectAll`), `bulk apply` (the open bulk rename dialog: its Rename button),
+  `settings <general|appearance|layout|files|filetypes|actions|tags|preview|search|nearby|advanced|speed|organizer|features|about>`
 - `shot <name>`: prints `LEAF_SHOT <name>` on stdout; if `LEAF_CHECK_SHOTDIR` is set it waits (15 s at most) for
   `<dir>/<name>.png` to appear, else 1.5 s. The wrapper takes the picture.
 - `quit`: leaves (after running operations)

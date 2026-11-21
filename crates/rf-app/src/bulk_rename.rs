@@ -552,7 +552,7 @@ impl BulkRename {
     /// (the undo entry, tags following their files, failures being reported) runs in its
     /// `on_done`, so it does not depend on this dialog still being there. Closing the dialog is
     /// not offered while the batch runs.
-    fn apply(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn apply(&mut self, cx: &mut Context<Self>) {
         if !self.can_apply() {
             return;
         }
