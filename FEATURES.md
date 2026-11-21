@@ -142,6 +142,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 |---|---|---|
 | Map network drive | Gives a shared network folder a drive letter. (Windows only) |  |
 | Disconnect network drive | Removes a mapped network drive. (Windows only) |  |
+| Show project brain | Lists what an agent reads in this project: CLAUDE.md, AGENTS.md, the .claude folder (skills, settings, memory) and .mcp.json, with a search by name and the file shown in the preview pane. |  |
 | Rotate right | Turns the selected pictures a quarter to the right. |  |
 | Rotate left | Turns the selected pictures a quarter to the left. |  |
 | Open in terminal | Opens a terminal in this folder; in a server (sftp://) folder it runs ssh into it. | `` Ctrl+Shift+` `` |

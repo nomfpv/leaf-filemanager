@@ -117,6 +117,7 @@ gpui_kit::actions!(
         ShowChanges,
         ShowWorktrees,
         NewWorktree,
+        ShowProjectBrain,
         AddToBasket,
         RemoveFromBasket,
         NewBasket,

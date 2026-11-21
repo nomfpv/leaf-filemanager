@@ -1145,7 +1145,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_));
+                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_) | Location::Brain(_));
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -3007,6 +3007,7 @@ impl Workspace {
                     Location::Duplicates(r) => crate::duplicates_view::title(r),
                     Location::BuildJunk(p) => crate::junk_view::title(p),
                     Location::Changes(p) => crate::changes_view::title(p),
+                    Location::Brain(p) => crate::brain_view::title(p),
                     other => crate::i18n::td(&other.title()),
                 })
                 .collect()
@@ -3793,6 +3794,7 @@ impl Workspace {
             Location::Duplicates(roots) => vec![(crate::duplicates_view::title(roots), loc.clone())],
             Location::BuildJunk(path) => vec![(crate::junk_view::title(path), loc.clone())],
             Location::Changes(path) => vec![(crate::changes_view::title(path), loc.clone())],
+            Location::Brain(path) => vec![(crate::brain_view::title(path), loc.clone())],
             // `server`, then one crumb per folder on it
             Location::Remote(v) => {
                 let root = v.root();
@@ -5535,7 +5537,7 @@ impl Render for Workspace {
         let pane_shown = self.preview_open && self.compact.is_none() && room_for_preview && {
             // (the change feed's page has its own list, and the diff of the chosen file shows in the pane)
             let loc = self.active_tab().read(cx).location().clone();
-            loc.path().is_some() || matches!(loc, Location::Changes(_))
+            loc.path().is_some() || matches!(loc, Location::Changes(_) | Location::Brain(_))
         };
         // the hosted preview handler is a separate window: hide it whenever something of ours
         // could be under it (pane closed, a dialog or the Status Center open, palette, bulk rename)
@@ -5749,6 +5751,18 @@ impl Render for Workspace {
                 };
                 if let Some(root) = root {
                     v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::BuildJunk(root))));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowProjectBrain, _, cx| {
+                // the folder shown (the selected folder when one is)
+                let v = this.active_tab().clone();
+                let dir = {
+                    let v = v.read(cx);
+                    let sel: Vec<PathBuf> = v.selection_paths().into_iter().filter(|p| p.is_dir()).collect();
+                    if sel.len() == 1 { sel.into_iter().next() } else { v.current_dir() }
+                };
+                if let Some(d) = dir {
+                    v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::Brain(d))));
                 }
             }))
             .on_action(cx.listener(|this, _: &ShowChanges, window, cx| {

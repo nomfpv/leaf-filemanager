@@ -18,6 +18,7 @@ mod conflict_dialog;
 mod ctx_menu;
 mod menu_model;
 mod basket;
+mod brain_view;
 mod context_copy;
 mod custom_actions;
 mod custom_actions_page;

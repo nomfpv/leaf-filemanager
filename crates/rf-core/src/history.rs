@@ -25,6 +25,8 @@ pub enum Location {
     BuildJunk(PathBuf),
     /// The files changed in the git repository this folder is in (the change feed's page).
     Changes(PathBuf),
+    /// The instruction files, skills, memory and MCP config an agent reads in the project this folder is in (the project brain page).
+    Brain(PathBuf),
     /// HyperDownload's page: what is downloading and what was downloaded.
     Downloads,
     /// A folder that is not a local one, listed through the virtual filesystem (`leaf-vfs`): `sftp://`, `mem://`...
@@ -85,6 +87,7 @@ impl Location {
             Location::Duplicates(v) => Location::Duplicates(v.iter().map(|p| clean_path(p)).collect()),
             Location::BuildJunk(p) => Location::BuildJunk(clean_path(&p)),
             Location::Changes(p) => Location::Changes(clean_path(&p)),
+            Location::Brain(p) => Location::Brain(clean_path(&p)),
             other => other,
         }
     }
@@ -112,6 +115,7 @@ impl Location {
             Location::DiskUsage(p) => Some(Location::Path(p.clone())),
             Location::BuildJunk(p) => Some(Location::Path(p.clone())),
             Location::Changes(p) => Some(Location::Path(p.clone())),
+            Location::Brain(p) => Some(Location::Path(p.clone())),
             Location::Duplicates(v) => Some(v.first().map_or(Location::Home, |p| Location::Path(p.clone()))),
             Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads => {
                 Some(Location::Home)
@@ -136,6 +140,7 @@ impl Location {
             Location::Duplicates(_) => "Duplicates".into(),
             Location::BuildJunk(p) => format!("Build junk — {}", display_name(p)),
             Location::Changes(p) => format!("Changes — {}", display_name(p)),
+            Location::Brain(p) => format!("Project brain — {}", display_name(p)),
             Location::Downloads => "HyperDownload".into(),
             Location::Remote(v) if v.is_root() && v.authority().is_empty() => v.scheme().to_string(),
             Location::Remote(v) if v.is_root() => v.authority().to_string(),

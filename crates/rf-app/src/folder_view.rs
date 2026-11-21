@@ -590,6 +590,8 @@ pub struct FolderView {
     dup_selected: Option<(PathBuf, Entry)>,
     /// The build-junk finder's page of this tab.
     junk: Option<Entity<crate::junk_view::JunkView>>,
+    /// The project brain page of this tab.
+    brain: Option<Entity<crate::brain_view::BrainView>>,
     /// The change feed's page of this tab.
     changes: Option<Entity<crate::changes_view::ChangesView>>,
     /// How many git-ignored items the list leaves out now ("Hide git-ignored files"), and the matching in flight.
@@ -803,6 +805,7 @@ impl FolderView {
             disk_usage: None,
             dups: None,
             junk: None,
+            brain: None,
             ignored_n: 0,
             ignore_on: false,
             ignore_serial: 0,
@@ -876,6 +879,9 @@ impl FolderView {
         if let Location::Changes(p) = self.location() {
             return crate::changes_view::title(p);
         }
+        if let Location::Brain(p) = self.location() {
+            return crate::brain_view::title(p);
+        }
         crate::i18n::td(&self.location().title())
     }
 
@@ -892,6 +898,7 @@ impl FolderView {
             Location::Duplicates(_) => L::Copy,
             Location::BuildJunk(_) => L::Eraser,
             Location::Changes(_) => L::GitCompare,
+            Location::Brain(_) => L::Brain,
             Location::Downloads => L::ArrowDownToLine,
             Location::Remote(_) => L::Server,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
@@ -4027,7 +4034,7 @@ impl FolderView {
 
     /// Item shown in the preview pane.
     pub fn preview_target(&self) -> Option<(PathBuf, Entry)> {
-        if matches!(self.location(), Location::Duplicates(_) | Location::Changes(_)) {
+        if matches!(self.location(), Location::Duplicates(_) | Location::Changes(_) | Location::Brain(_)) {
             return self.dup_selected.clone();
         }
         let ei = self.cursor_entry()?;
@@ -4086,6 +4093,7 @@ impl FolderView {
         let text = match self.location() {
             Location::BuildJunk(_) => self.junk.as_ref()?.read(cx).status_text(),
             Location::Changes(_) => self.changes.as_ref()?.read(cx).status_text(),
+            Location::Brain(_) => self.brain.as_ref()?.read(cx).status_text(),
             _ => return None,
         };
         (!text.is_empty()).then_some(text)
@@ -5825,6 +5833,35 @@ impl Render for FolderView {
                     }
                 };
                 div().size_full().child(jv).into_any_element()
+            }
+            Location::Brain(dir) => {
+                let dir = dir.clone();
+                let bv = match &self.brain {
+                    Some(bv) if bv.read(cx).dir() == dir.as_path() => bv.clone(),
+                    _ => {
+                        let bv = cx.new(|cx| crate::brain_view::BrainView::new(dir, window, cx));
+                        cx.subscribe(&bv, |this, _, ev: &crate::brain_view::BrainEvent, cx| match ev {
+                            crate::brain_view::BrainEvent::Selected(sel) => {
+                                this.dup_selected = sel.as_ref().map(|(p, size, ms)| {
+                                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    (p.clone(), Entry::new(&name, rf_core::EntryKind::File, *size, *ms, 0, 0))
+                                });
+                                cx.notify();
+                            }
+                            crate::brain_view::BrainEvent::ShowInFolder(path) => {
+                                if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+                                    this.set_reselect(name.to_string_lossy().into_owned());
+                                    this.navigate(Location::Path(parent.to_path_buf()), cx);
+                                }
+                            }
+                        })
+                        .detach();
+                        cx.observe(&bv, |_, _, cx| cx.notify()).detach();
+                        self.brain = Some(bv.clone());
+                        bv
+                    }
+                };
+                div().size_full().child(bv).into_any_element()
             }
             Location::Changes(dir) => {
                 let dir = dir.clone();
