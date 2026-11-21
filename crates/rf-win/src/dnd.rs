@@ -1,5 +1,5 @@
-//! Drag files out of rustyfiles (to Explorer, the desktop, other apps — or back into
-//! rustyfiles itself) with the standard shell data object and drag image.
+//! Drag files out of leaf (to Explorer, the desktop, other apps — or back into
+//! leaf itself) with the standard shell data object and drag image.
 
 use std::path::{Path, PathBuf};
 

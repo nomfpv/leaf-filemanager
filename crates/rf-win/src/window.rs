@@ -97,7 +97,7 @@ pub fn set_min_size(hwnd: isize, size: Option<(u16, u16)>) {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::UI::WindowsAndMessaging::{RemovePropW, SetPropW};
     let h = HWND(hwnd as *mut _);
-    let name = windows::core::w!("rustyfiles.MinSize");
+    let name = windows::core::w!("leaf.MinSize");
     unsafe {
         match size {
             Some((w, hh)) => {

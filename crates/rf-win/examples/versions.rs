@@ -1,6 +1,6 @@
-//! Two builds of rustyfiles (and File Explorer) opening the same folder, measured the same way as
+//! Two builds of leaf (and File Explorer) opening the same folder, measured the same way as
 //! the speed test, taking turns: `cargo run --release -p rf-win --example versions --
-//! <folder> <runs> <label=exe>...`. Each rustyfiles starts as an extra instance with its own
+//! <folder> <runs> <label=exe>...`. Each leaf starts as an extra instance with its own
 //! settings folder (the user's settings and running app are left alone).
 
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ fn main() {
                 ("LEAF_MUTE".into(), "1".into()),
                 ("LEAF_NO_INDEX".into(), "1".into()),
             ];
-            (label.to_string(), App { kind: AppKind::Rustyfiles, exe: PathBuf::from(exe), env })
+            (label.to_string(), App { kind: AppKind::Leaf, exe: PathBuf::from(exe), env })
         })
         .collect();
     let explorer = rf_win::bench::detect().into_iter().find(|x| x.kind == AppKind::Explorer).unwrap();

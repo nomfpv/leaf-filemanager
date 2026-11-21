@@ -28,7 +28,7 @@ impl Identity {
         }
         std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
         let key = rcgen::KeyPair::generate().context("cannot make a key")?;
-        let params = rcgen::CertificateParams::new(vec!["rustyfiles".to_string()]).context("certificate parameters")?;
+        let params = rcgen::CertificateParams::new(vec!["leaf".to_string()]).context("certificate parameters")?;
         let cert = params.self_signed(&key).context("cannot sign the certificate")?;
         let (cert, key) = (cert.der().clone(), key.serialize_der());
         write_private(&key_path, &key)?;

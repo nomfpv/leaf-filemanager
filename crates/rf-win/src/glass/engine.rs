@@ -1460,7 +1460,7 @@ impl Engine {
         };
         match tried {
             Some(Ok(m)) => {
-                log::info!("glass: a capture session could be made again; going back to it, rustyfiles windows are visible to screenshots and recordings again");
+                log::info!("glass: a capture session could be made again; going back to it, leaf windows are visible to screenshots and recordings again");
                 self.switch_to_session(hmon, m);
             }
             Some(Err(why)) => {
@@ -1554,7 +1554,7 @@ impl Engine {
                 // The registry is read AFTER the mode is published: a popup that registered before this read is in the snapshot, one that
                 // registers later sees `Session` and sends ExtrasChanged. Read before, one in between would be in neither.
                 self.excl.set_extras(super::extras_snapshot());
-                log::info!("glass: screen capture through a Windows.Graphics.Capture session; rustyfiles windows stay visible to screenshots and recordings");
+                log::info!("glass: screen capture through a Windows.Graphics.Capture session; leaf windows stay visible to screenshots and recordings");
                 // no window carries the flag any more (an earlier mode of this process may have set it)
                 let mut all: Vec<isize> = self.wins.keys().copied().collect();
                 all.extend(self.excl.extras().iter().copied());
@@ -1570,9 +1570,9 @@ impl Engine {
     /// picture BEFORE any capture is made, and the sessions (if there are any) are closed. `fell_back`: a session was in use and failed.
     fn use_affinity(&mut self, why: &str, fell_back: bool, failure: bool) {
         if fell_back {
-            log::info!("glass: the capture session failed ({why}); falling back to Desktop Duplication, rustyfiles windows are hidden from screenshots and recordings");
+            log::info!("glass: the capture session failed ({why}); falling back to Desktop Duplication, leaf windows are hidden from screenshots and recordings");
         } else {
-            log::info!("glass: screen capture through Desktop Duplication, rustyfiles windows are hidden from screenshots and recordings ({why})");
+            log::info!("glass: screen capture through Desktop Duplication, leaf windows are hidden from screenshots and recordings ({why})");
         }
         self.mode = CaptureMode::Affinity;
         set_mode(CaptureMode::Affinity);

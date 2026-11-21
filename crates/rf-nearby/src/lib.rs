@@ -1,4 +1,4 @@
-//! rf-nearby: send files to rustyfiles on the other devices of the same network, AirDrop-like, on every platform rustyfiles runs on
+//! rf-nearby: send files to leaf on the other devices of the same network, AirDrop-like, on every platform leaf runs on
 //! (Windows, macOS, and later Linux). Nothing in here is platform-specific: discovery is mDNS / DNS-SD, the transfer is QUIC with
 //! TLS 1.3, files are plain `std` / `tokio` file I/O.
 //!

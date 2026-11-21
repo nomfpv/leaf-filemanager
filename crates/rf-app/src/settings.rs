@@ -1,4 +1,4 @@
-//! Persistent user settings (%APPDATA%\rustyfiles\settings.toml) as a GPUI global.
+//! Persistent user settings (%APPDATA%\leaf\settings.toml) as a GPUI global.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -401,7 +401,7 @@ pub struct Settings {
     /// The pane's height at the bottom (drag its top edge). Written only once the user has moved it.
     #[serde(skip_serializing_if = "is_default_preview_height")]
     pub preview_height: f32,
-    /// The file's details under its preview (type, size, dates, location, the hash button). Asked for on the rustyfiles Discord: "Hope
+    /// The file's details under its preview (type, size, dates, location, the hash button). Asked for on the leaf Discord: "Hope
     /// the Properties can have an option to hide".
     pub preview_details: bool,
     pub renderer: RendererPref,
@@ -425,23 +425,23 @@ pub struct Settings {
     /// (right click > Hide), like "Hidden drives"".
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_places: Vec<String>,
-    /// The accent colour of rustyfiles as "#RRGGBB"; empty: Windows' own accent (Settings > Appearance).
+    /// The accent colour of leaf as "#RRGGBB"; empty: Windows' own accent (Settings > Appearance).
     pub accent_color: String,
     /// The user's own programs for kinds of files (Settings > File types; `rf_core::openrules`): the first program of a list opens
-    /// such a file on a double click, all of them stand first under "Open with". Only rustyfiles follows them.
+    /// such a file on a double click, all of them stand first under "Open with". Only leaf follows them.
     pub open_rules: Vec<rf_core::openrules::OpenRule>,
-    /// Closing the last window keeps rustyfiles in the notification area (Files' "leave app
+    /// Closing the last window keeps leaf in the notification area (Files' "leave app
     /// running in the background"): the next window opens instantly.
     pub run_in_background: bool,
     /// Status bar: listing time and the GPU/CPU renderer badge (developer info).
     pub show_perf_info: bool,
-    /// A notification when a long operation finishes while rustyfiles is not in front.
+    /// A notification when a long operation finishes while leaf is not in front.
     pub notify_long_ops: bool,
     /// The one-time move from "details" to "adaptive" (0.3.3) has been made.
     pub adaptive_offered: bool,
     pub show_extensions: bool,
     /// Custom shortcuts: keystroke → action, e.g. `"ctrl-k" = "NewFolder"` (names as in the
-    /// command palette's actions; `rustyfiles::` prefix optional). Applied at startup.
+    /// command palette's actions; `leaf::` prefix optional). Applied at startup.
     pub keybindings: std::collections::BTreeMap<String, String>,
     /// Last window placement: [x, y, width, height, maximized (0/1)].
     pub window: Option<[f32; 5]>,
@@ -586,7 +586,7 @@ pub struct Settings {
     pub show_flatten: bool,
 
     // ---- leaf-look (Hızlı Bakış, ayrı program): ayarları kendi dosyasında (`look::config`)
-    /// leaf-look kullanılsın mı (kapalıyken rustyfiles onu başlatmaz, Boşluk bir şey yapmaz).
+    /// leaf-look kullanılsın mı (kapalıyken leaf onu başlatmaz, Boşluk bir şey yapmaz).
     pub look_enabled: bool,
     /// Space hands the file to QuickLook (QL-Win) instead of leaf-look (`quicklook`).
     pub space_quicklook: bool,
@@ -606,7 +606,7 @@ pub struct Settings {
     /// commands only; Ctrl+P still searches past folders.
     pub palette_folder_history: bool,
 
-    // ---- Nearby (sending files to rustyfiles on the network's other devices; Settings -> "Nearby"; crates/rf-nearby and nearby.rs)
+    // ---- Nearby (sending files to leaf on the network's other devices; Settings -> "Nearby"; crates/rf-nearby and nearby.rs)
     /// Nearby runs in the main process (off by default: it listens on a network port, and Windows' firewall may ask about that).
     pub nearby_enabled: bool,
     /// Who sees this PC: nobody, its trusted devices (the default), or everyone. "Everyone" lasts ten minutes and a start reads it as
@@ -802,7 +802,7 @@ pub fn solid_backdrop() -> bool {
 }
 
 /// The materials a Windows without Windows 11's materials (Windows 10) still gives the MAIN window: Acrylic, as the old blur behind
-/// it, and HyperGlass, which rustyfiles draws itself. Menus and popups stay plain there, since the blur-behind of a popup covered its
+/// it, and HyperGlass, which leaf draws itself. Menus and popups stay plain there, since the blur-behind of a popup covered its
 /// whole frame (issue 24). Mica is not among them: there it left the window see-through. Issue 78: a Windows 10 user found Acrylic
 /// right on their PC and asked for it and HyperGlass back.
 pub fn main_window_only(b: BackdropPref) -> bool {
@@ -1181,7 +1181,7 @@ show_hidden = true").unwrap();
     }
 }
 
-/// Where data that can be rebuilt lives (remembered folder sizes): `%LOCALAPPDATA%\rustyfiles`,
+/// Where data that can be rebuilt lives (remembered folder sizes): `%LOCALAPPDATA%\leaf`,
 /// or `LEAF_CONFIG_DIR` when set, so test copies keep their data apart.
 pub fn local_data_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = std::env::var_os("LEAF_CONFIG_DIR").filter(|d| !d.is_empty()) {
@@ -1191,10 +1191,10 @@ pub fn local_data_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = rf_win::portable::data_dir() {
         return Some(d);
     }
-    dirs::data_local_dir().map(|d| d.join("rustyfiles"))
+    dirs::data_local_dir().map(|d| d.join("leaf"))
 }
 
-/// `%APPDATA%\rustyfiles`, or `LEAF_CONFIG_DIR` when set (portable use, tests).
+/// `%APPDATA%\leaf`, or `LEAF_CONFIG_DIR` when set (portable use, tests).
 pub fn app_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = std::env::var_os("LEAF_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(std::path::PathBuf::from(d));
@@ -1203,7 +1203,7 @@ pub fn app_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = rf_win::portable::data_dir() {
         return Some(d);
     }
-    dirs::config_dir().map(|d| d.join("rustyfiles"))
+    dirs::config_dir().map(|d| d.join("leaf"))
 }
 
 #[cfg(test)]
@@ -1332,7 +1332,7 @@ theme = \"dark\"
 /// so it never competes with opening the window.
 fn sync_name_index(on: bool, excluded: &[String]) {
     use std::sync::atomic::{AtomicU8, Ordering};
-    // leaf-look reads these settings too: the index is rustyfiles' (a second indexer would walk
+    // leaf-look reads these settings too: the index is leaf's (a second indexer would walk
     // every drive again and write the same index files)
     if crate::background::side_process() {
         return;
@@ -1371,7 +1371,7 @@ fn sync_name_index(on: bool, excluded: &[String]) {
         // a copy with its own settings folder (tests, portable) keeps its index there too
         let dir = match std::env::var_os("LEAF_CONFIG_DIR").map(std::path::PathBuf::from).or_else(rf_win::portable::data_dir) {
             Some(cfg) => cfg.join("index"),
-            None => std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, std::path::PathBuf::from).join("rustyfiles").join("index"),
+            None => std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, std::path::PathBuf::from).join("leaf").join("index"),
         };
         // LEAF_INDEX_ROOTS="E:\;F:\" picks the roots (testing)
         let roots = match std::env::var("LEAF_INDEX_ROOTS") {

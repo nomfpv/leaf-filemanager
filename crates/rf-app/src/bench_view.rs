@@ -115,7 +115,7 @@ fn test_label(t: OpenTest) -> &'static str {
 
 fn app_label(k: AppKind) -> &'static str {
     match k {
-        AppKind::Rustyfiles => "rustyfiles",
+        AppKind::Leaf => "leaf",
         AppKind::Explorer => t!("File Explorer"),
         AppKind::Files => "Files",
         AppKind::FilePilot => "File Pilot",
@@ -141,7 +141,7 @@ fn start(cx: &mut App) {
     if st.running.is_some() {
         return;
     }
-    let mut apps = vec![crate::bench::rustyfiles_app()];
+    let mut apps = vec![crate::bench::leaf_app()];
     apps.extend(st.detected.iter().filter(|a| !st.off.contains(&a.kind)).cloned());
     let plan = crate::bench::Plan { apps, open: OpenTest::ALL.to_vec(), copy: true, engines: true };
     let shared = Arc::new(Mutex::new(Shared::default()));
@@ -259,7 +259,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
 
     // intro: what it does, on which machine, with which apps
     let machine = st.machine.as_ref().map(machine_line).unwrap_or_default();
-    let mut chips = h_flex().gap_2().flex_wrap().child(chip(p, "bench-app-rf", "rustyfiles", true, true, |_| {}));
+    let mut chips = h_flex().gap_2().flex_wrap().child(chip(p, "bench-app-rf", "leaf", true, true, |_| {}));
     let installed: Vec<AppKind> = st.detected.iter().map(|a| a.kind).collect();
     for kind in [AppKind::Explorer, AppKind::Files, AppKind::FilePilot] {
         let here = installed.contains(&kind);
@@ -413,7 +413,7 @@ fn race_card(p: &Palette, r: &Results, race: OpenTest, elapsed: f64) -> AnyEleme
                 let total_dots = (longest / DOT_MS).ceil().max(1.0);
                 let lit = (shown / DOT_MS).ceil();
                 let frac = (lit / total_dots).clamp(0.0, 1.0) as f32;
-                let color = if app == AppKind::Rustyfiles { p.accent } else { p.text_secondary };
+                let color = if app == AppKind::Leaf { p.accent } else { p.text_secondary };
                 (
                     div().h(px(8.)).w_full().rounded_full().bg(p.divider).child(div().h_full().w(relative(frac.max(0.005))).rounded_full().bg(color)).into_any_element(),
                     if done { format!("{}{}", ms(m.settled_ms), if m.shared { " *" } else { "" }) } else { t!("Listing…").to_string() },
@@ -506,12 +506,12 @@ fn table_card(p: &Palette, r: &Results) -> AnyElement {
 fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
     let e = &r.engines;
     let mut rows: Vec<(String, String, String, String)> = Vec::new();
-    // "işlemci süresi: rustyfiles 1.20 s · Windows 3.40 s · bellek: +12 MB · +40 MB"
+    // "işlemci süresi: leaf 1.20 s · Windows 3.40 s · bellek: +12 MB · +40 MB"
     let cost = |ours: (Option<f64>, Option<f64>), theirs: Option<(Option<f64>, Option<f64>, &str)>| -> String {
         let mb = |m: f64| format!("+{m:.0} MB");
         let mut parts = Vec::new();
         if let Some(c) = ours.0 {
-            let mut s = format!("{}: rustyfiles {}", t!("CPU time"), ms(c));
+            let mut s = format!("{}: leaf {}", t!("CPU time"), ms(c));
             if let Some((Some(tc), _, name)) = theirs {
                 s.push_str(&format!(" · {name} {}", ms(tc)));
             }
@@ -531,7 +531,7 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
         let usage = cost((v.ours_cpu_ms, v.ours_mb), Some((v.windows_cpu_ms, v.windows_mb, windows_name)));
         let (Some(a), Some(b)) = (v.ours_ms, v.windows_ms) else {
             if let Some(a) = v.ours_ms {
-                rows.push((label.to_string(), format!("rustyfiles {}", ms(a)), String::new(), usage));
+                rows.push((label.to_string(), format!("leaf {}", ms(a)), String::new(), usage));
             }
             return;
         };
@@ -543,7 +543,7 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
         } else {
             t!("{x} slower").replace("{x}", &times(a, b))
         };
-        rows.push((label.to_string(), format!("rustyfiles {} · {windows_name} {}", ms(a), ms(b)), verdict, usage));
+        rows.push((label.to_string(), format!("leaf {} · {windows_name} {}", ms(a), ms(b)), verdict, usage));
     };
     versus(t!("Copying: 10,000 small files"), &e.copy_small, "Windows");
     versus(t!("Copying: one 1 GB file"), &e.copy_big, "Windows");
@@ -580,7 +580,7 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
     }
     Some(
         shell(p)
-            .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("rustyfiles' engines and Windows'"))))
+            .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("leaf's engines and Windows'"))))
             .child(list)
             .into_any_element(),
     )

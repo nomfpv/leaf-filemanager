@@ -70,7 +70,7 @@ pub fn pick(owner: HWND, title: &str, kind: Pick<'_>) -> Option<PathBuf> {
 }
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "rustyfiles";
+const RUN_VALUE: &str = "leaf";
 
 /// Whether the app starts with Windows (HKCU Run entry, no admin rights needed).
 pub fn starts_with_windows() -> bool {

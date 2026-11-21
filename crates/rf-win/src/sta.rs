@@ -1,7 +1,7 @@
 //! A long-lived single-threaded-apartment "shell thread" with a message pump and a hidden
 //! owner window. Context menus, property sheets and other modeless shell UI must live on a
 //! thread that keeps pumping messages — and must never be the UI thread, so a slow shell
-//! extension can't freeze rustyfiles.
+//! extension can't freeze leaf.
 
 use std::collections::VecDeque;
 use std::sync::OnceLock;
@@ -68,7 +68,7 @@ fn start() -> ShellThread {
             ON_SHELL_THREAD.with(|c| c.set(true));
             let _ = OleInitialize(None);
             let hinst = GetModuleHandleW(None).unwrap_or_default();
-            let class = w!("rustyfiles.ShellOwner");
+            let class = w!("leaf.ShellOwner");
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
                 hInstance: hinst.into(),

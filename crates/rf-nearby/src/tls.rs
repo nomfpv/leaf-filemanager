@@ -13,7 +13,7 @@ use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use crate::identity::Identity;
 
 /// The ALPN of the protocol: a peer that does not speak it is turned away in the handshake.
-pub const ALPN: &[u8] = b"rustyfiles-nearby/1";
+pub const ALPN: &[u8] = b"leaf-nearby/1";
 
 fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
@@ -110,6 +110,6 @@ pub fn peer_fingerprint(conn: &quinn::Connection) -> Option<String> {
 /// which has two different sessions, can't make the two screens agree.
 pub fn pairing_code(conn: &quinn::Connection) -> Option<String> {
     let mut out = [0u8; 8];
-    conn.export_keying_material(&mut out, b"rustyfiles nearby pairing", b"").ok()?;
+    conn.export_keying_material(&mut out, b"leaf nearby pairing", b"").ok()?;
     Some(format!("{:06}", u64::from_be_bytes(out) % 1_000_000))
 }

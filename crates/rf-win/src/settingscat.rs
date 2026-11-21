@@ -223,7 +223,7 @@ fn clean(s: &str) -> String {
 
 /// The file's text: a first line with the key the file is valid for, then one entry a line.
 pub fn to_text(key: &str, entries: &[Entry]) -> String {
-    let mut s = format!("rustyfiles-settings-catalogue\t1\t{}\n", clean(key));
+    let mut s = format!("leaf-settings-catalogue\t1\t{}\n", clean(key));
     for e in entries {
         s.push_str(&format!("{}\t{}\t{}\t{}\n", clean(&e.name), clean(&e.place), clean(&e.keywords), clean(&e.launch.encode())));
     }
@@ -234,7 +234,7 @@ pub fn to_text(key: &str, entries: &[Entry]) -> String {
 pub fn from_text(key: &str, text: &str) -> Option<Vec<Entry>> {
     let mut lines = text.lines();
     let head: Vec<&str> = lines.next()?.split('\t').collect();
-    if head.len() != 3 || head[0] != "rustyfiles-settings-catalogue" || head[1] != "1" || head[2] != clean(key) {
+    if head.len() != 3 || head[0] != "leaf-settings-catalogue" || head[1] != "1" || head[2] != clean(key) {
         return None;
     }
     let mut out = Vec::new();

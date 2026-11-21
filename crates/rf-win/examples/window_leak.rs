@@ -1,7 +1,7 @@
-//! Issue #3: memory left behind by each closed window while rustyfiles keeps running in the
+//! Issue #3: memory left behind by each closed window while leaf keeps running in the
 //! background. Opens a window on `<folder>` through a second launch, closes it with WM_CLOSE,
 //! and prints the primary process' private bytes / working set / handles after every close.
-//! `cargo run --release -p rf-win --example window_leak -- <rustyfiles.exe> <folder> <windows>`
+//! `cargo run --release -p rf-win --example window_leak -- <leaf.exe> <folder> <windows>`
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -11,7 +11,7 @@ use rf_win::bench::{post_close, process_memory, windows_of};
 
 fn main() -> anyhow::Result<()> {
     let mut a = std::env::args().skip(1);
-    let exe = PathBuf::from(a.next().expect("rustyfiles.exe"));
+    let exe = PathBuf::from(a.next().expect("leaf.exe"));
     let folder = PathBuf::from(a.next().expect("folder"));
     let count: usize = a.next().map_or(12, |s| s.parse().unwrap());
     let cfg = std::env::temp_dir().join("rf-window-leak-cfg");

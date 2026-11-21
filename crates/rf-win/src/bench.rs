@@ -4,7 +4,7 @@
 //! sized to 1200 × 800, and captured with `PrintWindow` every ~30 ms. The folder counts as
 //! open when the picture last changed and then stayed the same for [`QUIET`]: the time of that
 //! last change is the result (the wait itself is not counted). The same method produced the
-//! numbers on rustyfiles.com (notes/benchmarks/2026-11-06).
+//! numbers of the upstream project (its notes/benchmarks/2026-11-06).
 //!
 //! Alongside: the CPU time and memory of the process that owns the window. When that process
 //! was already running (Explorer's shell, a Files window the user had open) the numbers are
@@ -43,7 +43,7 @@ pub const SIZE: (i32, i32) = (1200, 800);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum AppKind {
-    Rustyfiles,
+    Leaf,
     Explorer,
     Files,
     FilePilot,
@@ -52,7 +52,7 @@ pub enum AppKind {
 impl AppKind {
     pub fn name(self) -> &'static str {
         match self {
-            AppKind::Rustyfiles => "rustyfiles",
+            AppKind::Leaf => "leaf",
             AppKind::Explorer => "File Explorer",
             AppKind::Files => "Files",
             AppKind::FilePilot => "File Pilot",
@@ -372,12 +372,12 @@ pub fn measure_launch(app: &App, arg: &std::ffi::OsStr, title: &str, quiet: Dura
             anyhow::bail!("{}: no window within {:?}", app.kind.name(), timeout);
         }
         let found = windows().into_iter().find(|w| {
-            // rustyfiles started as its own instance must show its own window, never one of the
+            // leaf started as its own instance must show its own window, never one of the
             // user's copy; started as a single instance, it hands the folder to the running one
             // (the test's own, with the test's settings)
             !before.contains(&w.hwnd)
                 && w.title.contains(&leaf)
-                && (app.kind != AppKind::Rustyfiles || !app.env.iter().any(|(k, _)| k == "LEAF_MULTI_INSTANCE") || w.pid == child_pid)
+                && (app.kind != AppKind::Leaf || !app.env.iter().any(|(k, _)| k == "LEAF_MULTI_INSTANCE") || w.pid == child_pid)
         });
         if let Some(w) = found {
             break w;
@@ -457,7 +457,7 @@ pub fn measure_launch(app: &App, arg: &std::ffi::OsStr, title: &str, quiet: Dura
     })
 }
 
-/// Closes the window this run opened; waits up to 5 s. Our own child (rustyfiles) is ended if
+/// Closes the window this run opened; waits up to 5 s. Our own child (leaf) is ended if
 /// it is still there; other apps' processes never are.
 fn close(win: isize, child: &mut std::process::Child, kind: AppKind) {
     let h = hwnd(win);
@@ -468,7 +468,7 @@ fn close(win: isize, child: &mut std::process::Child, kind: AppKind) {
     while unsafe { IsWindow(Some(h)) }.as_bool() && t.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(30));
     }
-    if kind == AppKind::Rustyfiles {
+    if kind == AppKind::Leaf {
         if t.elapsed() >= Duration::from_secs(5) || matches!(child.try_wait(), Ok(None)) {
             let deadline = Instant::now() + Duration::from_secs(3);
             while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {

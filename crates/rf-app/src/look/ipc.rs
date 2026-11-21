@@ -1,14 +1,14 @@
-//! rustyfiles ↔ leaf-look iletileri (tek örnek borusu üzerinden, satır başına bir ileti).
+//! leaf ↔ leaf-look iletileri (tek örnek borusu üzerinden, satır başına bir ileti).
 
 use std::path::PathBuf;
 
 use super::ShowOpts;
 
 /// leaf-look'un tek örnek adı (boru ve kilit).
-pub const APP: &str = "directlook";
+pub const APP: &str = rf_win::LOOK_EXE_STEM;
 
 /// The single-instance name. `LEAF_LOOK_INSTANCE=<x>` gives a test copy its own
-/// ("directlook-<x>"), so it never talks to the user's running leaf-look.
+/// ("leaf-look-<x>"), so it never talks to the user's running leaf-look.
 pub fn app_name() -> String {
     match std::env::var("LEAF_LOOK_INSTANCE") {
         Ok(x) if !x.is_empty() => format!("{APP}-{x}"),
@@ -16,14 +16,14 @@ pub fn app_name() -> String {
     }
 }
 const PREFIX: &str = "\u{1}dl:";
-const TO_APP_PREFIX: &str = "\u{1}directlook:";
+const TO_APP_PREFIX: &str = "\u{1}leaf-look:";
 
 /// leaf-look'a giden ileti.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Msg {
     /// Göster (komut satırı `--look`).
     Show(PathBuf, ShowOpts),
-    /// Açıksa kapat, değilse göster (rustyfiles'ta Boşluk).
+    /// Açıksa kapat, değilse göster (leaf'ta Boşluk).
     Toggle(PathBuf),
     /// Seçim değişti: açıksa bu dosyaya geç, değilse bir şey yapma.
     Follow(PathBuf),
@@ -78,10 +78,10 @@ impl Msg {
     }
 }
 
-/// leaf-look'tan rustyfiles'a giden ileti.
+/// leaf-look'tan leaf'a giden ileti.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToApp {
-    /// Önizleme penceresi kapandı (rustyfiles "açık" bilgisini bırakır).
+    /// Önizleme penceresi kapandı (leaf "açık" bilgisini bırakır).
     LookClosed,
     /// Ayarlar → leaf-look sayfasını aç.
     OpenSettings,
@@ -110,10 +110,10 @@ impl ToApp {
     }
 }
 
-/// directlook.exe: bu programın yanında.
+/// leaf-look.exe: bu programın yanında.
 pub fn exe() -> Option<PathBuf> {
     let me = std::env::current_exe().ok()?;
-    let p = me.with_file_name("directlook.exe");
+    let p = me.with_file_name(rf_win::exe_name(rf_win::LOOK_EXE_STEM));
     p.exists().then_some(p)
 }
 
@@ -129,7 +129,7 @@ pub fn send(msg: Msg, start: bool) {
             return;
         }
         let Some(exe) = exe() else {
-            log::warn!("directlook.exe not found");
+            log::warn!("{} not found", rf_win::exe_name(rf_win::LOOK_EXE_STEM));
             return;
         };
         let mut cmd = std::process::Command::new(exe);
@@ -139,7 +139,7 @@ pub fn send(msg: Msg, start: bool) {
             cmd.args(["--msg", &text]);
         }
         if let Err(e) = cmd.spawn() {
-            log::warn!("couldn't start directlook: {e}");
+            log::warn!("couldn't start {}: {e}", rf_win::LOOK_EXE_STEM);
         }
     });
 }
@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn messages_to_rustyfiles() {
+    fn messages_to_leaf() {
         for m in [ToApp::LookClosed, ToApp::OpenSettings, ToApp::Step(true), ToApp::Step(false)] {
             assert_eq!(ToApp::decode(&m.encode()), Some(m));
         }

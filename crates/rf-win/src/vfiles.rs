@@ -4,7 +4,7 @@
 //! on Desktop 1, and press CTRL+V (or Paste) on Desktop 2 ... it is automatically being transferred via LAN ... This feature on Input
 //! Director seems to so far only work when using Windows Explorer"). A program whose files are not files on THIS disk (a remote
 //! desktop session, a tool that carries the clipboard between PCs, a mail program's attachments, an archive opened in Explorer)
-//! cannot put paths on the clipboard (`CF_HDROP`), and paths were the only thing rustyfiles pasted. Such a program offers the
+//! cannot put paths on the clipboard (`CF_HDROP`), and paths were the only thing leaf pasted. Such a program offers the
 //! shell's two formats instead: "FileGroupDescriptorW", a list of names with sizes and times, and "FileContents", the bytes of the
 //! i-th of them, usually as a stream that is read while the source fetches. Explorer pastes them; this module does the same.
 //!
@@ -360,7 +360,7 @@ pub fn paste_clipboard(dest: &Path, progress: &mut dyn FnMut(Progress), cancel: 
 // WHY (issue 128, a browser's image dragged to a folder; and on Discord: "When I attempt to drag from Outlook attachments into the
 // folder, it doesn't work"). Such a drag carries the same two formats as such a paste and no paths, and the window's drop target
 // took paths only. The drop target asks [`drag_paths`] instead (registered by the app with the GPUI fork's
-// `dnd_hint::set_virtual_reader`): the files are written into a folder of their own under %TEMP%\rustyfiles-drop at the drop, and
+// `dnd_hint::set_virtual_reader`): the files are written into a folder of their own under %TEMP%\leaf-drop at the drop, and
 // the drop goes on as a drop of those files, so every place that takes files (a folder, a tab, the sidebar, the dock) takes these.
 // The source's data object is only valid during the drop, so they are written then, before the drop handlers run.
 
@@ -369,7 +369,7 @@ static DROP_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None)
 
 /// Where dropped virtual files are written, a folder per drop.
 pub fn drops_root() -> PathBuf {
-    std::env::temp_dir().join("rustyfiles-drop")
+    std::env::temp_dir().join("leaf-drop")
 }
 
 /// A drop's folder that has been there this long is removed at a later drop (a copy out of it has long finished).

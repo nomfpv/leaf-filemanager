@@ -1,9 +1,9 @@
-//! A program of rustyfiles does not keep its own installation folder as its working directory.
+//! A program of leaf does not keep its own installation folder as its working directory.
 //!
 //! WHY (2026-11-14, the user: "0.7.0 dan 0.7.2 ye güncellenmiyor"). The updater replaces the installed program by renaming its
-//! folder (`...\rustyfiles\current`), and Windows refuses to rename a folder that is some process's working directory (error 32,
+//! folder (`...\leaf\current`), and Windows refuses to rename a folder that is some process's working directory (error 32,
 //! "used by another process"; tried in a scratch folder: a child whose working directory is the folder blocks the rename, and the
-//! rename goes through the moment the child ends). The installed shortcuts start rustyfiles IN that folder ("Start in":
+//! rename goes through the moment the child ends). The installed shortcuts start leaf IN that folder ("Start in":
 //! `...\current`), and so does the updater when it starts the program again. Everything the program starts without naming a folder
 //! inherits it: the window shown while an update is applied (a copy of the program run from the temporary folder, so the updater's
 //! own check for "processes running from the installation" does not see it), every document opened from a folder view, every app
@@ -13,7 +13,7 @@
 //!
 //! THE RULE. First thing in `main`, a program whose working directory lies inside its own installation moves to a neutral folder
 //! (the user's profile; the temporary folder when there is none). A working directory anywhere else is left alone: a terminal that
-//! starts `rustyfiles .` means the folder it stands in, and relative arguments keep their meaning. Nothing in the program reads
+//! starts `leaf .` means the folder it stands in, and relative arguments keep their meaning. Nothing in the program reads
 //! files relative to the working directory.
 
 use std::path::{Path, PathBuf};
@@ -52,7 +52,7 @@ pub fn must_leave(exe: &Path, cwd: &Path) -> bool {
     install_root(exe).is_some_and(|root| is_inside(cwd, &root))
 }
 
-/// Called first thing by every program of rustyfiles: leaves the installation folder when the process was started in it. Returns
+/// Called first thing by every program of leaf: leaves the installation folder when the process was started in it. Returns
 /// the folder it moved to, `None` when it stays where it is (or cannot move: then nothing has changed).
 pub fn leave() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -72,38 +72,38 @@ pub fn leave() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    const EXE: &str = r"C:\Users\user\AppData\Local\rustyfiles\current\rustyfiles.exe";
+    const EXE: &str = r"C:\Users\user\AppData\Local\leaf\current\leaf.exe";
 
     #[test]
     fn the_installation_is_the_folder_above_current() {
-        assert_eq!(install_root(Path::new(EXE)), Some(PathBuf::from(r"C:\Users\user\AppData\Local\rustyfiles")));
-        assert_eq!(install_root(Path::new(r"C:\Users\user\AppData\Local\rustyfiles\CURRENT\directlook.exe")), Some(PathBuf::from(r"C:\Users\user\AppData\Local\rustyfiles")));
+        assert_eq!(install_root(Path::new(EXE)), Some(PathBuf::from(r"C:\Users\user\AppData\Local\leaf")));
+        assert_eq!(install_root(Path::new(r"C:\Users\user\AppData\Local\leaf\CURRENT\leaf-look.exe")), Some(PathBuf::from(r"C:\Users\user\AppData\Local\leaf")));
         // a portable copy or a build: the program's own folder
-        assert_eq!(install_root(Path::new(r"D:\tools\rustyfiles\rustyfiles.exe")), Some(PathBuf::from(r"D:\tools\rustyfiles")));
-        assert_eq!(install_root(Path::new(r"C:\dev\rustyfiles\target\release\rustyfiles.exe")), Some(PathBuf::from(r"C:\dev\rustyfiles\target\release")));
+        assert_eq!(install_root(Path::new(r"D:\tools\leaf\leaf.exe")), Some(PathBuf::from(r"D:\tools\leaf")));
+        assert_eq!(install_root(Path::new(r"C:\dev\leaf\target\release\leaf.exe")), Some(PathBuf::from(r"C:\dev\leaf\target\release")));
         // a folder called "current" at the top of a drive is not the updater's layout: the drive is never the installation
-        assert_eq!(install_root(Path::new(r"C:\current\rustyfiles.exe")), Some(PathBuf::from(r"C:\current")));
+        assert_eq!(install_root(Path::new(r"C:\current\leaf.exe")), Some(PathBuf::from(r"C:\current")));
     }
 
     #[test]
     fn a_process_started_in_its_installation_leaves_and_any_other_stays() {
         let exe = Path::new(EXE);
         // what the shortcut's "Start in" and the updater's restart give
-        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles\current")));
-        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles\current\")));
-        assert!(must_leave(exe, Path::new(r"\\?\C:\Users\user\AppData\Local\rustyfiles\current")));
-        assert!(must_leave(exe, Path::new(r"c:\users\USER\appdata\local\RUSTYFILES\Current")), "cases are not told apart");
-        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles")), "the installation itself: an uninstall removes it");
-        assert!(must_leave(exe, Path::new(r"C:/Users/user/AppData/Local/rustyfiles/current")));
-        // a terminal that starts `rustyfiles .` somewhere else means that folder
+        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\leaf\current")));
+        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\leaf\current\")));
+        assert!(must_leave(exe, Path::new(r"\\?\C:\Users\user\AppData\Local\leaf\current")));
+        assert!(must_leave(exe, Path::new(r"c:\users\USER\appdata\local\LEAF\Current")), "cases are not told apart");
+        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\leaf")), "the installation itself: an uninstall removes it");
+        assert!(must_leave(exe, Path::new(r"C:/Users/user/AppData/Local/leaf/current")));
+        // a terminal that starts `leaf .` somewhere else means that folder
         assert!(!must_leave(exe, Path::new(r"C:\Users\user\Documents")));
         assert!(!must_leave(exe, Path::new(r"C:\Users\user\AppData\Local")));
-        assert!(!must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles-data")), "a folder that only begins with the same letters");
+        assert!(!must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\leaf-data")), "a folder that only begins with the same letters");
         assert!(!must_leave(exe, Path::new(r"D:\")));
         // the copy of the program that shows the update window runs from the temporary folder
-        let copy = Path::new(r"C:\Users\user\AppData\Local\Temp\rustyfiles-update\rustyfiles-update.exe");
+        let copy = Path::new(r"C:\Users\user\AppData\Local\Temp\leaf-update\leaf-update.exe");
         assert!(!must_leave(copy, Path::new(r"C:\Users\user\AppData\Local\Temp")));
-        assert!(must_leave(copy, Path::new(r"C:\Users\user\AppData\Local\Temp\rustyfiles-update")));
+        assert!(must_leave(copy, Path::new(r"C:\Users\user\AppData\Local\Temp\leaf-update")));
     }
 
     #[test]

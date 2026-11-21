@@ -1,6 +1,6 @@
 [package]
 name = "rf-nearby"
-description = "Send files to rustyfiles on other devices in the same network: discovery (mDNS), pairing and transfer (QUIC). Platform-free: Windows, macOS, Linux."
+description = "Send files to leaf on other devices in the same network: discovery (mDNS), pairing and transfer (QUIC). Platform-free: Windows, macOS, Linux."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -533,7 +533,7 @@ pub fn checkout(root: &Path, branch: &str, mode: CheckoutMode) -> Result<()> {
             if dirty {
                 git_text(
                     root,
-                    &["stash", "push", "--include-untracked", "-m", "rustyfiles checkout"],
+                    &["stash", "push", "--include-untracked", "-m", "leaf checkout"],
                     "Couldn't stash the changes",
                 )?;
             }

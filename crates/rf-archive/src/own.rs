@@ -28,7 +28,7 @@ pub(crate) fn describe(e: &rarchive::Error) -> String {
     match e {
         E::Io(x) => format!("Couldn't read the archive file: {x}"),
         E::NotArchive => "This file is not an archive, or its header is damaged.".into(),
-        E::OldFormat => "This is a very old RAR 1.3/1.4 archive (1990s); rustyfiles doesn't open this format. WinRAR or 7-Zip can open it.".into(),
+        E::OldFormat => "This is a very old RAR 1.3/1.4 archive (1990s); leaf doesn't open this format. WinRAR or 7-Zip can open it.".into(),
         E::Unsupported(what) => unsupported(what),
         E::Corrupt(what) => format!("The archive is damaged or only partly downloaded; try downloading it again. (Details: {what})"),
         E::BadChecksum(name) => format!("\"{name}\" came out damaged (checksum mismatch). The archive may be damaged; try downloading it again."),
@@ -40,7 +40,7 @@ pub(crate) fn describe(e: &rarchive::Error) -> String {
 fn unsupported(what: &str) -> String {
     let feature = match what {
         "old RAR encryption" => {
-            return "This archive uses the old RAR 1.5/2.0 encryption; rustyfiles doesn't open it. WinRAR or 7-Zip can open it.".into();
+            return "This archive uses the old RAR 1.5/2.0 encryption; leaf doesn't open it. WinRAR or 7-Zip can open it.".into();
         }
         "missing volume" => {
             return "A part of the multi-part archive is missing. Put all parts (.part1.rar, .part2.rar… or .rar, .r00, .r01…) in the same folder and try again.".into();

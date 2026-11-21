@@ -64,11 +64,11 @@ if (-not $SkipBuild) {
     } finally { Pop-Location }
 }
 $app = $null
-foreach ($n in 'leaf.exe', 'rustyfiles.exe') {
+foreach ($n in @('leaf.exe')) {
     $c = Join-Path $target $n
     if (Test-Path -LiteralPath $c) { $app = $c; break }
 }
-if (-not $app) { Die "no release app exe in $target (leaf.exe or rustyfiles.exe)" }
+if (-not $app) { Die "no release app exe in $target (leaf.exe)" }
 $openbench = Join-Path $target 'examples\openbench.exe'
 $copyvs = Join-Path $target 'examples\copy_vs.exe'
 foreach ($e in $openbench, $copyvs) { if (-not (Test-Path -LiteralPath $e)) { Die "missing $e (build without -SkipBuild)" } }

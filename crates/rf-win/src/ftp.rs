@@ -107,7 +107,7 @@ fn last_err(what: &str) -> std::io::Error {
 
 /// (session, connection) — the session must outlive the connection; keep both.
 fn connect(u: &FtpUrl) -> std::io::Result<(Handle, Handle)> {
-    let agent = wide("rustyfiles");
+    let agent = wide("leaf");
     let session = Handle(unsafe { InternetOpenW(PCWSTR(agent.as_ptr()), INTERNET_OPEN_TYPE_PRECONFIG.0, PCWSTR::null(), PCWSTR::null(), 0) });
     if session.0.is_null() {
         return Err(last_err("InternetOpen"));

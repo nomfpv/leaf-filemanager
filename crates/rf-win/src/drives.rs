@@ -65,7 +65,7 @@ pub fn letters_of_mask(mask: u32) -> Vec<char> {
     (0..26u8).filter(|i| mask & (1 << i) != 0).map(|i| (b'A' + i) as char).collect()
 }
 
-/// The drives the user hides in rustyfiles (Settings > Files and folders), as a mask. One value for the process, set from the
+/// The drives the user hides in leaf (Settings > Files and folders), as a mask. One value for the process, set from the
 /// settings whenever they are applied.
 static HIDDEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -89,7 +89,7 @@ pub fn policy_hidden() -> u32 {
 ///
 /// WHY (issue 23, LokeYourC3PH, with a picture of four drives of which one was a raw encrypted volume: "any encrypted volume which is
 /// not the system volume, stills shows up, even though I can hide it in the Windows Explorer ... I would like for an option where we
-/// can hide volumes in rustyfiles"). A hidden drive is only not LISTED: its address typed into the address bar opens it as before.
+/// can hide volumes in leaf"). A hidden drive is only not LISTED: its address typed into the address bar opens it as before.
 /// It is also not asked for its name and its size, which is where a volume that cannot be read answers slowly or with an error.
 pub fn visible_drives() -> Vec<Drive> {
     list_drives_except(hidden() | policy_hidden())

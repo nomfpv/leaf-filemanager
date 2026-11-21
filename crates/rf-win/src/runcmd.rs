@@ -315,7 +315,7 @@ mod tests {
     /// (a folder of the search path or an App Paths entry). Files are looked for, never started.
     #[test]
     fn probe_well_known_programs() {
-        for name in ["cmd", "powershell", "pwsh", "wt", "notepad", "calc", "code", "no-such-program-rustyfiles-test"] {
+        for name in ["cmd", "powershell", "pwsh", "wt", "notepad", "calc", "code", "no-such-program-leaf-test"] {
             let r = [cl(name, "")];
             let via_dirs = find_with(&r, Path::new("C:\\"), &search_dirs(), &|_| None, &is_program_file).is_some();
             let via_any = find(&r, Path::new("C:\\")).is_some();
@@ -331,6 +331,6 @@ mod tests {
         let found = find(&[cl("cmd", "/k dir")], Path::new("C:\\")).expect("cmd should be found");
         assert!(found.exe.to_string_lossy().to_lowercase().ends_with(r"\system32\cmd.exe"), "{:?}", found.exe);
         assert_eq!(found.args, "/k dir");
-        assert!(find(&[cl("no-such-program-rustyfiles-test", "")], Path::new("C:\\")).is_none());
+        assert!(find(&[cl("no-such-program-leaf-test", "")], Path::new("C:\\")).is_none());
     }
 }

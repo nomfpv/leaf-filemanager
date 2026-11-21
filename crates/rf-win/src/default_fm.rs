@@ -1,6 +1,6 @@
 //! "Set as default file manager" (Files' Advanced setting), per-user (HKCU only, no admin):
-//! folders and Win+E open in rustyfiles. Same keys as Files' SetFilesAsDefault.reg. Archives
-//! are offered as an app registration (see `register_app`): the user picks rustyfiles for them
+//! folders and Win+E open in leaf. Same keys as Files' SetFilesAsDefault.reg. Archives
+//! are offered as an app registration (see `register_app`): the user picks leaf for them
 //! in Windows' Default apps.
 //!
 //! The app must hand non-folder arguments (e.g. `::{CLSID}` shell namespaces like Control Panel)
@@ -11,7 +11,7 @@ use windows_registry::{CURRENT_USER, Key};
 pub const CLASSES: &str = r"Software\Classes";
 const WIN_E_CLSID: &str = r"CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
 /// zip (CompressedFolder) and 7z, rar, tar, gz… (ArchiveFolder): their `open` verbs. Earlier
-/// versions pointed these at rustyfiles; no more: "Open with" then merged Windows' own handler
+/// versions pointed these at leaf; no more: "Open with" then merged Windows' own handler
 /// ("File Explorer") with ours into one entry with Explorer's name. Ours are removed.
 const ARCHIVE_VERBS: [&str; 2] = [r"CompressedFolder\shell\open", r"ArchiveFolder\shell\open"];
 
@@ -33,19 +33,19 @@ pub fn enable(exe: &str, classes_root: &str) -> anyhow::Result<()> {
     register_app(exe, classes_root)
 }
 
-/// Archive types rustyfiles browses, offered in Windows' Default apps and "Open with". Which
+/// Archive types leaf browses, offered in Windows' Default apps and "Open with". Which
 /// app opens them is the user's choice (Windows keeps it signed; no program may set it).
 pub const ARCHIVE_EXTS: [&str; 9] = [".zip", ".7z", ".rar", ".tar", ".tgz", ".txz", ".tzst", ".tbz2", ".tbz"];
-const PROGID: &str = "rustyfiles.Archive";
-/// Name under RegisteredApplications (`ms-settings:defaultapps?registeredAppUser=rustyfiles`).
-pub const APP_NAME: &str = "rustyfiles";
+const PROGID: &str = "leaf.Archive";
+/// Name under RegisteredApplications (`ms-settings:defaultapps?registeredAppUser=leaf`).
+pub const APP_NAME: &str = "leaf";
 
 /// `Software` for `Software\Classes` (tests use a scratch root).
 fn software_root(classes_root: &str) -> &str {
     classes_root.strip_suffix(r"\Classes").unwrap_or(classes_root)
 }
 
-/// Registers rustyfiles as an app that opens archives (Default Programs capabilities): it
+/// Registers leaf as an app that opens archives (Default Programs capabilities): it
 /// can then be picked in Settings → Default apps or "Open with → Always". Changes no default.
 pub fn register_app(exe: &str, classes_root: &str) -> anyhow::Result<()> {
     let base = CURRENT_USER.create(classes_root)?;
@@ -59,16 +59,16 @@ pub fn register_app(exe: &str, classes_root: &str) -> anyhow::Result<()> {
     base.create(format!(r"{PROGID}\shell\open\command"))?.set_string("", format!("\"{exe}\" \"%1\""))?;
     // the name and icon "Open with" / Default apps show for this handler
     let app = base.create(format!(r"{PROGID}\Application"))?;
-    app.set_string("ApplicationName", "rustyfiles")?;
+    app.set_string("ApplicationName", APP_NAME)?;
     app.set_string("ApplicationIcon", format!("\"{exe}\",0"))?;
-    app.set_string("ApplicationCompany", "rustyfiles")?;
+    app.set_string("ApplicationCompany", APP_NAME)?;
     for e in ARCHIVE_EXTS {
         base.create(format!(r"{e}\OpenWithProgids"))?.set_string(PROGID, "")?;
     }
     let root = software_root(classes_root);
-    let caps_path = format!(r"{root}\rustyfiles\Capabilities");
+    let caps_path = format!(r"{root}\{APP_NAME}\Capabilities");
     let caps = CURRENT_USER.create(&caps_path)?;
-    caps.set_string("ApplicationName", "rustyfiles")?;
+    caps.set_string("ApplicationName", APP_NAME)?;
     caps.set_string("ApplicationDescription", "Fast file manager")?;
     let fa = caps.create("FileAssociations")?;
     for e in ARCHIVE_EXTS {
@@ -87,7 +87,7 @@ fn unregister_app(classes_root: &str) {
         }
     }
     let root = software_root(classes_root);
-    let _ = CURRENT_USER.remove_tree(format!(r"{root}\rustyfiles"));
+    let _ = CURRENT_USER.remove_tree(format!(r"{root}\{APP_NAME}"));
     if let Ok(k) = CURRENT_USER.open(format!(r"{root}\RegisteredApplications")) {
         let _ = k.remove_value(APP_NAME);
     }
@@ -107,7 +107,30 @@ fn verb_command(classes_root: &str, verb: &str) -> Option<String> {
 }
 
 fn ours(classes_root: &str, verb: &str) -> bool {
-    verb_command(classes_root, verb).is_some_and(|v| v.to_lowercase().contains("rustyfiles"))
+    verb_command(classes_root, verb).is_some_and(|v| is_our_command(&v))
+}
+
+/// The program a registry command line starts: `"<dir>/leaf.exe" "%1"` -> `<dir>/leaf.exe` (quoted, or up to the first space).
+fn command_exe(command: &str) -> Option<&str> {
+    let v = command.trim();
+    match v.strip_prefix('"') {
+        Some(rest) => rest.split('"').next(),
+        None => v.split(' ').next(),
+    }
+    .filter(|e| !e.is_empty())
+}
+
+/// Whether `exe` is this app: its file name is `leaf.exe` (any case). A file-name test, not a substring one: a path such as
+/// `D:/leaf-filemanager/other.exe` or a program called `leafpad.exe` is somebody else's.
+fn is_our_exe(exe: &str) -> bool {
+    let p = std::path::Path::new(exe);
+    p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(crate::APP_EXE_STEM))
+        && p.extension().is_none_or(|e| e.eq_ignore_ascii_case("exe"))
+}
+
+/// Whether a registry command line starts this app.
+fn is_our_command(command: &str) -> bool {
+    command_exe(command).is_some_and(is_our_exe)
 }
 
 /// Our old archive verb overrides go (another app's own ones stay).
@@ -149,19 +172,14 @@ pub fn is_enabled(classes_root: &str) -> bool {
     CURRENT_USER
         .open(format!(r"{classes_root}\Folder\shell\open\command"))
         .and_then(|k| k.get_string(""))
-        .map(|v| v.to_lowercase().contains("rustyfiles"))
-        .unwrap_or(false)
+        .is_ok_and(|v| is_our_command(&v))
 }
 
 /// The exe our `Folder\shell\open` command points at (None when not enabled).
 pub fn registered_exe(classes_root: &str) -> Option<std::path::PathBuf> {
     let v = CURRENT_USER.open(format!(r"{classes_root}\Folder\shell\open\command")).and_then(|k| k.get_string("")).ok()?;
-    let v = v.trim();
-    let exe = match v.strip_prefix('"') {
-        Some(rest) => rest.split('"').next()?,
-        None => v.split(' ').next()?,
-    };
-    exe.to_lowercase().contains("rustyfiles").then(|| exe.into())
+    let exe = command_exe(&v)?;
+    is_our_exe(exe).then(|| exe.into())
 }
 
 /// While we are the default, a registered exe that no longer exists (moved, rebuilt elsewhere,
@@ -178,7 +196,7 @@ pub fn heal(current: &str, classes_root: &str) -> bool {
     match registered_exe(classes_root) {
         Some(old) if !old.exists() => enable(current, classes_root).is_ok(),
         Some(_) => false,
-        None if verb_command(classes_root, r"Folder\shell\explore").is_some_and(|c| c.to_lowercase().contains("rustyfiles")) => {
+        None if verb_command(classes_root, r"Folder\shell\explore").is_some_and(|c| is_our_command(&c)) => {
             enable(current, classes_root).is_ok()
         }
         None => false,
@@ -195,7 +213,7 @@ pub fn should_forward_to_explorer(arg: &str) -> bool {
 /// argument we hand to it can come straight back (a server root like `\\nas`, a folder that
 /// looked like a file). Forwards are remembered for a few seconds to break such a loop.
 fn forward_log() -> std::path::PathBuf {
-    std::env::temp_dir().join("rustyfiles-forward.txt")
+    std::env::temp_dir().join("leaf-forward.txt")
 }
 
 fn now_ms() -> u128 {
@@ -231,57 +249,93 @@ fn note_in(log: &std::path::Path, arg: &str, now: u128) {
 mod tests {
     use super::*;
 
+    /// A scratch key under HKCU\Software, removed when the test ends (also when an assertion fails).
+    struct Scratch(String);
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            Scratch(format!(r"Software\leaf-{tag}-{}", std::process::id()))
+        }
+        fn classes(&self) -> String {
+            format!(r"{}\Classes", self.0)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = CURRENT_USER.remove_tree(&self.0);
+        }
+    }
+
+    #[test]
+    fn ours_is_told_by_the_programs_file_name() {
+        assert!(is_our_command(r#""C:\x\leaf.exe" "%1""#));
+        assert!(is_our_command(r#""C:\Program Files\LEAF.EXE""#));
+        assert!(is_our_command(r"C:\x\leaf.exe %1"));
+        assert!(!is_our_command(r#""D:\leaf-filemanager\target\other.exe" "%1""#), "a folder named like us is not us");
+        assert!(!is_our_command(r#""C:\Tools\leafpad.exe" "%1""#));
+        assert!(!is_our_command(r#""C:\x\leaf-look.exe""#), "the Preview program is not the file manager");
+        assert!(!is_our_command(r"C:\Windows\explorer.exe"));
+        assert!(!is_our_command(""));
+    }
+
     #[test]
     fn enable_disable_in_scratch_key() {
-        let root = format!(r"Software\rustyfiles-test-{}\Classes", std::process::id());
-        enable(r"C:\x\rustyfiles.exe", &root).unwrap();
+        let scratch = Scratch::new("test");
+        let root = scratch.classes();
+        enable(r"C:\x\leaf.exe", &root).unwrap();
         assert!(is_enabled(&root));
         let k = CURRENT_USER.open(format!(r"{root}\{WIN_E_CLSID}\shell\opennewwindow\command")).unwrap();
-        assert_eq!(k.get_string("").unwrap(), "\"C:\\x\\rustyfiles.exe\"");
+        assert_eq!(k.get_string("").unwrap(), "\"C:\\x\\leaf.exe\"");
         // Windows' own archive handlers stay Explorer's
         assert!(!ARCHIVE_VERBS.iter().any(|v| ours(&root, v)));
-        assert!(app_registered(r"C:\x\rustyfiles.exe", &root));
-        let fa = CURRENT_USER.open(format!(r"Software\rustyfiles-test-{}\rustyfiles\Capabilities\FileAssociations", std::process::id())).unwrap();
+        assert!(app_registered(r"C:\x\leaf.exe", &root));
+        let fa = CURRENT_USER.open(format!(r"{}\{APP_NAME}\Capabilities\FileAssociations", scratch.0)).unwrap();
         assert_eq!(fa.get_string(".zip").unwrap(), PROGID);
         // an older registration: its archive verb overrides go
         let base = CURRENT_USER.create(&root).unwrap();
-        set_command(&base, &format!(r"{}\command", ARCHIVE_VERBS[1]), r#""C:\x\rustyfiles.exe" "%1""#).unwrap();
-        assert!(add_archives(r"C:\x\rustyfiles.exe", &root));
+        set_command(&base, &format!(r"{}\command", ARCHIVE_VERBS[1]), r#""C:\x\leaf.exe" "%1""#).unwrap();
+        assert!(add_archives(r"C:\x\leaf.exe", &root));
         assert!(!ours(&root, ARCHIVE_VERBS[1]));
-        assert!(!add_archives(r"C:\x\rustyfiles.exe", &root)); // nothing left to do
+        assert!(!add_archives(r"C:\x\leaf.exe", &root)); // nothing left to do
         // the open verb lost while the explore verb is ours: written again whole (issue 97)
         let _ = base.remove_tree(r"Folder\shell\open\command");
         assert!(!is_enabled(&root));
-        assert!(heal(&std::env::current_exe().unwrap().display().to_string(), &root));
+        let fake = fake_app_exe("enable");
+        assert!(heal(&fake.display().to_string(), &root));
         assert!(is_enabled(&root));
         disable(&root).unwrap();
         assert!(!is_enabled(&root));
         assert!(!ARCHIVE_VERBS.iter().any(|v| ours(&root, v)));
-        assert!(!app_registered(r"C:\x\rustyfiles.exe", &root));
+        assert!(!app_registered(r"C:\x\leaf.exe", &root));
         assert!(CURRENT_USER.open(format!(r"{root}\{PROGID}")).is_err());
         // another app's archive verb survives
         set_command(&base, &format!(r"{}\command", ARCHIVE_VERBS[0]), r"C:\7z\7zFM.exe %1").unwrap();
         disable(&root).unwrap();
         assert!(CURRENT_USER.open(format!(r"{root}\{}\command", ARCHIVE_VERBS[0])).is_ok());
-        let _ = CURRENT_USER.remove_tree(format!(r"Software\rustyfiles-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(fake.parent().unwrap());
         assert!(should_forward_to_explorer("::{26EE0668-A00A-44D7-9371-BEB064C98683}"));
         assert!(!should_forward_to_explorer(r"C:\Windows"));
     }
 
+    /// A copy of the test binary named like the app (`leaf.exe`) in a folder of its own, for the "is it ours" check of `heal`.
+    fn fake_app_exe(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("leaf-fm-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join(crate::exe_name(crate::APP_EXE_STEM));
+        std::fs::copy(std::env::current_exe().unwrap(), &fake).unwrap();
+        fake
+    }
+
     #[test]
     fn heals_a_missing_exe() {
-        let root = format!(r"Software\rustyfiles-heal-{}\Classes", std::process::id());
-        let me = std::env::current_exe().unwrap().display().to_string();
-        enable(r"C:\yok\rustyfiles.exe", &root).unwrap();
-        assert_eq!(registered_exe(&root), Some(std::path::PathBuf::from(r"C:\yok\rustyfiles.exe")));
-        // current_exe is a test binary: name it like the app for the "is it ours" check
-        let fake = std::env::temp_dir().join(format!("rustyfiles-heal-{}.exe", std::process::id()));
-        std::fs::copy(&me, &fake).unwrap();
+        let scratch = Scratch::new("heal");
+        let root = scratch.classes();
+        enable(r"C:\yok\leaf.exe", &root).unwrap();
+        assert_eq!(registered_exe(&root), Some(std::path::PathBuf::from(r"C:\yok\leaf.exe")));
+        let fake = fake_app_exe("heal");
         assert!(heal(&fake.display().to_string(), &root));
         assert_eq!(registered_exe(&root), Some(fake.clone()));
         assert!(!heal(&fake.display().to_string(), &root)); // already fine
-        let _ = CURRENT_USER.remove_tree(format!(r"Software\rustyfiles-heal-{}", std::process::id()));
-        let _ = std::fs::remove_file(&fake);
+        let _ = std::fs::remove_dir_all(fake.parent().unwrap());
     }
 
     #[test]

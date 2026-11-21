@@ -1,7 +1,7 @@
 //! Settings -> Dosya türleri: the user's own programs for kinds of files (`rf_core::openrules`). A list per group of extensions; its
 //! first program opens such a file on a double click, all of them stand first under "Open with". Everything is changed in place:
 //! the extensions are asked for in a small dialog, a program is chosen in a file dialog or typed as a path, and the order is changed
-//! with the arrows. Only rustyfiles follows the lists; Windows' own defaults are not touched.
+//! with the arrows. Only leaf follows the lists; Windows' own defaults are not touched.
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::component::{Icon, h_flex, v_flex};
@@ -265,7 +265,7 @@ pub fn page(p: &Palette, s: &Settings) -> Vec<AnyElement> {
                 p,
                 L::AppWindow,
                 t!("Programs by file type").into(),
-                Some(t!("Make your own list of programs for a file type: the first program in the list opens that type on a double click, and all of them stand at the top of \"Open with\" in the right-click menu. Programs are given by their paths, so a program Windows does not know works too. Only rustyfiles follows these lists; Windows' default programs do not change.").into()),
+                Some(t!("Make your own list of programs for a file type: the first program in the list opens that type on a double click, and all of them stand at the top of \"Open with\" in the right-click menu. Programs are given by their paths, so a program Windows does not know works too. Only leaf follows these lists; Windows' default programs do not change.").into()),
                 Some(button("or-new", p, t!("New type"), |window, cx| ask_exts(None, window, cx))),
             ))
             .into_any_element(),

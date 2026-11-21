@@ -1,4 +1,4 @@
-//! rustyfiles ve leaf-look'un ortak kodu; iki program da bu kütüphaneyi kullanır.
+//! leaf ve leaf-look'un ortak kodu; iki program da bu kütüphaneyi kullanır.
 
 mod actions;
 mod aliases;
@@ -126,7 +126,7 @@ mod placement_tests {
     }
 }
 
-/// Panics are written to %APPDATA%\rustyfiles\crash.log (the app has no console in release).
+/// Panics are written to %APPDATA%\leaf\crash.log (the app has no console in release).
 pub(crate) fn install_panic_log() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -147,9 +147,9 @@ pub(crate) fn install_panic_log() {
     }));
 }
 
-/// Whether rustyfiles is registered as the default file manager (HKCU).
+/// Whether leaf is registered as the default file manager (HKCU).
 pub static DEFAULT_FM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Opens a rustyfiles window. `start = None` restores the session (first window) or opens Home.
+/// Opens a leaf window. `start = None` restores the session (first window) or opens Home.
 pub fn open_main_window(
     start: Option<Location>,
     ipc: Option<futures::channel::mpsc::UnboundedReceiver<String>>,
@@ -244,13 +244,13 @@ fn save_and_quit(cx: &mut App) {
     cx.quit();
 }
 
-/// The variable a restarted rustyfiles is started with: the process id of the one that is ending (see [`restart`]).
+/// The variable a restarted leaf is started with: the process id of the one that is ending (see [`restart`]).
 const AFTER_EXIT_ENV: &str = "LEAF_AFTER_EXIT";
 
-/// Restarts rustyfiles: leaf-look is asked to stop, a new rustyfiles is started that waits for this one to end, and
+/// Restarts leaf: leaf-look is asked to stop, a new leaf is started that waits for this one to end, and
 /// this one quits the usual way (settings and session written). The new one opens its last session and brings
 /// leaf-look back as the settings say. WHY (the owner, 2026-11-17, after a morning where the dock came up empty: "bir de bir
-/// kısayol ekleyelim. rustyfiles'ı restart etsin"): there was no way to start everything afresh short of ending the processes by
+/// kısayol ekleyelim. leaf'ı restart etsin"): there was no way to start everything afresh short of ending the processes by
 /// hand. Ctrl+Alt+Shift+R and the command palette.
 pub(crate) fn restart(cx: &mut App) {
     let Ok(me) = std::env::current_exe() else { return };
@@ -260,7 +260,7 @@ pub(crate) fn restart(cx: &mut App) {
         // (no folder: the new process opens the last session; its working directory is never the installation folder)
         let dir = std::env::temp_dir();
         if let Err(e) = std::process::Command::new(&me).env(AFTER_EXIT_ENV, &pid).current_dir(dir).spawn() {
-            log::warn!("restart: the new rustyfiles did not start: {e}");
+            log::warn!("restart: the new leaf did not start: {e}");
         }
     });
     // (give the stops their moment, then quit; the new process waits for this one to be gone)
@@ -275,7 +275,7 @@ pub(crate) fn restart(cx: &mut App) {
     .detach();
 }
 
-/// A restarted rustyfiles: waits (up to ten seconds) for the one that started it to end, so that it does not hand its start to
+/// A restarted leaf: waits (up to ten seconds) for the one that started it to end, so that it does not hand its start to
 /// that one as a second launch does.
 fn wait_for_the_old_one() {
     let Some(pid) = std::env::var(AFTER_EXIT_ENV).ok().and_then(|p| p.trim().parse::<u32>().ok()) else { return };
@@ -311,7 +311,7 @@ fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<rf_win::
     rx.recv_timeout(limit).ok().flatten().filter(|p| p.fs_path.is_none())
 }
 
-/// rustyfiles'ın girişi.
+/// leaf'ın girişi.
 /// Start-up timing (`LEAF_TRACE_START=1`, logged at info): milliseconds since the process
 /// was created, at the steps before the first window.
 pub(crate) fn start_mark(step: &str) {
@@ -340,7 +340,7 @@ pub fn main() {
     rf_win::shell::suppress_critical_error_dialogs();
     // before any shell icon/thumbnail work: see keep_gdiplus_alive (loader-lock deadlock)
     rf_win::thumbs::keep_gdiplus_alive();
-    // Logs go to stderr and to rustyfiles.log in the settings folder; override the level with
+    // Logs go to stderr and to leaf.log in the settings folder; override the level with
     // RUST_LOG. The hybrid renderer (gpui_windows) logs its GPU/CPU switches at info level.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,gpui_windows=info"))
         .target(env_logger::Target::Pipe(Box::new(logfile::Tee::new())))
@@ -426,7 +426,7 @@ pub fn main() {
             } else {
                 is_dir_bounded(PathBuf::from(&arg), std::time::Duration::from_secs(2))
             };
-            // a browsable archive (leaf-look's "rustyfiles'ta aç") opens like a folder, here
+            // a browsable archive (leaf-look's "leaf'ta aç") opens like a folder, here
             let archive = !shell_namespace && archive_view::is_browsable(std::path::Path::new(&arg));
             if is_dir == Some(false) && !archive {
                 // Explorer opens folders through the verb we took over: what we just handed it may
@@ -478,7 +478,7 @@ pub fn main() {
         )
     });
 
-    // more folders on the command line (`rustyfiles.exe "C:\My Pictures" "D:\My Videos"`): each one a tab of the same window, after the
+    // more folders on the command line (`leaf.exe "C:\My Pictures" "D:\My Videos"`): each one a tab of the same window, after the
     // first (issue 125). Only plain folders that are there (one that is gone is passed over without a word), after a first argument that
     // was one too.
     let more_folders: Vec<String> = if matches!(start, Some(Location::Path(_))) && select.is_none() {

@@ -1,4 +1,4 @@
-//! Tags as a GPUI global, persisted to %APPDATA%\rustyfiles\tags.json.
+//! Tags as a GPUI global, persisted to %APPDATA%\leaf\tags.json.
 
 use std::path::PathBuf;
 

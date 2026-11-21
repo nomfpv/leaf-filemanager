@@ -1090,7 +1090,7 @@ fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
         // permission) they are not, and the line would be untrue. Before the engine has chosen (no window has glass yet) the mode is
         // Off and the line is left out; the page is drawn again once the glass is on the window.
         if rf_win::glass::capture_mode() == rf_win::glass::CaptureMode::Affinity {
-            notes.push(t!("On this version of Windows, or while the screenshot border permission is off, rustyfiles windows do not appear in screenshots, recordings or screen sharing.").to_string());
+            notes.push(t!("On this version of Windows, or while the screenshot border permission is off, leaf windows do not appear in screenshots, recordings or screen sharing.").to_string());
         }
         if let Some(why) = crate::glass::failure() {
             notes.push(t!("Glass could not start: {reason}. Mica is used instead.").replace("{reason}", &why));
@@ -2477,7 +2477,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Eye,
         t!("Use Preview"),
-        Some(t!("Preview with Space. Runs as a separate program: it doesn't slow rustyfiles down, and if one closes the other is unaffected.")),
+        Some(t!("Preview with Space. Runs as a separate program: it doesn't slow leaf down, and if one closes the other is unaffected.")),
         switch("dl-enabled", p, enabled, move |_, cx| {
             settings::update(cx, |s| s.look_enabled = !enabled);
             if enabled {
@@ -2507,7 +2507,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Monitor,
         t!("Preview with Space in Explorer and on the desktop too"),
-        Some(t!("Preview keeps running in the background and opens when Windows starts (icon in the notification area), even while rustyfiles is closed")),
+        Some(t!("Preview keeps running in the background and opens when Windows starts (icon in the notification area), even while leaf is closed")),
         switch("look-wide", p, l.look_system_wide, {
             let on = l.look_system_wide;
             move |_, cx| {
@@ -2560,7 +2560,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::AppWindow,
             t!("Preview icon in the notification area"),
-            Some(t!("Not shown while rustyfiles runs in the background: then rustyfiles' icon is the only one")),
+            Some(t!("Not shown while leaf runs in the background: then leaf's icon is the only one")),
             lsw("look-tray", p, l.look_tray_icon, |s, v| s.look_tray_icon = v),
         ),
         card(p, L::MousePointerClick, t!("Focus the window when it opens"), Some(t!("When off, the keyboard stays in Explorer: arrow keys move between files")), lsw("look-focus", p, l.look_focus_on_open, |s, v| s.look_focus_on_open = v)),
@@ -2706,14 +2706,14 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         t!("switches")
     );
     let dfm_on = crate::DEFAULT_FM.load(std::sync::atomic::Ordering::Relaxed);
-    // while rustyfiles is the default file manager: archives can be given to it too (only the
+    // while leaf is the default file manager: archives can be given to it too (only the
     // user can pick the default app, in Windows' own page)
     let archives = dfm_on.then(|| {
         card(
             p,
             L::FileArchive,
-            t!("Open archives with rustyfiles"),
-            Some(t!("The default app for zip, 7z, rar and tar is chosen in Windows. Make rustyfiles the default on the page that opens.")),
+            t!("Open archives with leaf"),
+            Some(t!("The default app for zip, 7z, rar and tar is chosen in Windows. Make leaf the default on the page that opens.")),
             button("dfm-arch", p, t!("Default apps"), |_, _| {
                 let page = format!("ms-settings:defaultapps?registeredAppUser={}", rf_win::default_fm::APP_NAME);
                 if let Err(e) = rf_win::shell::open(std::path::Path::new(&page)) {
@@ -2735,7 +2735,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         card(
             p,
             L::Power,
-            t!("Open rustyfiles when Windows starts"),
+            t!("Open leaf when Windows starts"),
             None,
             switch("start-win", p, start_on, move |window, _| {
                 if let Ok(exe) = std::env::current_exe() {
@@ -2757,7 +2757,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::Bell,
             t!("Notify when long operations finish"),
-            Some(t!("When copying, moving or compressing took over 10 seconds and rustyfiles isn't in front")),
+            Some(t!("When copying, moving or compressing took over 10 seconds and leaf isn't in front")),
             sw("notify-ops", p, s.notify_long_ops, |s, v| s.notify_long_ops = v),
         ),
         card(
@@ -2850,7 +2850,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::AppWindow,
             t!("Set as default file manager"),
-            Some(t!("Folders and Win+E open with rustyfiles. Applies to this user only and can be reverted at any time.")),
+            Some(t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time.")),
             switch("dfm", p, dfm_on, move |window, _| {
                 let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
                 std::thread::spawn(move || {
@@ -2878,7 +2878,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::ScrollText,
             t!("Log file"),
-            Some(t!("Warnings and errors are written to rustyfiles.log (1 MB at most; a full one becomes .old). It can be attached when reporting a problem.")),
+            Some(t!("Warnings and errors are written to leaf.log (1 MB at most; a full one becomes .old). It can be attached when reporting a problem.")),
             button("log-open", p, t!("Show in folder"), |_, cx| {
                 if let Some(path) = crate::logfile::path() {
                     crate::workspace::route_ipc(format!("{}{}", crate::workspace::SELECT_PREFIX, path.display()), cx);
@@ -2993,7 +2993,7 @@ pub(crate) fn check_updates_now(cx: &mut App) {
 }
 
 const REPO_URL: &str = "https://github.com/gelenmedya/rustyfiles";
-const SITE_URL: &str = "https://rustyfiles.com";
+const SITE_URL: &str = "https://leaf.com";
 const DISCORD_URL: &str = "https://discord.gg/K2banZ36zJ";
 const ISSUES_URL: &str = "https://github.com/gelenmedya/rustyfiles/issues/new";
 const RELEASES_URL: &str = "https://github.com/gelenmedya/rustyfiles/releases";
@@ -3007,17 +3007,17 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         card(
             p,
             L::FolderOpen,
-            "rustyfiles",
+            "leaf",
             Some(&version),
-            button("copy-ver", p, t!("Copy"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("rustyfiles {ver}")))),
+            button("copy-ver", p, t!("Copy"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("leaf {ver}")))),
         ),
         update_card(p, &s),
         section(p, "GitHub"),
-        link_row(p, "gh-star", L::Star, t!("Star it on GitHub"), Some(t!("If rustyfiles is useful to you, it helps others find it.")), |_, _| open_url(REPO_URL)),
+        link_row(p, "gh-star", L::Star, t!("Star it on GitHub"), Some(t!("If leaf is useful to you, it helps others find it.")), |_, _| open_url(REPO_URL)),
         link_row(p, "gh-issue", L::MessageSquare, t!("Report a bug or suggest something"), None, |_, _| open_url(ISSUES_URL)),
         link_row(p, "gh-notes", L::ScrollText, t!("Release notes"), None, |_, _| open_url(RELEASES_URL)),
         section(p, t!("Community")),
-        link_row(p, "site", L::Globe, t!("Website"), Some("rustyfiles.com"), |_, _| open_url(SITE_URL)),
+        link_row(p, "site", L::Globe, t!("Website"), Some("leaf.com"), |_, _| open_url(SITE_URL)),
         link_row(p, "discord", L::Users, t!("Discord server"), Some(t!("Ask questions, share ideas, hear about new versions.")), |_, _| open_url(DISCORD_URL)),
         div()
             .px_1()
@@ -3110,7 +3110,7 @@ fn pick_into(_window: &mut Window, cx: &mut App, title: &str, target: PickTarget
         let r = match kind {
             0 => pick(owner, &title, Pick::File { filters: &f(&images) }),
             1 => pick(owner, &title, Pick::File { filters: &f(&exe) }),
-            2 => pick(owner, &title, Pick::Save { filters: &f(&toml), default_name: "rustyfiles-ayarlar.toml" }),
+            2 => pick(owner, &title, Pick::Save { filters: &f(&toml), default_name: "leaf-settings.toml" }),
             _ => pick(owner, &title, Pick::File { filters: &f(&toml) }),
         };
         let _ = tx.send(r);

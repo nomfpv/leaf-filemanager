@@ -1,13 +1,13 @@
 //! The Settings speed test without the UI: `cargo run --release -p rf-app --example bench_cli
-//! -- [quick]`. Needs target/release/rustyfiles.exe built. Prints the results as JSON.
+//! -- [quick]`. Needs target/release/leaf.exe built. Prints the results as JSON.
 
 use std::sync::atomic::AtomicBool;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
     let quick = std::env::args().any(|a| a == "quick");
-    let mut me = rf_app::bench::rustyfiles_app();
-    me.exe = std::env::current_exe()?.parent().unwrap().parent().unwrap().join("rustyfiles.exe");
+    let mut me = rf_app::bench::leaf_app();
+    me.exe = std::env::current_exe()?.parent().unwrap().parent().unwrap().join(rf_win::exe_name(rf_win::APP_EXE_STEM));
     let mut apps = vec![me];
     apps.extend(rf_win::bench::detect());
     let plan = rf_app::bench::Plan {

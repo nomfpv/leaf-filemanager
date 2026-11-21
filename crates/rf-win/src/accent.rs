@@ -40,7 +40,7 @@ pub fn system_palette() -> Option<AccentPalette> {
     parse_palette(&raw)
 }
 
-/// The colour the user chose for rustyfiles in place of Windows' accent (`NO_OVERRIDE`: none). One value for the process, set from the
+/// The colour the user chose for leaf in place of Windows' accent (`NO_OVERRIDE`: none). One value for the process, set from the
 /// settings whenever they are applied.
 static OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(NO_OVERRIDE);
 const NO_OVERRIDE: u32 = u32::MAX;
@@ -129,7 +129,7 @@ pub fn system_is_dark() -> bool {
     dark_from_value(theme_value("SystemUsesLightTheme"))
 }
 
-/// Whether apps are asked to use the dark theme (the other of the two settings; rustyfiles' own windows use it by default).
+/// Whether apps are asked to use the dark theme (the other of the two settings; leaf's own windows use it by default).
 pub fn apps_use_dark() -> bool {
     dark_from_value(theme_value("AppsUseLightTheme"))
 }

@@ -377,7 +377,7 @@ enum Msg {
 /// The step a search is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SearchStage {
-    /// rustyfiles' own name index.
+    /// leaf's own name index.
     Index,
     /// Windows Search (names and contents) is asked.
     Windows,
@@ -1156,7 +1156,7 @@ impl FolderView {
     }
 
     /// Asks for the overlays of the current folder's items in the background (`rf_win::overlays`), after a listing. Only plain folders
-    /// on a disk or a share; links are left out (rustyfiles draws their arrow itself), and a huge folder's first items only.
+    /// on a disk or a share; links are left out (leaf draws their arrow itself), and a huge folder's first items only.
     fn refresh_overlays(&mut self, cx: &mut Context<Self>) {
         const MOST: usize = 5_000;
         self.overlay_cancel.store(true, Ordering::Relaxed);
@@ -5203,7 +5203,7 @@ pub(crate) fn open_in_background(path: PathBuf, cx: &mut App) {
         // FTP: download to a temp copy, then open that
         let path = if rf_win::ftp::is_ftp(&path) {
             let name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-            let dir = std::env::temp_dir().join("rustyfiles-ftp");
+            let dir = std::env::temp_dir().join("leaf-ftp");
             let _ = std::fs::create_dir_all(&dir);
             let local = dir.join(name);
             if let Err(e) = rf_win::ftp::download(&path.to_string_lossy(), &local) {

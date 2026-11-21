@@ -1,5 +1,5 @@
 //! Arşiv görüntüleyici: içeriği ağaç olarak (klasörler açılır/kapanır), özet satırı
-//! ("ZIP arşivi, N klasör ve M dosya"), sıkıştırılmış/açılmış boyut; "rustyfiles'ta aç" Diğer'de.
+//! ("ZIP arşivi, N klasör ve M dosya"), sıkıştırılmış/açılmış boyut; "leaf'ta aç" Diğer'de.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -44,13 +44,13 @@ impl Viewer for ArchiveViewer {
         self.view.as_ref().map_or_else(|| div().into_any_element(), |v| v.clone().into_any_element())
     }
     fn more_menu(&self) -> Vec<MoreItem> {
-        // leaf-look ayrı süreç: çıkarma rustyfiles'ın işlem merkezinde yapılır, arşiv oraya gönderilir.
+        // leaf-look ayrı süreç: çıkarma leaf'ın işlem merkezinde yapılır, arşiv oraya gönderilir.
         let path = self.path.clone();
         vec![MoreItem {
-            label: t!("Open in rustyfiles").into(),
+            label: t!("Open in leaf").into(),
             action: Rc::new(move |_, cx: &mut App| {
                 crate::look::LookManager::close(cx);
-                open_in_rustyfiles(path.clone());
+                open_in_leaf(path.clone());
             }),
         }]
     }
@@ -59,9 +59,9 @@ impl Viewer for ArchiveViewer {
     }
 }
 
-/// rustyfiles'a gidecek ileti ve (çalışmıyorsa) başlatma argümanı: klasör gibi gezilebilen arşiv
+/// leaf'a gidecek ileti ve (çalışmıyorsa) başlatma argümanı: klasör gibi gezilebilen arşiv
 /// kendisi açılır, ötekiler (.gz gibi) klasöründe seçili gösterilir.
-pub fn rustyfiles_launch(path: &Path) -> (String, String) {
+pub fn leaf_launch(path: &Path) -> (String, String) {
     let p = path.display().to_string();
     if crate::archive_view::is_browsable(path) {
         (p.clone(), p)
@@ -70,21 +70,21 @@ pub fn rustyfiles_launch(path: &Path) -> (String, String) {
     }
 }
 
-fn open_in_rustyfiles(path: PathBuf) {
+fn open_in_leaf(path: PathBuf) {
     std::thread::spawn(move || {
-        let (msg, arg) = rustyfiles_launch(&path);
+        let (msg, arg) = leaf_launch(&path);
         rf_win::look::win::allow_any_foreground();
         if rf_win::single_instance::send_to(&rf_win::single_instance::instance_name(), &msg) {
             return;
         }
-        let exe = std::env::current_exe().map(|e| e.with_file_name("rustyfiles.exe"));
+        let exe = std::env::current_exe().map(|e| e.with_file_name(rf_win::exe_name(rf_win::APP_EXE_STEM)));
         match exe {
             Ok(exe) if exe.exists() => {
                 if let Err(e) = std::process::Command::new(exe).arg(arg).spawn() {
-                    log::warn!("couldn't start rustyfiles: {e}");
+                    log::warn!("couldn't start leaf: {e}");
                 }
             }
-            _ => log::warn!("rustyfiles.exe not found"),
+            _ => log::warn!("{} not found", rf_win::exe_name(rf_win::APP_EXE_STEM)),
         }
     });
 }
@@ -385,17 +385,17 @@ impl Render for ArchiveView {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, rows, rustyfiles_launch};
+    use super::{build_tree, rows, leaf_launch};
 
     #[test]
-    fn archives_open_in_rustyfiles_as_folder_or_selected() {
+    fn archives_open_in_leaf_as_folder_or_selected() {
         let zip = std::path::Path::new(r"C:\a b\x.zip");
-        assert_eq!(rustyfiles_launch(zip), (r"C:\a b\x.zip".to_string(), r"C:\a b\x.zip".to_string()));
+        assert_eq!(leaf_launch(zip), (r"C:\a b\x.zip".to_string(), r"C:\a b\x.zip".to_string()));
         let gz = std::path::Path::new(r"C:\a\log.gz");
-        let (msg, arg) = rustyfiles_launch(gz);
+        let (msg, arg) = leaf_launch(gz);
         assert_eq!(msg, format!("{}C:\\a\\log.gz", crate::workspace::SELECT_PREFIX));
         assert_eq!(arg, r"/select,C:\a\log.gz");
-        // ileti rustyfiles tarafında doğru çözülür
+        // ileti leaf tarafında doğru çözülür
         assert_eq!(crate::workspace::parse_launch(&msg).1.as_deref(), Some("log.gz"));
     }
 

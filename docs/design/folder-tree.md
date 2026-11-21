@@ -1,6 +1,6 @@
 # The folder tree in the navigation pane
 
-Explorer's navigation pane is a tree that opens and closes; rustyfiles' sidebar is a flat list (pins, drives, tags). This adds the
+Explorer's navigation pane is a tree that opens and closes; leaf's sidebar is a flat list (pins, drives, tags). This adds the
 tree as one more section of the sidebar, **off by default**. Nothing changes for a user who does not turn it on.
 
 Code: the model is `crates/rf-core/src/navtree.rs` (pure, tested without a window); the view and the window's hooks are

@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn urls_are_told_from_paths() {
-        assert!(looks_like_url("https://rustyfiles.com"));
+        assert!(looks_like_url("https://example.com"));
         assert!(looks_like_url("ftp://host/dir"));
         assert!(looks_like_url("git+ssh://host/x y"));
         assert!(!looks_like_url(r"C:\a\b"));

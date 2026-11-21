@@ -397,7 +397,7 @@ pub fn any_main_window(cx: &App) -> bool {
 }
 
 /// A second launch's message that asks for a file to be shown selected in its folder
-/// (`rustyfiles /select,<file>`, like Explorer).
+/// (`leaf /select,<file>`, like Explorer).
 pub const SELECT_PREFIX: &str = "\u{1}select:";
 
 /// A file to select in the window that just opened its folder ("Show in folder" from another app,
@@ -406,7 +406,7 @@ pub const SELECT_HERE_PREFIX: &str = "\u{1}select-here:";
 
 /// A second launch on a shell folder (a phone, Network…) reaches the running window as this
 /// prefix plus the folder's parsing name (and, in a saved session, a tab and its name).
-pub const SHELL_PREFIX: &str = "rustyfiles-shell:";
+pub const SHELL_PREFIX: &str = "leaf-shell:";
 
 /// How a tab is kept in the saved session: a folder's path, a search's folder, the Recycle Bin
 /// and shell folders (a phone…) by name; other places come back as Home ("").
@@ -415,7 +415,7 @@ fn session_text(loc: &Location) -> String {
         Location::Path(p) => rf_core::history::redact_credentials(&p.to_string_lossy()),
         Location::Search { root, .. } => root.to_string_lossy().into_owned(),
         Location::RecycleBin => "shell:RecycleBinFolder".into(),
-        Location::Downloads => "rustyfiles:downloads".into(),
+        Location::Downloads => "leaf:downloads".into(),
         Location::Shell { parsing, name } => format!("{SHELL_PREFIX}{parsing}\t{name}"),
         _ => String::new(),
     }
@@ -3956,7 +3956,7 @@ pub(crate) fn drop_files(paths: &ExternalPaths, dest: PathBuf, cx: &mut App) {
 
 /// Archivers hand a drop the files they extracted into a folder of their own under TEMP (7-Zip `7zE…`, WinRAR `Rar$DRa…`) and delete
 /// that folder as soon as the drop returns. Our transfer starts after it (and after a "replace?" question) and found nothing: "The
-/// system cannot find the file specified" (issue 139, 131). So while the drop is still going on such files are kept in rustyfiles'
+/// system cannot find the file specified" (issue 139, 131). So while the drop is still going on such files are kept in leaf's
 /// own folder under TEMP, hard-linked (instant on the same volume, and the file lives on when the archiver deletes its name) or else
 /// copied, and the transfer takes them from there. Anything else is returned as it was: a user's own files are never touched.
 fn hold_archiver_drop(sources: Vec<PathBuf>, temp: &Path) -> Vec<PathBuf> {
@@ -3977,7 +3977,7 @@ fn hold_archiver_drop(sources: Vec<PathBuf>, temp: &Path) -> Vec<PathBuf> {
     if sources.is_empty() || !sources.iter().all(|p| from_archiver(p)) {
         return sources;
     }
-    let base = temp.join("rustyfiles-drops");
+    let base = temp.join("leaf-drops");
     // (the drops of earlier days: whatever a transfer left there, links that cost no room, or copies)
     if let Ok(old) = std::fs::read_dir(&base) {
         for e in old.flatten() {
@@ -4030,7 +4030,7 @@ mod archiver_drop_tests {
         std::fs::write(seven.join("doc.txt"), b"inside the archive").unwrap();
         std::fs::write(seven.join("folder").join("deep.txt"), b"deeper").unwrap();
         let held = hold_archiver_drop(vec![seven.join("doc.txt"), seven.join("folder")], &temp);
-        assert!(held.iter().all(|p| p.starts_with(temp.join("rustyfiles-drops"))), "{held:?}");
+        assert!(held.iter().all(|p| p.starts_with(temp.join("leaf-drops"))), "{held:?}");
         // the archiver deletes its folder when the drop returns: what the transfer will read is still there
         std::fs::remove_dir_all(&seven).unwrap();
         assert_eq!(std::fs::read(&held[0]).unwrap(), b"inside the archive");
@@ -4506,7 +4506,7 @@ impl Render for Workspace {
             .flatten();
         let status = self.render_statusbar(&p, strip_bar_w, cx);
         // Taskbar title follows the active folder.
-        let title = format!("{} — rustyfiles", self.active_tab().read(cx).title(cx));
+        let title = format!("{} - leaf", self.active_tab().read(cx).title(cx));
         if title != self.last_title {
             window.set_window_title(&title);
             self.last_title = title;

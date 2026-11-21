@@ -1,4 +1,4 @@
-//! Folder-open timing with rustyfiles' own method, for any app.
+//! Folder-open timing with leaf's own method, for any app.
 //! `openbench <rf|other|explorer> <exe> <folder> <runs>`
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -14,7 +14,7 @@ fn main() {
             let cfg = std::env::temp_dir().join("rf-openbench-cfg");
             let _ = std::fs::create_dir_all(&cfg);
             App {
-                kind: AppKind::Rustyfiles,
+                kind: AppKind::Leaf,
                 exe: PathBuf::from(exe),
                 env: vec![
                     ("LEAF_MULTI_INSTANCE".into(), "1".into()),

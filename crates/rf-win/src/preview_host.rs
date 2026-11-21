@@ -459,7 +459,7 @@ fn host_window(owner: isize) -> Option<HWND> {
         }
         unsafe {
             let inst = GetModuleHandleW(None).ok()?;
-            let class = w!("rustyfiles-preview-host");
+            let class = w!("leaf-preview-host");
             // CS_DBLCLKS: the picture's double click arrives as one (see WM_LBUTTONDBLCLK)
             let wc = WNDCLASSW { style: windows::Win32::UI::WindowsAndMessaging::CS_DBLCLKS, lpfnWndProc: Some(wndproc), hInstance: inst.into(), lpszClassName: class, ..Default::default() };
             RegisterClassW(&wc);

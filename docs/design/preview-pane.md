@@ -1,6 +1,6 @@
 # The preview pane at the bottom
 
-Explorer's details pane can sit at the bottom of the window; rustyfiles' preview pane was always at the right. This adds the
+Explorer's details pane can sit at the bottom of the window; leaf's preview pane was always at the right. This adds the
 bottom position as a setting. **The default is the right, and nothing about it changes**: a user who does not ask for the bottom
 sees the same pixels, the settings file gets no new key (`preview_position` and `preview_height` are written only when they are
 not the defaults), and the only cost is one settings read per frame (the position is read once, the pane is not touched).

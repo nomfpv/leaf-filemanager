@@ -1,5 +1,5 @@
-//! Finding the other devices: every running rustyfiles advertises itself over mDNS / DNS-SD (the way printers and AirPlay do) as
-//! `<device id>._rustyfiles._udp.local.` and browses for the others. No server, no account. The port is shared with the system's own
+//! Finding the other devices: every running leaf advertises itself over mDNS / DNS-SD (the way printers and AirPlay do) as
+//! `<device id>._leaf._udp.local.` and browses for the others. No server, no account. The port is shared with the system's own
 //! responder where there is one (mDNSResponder on macOS, Windows' own on Windows): the library binds 5353 with address reuse.
 
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use crate::{Inner, LinkKind};
 
-pub const SERVICE: &str = "_rustyfiles._udp.local.";
+pub const SERVICE: &str = "_leaf._udp.local.";
 
 /// What a peer's advertisement says.
 #[derive(Clone, Debug)]

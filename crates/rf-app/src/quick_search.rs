@@ -1,10 +1,10 @@
 //! Quick search (Alt+Space by default): a small window over whatever app is in front that finds
-//! installed apps, files and folders (rustyfiles' name index), Chrome / Edge bookmarks, and
+//! installed apps, files and folders (leaf's name index), Chrome / Edge bookmarks, and
 //! offers a web search. Enter opens, Ctrl+Enter shows the item in its folder, Shift+Enter
 //! previews it with leaf-look, Esc closes. What is opened often comes first, and what was chosen
 //! for the same typed letters before comes first of all ("En iyi eşleşme": see `Picks`).
 //!
-//! The hotkey is registered by the running rustyfiles (`rf_win::hotkey`); with "keep running in
+//! The hotkey is registered by the running leaf (`rf_win::hotkey`); with "keep running in
 //! the background" on it works while no window is open.
 
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ use crate::theme::{self, Palette};
 
 /// The shortcut editor records into the quick-search hotkey under this name (keymap_editor).
 pub const CAPTURE_ACTION: &str = "@quick-search";
-/// `rustyfiles.exe --quick-search` opens it too (in the running rustyfiles).
+/// `leaf.exe --quick-search` opens it too (in the running leaf).
 pub const LAUNCH_ARG: &str = "--quick-search";
 
 const WIDTH: f32 = 680.;
@@ -50,7 +50,7 @@ static HELD: Mutex<Option<(Option<String>, Option<rf_win::hotkey::HotkeyError>)>
 
 static NO_HOTKEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// This process registers the hotkey: the one rustyfiles (not leaf-look, not a test copy). `LEAF_QUICK_HOTKEY=1` lets a test
+/// This process registers the hotkey: the one leaf (not leaf-look, not a test copy). `LEAF_QUICK_HOTKEY=1` lets a test
 /// copy hold it like the real one (a copy the user tries the next version with, while the installed app is not running); without it a
 /// test copy never takes the user's hotkey.
 fn hotkey_owner() -> bool {
@@ -316,7 +316,7 @@ struct Usage {
     /// What was chosen for what was typed.
     picks: Picks,
     loaded: bool,
-    /// The dates of the two files when they were read: a file that another rustyfiles process has written since is read again.
+    /// The dates of the two files when they were read: a file that another leaf process has written since is read again.
     stamps: [Option<SystemTime>; 2],
 }
 
@@ -804,7 +804,7 @@ pub(crate) fn search_files(query: &str, index_on: bool) -> FilesFound {
     let (used, lift) = lifts(query);
     let mut index_building = false;
     let status = rf_win::indexer::status();
-    // on in Settings but not started yet (it starts a few seconds after rustyfiles): coming
+    // on in Settings but not started yet (it starts a few seconds after leaf): coming
     let index_off = !index_on;
     if index_on && status.is_empty() {
         index_building = true;
@@ -1110,7 +1110,7 @@ impl QuickSearch {
                 crate::look::ipc::send(crate::look::ipc::Msg::Show(path.clone(), crate::look::ShowOpts::default()), true);
             }
             (Target::Path { path, dir: true }, How::Open) => {
-                // a folder opens in rustyfiles
+                // a folder opens in leaf
                 let msg = path.display().to_string();
                 cx.defer(move |cx| crate::workspace::route_ipc(msg, cx));
             }

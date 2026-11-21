@@ -81,7 +81,7 @@ pub async fn connect(inner: &Inner, addrs: &[SocketAddr]) -> anyhow::Result<quin
     let mut last = anyhow!("the device has no address");
     for addr in addrs {
         let attempt = async {
-            let connecting = inner.endpoint.connect_with(inner.client.clone(), *addr, "rustyfiles")?;
+            let connecting = inner.endpoint.connect_with(inner.client.clone(), *addr, "leaf")?;
             anyhow::Ok(connecting.await?)
         };
         match tokio::time::timeout(CONNECT, attempt).await {

@@ -88,7 +88,7 @@ fn start_inner(on_query_remove: impl Fn(char, Sender<()>) + Send + 'static) -> O
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let _ = std::thread::Builder::new().name("rf-removal".into()).spawn(move || unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
-        let class = w!("rustyfiles.DeviceRemoval");
+        let class = w!("leaf.DeviceRemoval");
         let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: hinst.into(), lpszClassName: class, ..Default::default() };
         RegisterClassW(&wc);
         // A hidden top-level window (not message-only): volume arrival broadcasts only reach those.

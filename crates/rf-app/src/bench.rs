@@ -1,9 +1,9 @@
-//! The speed test in Settings: rustyfiles against the other file managers on this machine, and
+//! The speed test in Settings: leaf against the other file managers on this machine, and
 //! its own engines against Windows'. Blocking: run [`run`] on a background thread.
 //!
 //! Test folders live in `<app dir>/bench` and are kept between runs (making 100 000 files takes a
 //! while); copies and extractions go to a scratch folder that is emptied after each run.
-//! rustyfiles is measured as a fresh process with its own settings folder, the way the others
+//! leaf is measured as a fresh process with its own settings folder, the way the others
 //! start: the user's settings are neither read nor changed.
 
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ impl OpenTest {
 /// What to run.
 #[derive(Debug, Clone)]
 pub struct Plan {
-    /// rustyfiles first, then the apps to compare with.
+    /// leaf first, then the apps to compare with.
     pub apps: Vec<App>,
     pub open: Vec<OpenTest>,
     pub copy: bool,
@@ -133,18 +133,18 @@ pub enum Progress {
     Step { i: usize, n: usize, label: String },
 }
 
-/// `%LOCALAPPDATA%/rustyfiles/bench`: local, never the roaming settings folder (a roaming
+/// `%LOCALAPPDATA%/leaf/bench`: local, never the roaming settings folder (a roaming
 /// profile would carry 100 000 test files around).
 pub fn bench_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, PathBuf::from).join("rustyfiles").join("bench")
+    std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, PathBuf::from).join("leaf").join("bench")
 }
 
-/// rustyfiles itself, started fresh with its own settings folder.
-pub fn rustyfiles_app() -> App {
-    let exe = std::env::current_exe().map(|p| p.with_file_name("rustyfiles.exe")).unwrap_or_default();
-    let cfg = bench_dir().join("rustyfiles-settings");
+/// leaf itself, started fresh with its own settings folder.
+pub fn leaf_app() -> App {
+    let exe = std::env::current_exe().map(|p| p.with_file_name(rf_win::exe_name(rf_win::APP_EXE_STEM))).unwrap_or_default();
+    let cfg = bench_dir().join("leaf-settings");
     App {
-        kind: AppKind::Rustyfiles,
+        kind: AppKind::Leaf,
         exe,
         env: vec![
             ("LEAF_MULTI_INSTANCE".into(), "1".into()),
@@ -249,8 +249,8 @@ fn make_copy_sources(root: &Path, report: &dyn Fn(f32)) -> std::io::Result<(Path
 }
 
 /// Writes the benchmark instance's settings: nothing that would stay running or reach out.
-fn prepare_rustyfiles_settings() -> std::io::Result<()> {
-    let cfg = bench_dir().join("rustyfiles-settings");
+fn prepare_leaf_settings() -> std::io::Result<()> {
+    let cfg = bench_dir().join("leaf-settings");
     std::fs::create_dir_all(&cfg)?;
     std::fs::write(
         cfg.join("settings.toml"),
@@ -417,7 +417,7 @@ pub fn run(plan: &Plan, progress: &dyn Fn(Progress), cancel: &AtomicBool) -> any
     let _files_session = if plan.apps.iter().any(|a| a.kind == AppKind::Files) { FilesSession::begin() } else { None };
     let root = bench_dir();
     std::fs::create_dir_all(&root)?;
-    prepare_rustyfiles_settings()?;
+    prepare_leaf_settings()?;
     let machine = rf_win::bench::machine(&root);
 
     // test folders
@@ -623,20 +623,21 @@ mod files_live {
 
 #[cfg(test)]
 mod live_100k {
-    /// The 100 000-file folder: rustyfiles from scratch, rustyfiles already running (a copy with
+    /// The 100 000-file folder: leaf from scratch, leaf already running (a copy with
     /// the test's own settings, kept running in the background: its first start is the warm-up
     /// run, then each start hands the folder to it, as README measures), Explorer and Files.
-    /// Never touches the user's copy: skipped while any other rustyfiles runs. Opens windows: run
+    /// Never touches the user's copy: skipped while any other leaf runs. Opens windows: run
     /// by hand (`cargo test -p rf-app --lib live_100k -- --ignored --nocapture`), then end the
     /// test's copy (it stays in the background).
     #[test]
     #[ignore]
     fn open_100k() {
         use rf_win::bench::{App, AppKind};
-        let fresh = super::rustyfiles_app();
-        let others = std::process::Command::new("tasklist").args(["/FI", "IMAGENAME eq rustyfiles.exe", "/NH"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("rustyfiles.exe")).unwrap_or(true);
-        assert!(!others, "a rustyfiles is running: the warm runs would go to it");
-        let cfg = super::bench_dir().join("rustyfiles-warm");
+        let fresh = super::leaf_app();
+        let exe = rf_win::exe_name(rf_win::APP_EXE_STEM);
+        let others = std::process::Command::new("tasklist").args(["/FI", &format!("IMAGENAME eq {exe}"), "/NH"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains(&exe)).unwrap_or(true);
+        assert!(!others, "a leaf is running: the warm runs would go to it");
+        let cfg = super::bench_dir().join("leaf-warm");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(cfg.join("settings.toml"), "restore_session = false
 run_in_background = true
@@ -648,13 +649,13 @@ name_index = false
 look_enabled = false
 ").unwrap();
         let warm = App {
-            kind: AppKind::Rustyfiles,
+            kind: AppKind::Leaf,
             exe: fresh.exe.clone(),
             env: vec![("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()), ("LEAF_MUTE".into(), "1".into())],
         };
         let mut apps = vec![fresh, warm];
         apps.extend(rf_win::bench::detect().into_iter().filter(|a| matches!(a.kind, AppKind::Explorer | AppKind::Files)));
-        let names = ["rustyfiles, from scratch", "rustyfiles, already running", "File Explorer", "Files"];
+        let names = ["leaf, from scratch", "leaf, already running", "File Explorer", "Files"];
         let plan = super::Plan { apps, open: vec![super::OpenTest::Files100k], copy: false, engines: false };
         let r = super::run(&plan, &|_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
         for (name, a) in names.iter().zip(&r.open[0].apps) {

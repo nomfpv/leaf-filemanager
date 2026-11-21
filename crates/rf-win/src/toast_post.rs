@@ -1,7 +1,7 @@
 //! Our own toast notifications (Nearby's questions and arrivals). `toasts` reads other programs' notifications; this module posts ours.
 //!
 //! Windows shows a toast only for an AppUserModelID that a Start menu shortcut carries: the installed app has one (Velopack's
-//! shortcut, `velopack.rustyfiles`), a build run from the source tree has none, and then [`show`] fails and the caller asks in a
+//! shortcut, `velopack.leaf`), a build run from the source tree has none, and then [`show`] fails and the caller asks in a
 //! window of its own instead. It fails too when the user turned notifications off for us or altogether.
 //!
 //! The buttons' answers come back through the toast's Activated event while this process runs. There is no COM activator, so a
@@ -17,7 +17,7 @@ use windows::Foundation::TypedEventHandler;
 use windows::UI::Notifications::{NotificationSetting, ToastActivatedEventArgs, ToastNotification, ToastNotificationManager};
 use windows::core::{HSTRING, IInspectable, Interface};
 
-const GROUP: &str = "rustyfiles";
+const GROUP: &str = "leaf";
 
 /// The toasts shown and not yet taken away, by tag: kept so their Activated handlers stay alive.
 static LIVE: Mutex<Option<HashMap<String, ToastNotification>>> = Mutex::new(None);

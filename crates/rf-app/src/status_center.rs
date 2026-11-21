@@ -1991,8 +1991,8 @@ fn panel(ops: &Entity<Ops>, p: &Palette, cx: &App) -> Div {
 fn update_row(p: &Palette) -> Option<AnyElement> {
     use crate::installer::State;
     let (title, detail, pct, ready) = match crate::installer::state() {
-        State::Downloading(v, pct) => (t!("Downloading rustyfiles {v}").replace("{v}", &v), format!("%{pct}"), Some(pct), false),
-        State::Ready(v) => (t!("rustyfiles {v} is ready").replace("{v}", &v), t!("Installs when you restart").to_string(), None, true),
+        State::Downloading(v, pct) => (t!("Downloading leaf {v}").replace("{v}", &v), format!("%{pct}"), Some(pct), false),
+        State::Ready(v) => (t!("leaf {v} is ready").replace("{v}", &v), t!("Installs when you restart").to_string(), None, true),
         _ => return None,
     };
     Some(
@@ -2061,9 +2061,9 @@ pub fn update_toast(p: &Palette, picker: bool) -> Option<AnyElement> {
     let important = crate::installer::is_important(&v);
     let (edge, sign) = if important { (p.danger, L::TriangleAlert) } else { (p.accent, L::RefreshCw) };
     let (title, line) = if important {
-        (t!("Important update: rustyfiles {v}").replace("{v}", &v), t!("It brings important fixes. Restart now.").to_string())
+        (t!("Important update: leaf {v}").replace("{v}", &v), t!("It brings important fixes. Restart now.").to_string())
     } else {
-        (t!("rustyfiles {v} is ready").replace("{v}", &v), t!("Installs when you restart").to_string())
+        (t!("leaf {v} is ready").replace("{v}", &v), t!("Installs when you restart").to_string())
     };
     Some(
         div()

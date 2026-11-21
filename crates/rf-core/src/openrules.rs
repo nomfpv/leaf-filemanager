@@ -5,7 +5,7 @@
 //! customize the default opening and open with behavior for different files ... i can set the default to my vscodium path ... and i
 //! can set first priority to notepad++"). Windows keeps one default per type and guards it; a program it does not know has to be
 //! browsed for every time. Here a type has an ordered list of programs, each given by its path: the first opens the file on a double
-//! click, all of them are the first rows of "Open with". Only rustyfiles follows the list: Windows' own defaults are not touched.
+//! click, all of them are the first rows of "Open with". Only leaf follows the list: Windows' own defaults are not touched.
 
 use std::path::Path;
 

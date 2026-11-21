@@ -1,4 +1,4 @@
-//! Windowless probe of the hand-over of a launch to the running rustyfiles (GitHub issue 15). Nothing here creates a window.
+//! Windowless probe of the hand-over of a launch to the running leaf (GitHub issue 15). Nothing here creates a window.
 //!
 //! `handover_probe [old|new] [N]` runs the scenarios below with the real pipe and mutex code of `rf_win::single_instance`
 //! (`old`: what 0.6.5 does) or `rf_win::handover` (`new`), against a "first instance" that is a child process of this probe

@@ -44,9 +44,9 @@ fn build_info() {
 
 fn main() {
     build_info();
-    println!("cargo:rerun-if-changed=rustyfiles.rc");
-    println!("cargo:rerun-if-changed=directlook.rc");
-    println!("cargo:rerun-if-changed=assets/rustyfiles.ico");
+    println!("cargo:rerun-if-changed=leaf.rc");
+    println!("cargo:rerun-if-changed=leaf-look.rc");
+    println!("cargo:rerun-if-changed=assets/leaf.ico");
     // each exe gets its own name (Windows shows FileDescription in Open with / Task Manager)
     // The .rc files say 0.1.0 as a placeholder: the version resource (Task Manager, Properties →
     // Details, Apps & features) gets the crate's real version, written into a copy in OUT_DIR.
@@ -57,7 +57,7 @@ fn main() {
         let ver = std::env::var("CARGO_PKG_VERSION").unwrap();
         let nums: Vec<u32> = ver.split(['.', '-', '+']).take(3).map(|p| p.parse().unwrap_or(0)).collect();
         let commas = format!("{},{},{},0", nums.first().unwrap_or(&0), nums.get(1).unwrap_or(&0), nums.get(2).unwrap_or(&0));
-        for (rc, bin) in [("rustyfiles.rc", "rustyfiles"), ("directlook.rc", "directlook")] {
+        for (rc, bin) in [("leaf.rc", "leaf"), ("leaf-look.rc", "leaf-look")] {
             let text = std::fs::read_to_string(dir.join(rc)).expect("read .rc")
                 .replace("0,1,0,0", &commas)
                 .replace("\"0.1.0\"", &format!("\"{ver}\""))

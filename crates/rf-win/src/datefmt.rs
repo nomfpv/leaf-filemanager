@@ -1,6 +1,6 @@
 //! Dates and times written the way the user's Windows writes them: the short date and the short time of the regional format
 //! (Settings > Time & language > Language & region > Regional format). Explorer's columns use the same two (issue 59: "date format
-//! with Windows Explorer is 11/17/2026 9:30AM ... and 11.17.2026 09:30 with RustyFiles").
+//! with Windows Explorer is 11/17/2026 9:30AM ... and 11.17.2026 09:30 with Leaf").
 
 use chrono::{DateTime, Datelike, Local, Timelike};
 use windows::Win32::Foundation::SYSTEMTIME;

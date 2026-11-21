@@ -110,7 +110,7 @@ impl SortPref {
 /// Why the store will not be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Blocked {
-    /// The file on disk was written by a newer version of rustyfiles.
+    /// The file on disk was written by a newer version of leaf.
     NewerVersion(u32),
     /// The file exists and could not be read (a lock, a sharing violation, a failing disk).
     Unreadable(String),

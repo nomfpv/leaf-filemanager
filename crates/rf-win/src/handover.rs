@@ -1,4 +1,4 @@
-//! The hand-over of a launch to the rustyfiles that is already running (GitHub issue 15: "a folder only flickers and does not open on
+//! The hand-over of a launch to the leaf that is already running (GitHub issue 15: "a folder only flickers and does not open on
 //! the first try, the second try works").
 //!
 //! THE CAUSE. A second launch used to write its folder into the first instance's pipe and exit at once: it never learned whether
@@ -26,11 +26,11 @@
 //! whoever has the foreground (Explorer, the taskbar), the first instance was not, and without the grant the first instance's
 //! window comes up behind the others with only its taskbar button flashing.
 //!
-//! An older rustyfiles (from before this) has a pipe that only takes writes: opening it for reading is refused, which is how a
+//! An older leaf (from before this) has a pipe that only takes writes: opening it for reading is refused, which is how a
 //! newer second launch knows it can get no answer and falls back to the old fire-and-forget write. A newer first instance takes
 //! the old fire-and-forget writes too (they just never see an answer).
 //!
-//! `LEAF_TRACE_HANDOVER=1` writes the steps with time marks to `rustyfiles-handover.log` in the temp folder (or to the
+//! `LEAF_TRACE_HANDOVER=1` writes the steps with time marks to `leaf-handover.log` in the temp folder (or to the
 //! file the variable names); off, a step costs one atomic load.
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -296,7 +296,7 @@ fn trace_sink() -> Option<&'static std::path::PathBuf> {
     static SINK: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
     SINK.get_or_init(|| {
         let v = std::env::var_os("LEAF_TRACE_HANDOVER").filter(|v| !v.is_empty())?;
-        Some(if v == "1" { std::env::temp_dir().join("rustyfiles-handover.log") } else { v.into() })
+        Some(if v == "1" { std::env::temp_dir().join("leaf-handover.log") } else { v.into() })
     })
     .as_ref()
 }

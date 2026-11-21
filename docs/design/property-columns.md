@@ -1,7 +1,7 @@
 # Columns for any Windows property
 
 Explorer lets the user add any property of the Windows property system to the Details view (dimensions, duration, artist, album,
-date taken, authors, bit rate, camera model ...) and sort and group by it. Music and photo folders need that. rustyfiles had
+date taken, authors, bit rate, camera model ...) and sort and group by it. Music and photo folders need that. leaf had
 fixed columns only (name, tags, modified, created, type, size, git, sync). This adds the others, off until the user asks.
 
 ## What the user sees

@@ -917,7 +917,7 @@ impl Render for Preview {
         let video = matches!(cat, Category::Video);
         let video_on = playable && video && !self.occluded && self.player.as_ref().is_some_and(|pl| pl.path == path && pl.started);
         // Without the file details under it the picture takes the pane's whole height, as Explorer's preview pane does (asked on the
-        // rustyfiles Discord: "full half of the screen view would make it work like Windows"); a text or an archive's list below
+        // leaf Discord: "full half of the screen view would make it work like Windows"); a text or an archive's list below
         // keeps the fixed sizes.
         let fill = !cx.global::<crate::settings::Settings>().preview_details
             && !self.text.as_ref().is_some_and(|(tp, _)| *tp == path)

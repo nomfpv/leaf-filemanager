@@ -9,7 +9,7 @@
 //! "Certainly hide" is deliberately strict, because a wrong yes shows as a glass that is frozen while the user looks straight at it
 //! through a window that only looked opaque, and a wrong no costs only the work that was done before. A window above counts only when
 //! it is visible, not minimised, not cloaked (another virtual desktop, a suspended app), has no window region, is not click-through,
-//! and is opaque: a layered window counts only with `LWA_ALPHA` 255, and one of rustyfiles' own glass windows (it carries the mark
+//! and is opaque: a layered window counts only with `LWA_ALPHA` 255, and one of leaf's own glass windows (it carries the mark
 //! of `crossproc.rs`) never counts: it is see-through by design.
 //!
 //! The doubtful one is a window with NO REDIRECTION BITMAP (a swap chain in DirectComposition, which can be see-through anywhere),
@@ -19,7 +19,7 @@
 //! takes the focus (`is_app_window`): the things a browser or an editor window have and an overlay does not.
 //!
 //! The kind that is NOT layered counted for nothing until 2026-11-14 ("may be see-through anywhere"). That is the strict reading, and
-//! it meant that a rustyfiles window behind a maximised Chrome was taken for a window in view: its glass went on being drawn from a
+//! it meant that a leaf window behind a maximised Chrome was taken for a window in view: its glass went on being drawn from a
 //! screen it could not be seen on (a user watching a video in the browser saw the video run in that window's glass, in the dock's
 //! preview of it), and the engine never let its capture go. What is given up: an application window that really is see-through
 //! without being layered (a terminal set to a translucent background) now hides the glass under it as far as the engine knows, and
@@ -54,7 +54,7 @@ pub(super) struct Look {
     pub layered: Option<(u8, u32)>,
     /// The window has a window region of its own.
     pub has_region: bool,
-    /// It is a glass window of rustyfiles (this process's or another's: the mark of `crossproc.rs`).
+    /// It is a glass window of leaf (this process's or another's: the mark of `crossproc.rs`).
     pub glass: bool,
 }
 
@@ -312,7 +312,7 @@ mod tests {
     }
 
     /// Today's Chrome, Windows Terminal and the store apps: no redirection bitmap and NOT layered. Measured on a user's desktop
-    /// (2026-11-14): a maximised Chrome with style 17CF0000 and extended style 00200100 over a rustyfiles window whose glass went on
+    /// (2026-11-14): a maximised Chrome with style 17CF0000 and extended style 00200100 over a leaf window whose glass went on
     /// showing the browser's video.
     #[test]
     fn an_application_window_without_a_redirection_bitmap_hides_what_is_under_it_and_an_overlay_does_not() {
@@ -329,8 +329,8 @@ mod tests {
     }
 
     #[test]
-    fn a_glass_window_of_rustyfiles_never_hides_what_is_under_it() {
-        // (it is see-through by design: another rustyfiles window with the glass backdrop, maximised over this one)
+    fn a_glass_window_of_leaf_never_hides_what_is_under_it() {
+        // (it is see-through by design: another leaf window with the glass backdrop, maximised over this one)
         let glass = Look { style: 0x14CF_0000, ex_style: WS_EX_NOREDIRECTIONBITMAP.0 | 0x100, layered: None, has_region: false, glass: true };
         assert!(!is_solid(&glass, false));
         assert!(!is_solid(&glass, true), "maximised too");

@@ -140,7 +140,7 @@ removed), split into the files of the apps it asked about and all the others: a 
 alone, the second is what Explorer and apps wrote meanwhile. On this machine both numbers were 0 in every row. That is evidence
 for the `IApplicationDocumentLists` calls that were made (28 apps), not a proof that the call can never rewrite a list.
 
-The one existing writer is `rf_win::jumplist::set` (rustyfiles' own list for its own AppUserModelID), unchanged; its unit test
+The one existing writer is `rf_win::jumplist::set` (leaf's own list for its own AppUserModelID), unchanged; its unit test
 writes a list for the test binary's identity, as it always did.
 
 ## Trying it

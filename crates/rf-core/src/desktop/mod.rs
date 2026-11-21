@@ -1,4 +1,4 @@
-//! The model of the desktop that rustyfiles draws itself (shell plan, increments F1 and F2): what is on the wallpaper, what is on the
+//! The model of the desktop that leaf draws itself (shell plan, increments F1 and F2): what is on the wallpaper, what is on the
 //! desktop, and where each icon sits. Nothing in this module touches the system: the registry is read through [`registry::RegRead`], the
 //! folders through traits in rf-win, so every rule here is tested on plain data. The system side is `rf_win::desktop`.
 //!

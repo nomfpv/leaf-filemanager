@@ -8,14 +8,14 @@ use std::time::Duration;
 use velopack::VelopackApp;
 
 /// AppUserModelID of the installed app (Velopack names shortcuts "velopack.<pack id>").
-pub const APP_ID: &str = "velopack.rustyfiles";
+pub const APP_ID: &str = "velopack.leaf";
 
 /// Whether a process started with this first argument may apply a waiting update as it starts. Velopack does that before any code
-/// of ours runs, and it ends every running rustyfiles process to do it.
+/// of ours runs, and it ends every running leaf process to do it.
 ///
 /// WHY NOT EVERY PROCESS (the updater's log on the user's PC, 2026-11-14: an update from 0.7.0 to 0.7.2 was applied by a process
 /// started with `--pick`, that is by another program's Open dialog; the dock, the picker, the quick search and the main app in the
-/// background are all started without the user asking for rustyfiles). Only a start the user means as "open rustyfiles" applies it:
+/// background are all started without the user asking for leaf). Only a start the user means as "open leaf" applies it:
 /// no argument, a folder or file to open, or a Settings page. Everything that begins with `--` otherwise is a side process (and
 /// the updater's own hooks, which never apply anything). The update is not lost: the next such start applies it, and so does the
 /// button in Settings and in the status bar.
@@ -46,11 +46,11 @@ fn after_install_or_update() {
         let _ = rf_win::default_fm::enable(&me.display().to_string(), rf_win::default_fm::CLASSES);
     }
     if rf_win::dialogs::starts_with_windows_as("leaf-look") {
-        let _ = rf_win::dialogs::set_start_with_windows_as("leaf-look", &me.with_file_name("directlook.exe"), &["--background"], true);
+        let _ = rf_win::dialogs::set_start_with_windows_as("leaf-look", &me.with_file_name(rf_win::exe_name(rf_win::LOOK_EXE_STEM)), &["--background"], true);
     }
 }
 
-/// Everything rustyfiles changed in Windows goes back (settings in %APPDATA% stay).
+/// Everything leaf changed in Windows goes back (settings in %APPDATA% stay).
 fn before_uninstall() {
     let classes = rf_win::default_fm::CLASSES;
     if rf_win::default_fm::is_enabled(classes) {
@@ -163,7 +163,7 @@ pub fn restart_to_update() {}
 mod start_apply_tests {
     use super::applies_update_at_start;
 
-    /// A waiting update is applied when the user opens rustyfiles, and never by a process started behind the user's back.
+    /// A waiting update is applied when the user opens leaf, and never by a process started behind the user's back.
     #[test]
     fn only_a_start_the_user_means_applies_a_waiting_update() {
         for open in [None, Some(r"C:\Users\user\Documents"), Some("D:\\"), Some("report.pdf"), Some("--settings=dock"), Some("--settings=speed")] {

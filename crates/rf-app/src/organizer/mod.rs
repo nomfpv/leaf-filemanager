@@ -101,8 +101,8 @@ pub fn problem_text(p: &Problem) -> String {
             reason,
             t!("Rules start with an empty list.")
         ),
-        Problem::Corrupt { moved_to: None, reason } => format!("{} ({reason})", t!("The rules file could not be read or set aside; rules will not be saved. Restart rustyfiles.")),
-        Problem::Unreadable(reason) => format!("{} ({reason})", t!("The rules file cannot be read right now; writing could overwrite it, so rules will not be saved. Restart rustyfiles.")),
+        Problem::Corrupt { moved_to: None, reason } => format!("{} ({reason})", t!("The rules file could not be read or set aside; rules will not be saved. Restart leaf.")),
+        Problem::Unreadable(reason) => format!("{} ({reason})", t!("The rules file cannot be read right now; writing could overwrite it, so rules will not be saved. Restart leaf.")),
     }
 }
 

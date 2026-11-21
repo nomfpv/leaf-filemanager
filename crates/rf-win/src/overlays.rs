@@ -6,7 +6,7 @@
 //! `HKLM\...\Explorer\ShellIconOverlayIdentifiers`. Explorer asks the folder (`IShellIconOverlay` of its `IShellFolder`), which asks the
 //! shell's overlay manager: it loads the handlers, keeps Windows' limit of 15 in the registry's order, and answers with the index of
 //! the overlay's picture in the system image list. That picture is icon-sized with the mark in its corner: it is drawn over the item's
-//! icon at the same size. The folder's answer has the shortcut arrow too, which rustyfiles draws itself (the caller skips links).
+//! icon at the same size. The folder's answer has the shortcut arrow too, which leaf draws itself (the caller skips links).
 //!
 //! The handlers are the programs' own DLLs, loaded into this process as Explorer loads them into its own. They are asked on one
 //! thread of their own (an STA, as in Explorer), never the UI thread: a handler that asks its service over a pipe can take a while,

@@ -1,6 +1,6 @@
 # rustdecoder
 
-rustyfiles' own video engine, replacing FilmCraft in leaf-look and the preview pane.
+leaf's own video engine, replacing FilmCraft in leaf-look and the preview pane.
 
 ## Why
 

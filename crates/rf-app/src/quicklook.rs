@@ -1,5 +1,5 @@
 //! QuickLook (QL-Win) as the Space previewer instead of leaf-look: Settings › leaf-look › "Space opens QuickLook" (asked on
-//! Discord). QuickLook watches Explorer's windows only, so rustyfiles hands it the file itself.
+//! Discord). QuickLook watches Explorer's windows only, so leaf hands it the file itself.
 //!
 //! QuickLook listens on the pipe `\\.\pipe\QuickLook.App.Pipe.<the user's SID>` for one line per connection:
 //! `Message|path|options`. `Toggle` opens a preview of the file, or closes the preview when it already shows that file; `Switch`

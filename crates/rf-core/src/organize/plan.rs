@@ -443,8 +443,8 @@ mod tests {
             program_files: vec![PathBuf::from(r"C:\Program Files")],
             user_profile: Some(PathBuf::from(r"C:\Users\user")),
             app_data: vec![PathBuf::from(r"C:\Users\user\AppData")],
-            app_dirs: vec![PathBuf::from(r"C:\Users\user\AppData\Roaming\rustyfiles")],
-            app_files: vec![PathBuf::from(r"C:\Users\user\Downloads\rustyfiles.exe")],
+            app_dirs: vec![PathBuf::from(r"C:\Users\user\AppData\Roaming\leaf")],
+            app_files: vec![PathBuf::from(r"C:\Users\user\Downloads\leaf.exe")],
         }
     }
 
@@ -672,8 +672,8 @@ mod tests {
         assert_eq!(p.ignored, 4);
         // the app's own folder cannot even be watched
         let mut r = rule(1, "hepsi", vec![], to_pics());
-        r.folder = PathBuf::from(r"C:\Users\user\AppData\Roaming\rustyfiles");
-        let p = run(&[r], &[file(r"C:\Users\user\AppData\Roaming\rustyfiles", "settings.toml")], &[]);
+        r.folder = PathBuf::from(r"C:\Users\user\AppData\Roaming\leaf");
+        let p = run(&[r], &[file(r"C:\Users\user\AppData\Roaming\leaf", "settings.toml")], &[]);
         assert!(p.steps.is_empty());
         assert!(matches!(p.unusable[0].2, Unusable::Refused(Refusal::AppData)));
     }
@@ -918,7 +918,7 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn files_are_not_sent_into_protected_places() {
-        for dest in [r"C:\Windows\Temp", r"C:\Program Files\Foo", r"C:\Users\user\AppData\Roaming\Foo", r"C:\Users\user\AppData\Roaming\rustyfiles\x"] {
+        for dest in [r"C:\Windows\Temp", r"C:\Program Files\Foo", r"C:\Users\user\AppData\Roaming\Foo", r"C:\Users\user\AppData\Roaming\leaf\x"] {
             let r = rule(1, "r", vec![ext(&["jpg"])], Action::MoveTo { folder: PathBuf::from(dest) });
             let p = run(&[r], &[file(DL, "a.jpg")], &[]);
             assert!(p.steps.is_empty(), "{dest}");

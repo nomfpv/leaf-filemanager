@@ -1,9 +1,9 @@
-//! The folders the user went to, kept across runs (`%LOCALAPPDATA%\rustyfiles\folder_history.json`), so they can be found again
+//! The folders the user went to, kept across runs (`%LOCALAPPDATA%\leaf\folder_history.json`), so they can be found again
 //! by a few letters: in the command palette (Ctrl+Shift+P, unless `palette_folder_history` is off) and in the folder-only search
 //! (Ctrl+P, `SearchFolderHistory`).
 //!
 //! A folder a tab lands on is recorded by [`record`]; the list is written a moment later on a worker, merged with what the file
-//! holds by then, so two rustyfiles processes keep each other's visits. [`rank`] orders the list for what was typed.
+//! holds by then, so two leaf processes keep each other's visits. [`rank`] orders the list for what was typed.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;

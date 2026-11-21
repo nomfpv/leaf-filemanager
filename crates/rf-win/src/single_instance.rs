@@ -14,36 +14,8 @@ use windows::core::PCWSTR;
 
 use crate::wide::wide;
 
-/// Groups whose names carry the session number as well. The mutex is in the `Local\` namespace, which is per session already, but a
-/// named PIPE lives in one namespace for the whole machine: two sessions of one user name (the console and a remote one, fast user
-/// switching) would find each other's pipe, and a second `--dock` or `--shell` in session 2 would greet (and a `stop` would end) the
-/// first one in session 1. The shell host is the one group that must be right here, because it can be somebody's whole desktop; the
-/// others keep their names so that a copy of rustyfiles from before this change is still found by a newer one.
-///
-/// The FIRST interactive session (0 and 1: the console of a single-user PC) keeps the name it always had, with no session in it, for
-/// the same reason: after an update the old main app that is still running sends `stop`, `reload` and `ping` to the name it knows, and
-/// a dock that listens under a new one would be deaf to it (and a second dock would be started beside it). Two sessions can still not
-/// meet, because every other session carries its number.
-const SESSION_SCOPED: &[&str] = &["rustyfiles-dock"];
-
-/// The sessions that keep the old, session-less names of the scoped groups.
-const LEGACY_SESSIONS: u32 = 1;
-
-/// The Windows session this process lives in (0 for the services session, 1 for the console on a single-user PC). 0 when it cannot be read.
-pub fn session_id() -> u32 {
-    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    let mut id = 0u32;
-    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut id) }.is_ok() { id } else { 0 }
-}
-
-/// (kilit adı, boru adı) bir uygulama için: rustyfiles ve leaf-look ayrı örnek gruplarıdır.
+/// (kilit adı, boru adı) bir uygulama için: leaf ve leaf-look ayrı örnek gruplarıdır.
 pub(crate) fn names_for(app: &str) -> (String, String) {
-    names_in_session(app, session_id())
-}
-
-/// [`names_for`] for a given session (the tests need to ask for another one).
-fn names_in_session(app: &str, session: u32) -> (String, String) {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".into());
     // A separate settings folder (tests, portable copies) is a separate instance group:
     // its second launch must not land in the user's everyday window.
@@ -56,8 +28,7 @@ fn names_in_session(app: &str, session: u32) -> (String, String) {
         }
         None => String::new(),
     };
-    let session = if SESSION_SCOPED.contains(&app) && session > LEGACY_SESSIONS { format!("-s{session}") } else { String::new() };
-    (format!("Local\\{app}-{user}{suffix}{session}"), format!(r"\\.\pipe\{app}-{user}{suffix}{session}"))
+    (format!("Local\\{app}-{user}{suffix}"), format!(r"\\.\pipe\{app}-{user}{suffix}"))
 }
 
 pub enum Role {
@@ -82,17 +53,17 @@ pub fn acquire(message: &str) -> Role {
     acquire_app(&instance_name(), message)
 }
 
-/// "rustyfiles", or "rustyfiles-NAME" with `LEAF_INSTANCE=NAME`: a copy that is a single
+/// "leaf", or "leaf-NAME" with `LEAF_INSTANCE=NAME`: a copy that is a single
 /// instance of its own (the speed test's "already running" copy) and never forwards to, or
 /// receives from, the user's.
 pub fn instance_name() -> String {
     match std::env::var("LEAF_INSTANCE") {
-        Ok(n) if !n.is_empty() => format!("rustyfiles-{n}"),
-        _ => "rustyfiles".to_string(),
+        Ok(n) if !n.is_empty() => format!("{}-{n}", crate::APP_EXE_STEM),
+        _ => crate::APP_EXE_STEM.to_string(),
     }
 }
 
-/// [`acquire`] for another application of the bundle (e.g. "directlook").
+/// [`acquire`] for another application of the bundle (e.g. "leaf-look").
 pub fn acquire_app(app: &str, message: &str) -> Role {
     let (mutex_name, pipe_name) = names_for(app);
     let w = wide(&mutex_name);
@@ -220,32 +191,12 @@ mod app_tests {
 
     #[test]
     fn apps_have_separate_names() {
-        let (m1, p1) = names_for("rustyfiles");
-        let (m2, p2) = names_for("directlook");
+        let (m1, p1) = names_for("leaf");
+        let (m2, p2) = names_for("leaf-look");
         assert_ne!(m1, m2);
         assert_ne!(p1, p2);
-        assert!(p2.contains("directlook"));
-    }
-
-    #[test]
-    fn the_shell_host_group_is_told_apart_by_session_and_the_others_are_not() {
-        let (m1, p1) = names_in_session("rustyfiles-dock", 1);
-        let (m2, p2) = names_in_session("rustyfiles-dock", 2);
-        let (m3, p3) = names_in_session("rustyfiles-dock", 3);
-        assert_ne!(p1, p2, "a pipe is machine-wide: it must carry the session");
-        assert_ne!(p2, p3);
-        assert_ne!(m1, m2);
-        assert_ne!(m2, m3);
+        assert!(p2.contains("leaf-look"));
         assert!(m1.starts_with("Local\\"), "the mutex stays in the per-session namespace");
-        // the console session keeps the name an older copy computes, so that an old main app still reaches a newer dock
-        assert_eq!(names_in_session("rustyfiles-dock", 0), (m1.clone(), p1.clone()));
-        assert!(!p1.contains("-s1"), "{p1}");
-        // the same session, the same name: a second --dock or --shell finds the first
-        assert_eq!(names_in_session("rustyfiles-dock", 1), (m1, p1));
-        // the main app and leaf-look keep the names older copies know
-        assert_eq!(names_in_session("rustyfiles", 1), names_in_session("rustyfiles", 2));
-        assert_eq!(names_in_session("directlook", 1), names_in_session("directlook", 5));
-        assert!(session_id() < 1_000_000);
     }
 
     #[test]

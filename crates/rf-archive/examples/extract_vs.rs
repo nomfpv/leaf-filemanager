@@ -1,4 +1,4 @@
-//! Extracting archives to disk: rustyfiles' engine against NanaZip / 7-Zip (`7z x`) and Windows'
+//! Extracting archives to disk: leaf's engine against NanaZip / 7-Zip (`7z x`) and Windows'
 //! own `tar.exe` (libarchive, what Explorer uses for RAR and 7z), taking turns, best of `rounds`.
 //! `cargo run --release -p rf-archive --example extract_vs -- <dest-dir> <rounds> <archive>...`
 
@@ -47,6 +47,6 @@ fn main() {
             }
         }
         let s = |v: Option<f64>| v.map_or("failed".to_string(), |v| format!("{v:.2} s"));
-        println!("{name}: rustyfiles {} ({} files) | 7z {} ({}) | Windows tar {} ({})", s(best[0]), counts[0], s(best[1]), counts[1], s(best[2]), counts[2]);
+        println!("{name}: leaf {} ({} files) | 7z {} ({}) | Windows tar {} ({})", s(best[0]), counts[0], s(best[1]), counts[1], s(best[2]), counts[2]);
     }
 }

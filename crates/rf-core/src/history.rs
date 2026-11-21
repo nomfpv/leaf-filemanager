@@ -38,7 +38,7 @@ impl Location {
                 Some(Location::RecycleBin)
             }
             // (HyperDownload's page, as a saved session names it)
-            "rustyfiles:downloads" => Some(Location::Downloads),
+            "leaf:downloads" => Some(Location::Downloads),
             _ => None,
         }
     }

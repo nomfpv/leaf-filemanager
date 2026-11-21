@@ -1,10 +1,10 @@
-//! Windowless probe: what it costs to hand a place to a RUNNING rustyfiles, by the two ways the desktop can do it.
+//! Windowless probe: what it costs to hand a place to a RUNNING leaf, by the two ways the desktop can do it.
 //!
-//! It plays the running rustyfiles itself: it takes the single-instance mutex of a test instance and serves its pipe, so that no window
+//! It plays the running leaf itself: it takes the single-instance mutex of a test instance and serves its pipe, so that no window
 //! of any program is made and nothing of the user's is reached. Then, `RUNS` times each:
 //!
 //! * PIPE: writes the line to the pipe from this process (what the shell host does now). Timed to the line arriving.
-//! * PROCESS: starts `rustyfiles.exe <argument>` (what the host did before). That copy finds the mutex held, forwards its line over
+//! * PROCESS: starts `leaf.exe <argument>` (what the host did before). That copy finds the mutex held, forwards its line over
 //!   the pipe and ends without a window. Timed to the line arriving, and to the process ending.
 //!
 //! Run it with a test instance, a settings folder of its own and a temp folder of its own (the started copy tidies its temp folder
@@ -14,7 +14,7 @@
 //! set LEAF_INSTANCE=probe-open
 //! set LEAF_CONFIG_DIR=<an empty temp folder>
 //! set TEMP=<another empty temp folder>
-//! cargo run --offline -p rf-win --example open_handover_probe -- <path of rustyfiles.exe> [runs]
+//! cargo run --offline -p rf-win --example open_handover_probe -- <path of leaf.exe> [runs]
 //! ```
 //!
 //! Nothing is written outside those folders and the registry is not touched.
@@ -32,11 +32,11 @@ fn median(v: &mut [f64]) -> f64 {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(exe) = args.first() else {
-        eprintln!("usage: open_handover_probe <rustyfiles.exe> [runs]");
+        eprintln!("usage: open_handover_probe <leaf.exe> [runs]");
         std::process::exit(2);
     };
     if std::env::var_os("LEAF_INSTANCE").is_none() || std::env::var_os("LEAF_CONFIG_DIR").is_none() {
-        eprintln!("refusing to run: LEAF_INSTANCE and LEAF_CONFIG_DIR must be set, so that the user's own rustyfiles is never reached");
+        eprintln!("refusing to run: LEAF_INSTANCE and LEAF_CONFIG_DIR must be set, so that the user's own leaf is never reached");
         std::process::exit(2);
     }
     let runs: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);

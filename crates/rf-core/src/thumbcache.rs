@@ -1,6 +1,6 @@
 //! The rule of the thumbnail cache's limit. The cache itself (`rf-app/src/image_cache.rs`) is
 //! memory only: decoded pictures of thumbnails and of per-file icons, kept least recently used
-//! first. rustyfiles keeps no thumbnail files of its own, and Windows' own thumbnail cache (the
+//! first. leaf keeps no thumbnail files of its own, and Windows' own thumbnail cache (the
 //! `thumbcache_*.db` files of the shell) is never read, written or deleted from here.
 //!
 //! What is here is pure: how the user's setting becomes a byte budget, what a tracked picture is

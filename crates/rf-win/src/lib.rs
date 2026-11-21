@@ -2,6 +2,16 @@
 //!
 //! Every function here may block (disk, network, shell extensions). Never call them on the UI thread.
 
+/// The file manager's program (its file name without the extension).
+pub const APP_EXE_STEM: &str = "leaf";
+/// The Preview program, the second binary (its file name without the extension).
+pub const LOOK_EXE_STEM: &str = "leaf-look";
+
+/// A program's file name: `leaf.exe` on Windows, `leaf` elsewhere.
+pub fn exe_name(stem: &str) -> String {
+    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
+}
+
 pub mod accent;
 pub mod activate;
 pub mod apppkg;

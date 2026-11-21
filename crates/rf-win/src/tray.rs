@@ -75,7 +75,7 @@ fn tray() -> &'static Tray {
             .name("rf-tray".into())
             .spawn(move || unsafe {
                 let hinst = GetModuleHandleW(None).unwrap_or_default();
-                let class = w!("rustyfiles.Tray");
+                let class = w!("leaf.Tray");
                 let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: hinst.into(), lpszClassName: class, ..Default::default() };
                 RegisterClassW(&wc);
                 let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, class, w!(""), WS_POPUP, 0, 0, 0, 0, None, None, Some(hinst.into()), None)
@@ -116,7 +116,7 @@ pub fn hide() {
     post(Cmd::Hide);
 }
 
-/// A notification (toast) from rustyfiles. Respects Focus Assist / quiet hours.
+/// A notification (toast) from leaf. Respects Focus Assist / quiet hours.
 pub fn notify(title: &str, body: &str) {
     post(Cmd::Notify { title: title.to_string(), body: body.to_string() });
 }
@@ -131,7 +131,7 @@ fn app_icon() -> HICON {
     unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
         let (cx, cy) = (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
-        // resource id 1 = the app icon (rustyfiles.rc)
+        // resource id 1 = the app icon (leaf.rc)
         LoadImageW(Some(hinst.into()), PCWSTR(1 as *const u16), IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR)
             .map(|h| HICON(h.0))
             .unwrap_or_default()
@@ -199,7 +199,7 @@ fn run_commands(hwnd: HWND) {
                 remove_icon(hwnd);
             }
             Cmd::Notify { title, body } => {
-                let temporary = ensure_icon(hwnd, "rustyfiles") && STATE.with(|s| s.borrow().0.is_none());
+                let temporary = ensure_icon(hwnd, "leaf") && STATE.with(|s| s.borrow().0.is_none());
                 let mut nid = base(hwnd);
                 nid.uFlags = NIF_INFO;
                 nid.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;

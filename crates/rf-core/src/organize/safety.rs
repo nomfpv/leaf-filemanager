@@ -85,7 +85,7 @@ impl Refusal {
             Refusal::ProgramFiles => T!("Program Files folders cannot be organized"),
             Refusal::UserProfile => T!("The user folder itself cannot be organized: choose a subfolder such as Downloads"),
             Refusal::AppData => T!("The AppData folder cannot be organized: apps keep their settings there"),
-            Refusal::AppOwn => T!("rustyfiles' own settings and data folder cannot be organized"),
+            Refusal::AppOwn => T!("leaf's own settings and data folder cannot be organized"),
         }
     }
 }
@@ -195,8 +195,8 @@ mod tests {
             program_files: vec![PathBuf::from(r"C:\Program Files"), PathBuf::from(r"C:\Program Files (x86)"), PathBuf::from(r"C:\ProgramData")],
             user_profile: Some(PathBuf::from(r"C:\Users\user")),
             app_data: vec![PathBuf::from(r"C:\Users\user\AppData")],
-            app_dirs: vec![PathBuf::from(r"C:\Users\user\AppData\Roaming\rustyfiles"), PathBuf::from(r"D:\portable\rustyfiles")],
-            app_files: vec![PathBuf::from(r"E:\Indirilenler\rustyfiles.exe")],
+            app_dirs: vec![PathBuf::from(r"C:\Users\user\AppData\Roaming\leaf"), PathBuf::from(r"D:\portable\leaf")],
+            app_files: vec![PathBuf::from(r"E:\Downloads\leaf.exe")],
         }
     }
 
@@ -246,9 +246,9 @@ mod tests {
         assert_eq!(r(r"c:\users\user\", false), Some(Refusal::UserProfile));
         assert_eq!(r(r"C:\Users\user\AppData", false), Some(Refusal::AppData));
         assert_eq!(r(r"C:\Users\user\AppData\Local\Temp", false), Some(Refusal::AppData));
-        assert_eq!(r(r"C:\Users\user\AppData\Roaming\rustyfiles\jobs", false), Some(Refusal::AppData));
-        assert_eq!(r(r"D:\portable\rustyfiles", false), Some(Refusal::AppOwn));
-        assert_eq!(r(r"D:\portable\rustyfiles\index", false), Some(Refusal::AppOwn));
+        assert_eq!(r(r"C:\Users\user\AppData\Roaming\leaf\jobs", false), Some(Refusal::AppData));
+        assert_eq!(r(r"D:\portable\leaf", false), Some(Refusal::AppOwn));
+        assert_eq!(r(r"D:\portable\leaf\index", false), Some(Refusal::AppOwn));
         // fine
         assert_eq!(r(r"C:\Users\user\Downloads", false), None);
         assert_eq!(r(r"C:\Users\user\Desktop", true), None);
@@ -264,8 +264,8 @@ mod tests {
     #[test]
     fn the_apps_own_files() {
         let p = prot();
-        assert!(p.is_app_file(Path::new(r"C:\Users\user\AppData\Roaming\rustyfiles\settings.toml")));
-        assert!(p.is_app_file(Path::new(r"d:\PORTABLE\rustyfiles\x.bozuk-1")));
+        assert!(p.is_app_file(Path::new(r"C:\Users\user\AppData\Roaming\leaf\settings.toml")));
+        assert!(p.is_app_file(Path::new(r"d:\PORTABLE\leaf\x.bozuk-1")));
         assert!(!p.is_app_file(Path::new(r"C:\Users\user\Downloads\settings.toml")));
         assert!(!ProtectedPaths::default().is_app_file(Path::new(r"C:\x")));
     }
@@ -276,10 +276,10 @@ mod tests {
     fn a_program_run_from_a_folder_does_not_make_the_folder_the_apps_own() {
         let p = prot();
         // only the program file itself is left alone
-        assert!(p.is_app_file(Path::new(r"e:\indirilenler\RUSTYFILES.EXE")));
-        assert!(!p.is_app_file(Path::new(r"E:\Indirilenler\foto.jpg")));
-        assert_eq!(p.refuse(Path::new(r"E:\Indirilenler"), false), None);
-        assert_eq!(p.refuse(Path::new(r"E:\Indirilenler"), true), None);
+        assert!(p.is_app_file(Path::new(r"e:\downloads\LEAF.EXE")));
+        assert!(!p.is_app_file(Path::new(r"E:\Downloads\foto.jpg")));
+        assert_eq!(p.refuse(Path::new(r"E:\Downloads"), false), None);
+        assert_eq!(p.refuse(Path::new(r"E:\Downloads"), true), None);
     }
 
     #[test]
@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(r(r"C:\Windows\System32"), Some(Refusal::WindowsFolder));
         assert_eq!(r(r"C:\Program Files\Foo"), Some(Refusal::ProgramFiles));
         assert_eq!(r(r"C:\Users\user\AppData\Roaming\Foo"), Some(Refusal::AppData));
-        assert_eq!(r(r"D:\portable\rustyfiles\x"), Some(Refusal::AppOwn));
+        assert_eq!(r(r"D:\portable\leaf\x"), Some(Refusal::AppOwn));
         // the profile folder itself and its ordinary folders are fine places to send files to
         assert_eq!(r(r"C:\Users\user"), None);
         assert_eq!(r(r"C:\Users\user\Pictures\2026"), None);

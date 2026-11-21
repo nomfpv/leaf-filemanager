@@ -1,4 +1,4 @@
-//! "Open the folder and select this file" from other apps while rustyfiles is the default file
+//! "Open the folder and select this file" from other apps while leaf is the default file
 //! manager: `SHOpenFolderAndSelectItems`, what Telegram's and the browsers' "Show in folder" call.
 //!
 //! Windows opens the folder through the folder verb we took over, so the file to select never
@@ -161,7 +161,7 @@ impl IWebBrowserApp_Impl for ShellWindow_Impl {
         not_impl()
     }
     fn Name(&self) -> Result<BSTR> {
-        Ok(BSTR::from("rustyfiles"))
+        Ok(BSTR::from("leaf"))
     }
     fn HWND(&self) -> Result<SHANDLE_PTR> {
         Ok(SHANDLE_PTR(self.hwnd.0 as isize))
@@ -296,7 +296,7 @@ impl IShellView_Impl for ShellWindow_Impl {
 
 /// Registers a shell window for `folder` on this thread and waits up to `wait` for the shell to
 /// ask for an item to be selected there: that item's path. Blocking (a message loop); call it
-/// on a thread of its own, right when rustyfiles is started on a folder.
+/// on a thread of its own, right when leaf is started on a folder.
 pub fn wait_for_select(folder: &Path, wait: Duration) -> Option<PathBuf> {
     unsafe {
         let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
@@ -354,7 +354,7 @@ unsafe fn register_and_wait(folder: &Path, wait: Duration) -> Option<PathBuf> {
         let mut held: Vec<(HWND, IWebBrowserApp, Option<i32>)> = Vec::new();
         for bytes in &lists {
             let Ok(location) = InitVariantFromBuffer(bytes.as_ptr().cast(), bytes.len() as u32) else { continue };
-            let Ok(hwnd) = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, w!("STATIC"), w!("rustyfiles shell window"), WINDOW_STYLE(0), 0, 0, 0, 0, None, None, None, None) else { continue };
+            let Ok(hwnd) = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, w!("STATIC"), w!("leaf shell window"), WINDOW_STYLE(0), 0, 0, 0, 0, None, None, None, None) else { continue };
             let app: IWebBrowserApp = ShellWindow { hwnd, folder: bytes.clone(), name: name.clone(), picked: picked.clone() }.into();
             let registered = (|| -> Result<i32> {
                 let empty = VARIANT::default();

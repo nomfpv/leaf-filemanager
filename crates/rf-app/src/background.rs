@@ -22,22 +22,22 @@ pub fn quitting() -> bool {
 
 fn labels() -> rf_win::tray::Labels {
     rf_win::tray::Labels {
-        tooltip: "rustyfiles".into(),
-        open: t!("Open rustyfiles").into(),
+        tooltip: "leaf".into(),
+        open: t!("Open leaf").into(),
         new_window: t!("New window").into(),
         settings: t!("Settings").into(),
         quit: t!("Exit").into(),
     }
 }
 
-/// Bu süreç leaf-look: rustyfiles'ın bildirim alanı simgesi gösterilmez (leaf-look'un kendisi var).
+/// Bu süreç leaf-look: leaf'ın bildirim alanı simgesi gösterilmez (leaf-look'un kendisi var).
 pub static LOOK_PROCESS: AtomicBool = AtomicBool::new(false);
 
-/// This process is the dock (`rustyfiles --dock`): a side process like leaf-look, so it owns no tray icon, no name index and no
+/// This process is the dock (`leaf --dock`): a side process like leaf-look, so it owns no tray icon, no name index and no
 /// hotkey, and does not start or stop the dock itself.
 pub static DOCK_PROCESS: AtomicBool = AtomicBool::new(false);
 
-/// A process that only helps the main rustyfiles (leaf-look, the dock) and must leave the machine-wide things to it.
+/// A process that only helps the main leaf (leaf-look, the dock) and must leave the machine-wide things to it.
 pub fn side_process() -> bool {
     LOOK_PROCESS.load(Ordering::Relaxed) || DOCK_PROCESS.load(Ordering::Relaxed)
 }
@@ -107,7 +107,7 @@ fn on_tray(e: rf_win::tray::TrayEvent, cx: &mut App) {
     }
 }
 
-/// An operation ended: notify when it was long and rustyfiles is not in front.
+/// An operation ended: notify when it was long and leaf is not in front.
 pub fn op_finished(ops: &Entity<Ops>, id: u64, cx: &mut App) {
     if !cx.global::<crate::settings::Settings>().notify_long_ops {
         return;

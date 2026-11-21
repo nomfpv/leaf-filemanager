@@ -34,7 +34,7 @@
 //! Desktop Duplication: every glass window carries `WDA_EXCLUDEFROMCAPTURE`, so nobody's capture holds any of them: what is behind both
 //! again, no loop, and nothing here is used. If the capture service refuses a list that has windows of other processes, the list is sent
 //! without them (`send_list`): the old picture (and the old loop) for that session, never a session that falls back to Desktop
-//! Duplication. A build without the mark (an older rustyfiles that still runs, a dock that outlived an update) is not seen: its windows
+//! Duplication. A build without the mark (an older leaf that still runs, a dock that outlived an update) is not seen: its windows
 //! are not left out and it does not leave ours out, so against such a process the loop of old remains until it is restarted.
 //!
 //! HOW A PROCESS KNOWS THE OTHERS. Every glass window carries a window property (`PROP`, the value is its process id) from the moment
@@ -55,7 +55,7 @@ use super::geom::Rc;
 /// The window property glass windows carry. The version is in the name: another meaning of the value would be another name.
 macro_rules! prop {
     () => {
-        w!("rustyfiles.glass.v1")
+        w!("leaf.glass.v1")
     };
 }
 

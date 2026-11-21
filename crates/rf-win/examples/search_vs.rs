@@ -1,7 +1,7 @@
-//! Searching subfolders, rustyfiles against File Explorer, the way people do it: both already
-//! running (Explorer's shell; a rustyfiles with its search index ready), a search link sent to
+//! Searching subfolders, leaf against File Explorer, the way people do it: both already
+//! running (Explorer's shell; a leaf with its search index ready), a search link sent to
 //! each, the time until the results on screen stop changing for a second.
-//! `cargo run --release -p rf-win --example search_vs -- <rustyfiles.exe> <folder> <query> <rounds>`
+//! `cargo run --release -p rf-win --example search_vs -- <leaf.exe> <folder> <query> <rounds>`
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -12,7 +12,7 @@ use rf_win::bench::{AppKind, measure_change, measure_launch, place_on_top, windo
 
 fn main() -> anyhow::Result<()> {
     let mut a = std::env::args().skip(1);
-    let exe = PathBuf::from(a.next().expect("rustyfiles.exe"));
+    let exe = PathBuf::from(a.next().expect("leaf.exe"));
     let root = PathBuf::from(a.next().expect("folder"));
     let query = a.next().expect("query");
     let rounds: usize = a.next().map_or(3, |s| s.parse().unwrap());
@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
     let quiet = Duration::from_millis(1000);
     let timeout = Duration::from_secs(180);
 
-    // a rustyfiles of its own (settings folder, instance group), with the index of `root` ready
+    // a leaf of its own (settings folder, instance group), with the index of `root` ready
     let cfg = std::env::temp_dir().join("rf-search-vs-cfg");
     let _ = std::fs::create_dir_all(&cfg);
     std::fs::write(cfg.join("settings.toml"), "restore_session = false\nrun_in_background = false\nauto_update = false\nstar_asked = true\nstarts = 1\nlook_enabled = false\n")?;
@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
         if let Some((h, _)) = windows_of(app.id()).into_iter().next() {
             break h;
         }
-        anyhow::ensure!(t.elapsed() < Duration::from_secs(20), "no rustyfiles window");
+        anyhow::ensure!(t.elapsed() < Duration::from_secs(20), "no leaf window");
         std::thread::sleep(Duration::from_millis(100));
     };
     place_on_top(hwnd);
@@ -69,12 +69,12 @@ fn main() -> anyhow::Result<()> {
         };
         match measure_change(hwnd, send, quiet, timeout) {
             Ok((ms, ch)) => {
-                eprintln!("round {r} rustyfiles: {ms:.0} ms ({} picture changes)", ch.len());
+                eprintln!("round {r} leaf: {ms:.0} ms ({} picture changes)", ch.len());
                 if r > 0 {
                     ours.push(ms);
                 }
             }
-            Err(e) => eprintln!("round {r} rustyfiles: {e:#}"),
+            Err(e) => eprintln!("round {r} leaf: {e:#}"),
         }
         std::thread::sleep(Duration::from_millis(800));
         match measure_launch(&explorer, std::ffi::OsStr::new(&link), &query, quiet, timeout, &cancel) {
@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
         v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
     };
     let index_line = std::fs::read_to_string(&log).unwrap_or_default().lines().filter(|l| l.contains("search: the index answered")).last().map(str::to_string);
-    println!("rustyfiles: {:.0} ms   File Explorer: {:.0} ms   (medians of {rounds})", med(ours), med(theirs));
+    println!("leaf: {:.0} ms   File Explorer: {:.0} ms   (medians of {rounds})", med(ours), med(theirs));
     if let Some(l) = index_line {
         println!("{l}");
     }

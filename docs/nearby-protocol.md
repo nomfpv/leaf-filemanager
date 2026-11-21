@@ -1,13 +1,13 @@
 # Nearby: the protocol
 
-How rustyfiles devices on the same network find each other and send files. **Nearby** is the feature's name; the code is
+How leaf devices on the same network find each other and send files. **Nearby** is the feature's name; the code is
 `crates/rf-nearby` (platform-free Rust, used by the Windows app and, through UniFFI, by the macOS app). Protocol version: **1**.
 
 ## Discovery
 
 DNS-SD over mDNS. Every device that is visible registers:
 
-- service type `_rustyfiles._udp.local.`, instance name = the device id, host `<device id>.local.`
+- service type `_leaf._udp.local.`, instance name = the device id, host `<device id>.local.`
 - port = the UDP port of its QUIC endpoint
 - TXT records:
 
@@ -31,7 +31,7 @@ taken on trust: it is always recomputed from the certificate the peer proves in 
 
 ## Transport
 
-QUIC (RFC 9000) with TLS 1.3, ALPN `rustyfiles-nearby/1`. Mutual TLS: both sides present their certificate and the handshake
+QUIC (RFC 9000) with TLS 1.3, ALPN `leaf-nearby/1`. Mutual TLS: both sides present their certificate and the handshake
 signatures are verified normally; the certificates themselves are not chained to any root. What a certificate is worth is decided by
 its fingerprint (trusted list) or by the user (an offer, a pairing code).
 
@@ -103,7 +103,7 @@ for trusted devices) and, with nothing of the kind, estimates from the two `link
 ### Pairing
 
 After a `pair` hello, both sides compute the same six-digit code from the TLS session: 8 bytes from the RFC 5705 exporter with label
-`rustyfiles nearby pairing` and an empty context, read as a big-endian u64, modulo 1 000 000, zero-padded to six digits. Each side
+`leaf nearby pairing` and an empty context, read as a big-endian u64, modulo 1 000 000, zero-padded to six digits. Each side
 shows it and asks its user. Each side then sends `PairConfirm` `{ "ok": true|false }` on the control stream (the client on its half,
 the server on its half) and reads the other's. Only when both are `true` does each side add the other's id, name and fingerprint to
 its trusted list.

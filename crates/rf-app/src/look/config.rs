@@ -1,4 +1,4 @@
-//! leaf-look ayarları: kendi dosyası `leaf-look.toml` (rustyfiles'ın `settings.toml`'u ile iki
+//! leaf-look ayarları: kendi dosyası `leaf-look.toml` (leaf'ın `settings.toml`'u ile iki
 //! süreç birbirinin değişikliğini ezmesin diye ayrı). Her değişiklik diskten taze okunur, üzerine
 //! yazılır, kaydedilir.
 

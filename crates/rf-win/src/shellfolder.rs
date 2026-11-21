@@ -236,7 +236,7 @@ pub fn is_applet(parsing: &str) -> bool {
     APPLETS.iter().any(|g| p.contains(g))
 }
 
-/// Resolves a `::{GUID}` / `shell:` / parsing-name argument to a shell folder that rustyfiles
+/// Resolves a `::{GUID}` / `shell:` / parsing-name argument to a shell folder that leaf
 /// can list itself: it must be a folder, not an applet namespace, and its enumerator must
 /// open. Folders on the file system come back with their `fs_path` (the caller opens those as
 /// ordinary folders). `None` = leave it to Explorer.

@@ -1,9 +1,9 @@
-//! Nearby, the Windows side: sending files to rustyfiles on the network's other devices, and taking theirs. The network part is
+//! Nearby, the Windows side: sending files to leaf on the network's other devices, and taking theirs. The network part is
 //! `crates/rf-nearby` (shared with the macOS app); this is the service in the main process, the Status Center cards for the transfers,
 //! the small window that asks about an offer or a pairing code, the "Send with Nearby" menu and the Settings page.
 //!
 //! Off until the user turns it on (Settings > Nearby): it listens on a network port, and Windows' firewall may ask about that. It runs
-//! while rustyfiles runs (a window open, or in the notification area).
+//! while leaf runs (a window open, or in the notification area).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -472,7 +472,7 @@ fn texts(q: &Question) -> (String, Vec<String>, Option<String>, &'static str, &'
 /// Windows shows our toasts only for the installed app: its Start menu shortcut carries the AppUserModelID. A build from the source
 /// tree or the portable zip has none, and a toast would vanish without a word: those ask in the window.
 fn toasts_usable() -> bool {
-    dirs::data_dir().is_some_and(|d| d.join(r"Microsoft\Windows\Start Menu\Programs\rustyfiles.lnk").exists())
+    dirs::data_dir().is_some_and(|d| d.join(r"Microsoft\Windows\Start Menu\Programs\leaf.lnk").exists())
 }
 
 fn toast_question(q: &Question, cx: &App) -> bool {
@@ -791,7 +791,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Send,
         t!("Use Nearby"),
-        Some(t!("rustyfiles on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, Windows Firewall may ask you to let rustyfiles use the network: allow it for private networks.")),
+        Some(t!("leaf on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, Windows Firewall may ask you to let leaf use the network: allow it for private networks.")),
         switch("nearby-on", p, on, move |_, cx| settings::update(cx, |s| s.nearby_enabled = !on)),
     )];
     if !on {
@@ -900,7 +900,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::Wifi,
             t!("No devices yet"),
-            Some(t!("rustyfiles must be open on the other device, with Nearby on. If the two haven't paired yet, at least one must be visible to Everyone.")),
+            Some(t!("leaf must be open on the other device, with Nearby on. If the two haven't paired yet, at least one must be visible to Everyone.")),
             div().into_any_element(),
         ));
     }

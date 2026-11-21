@@ -44,7 +44,7 @@ fn hotkey() -> &'static Hotkey {
             .name("rf-hotkey".into())
             .spawn(move || unsafe {
                 let inst = GetModuleHandleW(None).unwrap_or_default();
-                let class = w!("rustyfiles.Hotkey");
+                let class = w!("leaf.Hotkey");
                 let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: inst.into(), lpszClassName: class, ..Default::default() };
                 RegisterClassW(&wc);
                 let hwnd = CreateWindowExW(WINDOW_EX_STYLE(WS_EX_TOOLWINDOW.0), class, w!(""), WS_POPUP, 0, 0, 0, 0, None, None, Some(inst.into()), None)

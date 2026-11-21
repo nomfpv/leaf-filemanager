@@ -2,7 +2,7 @@
 //! tries the session again.
 //!
 //! WHAT WAS SEEN (the user's trial without Explorer): the session could not make a capture item for the monitor ("Could not capture the
-//! given monitor"), the engine fell back to Desktop Duplication, and that fallback hides every rustyfiles window from screenshots,
+//! given monitor"), the engine fell back to Desktop Duplication, and that fallback hides every leaf window from screenshots,
 //! recordings and screen sharing (`WDA_EXCLUDEFROMCAPTURE`); the user was sharing the screen and the dock was missing from the stream.
 //! The engine chose the backend ONCE per start and kept it for as long as glass was on screen, so a failure that was only passing (the
 //! shell not there yet, a display still waking up) cost the stream for the rest of the run.

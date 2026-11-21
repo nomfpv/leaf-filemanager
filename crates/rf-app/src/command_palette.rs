@@ -39,7 +39,7 @@ fn commands() -> Vec<Cmd> {
         cmd!("New text document", "", L::FilePlus, NewTextFile),
         cmd!("Refresh", "F5", L::RotateCw, Refresh),
         cmd!("Map network drive…", "", L::Network, MapNetworkDrive),
-        cmd!("Restart rustyfiles", "Ctrl+Alt+Shift+R", L::RotateCw, RestartApp),
+        cmd!("Restart leaf", "Ctrl+Alt+Shift+R", L::RotateCw, RestartApp),
         cmd!("Save session…", "", L::Save, SaveSession),
         cmd!("Disconnect network drive…", "", L::Network, DisconnectNetworkDrive),
         cmd!("Back", "Alt+←", L::ArrowLeft, GoBack),
@@ -480,7 +480,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn visits() -> Vec<Visit> {
-        [r"D:\Projeler\rustyfiles", r"C:\Users\user\Downloads", r"C:\Windows"]
+        [r"D:\Projects\leaf", r"C:\Users\user\Downloads", r"C:\Windows"]
             .iter()
             .enumerate()
             .map(|(i, p)| Visit { path: PathBuf::from(p), last_ms: 10 - i as i64, count: 1 })
@@ -504,9 +504,9 @@ mod tests {
     fn folder_mode_lists_past_folders_only_most_recent_first() {
         let (cmds, v) = (commands(), visits());
         let all = filter(PaletteMode::Folders, &cmds, &v, "");
-        assert_eq!(folders(&all), [r"D:\Projeler\rustyfiles", r"C:\Users\user\Downloads", r"C:\Windows"]);
+        assert_eq!(folders(&all), [r"D:\Projects\leaf", r"C:\Users\user\Downloads", r"C:\Windows"]);
         assert_eq!(all.len(), 3, "no commands");
-        assert_eq!(folders(&filter(PaletteMode::Folders, &cmds, &v, "rusty")), [r"D:\Projeler\rustyfiles"]);
+        assert_eq!(folders(&filter(PaletteMode::Folders, &cmds, &v, "leaf")), [r"D:\Projects\leaf"]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# UI automation helpers for driving rustyfiles in dev tests.
+# UI automation helpers for driving leaf in dev tests.
 # Dot-source:  . tools/ui.ps1 ; $p = Start-RF "C:\some\dir" ; Send-Keys "^+n" ; Shot-Screen "x.png" ; Stop-RF
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -17,7 +17,7 @@ public static class U {
 "@
 [U]::SetProcessDPIAware() | Out-Null
 $script:RF = $null
-$script:RFExe = "$PSScriptRoot\..\target\debug\rustyfiles.exe"
+$script:RFExe = "$PSScriptRoot\..\target\debug\leaf.exe"
 $env:LEAF_MULTI_INSTANCE = "1"   # tests must not forward into another running copy
 
 function Start-RF([string]$Path = "") {

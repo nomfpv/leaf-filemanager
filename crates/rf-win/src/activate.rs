@@ -185,7 +185,7 @@ mod tests {
     /// An id that is no app: the manager answers with an error well inside the wait, and the error reaches the caller. Starts nothing.
     #[test]
     fn an_id_that_is_no_app_comes_back_as_an_error() {
-        let r = packaged("rustyfiles.test.NoSuchPackage_0000000000000!App", "");
+        let r = packaged("leaf.test.NoSuchPackage_0000000000000!App", "");
         let e = r.expect_err("nothing is installed under this id");
         assert!(e.to_string().starts_with("activation:"), "{e}");
     }

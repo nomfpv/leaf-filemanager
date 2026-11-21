@@ -1,6 +1,6 @@
 //! The commands packaged apps add to Windows 11's new right-click menu (`IExplorerCommand`): "Open in Terminal", "Edit in Notepad",
 //! "Edit with Notepad++", NanaZip, PowerToys, VS Code, WhatsApp's "Send with", ... Explorer shows them; the classic menu that
-//! rustyfiles reads (`ctxmenu`) never had them.
+//! leaf reads (`ctxmenu`) never had them.
 //!
 //! WHY (issue 107: "Edit with Notepad++ ... is one of the commands that newer apps add only to Windows 11's new right-click menu";
 //! PR 123 added one such app by hand). An app declares them in its package manifest, `AppxManifest.xml`:

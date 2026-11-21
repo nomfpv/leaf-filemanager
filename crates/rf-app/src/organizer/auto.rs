@@ -134,7 +134,7 @@ pub fn sync(cx: &mut App) {
     for (id, name) in missing {
         if !TOLD.lock().unwrap().contains(&id) {
             TOLD.lock().unwrap().push(id);
-            let msg = format!("«{name}»: {}", t!("The folder was not found or cannot be opened; the rule is not running by itself. Save the rule once the folder is back, or restart rustyfiles."));
+            let msg = format!("«{name}»: {}", t!("The folder was not found or cannot be opened; the rule is not running by itself. Save the rule once the folder is back, or restart leaf."));
             log::warn!("organizer: {msg}");
             crate::status_center::start(cx, t!("File organizer").to_string(), move |_| anyhow::bail!("{msg}"));
         }
