@@ -562,13 +562,15 @@ pub struct SyncView {
     /// A job whose plan is being made for Run (its row says so).
     busy: Option<String>,
     hover: Option<usize>,
-    _task: Option<Task<()>>,
+    /// Preview and Run each have their own: a Preview after Run must not drop the Run's question.
+    _preview_task: Option<Task<()>>,
+    _run_task: Option<Task<()>>,
 }
 
 impl SyncView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         jobs(cx);
-        Self { preview: None, busy: None, hover: None, _task: None }
+        Self { preview: None, busy: None, hover: None, _preview_task: None, _run_task: None }
     }
 
     pub fn status_text(&self, cx: &App) -> String {
@@ -583,7 +585,7 @@ impl SyncView {
         let cancel = Arc::new(AtomicBool::new(false));
         self.preview = Some(Preview { job: job.clone(), plan: None, error: None, cancel: cancel.clone() });
         let work = cx.background_spawn(async move { make_plan(&job, &cancel) });
-        self._task = Some(cx.spawn(async move |this, cx| {
+        self._preview_task = Some(cx.spawn(async move |this, cx| {
             let got = work.await;
             let _ = this.update(cx, |v, cx| {
                 if let Some(pv) = v.preview.as_mut() {
@@ -612,7 +614,7 @@ impl SyncView {
         }
         self.busy = Some(job.id.clone());
         let work = cx.background_spawn(async move { make_plan(&job, &AtomicBool::new(false)) });
-        self._task = Some(cx.spawn_in(window, async move |this, cx| {
+        self._run_task = Some(cx.spawn_in(window, async move |this, cx| {
             let got = work.await;
             let _ = this.update_in(cx, |v, window, cx| {
                 v.busy = None;
