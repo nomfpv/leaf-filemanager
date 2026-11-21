@@ -221,9 +221,17 @@ fn no_window(c: &mut Command) {
     let _ = c;
 }
 
+/// No repository, work tree or index of leaf's own environment reaches git: it finds them from the folder alone.
+fn clean_env(c: &mut Command) {
+    for v in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_INDEX_FILE"] {
+        c.env_remove(v);
+    }
+}
+
 /// git in `dir`, nothing configured beyond no prompt and no window.
 fn plain_git(dir: &Path) -> Command {
     let mut c = Command::new("git");
+    clean_env(&mut c);
     c.arg("-C").arg(dir).arg("--no-pager");
     c.env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0");
     no_window(&mut c);
@@ -239,6 +247,7 @@ fn with_args(mut c: Command, args: &[&str]) -> Command {
 /// author so `commit-tree` works without a configured name.
 fn store_git(root: &Path, git_dir: &Path, empty_tree: &str, own_index: bool) -> Command {
     let mut c = Command::new("git");
+    clean_env(&mut c);
     c.arg("-C").arg(root).args(["--no-pager", "--attr-source", empty_tree]);
     for kv in ["core.autocrlf=false", "core.safecrlf=false", "core.fsmonitor=false", "core.quotepath=false", "gc.auto=0", "maintenance.auto=false", "diff.external="] {
         c.args(["-c", kv]);
@@ -250,8 +259,6 @@ fn store_git(root: &Path, git_dir: &Path, empty_tree: &str, own_index: bool) -> 
         .env("GIT_COMMITTER_EMAIL", "leaf@localhost");
     if own_index {
         c.env("GIT_INDEX_FILE", git_dir.join(INDEX_NAME));
-    } else {
-        c.env_remove("GIT_INDEX_FILE");
     }
     no_window(&mut c);
     c
@@ -761,6 +768,7 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
             match (mine.is_file(), theirs.is_file()) {
                 (true, true) => {
                     let mut c = Command::new("git");
+                    clean_env(&mut c);
                     c.args(["--no-pager", "diff", "--no-index", "--no-color", "--no-ext-diff", &u, "--"]).arg(&mine).arg(&theirs);
                     c.env("GIT_TERMINAL_PROMPT", "0");
                     no_window(&mut c);
