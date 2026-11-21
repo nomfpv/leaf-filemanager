@@ -33,6 +33,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut TagStore)) {
 /// renames paths calls this once with what it did (a copy does not: it leaves the copy untagged). Nothing is written when no tag
 /// is affected.
 pub fn follow(cx: &mut App, pairs: &[(PathBuf, PathBuf)]) {
+    crate::layouts::follow(cx, pairs); // a folder's saved sort/view moves with it
     if pairs.is_empty() || !cx.global::<Tags>().0.follows(pairs) {
         return;
     }
