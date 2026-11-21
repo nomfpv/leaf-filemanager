@@ -144,6 +144,11 @@ pub fn disconnect(v: &VPath, cx: &mut App) {
         let Err(e) = work.await else { return };
         let (title, text) = if e.kind() == std::io::ErrorKind::Unsupported {
             (t!("Not available"), t!("Network places need gio (gvfs), which is not installed on this system.").to_string())
+        } else if e.kind() == std::io::ErrorKind::NotConnected {
+            (
+                t!("Not connected"),
+                t!("Nothing of leaf's was connected to this server. A drive letter mapped to it, or a session Windows opened for Explorer, is ended in Explorer (Disconnect network drive), or by signing out.").to_string(),
+            )
         } else {
             (t!("Could not disconnect"), format!("{}\n\n{e}", t!("The place is still in use or the system refused.")))
         };

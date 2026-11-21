@@ -261,7 +261,7 @@ pub fn connect_share(_remote: &str, _user: &str, _password: &str, _remember: boo
 }
 
 /// Windows only: `Unsupported` here.
-pub fn cancel_share(_remote: &str) -> std::io::Result<()> {
+pub fn cancel_share(_remote: &str) -> std::io::Result<bool> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 

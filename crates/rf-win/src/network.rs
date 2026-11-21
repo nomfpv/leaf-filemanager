@@ -137,7 +137,7 @@ pub fn mount_path_login(_uri: &str, _user: &str, _domain: &str, _password: &str)
 }
 
 /// Lets go of `smb://host/share` (the session Windows keeps for `\\host\share`, and for `\\host\IPC$`, the server's own list of
-/// shares): `WNetCancelConnection2W`, never forced (a file still open there keeps it). Not connected counts as done. Other
+/// shares): `WNetCancelConnection2W`, never forced (a file still open there keeps it). `NotConnected` when neither was. Other
 /// schemes (`nfs://`): `Unsupported`.
 pub fn disconnect(uri: &str) -> std::io::Result<()> {
     let Some(rest) = uri.strip_prefix("smb://") else { return Err(std::io::ErrorKind::Unsupported.into()) };
@@ -148,25 +148,33 @@ pub fn disconnect(uri: &str) -> std::io::Result<()> {
     if host.is_empty() {
         return Err(std::io::ErrorKind::InvalidInput.into());
     }
-    let mut first = None;
+    let (mut first, mut any) = (None, false);
     for s in [share, "IPC$"].into_iter().filter(|s| !s.is_empty()) {
-        if let Err(e) = cancel_share(&format!(r"\\{host}\{s}"))
-            && first.is_none()
-        {
-            first = Some(e);
+        match cancel_share(&format!(r"\\{host}\{s}")) {
+            Ok(was) => any |= was,
+            Err(e) => {
+                any = true;
+                first.get_or_insert(e);
+            }
         }
     }
-    first.map_or(Ok(()), Err)
+    match first {
+        Some(e) => Err(e),
+        // (a session Explorer or a mapped drive holds is under another name: none of these was connected)
+        None if !any => Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "nothing of leaf's was connected to this server")),
+        None => Ok(()),
+    }
 }
 
-/// `WNetCancelConnection2W` on `\\host\share`, not forced; not connected (2250) is no error.
-pub fn cancel_share(remote: &str) -> std::io::Result<()> {
+/// `WNetCancelConnection2W` on `\\host\share`, not forced. `Ok(false)`: it was not connected (2250).
+pub fn cancel_share(remote: &str) -> std::io::Result<bool> {
     use windows::Win32::NetworkManagement::WNet::{NET_CONNECT_FLAGS, WNetCancelConnection2W};
     let w = wide(remote);
     // SAFETY: a NUL-terminated name that lives for the call
     let rc = unsafe { WNetCancelConnection2W(PCWSTR(w.as_ptr()), NET_CONNECT_FLAGS(0), false) };
     match rc.0 {
-        0 | 2250 => Ok(()),
+        0 => Ok(true),
+        2250 => Ok(false),
         e => Err(std::io::Error::from_raw_os_error(e as i32)),
     }
 }

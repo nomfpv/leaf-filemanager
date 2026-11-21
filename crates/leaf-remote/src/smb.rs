@@ -198,7 +198,9 @@ pub fn log_in_unc(path: &std::path::Path) -> Result<(), FsError> {
         Err(e) if leaf_sys::network::is_login_refused(&e) => Tried::Denied,
         // ERROR_SESSION_CREDENTIAL_CONFLICT: Windows is logged in to this server as another user already
         Err(e) if e.raw_os_error() == Some(1219) => {
-            Tried::Failed(FsError::Auth("Windows is logged in to this server as another user already. Disconnect it first (Disconnect on the host)".into()))
+            Tried::Failed(FsError::Auth(
+                "Windows is logged in to this server as another user already (a mapped drive or Explorer). Open it by its IP address or its full name instead: Windows gives that a session of its own. Or end the other session first (Disconnect network drive in Explorer)".into(),
+            ))
         }
         Err(e) => Tried::Failed(FsError::Offline(e.to_string())),
     })
