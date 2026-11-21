@@ -5,14 +5,17 @@
 //!   took it. A saved one is used without asking; when the server refuses it, it is deleted from the keyring and asked again.
 //! - What is saved, by [`SecretId`]: a password by scheme, user, server and port; a passphrase by the SHA-256 of its key
 //!   file's path (the path itself is not written; the file's name is, for the list).
-//! - The list of what is saved (for Settings > Hosts) is kept in the keyring too, as one more entry holding only ids:
-//!   nothing about saved secrets is ever in a file of leaf's (so the settings export cannot carry them).
+//! - The list of what is saved (for Settings > Hosts) is read from the keyring itself (a search for leaf's entries, the
+//!   names parsed back into ids), so it cannot drift from what is stored and has no size cap: nothing about saved secrets
+//!   is ever in a file of leaf's (so the settings export cannot carry them).
 //! - No keyring (no Secret Service running): [`SecretStore::available`] says why, the dialogs show "Remember" disabled with
 //!   that line, and nothing is saved anywhere else.
 //! - The keyring library's own error text goes to the log's details only (it never carries a secret); the user reads
 //!   leaf's sentence.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+#[cfg(test)]
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -41,12 +44,30 @@ impl SecretId {
         SecretId::Passphrase { fingerprint, file_name }
     }
 
-    /// The name of the keyring entry (`sftp://user@host:22`, `key:<sha-256>`).
+    /// The name of the keyring entry (`sftp://user@host:22`, `key:<sha-256>:<file name>`); [`SecretId::from_account`]
+    /// reads it back.
     fn account(&self) -> String {
         match self {
             SecretId::Password { scheme, user, host, port } => format!("{scheme}://{user}@{host}:{port}"),
-            SecretId::Passphrase { fingerprint, .. } => format!("key:{fingerprint}"),
+            SecretId::Passphrase { fingerprint, file_name } => format!("key:{fingerprint}:{file_name}"),
         }
+    }
+
+    /// The id of a keyring entry's name; `None` for a name leaf did not make.
+    fn from_account(account: &str) -> Option<SecretId> {
+        if let Some(rest) = account.strip_prefix("key:") {
+            let (fingerprint, file_name) = rest.split_once(':')?;
+            let hex = fingerprint.len() == 64 && fingerprint.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            return hex.then(|| SecretId::Passphrase { fingerprint: fingerprint.to_string(), file_name: file_name.to_string() });
+        }
+        let (scheme, rest) = account.split_once("://")?;
+        if !matches!(scheme, "sftp" | "ftp" | "ftps") {
+            return None;
+        }
+        let (user, server) = rest.rsplit_once('@')?;
+        let (host, port) = server.rsplit_once(':')?;
+        let port: u16 = port.parse().ok()?;
+        Some(SecretId::password(scheme, user, host, port)).filter(|id| !host.is_empty() && id.account() == account)
     }
 
     /// What the list of saved passwords shows: `user@host:port (SFTP)`, or the key file's name.
@@ -186,16 +207,14 @@ impl Vault {
 
 /// The service name every entry of leaf's has in the keyring.
 const SERVICE: &str = "leaf";
-/// The entry that lists what leaf saved (ids only, as JSON).
-const INDEX: &str = "leaf-saved-list";
+/// The entry an earlier build kept the list in (ids only); deleted when the list is read.
+const OLD_INDEX: &str = "leaf-saved-list";
 
 /// The system's keyring through `keyring-core` and the platform's store. Opened on first use (on Linux that is a D-Bus
 /// connection), never at app start.
 #[derive(Default)]
 pub struct Keyring {
     store: OnceLock<Result<Arc<keyring_core::CredentialStore>, String>>,
-    /// One change of the list at a time.
-    index: Mutex<()>,
 }
 
 /// leaf's sentence for a keyring failure; the library's text goes into the details after it.
@@ -205,6 +224,7 @@ fn failed(what: &str, e: keyring_core::Error) -> String {
         E::NoStorageAccess(_) => "the keyring is locked or refused access",
         E::PlatformFailure(_) => "the keyring did not answer",
         E::TooLong(..) | E::Invalid(..) => "the name is too long for the keyring",
+        E::NotSupportedByStore(_) => "this keyring cannot list its entries",
         _ => "the keyring gave an error",
     };
     // (`BadEncoding` and `BadDataFormat` hold the stored bytes: never printed)
@@ -235,6 +255,19 @@ fn open_store() -> Result<Arc<keyring_core::CredentialStore>, String> {
     }
 }
 
+/// What finds leaf's entries in the store: the Credential Manager matches a pattern on the target name
+/// (`<account>.<service>`), the Secret Service the `service` attribute. Each found entry's service is checked again.
+fn search_spec() -> std::collections::HashMap<&'static str, &'static str> {
+    #[cfg(windows)]
+    {
+        std::collections::HashMap::from([("pattern", r"\.leaf$")])
+    }
+    #[cfg(not(windows))]
+    {
+        std::collections::HashMap::from([("service", SERVICE)])
+    }
+}
+
 impl Keyring {
     fn store(&self) -> Result<&Arc<keyring_core::CredentialStore>, String> {
         self.store.get_or_init(open_store).as_ref().map_err(Clone::clone)
@@ -242,37 +275,6 @@ impl Keyring {
 
     fn entry(&self, account: &str) -> Result<keyring_core::Entry, String> {
         self.store()?.build(SERVICE, account, None).map_err(|e| failed("The keyring entry cannot be made", e))
-    }
-
-    fn read_index(&self) -> Result<Vec<SecretId>, String> {
-        match self.entry(INDEX)?.get_password() {
-            Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_else(|_| {
-                log::warn!("remote: the keyring's list of saved passwords is not readable; starting a new one");
-                Vec::new()
-            })),
-            Err(keyring_core::Error::NoEntry) => Ok(Vec::new()),
-            Err(e) => Err(failed("The list of saved passwords cannot be read", e)),
-        }
-    }
-
-    fn write_index(&self, ids: &[SecretId]) -> Result<(), String> {
-        let e = self.entry(INDEX)?;
-        if ids.is_empty() {
-            return match e.delete_credential() {
-                Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-                Err(err) => Err(failed("The list of saved passwords cannot be written", err)),
-            };
-        }
-        let text = serde_json::to_string(ids).map_err(|e| e.to_string())?;
-        e.set_password(&text).map_err(|e| failed("The list of saved passwords cannot be written", e))
-    }
-
-    fn change_index(&self, change: impl FnOnce(&mut Vec<SecretId>)) -> Result<(), String> {
-        let _g = self.index.lock().unwrap_or_else(|e| e.into_inner());
-        let mut ids = self.read_index()?;
-        let before = ids.clone();
-        change(&mut ids);
-        if ids != before { self.write_index(&ids) } else { Ok(()) }
     }
 }
 
@@ -291,25 +293,55 @@ impl SecretStore for Keyring {
     }
 
     fn set(&self, id: &SecretId, secret: &Secret) -> Result<(), String> {
-        self.entry(&id.account())?.set_password(secret.as_str()).map_err(|e| failed("The password cannot be saved", e))?;
-        self.change_index(|ids| {
-            if !ids.contains(id) {
-                ids.push(id.clone());
-            }
-        })
+        self.entry(&id.account())?.set_password(secret.as_str()).map_err(|e| failed("The password cannot be saved", e))
     }
 
     fn delete(&self, id: &SecretId) -> Result<(), String> {
         match self.entry(&id.account())?.delete_credential() {
-            Ok(()) | Err(keyring_core::Error::NoEntry) => {}
-            Err(e) => return Err(failed("The saved password cannot be deleted", e)),
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(e) => Err(failed("The saved password cannot be deleted", e)),
         }
-        self.change_index(|ids| ids.retain(|i| i != id))
     }
 
+    /// leaf's entries as the store has them now (an entry whose name leaf cannot read back is left out, never deleted).
     fn list(&self) -> Result<Vec<SecretId>, String> {
-        let _g = self.index.lock().unwrap_or_else(|e| e.into_inner());
-        self.read_index()
+        let found = self.store()?.search(&search_spec()).map_err(|e| failed("The list of saved passwords cannot be read", e))?;
+        let mut ids = Vec::new();
+        for entry in found {
+            let Some((service, account)) = entry.get_specifiers() else { continue };
+            if service != SERVICE {
+                continue;
+            }
+            if account == OLD_INDEX {
+                let _ = entry.delete_credential();
+                continue;
+            }
+            match SecretId::from_account(&account) {
+                Some(id) if !ids.contains(&id) => ids.push(id),
+                Some(_) => {}
+                None => log::debug!("remote: a keyring entry of service {SERVICE} that leaf did not make is left alone"),
+            }
+        }
+        Ok(ids)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn saved_ids_read_back_from_their_keyring_names() {
+    let ids = [
+        SecretId::password("sftp", "alice", "example.org", 22),
+        SecretId::password("ftps", "a@b.c", "10.0.0.1", 990),
+        SecretId::password("sftp", "bob", "[::1]", 2222),
+        SecretId::passphrase(std::path::Path::new("C:/Users/x/.ssh/id_ed25519")),
+        SecretId::passphrase(std::path::Path::new("/home/x/keys/a:b.key")),
+    ];
+    for id in &ids {
+        assert_eq!(SecretId::from_account(&id.account()).as_ref(), Some(id), "{}", id.account());
+    }
+    // names that are not leaf's ids are not read as one (so never listed, never deleted by "Forget all")
+    for other in ["leaf-saved-list", "key:abc:x", "http://a@b:1", "sftp://a@b:99999", "sftp://a@B:22", "sftp://nobody", "sftp://a@:22", ""] {
+        assert_eq!(SecretId::from_account(other), None, "{other}");
     }
 }
 
