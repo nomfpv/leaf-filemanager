@@ -46,6 +46,12 @@ pub fn render(p: &Palette, ops: &Entity<crate::status_center::Ops>, popups_open:
         .child(appearance_button(p, popups_open))
         .child(icon_button("tb-menu", p, L::Menu, t!("Menu").into(), popups_open).on_click(|_, window, cx| main_menu(window, cx)))
         .child(visibility_button(p, popups_open, cx))
+        .child({
+            // the moon in a dark window, the sun in a light one; a click is the "Light / dark theme" command
+            let tip: SharedString = if p.dark { t!("Switch to the light theme").into() } else { t!("Switch to the dark theme").into() };
+            icon_button("tb-theme", p, if p.dark { L::Moon } else { L::Sun }, tip, popups_open)
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::ToggleTheme), cx))
+        })
         .into_any_element()
 }
 
