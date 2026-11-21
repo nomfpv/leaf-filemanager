@@ -64,10 +64,11 @@ pub fn is_address_path(p: &Path) -> bool {
 }
 
 /// The remote place an address kept as a path stands for (`ftp://host/pub` from an older leaf's history), when leaf serves
-/// it now. Reads the name only.
+/// it now. A password in it (`ftp://user:pw@host`, which an older leaf took) is dropped, so the place is written back to the
+/// history without it. Reads the name only.
 pub fn upgrade_address_path(loc: Location) -> Location {
     match &loc {
-        Location::Path(p) if is_address_path(p) => match parse_typed(&p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")) {
+        Location::Path(p) if is_address_path(p) => match parse_typed(&rf_core::history::redact_credentials(&p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))) {
             Some(remote) => remote,
             None => loc,
         },
@@ -1521,4 +1522,21 @@ fn offer_copy(remote: VPath, local: PathBuf, cx: &mut App) {
             cx,
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_ftp_path_with_a_password_upgrades_without_it() {
+        leaf_remote::register(leaf_remote::Config::for_user(None), Arc::new(leaf_remote::NoPrompter));
+        let old = Location::Path(PathBuf::from("ftp://alice:s3cret@example.com/pub/x"));
+        let Location::Remote(v) = upgrade_address_path(old) else { panic!("not upgraded") };
+        assert_eq!(v.to_string(), "ftp://alice@example.com/pub/x");
+        assert!(!format!("{v:?}").contains("s3cret"));
+        // a path of this PC stays as it is
+        let local = Location::Path(PathBuf::from(r"C:\Users"));
+        assert_eq!(upgrade_address_path(local.clone()), local);
+    }
 }
