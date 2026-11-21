@@ -738,6 +738,9 @@ pub struct ExecOut {
     pub truncated: bool,
 }
 
+/// How long a Cancel waits for a copy command's pid line before it gives up stopping it.
+const STOP_WAIT: Duration = Duration::from_secs(5);
+
 /// The most output of a command that is kept.
 const EXEC_CAP: usize = 4 * 1024 * 1024;
 
@@ -777,7 +780,8 @@ impl Conn {
     /// Runs a copy command (`crate::server_copy::copy_command`) on a new channel and follows it until it ends, with no time
     /// limit: every piece of output goes to `on_text`; with `poll`, that command runs once a second beside it and its output
     /// goes to `on_poll`. When `cancelled` turns true the process group the command named (`leaf-pid`) is signalled, the end
-    /// awaited a few seconds, and `Cancelled` returned.
+    /// awaited a few seconds, and `Cancelled` returned. A Cancel before the pid line came waits for it up to `STOP_WAIT`; when
+    /// none comes the copy may still run there: `Ended::unstopped` is set (never a clean `Cancelled`).
     pub async fn exec_watch(
         &self,
         command: &str,
@@ -798,6 +802,8 @@ impl Conn {
         let mut head = String::new();
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let mut polled = Instant::now();
+        // since when a Cancel waits for the pid line
+        let mut stopping: Option<Instant> = None;
         loop {
             let ev = tokio::select! {
                 m = ch.wait() => Ev::Msg(m),
@@ -828,9 +834,21 @@ impl Conn {
                 Ev::Msg(Some(_)) => {}
                 Ev::Tick => {
                     self.touch();
-                    if cancelled() {
-                        if let Some(p) = pid {
-                            let _ = self.exec(&kill_command(p), Duration::from_secs(15)).await;
+                    if stopping.is_none() && cancelled() {
+                        stopping = Some(Instant::now());
+                    }
+                    if let Some(since) = stopping {
+                        match pid {
+                            Some(p) => {
+                                let _ = self.exec(&kill_command(p), Duration::from_secs(15)).await;
+                            }
+                            // (the pid line may be on its way: output is still read meanwhile)
+                            None if since.elapsed() < STOP_WAIT => continue,
+                            None => {
+                                let _ = ch.close().await;
+                                end.unstopped = true;
+                                return Ok(end);
+                            }
                         }
                         let _ = ch.close().await;
                         // (the copy may still write for a moment: the part is removed after it ended)
@@ -857,6 +875,10 @@ impl Conn {
             }
         }
         self.touch();
+        // (cancelled while waiting for the pid, and the copy ended by itself meanwhile: nothing runs there any more)
+        if stopping.is_some() {
+            return Err(FsError::Cancelled);
+        }
         Ok(end)
     }
 

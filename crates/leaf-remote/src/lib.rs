@@ -202,7 +202,7 @@ pub fn copy_on_server(
                 return Err(FsError::Unsupported);
             }
         };
-        server_copy::outcome(tool, &end)
+        server_copy::outcome(tool, &end, part)
     })
 }
 

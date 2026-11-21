@@ -101,6 +101,9 @@ pub fn parse_rsync_progress(text: &str) -> Option<u64> {
     }).last()
 }
 
+/// The start of the error of a copy that could not be stopped (its part is left alone: it is still being written).
+pub const UNSTOPPED: &str = "leaf could not stop the copy on the server";
+
 /// How a copy command ended.
 #[derive(Debug, Clone, Default)]
 pub struct Ended {
@@ -110,10 +113,15 @@ pub struct Ended {
     pub started: bool,
     /// The last line it printed that was not progress (the details of an error).
     pub last_line: String,
+    /// Cancel came before the command said its pid, and none came: the copy may still be running on the server.
+    pub unstopped: bool,
 }
 
 /// What a copy command's ending means: `Unsupported` when the command never started (the caller copies as before).
-pub fn outcome(tool: Tool, e: &Ended) -> Result<(), FsError> {
+pub fn outcome(tool: Tool, e: &Ended, part: &VPath) -> Result<(), FsError> {
+    if e.unstopped {
+        return Err(FsError::Other(format!("{UNSTOPPED}; it may still be writing {} (remove it when it is done)", part.path())));
+    }
     match e.code {
         Some(0) => Ok(()),
         Some(PART_TAKEN) => Err(FsError::Exists),
@@ -185,9 +193,15 @@ pub fn copy_with(
     let parent = to.parent().ok_or(FsError::Denied)?;
     let part = parent.join(&part_name(to.name()));
     if let Err(e) = run(&copy_command(tool, from.path(), part.path(), is_dir), &part) {
-        // (`Exists`: something was under the part name before the command; it is not leaf's to remove)
-        if e != FsError::Exists {
+        // (`Exists`: something was under the part name before the command; it is not leaf's to remove. A copy that could
+        // not be stopped is left alone too: it is still writing there, and the error names the part)
+        if e != FsError::Exists && !matches!(&e, FsError::Other(m) if m.starts_with(UNSTOPPED)) {
             let _ = fs.remove(&part, true);
+            // once more: a copy that was signalled may have written a last piece after the first removal
+            if fs.stat(&part).is_ok() {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let _ = fs.remove(&part, true);
+            }
         }
         return Err(e);
     }
