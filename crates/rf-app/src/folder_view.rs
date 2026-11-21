@@ -3486,7 +3486,7 @@ impl FolderView {
 
     fn on_drag_motion(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(press) = &self.drag_origin else { return };
-        if ev.pressed_button != Some(MouseButton::Left) {
+        if !left_still_held(ev) {
             self.drag_origin = None;
             return;
         }
@@ -5260,7 +5260,7 @@ impl FolderView {
                             ));
                         }
                         if this.marquee.is_some() {
-                            if ev.pressed_button == Some(MouseButton::Left) {
+                            if left_still_held(ev) {
                                 this.update_marquee(ev.position, cx);
                             } else {
                                 this.marquee = None;
@@ -5271,6 +5271,17 @@ impl FolderView {
                         this.on_drag_motion(ev, window, cx)
                     }))
                     .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.drag_origin = None;
+                            if this.marquee.take().is_some() {
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    // let go outside the list (over the sidebar, the other pane, outside the window): the band and the press end
+                    // there too, now that a move without the button no longer ends them off Windows (`left_still_held`)
+                    .on_mouse_up_out(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseUpEvent, _, cx| {
                             this.drag_origin = None;
@@ -6411,7 +6422,9 @@ impl FolderView {
 /// file drag of the same paths (GPUI's Linux backend does that on Wayland). Not tried on a real desktop yet.
 #[cfg(not(windows))]
 fn drag_out_row(row: Stateful<Div>, paths: ExternalPaths) -> Stateful<Div> {
-    let mut row = row.on_drag(paths, |d: &ExternalPaths, _, _, cx| cx.new(|_| d.clone()));
+    // (the toolkit draws nothing for `ExternalPaths` itself, leaving that to the system, which only draws for a drag between
+    // programs: inside the window the drag was invisible; the chip shows what is carried, as the tab and pin drags do)
+    let mut row = row.on_drag(paths, |d: &ExternalPaths, _, _, cx| cx.new(|_| DragChip::of(d.paths())));
     row = row.external_drag_payload::<ExternalPaths>(|d, _, _| {
         Some(ExternalDragPayload::Files(FileDragPaths::new(d.paths().iter().map(|p| (p.clone(), p.is_dir())))))
     });
@@ -6421,6 +6434,40 @@ fn drag_out_row(row: Stateful<Div>, paths: ExternalPaths) -> Stateful<Div> {
 #[cfg(windows)]
 fn drag_out_row(row: Stateful<Div>, _paths: ExternalPaths) -> Stateful<Div> {
     row
+}
+
+/// What follows the pointer while rows are dragged inside the window off Windows: the item's name, or how many items.
+#[cfg(not(windows))]
+struct DragChip(SharedString);
+
+#[cfg(not(windows))]
+impl DragChip {
+    fn of(paths: &[PathBuf]) -> Self {
+        Self(match paths {
+            [one] => one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| one.to_string_lossy().into_owned()).into(),
+            many => crate::i18n::items(many.len()).into(),
+        })
+    }
+}
+
+#[cfg(not(windows))]
+impl Render for DragChip {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let p = Palette::for_window(window);
+        div().px_3().py_1p5().rounded(theme::RADIUS).bg(p.card_bg).border_1().border_color(p.accent).text_sm().text_color(p.text).shadow_md().child(self.0.clone())
+    }
+}
+
+/// Whether a move during a press of the left button still belongs to it. Windows names the held button with every move. GPUI's
+/// Wayland backend forgets it when the pointer is entered again (`button_pressed` is cleared on `wl_pointer.enter`, and a move
+/// with no button is sent along), and from then on reports every move of that press without one: the rubber band and the press
+/// ended at the first such move (Linux tester: "no drag at all"). Off Windows only the left release ends them (`on_mouse_up`,
+/// `on_mouse_up_out` on the list); another button held still does.
+fn left_still_held(ev: &MouseMoveEvent) -> bool {
+    match ev.pressed_button {
+        Some(b) => b == MouseButton::Left,
+        None => !cfg!(windows),
+    }
 }
 
 /// Use the rendered path, so a refresh during a drag cannot retarget it by shifting row indices.
