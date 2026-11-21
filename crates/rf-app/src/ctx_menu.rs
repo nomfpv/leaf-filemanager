@@ -512,7 +512,7 @@ impl FolderView {
             name_index: prefs.name_index,
             send_to_fits: send_to_fits_files(items),
             archive_path: crate::archive_view::split(&ctx_dir).is_some(),
-            ftp: leaf_sys::ftp::is_ftp(&ctx_dir),
+            ftp: crate::remote::is_address_path(&ctx_dir),
             organizer: false,
             rotatable: !items.is_empty() && items.iter().all(|p| leaf_sys::rotate::can_rotate(p) && crate::archive_view::split(p).is_none()),
             image,
@@ -547,7 +547,7 @@ impl FolderView {
             in_search,
             prefs: cx.global::<crate::settings::Settings>().menu.clone(),
             archive_path,
-            ftp: leaf_sys::ftp::is_ftp(dir),
+            ftp: crate::remote::is_address_path(dir),
             organizer: !in_search && crate::organizer::has_rules_for(dir, cx),
             own_actions: own.is_some(),
             undo: undo.map(str::to_string),
@@ -1125,7 +1125,7 @@ fn send_to_fits(items: &[PathBuf], cx: &App) -> bool {
 /// The same without the setting (the menu's row has the switch itself).
 fn send_to_fits_files(items: &[PathBuf]) -> bool {
     let Some(parent) = items.first().and_then(|p| p.parent()) else { return false };
-    !leaf_sys::ftp::is_ftp(parent)
+    !crate::remote::is_address_path(parent)
         && items.iter().all(|p| p.parent() == Some(parent) && !(crate::archive_view::split(p).is_some() && !p.exists()))
 }
 

@@ -345,7 +345,7 @@ impl FolderView {
             return;
         }
         let Some(dir) = self.current_dir() else { return };
-        if leaf_sys::ftp::is_ftp(&dir) {
+        if crate::remote::is_address_path(&dir) {
             return;
         }
         let (tx, rx) = oneshot::channel();
@@ -402,7 +402,7 @@ impl FolderView {
     pub(crate) fn paste_to(&mut self, dir: PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
         // items copied in a folder on a server (and nothing copied since): downloaded here
         if let Some(items) = crate::remote::clipboard_items(cx) {
-            if !leaf_sys::ftp::is_ftp(&dir) && crate::archive_view::split(&dir).is_none() {
+            if !crate::remote::is_address_path(&dir) && crate::archive_view::split(&dir).is_none() {
                 let after = self.select_arrived(dir.clone(), cx);
                 crate::remote::download(cx, items, dir, Some(after));
             }
@@ -418,23 +418,8 @@ impl FolderView {
         leaf_sys::sta::run(move |owner| {
             let _ = tx.send(leaf_sys::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
         });
-        if leaf_sys::ftp::is_ftp(&dir) {
-            // FTP: upload the clipboard files (folders are skipped), then refresh
-            let url = dir.to_string_lossy().into_owned();
-            cx.spawn(async move |this, cx| {
-                if let Ok(Some((paths, _))) = rx.await {
-                    let work = cx.background_spawn(async move {
-                        for p in paths.iter().filter(|p| p.is_file()) {
-                            if let Err(e) = leaf_sys::ftp::upload(p, &url) {
-                                log::warn!("ftp upload {p:?}: {e}");
-                            }
-                        }
-                    });
-                    work.await;
-                    let _ = this.update(cx, |v, cx| v.refresh(cx));
-                }
-            })
-            .detach();
+        // (paste onto a server goes through `paste_remote`; an address kept as a path is no folder to paste in)
+        if crate::remote::is_address_path(&dir) {
             return;
         }
         cx.spawn(async move |this, cx| {
@@ -490,7 +475,7 @@ impl FolderView {
             return;
         }
         let Some(dir) = self.current_dir() else { return };
-        if leaf_sys::ftp::is_ftp(&dir) || crate::archive_view::split(&dir).is_some() {
+        if crate::remote::is_address_path(&dir) || crate::archive_view::split(&dir).is_some() {
             return;
         }
         let paths = self.selection_paths();

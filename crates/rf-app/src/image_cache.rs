@@ -410,7 +410,7 @@ impl ImageCache {
         let folder_preview = e.is_dir()
             && size >= FOLDER_PREVIEW_MIN
             && !own_picture(e)
-            && !leaf_sys::ftp::is_ftp(dir)
+            && !crate::remote::is_address_path(dir)
             && !crate::nav_touch::may_hold_archive(dir);
         let wants_thumb = crate::icons::has_thumbnail(e) || folder_preview;
         let per_file = wants_thumb || own_picture(e);

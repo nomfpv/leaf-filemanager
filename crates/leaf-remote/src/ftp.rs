@@ -15,7 +15,7 @@
 //! - Login: the user of the address or of the saved host, else `anonymous`. The password is asked in leaf's dialog and kept
 //!   in memory (wiped on drop) for this run, keyed by scheme, user, server and port (a password typed for `ftps` is never
 //!   sent over plain `ftp`); it is forgotten when the server refuses it. It is never in an address, a log line, a temporary
-//!   name or hosts.toml. (suppaftp writes the PASS line at trace level: the app caps that crate's log at debug, see
+//!   name or hosts.toml. (suppaftp writes the PASS line at trace level: the app caps that crate's log at warn, see
 //!   [`QUIET_LOG_TARGETS`].)
 //! - Writes: `Replace` stores into a hidden temporary name beside the file (`.name.leaf-up-<n>`) and renames it over the real
 //!   name only after the server confirmed the whole upload; a cut upload leaves the real file as it was. The generic copy's
@@ -45,7 +45,7 @@ use crate::conn::Config;
 use crate::prompt::{CertQuestion, HostKeyAnswer, Prompter, SecretQuestion};
 
 /// Log targets that write secrets at their most detailed level (suppaftp logs the `PASS` line at trace). The app caps these
-/// at `debug`, whatever `RUST_LOG` says.
+/// at `warn`, whatever `RUST_LOG` says (nothing up to `debug` carries a secret: the test checks that).
 pub const QUIET_LOG_TARGETS: &[&str] = &["suppaftp"];
 
 /// Connections per server at most (one for browsing, the rest for transfers running at the same time).

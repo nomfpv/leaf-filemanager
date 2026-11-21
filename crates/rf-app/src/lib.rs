@@ -391,12 +391,15 @@ pub fn main() {
     leaf_sys::thumbs::keep_gdiplus_alive();
     // Logs go to stderr and to leaf.log in the settings folder; override the level with
     // RUST_LOG. The default filter: `platform::LOG_FILTER`.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(platform::LOG_FILTER))
-        .target(env_logger::Target::Pipe(Box::new(logfile::Tee::new())))
-        .format_timestamp_millis()
-        .init();
+    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(platform::LOG_FILTER));
+    // crates that write a password at their most detailed level (the FTP client's PASS line, at trace) stay at warn whatever
+    // RUST_LOG says (the default level: a filter set here may only lower it)
+    for target in leaf_remote::QUIET_LOG_TARGETS {
+        logger.filter_module(target, log::LevelFilter::Warn);
+    }
+    logger.target(env_logger::Target::Pipe(Box::new(logfile::Tee::new()))).format_timestamp_millis().init();
     start_mark("logging");
-    // sftp:// (cheap: nothing connects until a server is opened; before the command line, which may name one)
+    // sftp://, ftp://, ftps:// (cheap: nothing connects until a server is opened; before the command line, which may name one)
     remote::register();
     // a bulk rename that did not end (crash, power loss) left its journal: logged and kept, the files are not touched
     if let Some(dir) = rename_exec::journal_dir() {

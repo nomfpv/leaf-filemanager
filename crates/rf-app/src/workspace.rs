@@ -496,6 +496,9 @@ pub fn parse_launch(msg: &str) -> (Location, Option<String>) {
     if let Some(loc) = crate::remote::parse_typed(m) {
         return (loc, None);
     }
+    if crate::remote::refused_address(m).is_some() {
+        return (Location::Home, None);
+    }
     if let Some(file) = m.strip_prefix(SELECT_PREFIX) {
         let p = PathBuf::from(file);
         if let (Some(dir), Some(name)) = (p.parent(), p.file_name()) {
@@ -701,7 +704,7 @@ fn remember_search(history: &mut Vec<String>, q: &str) {
 /// the UI thread for seconds); a folder merely named like an archive goes without the button.
 pub(crate) fn tab_terminal_dir(loc: &Location) -> Option<PathBuf> {
     let Location::Path(p) = loc else { return None };
-    (!leaf_sys::ftp::is_ftp(p) && leaf_sys::network::server_root(p).is_none() && !crate::nav_touch::may_hold_archive(p))
+    (!crate::remote::is_address_path(p) && leaf_sys::network::server_root(p).is_none() && !crate::nav_touch::may_hold_archive(p))
         .then(|| p.clone())
 }
 
@@ -1152,7 +1155,7 @@ impl Workspace {
             FolderEvent::ToOtherPane(kind, paths) => {
                 if let Some(other) = this.other_pane(emitter) {
                     let dest = match other.read(cx).location() {
-                        Location::Path(p) if !leaf_sys::ftp::is_ftp(p) && leaf_sys::network::server_root(p).is_none() => Some(p.clone()),
+                        Location::Path(p) if !crate::remote::is_address_path(p) && leaf_sys::network::server_root(p).is_none() => Some(p.clone()),
                         _ => None,
                     };
                     if let Some(dest) = dest {
@@ -1937,7 +1940,7 @@ impl Workspace {
             ShelfEvent::Transfer(kind, items) => {
                 let dest = match self.active_tab().read(cx).location() {
                     Location::Path(p)
-                        if !leaf_sys::ftp::is_ftp(p) && leaf_sys::network::server_root(p).is_none() =>
+                        if !crate::remote::is_address_path(p) && leaf_sys::network::server_root(p).is_none() =>
                     {
                         Some(p.clone())
                     }
@@ -4562,7 +4565,7 @@ impl Workspace {
     /// The free bytes on the volume `path` is on, and its root: read in the background, at most every 20 seconds per volume.
     fn free_space(&mut self, path: &Path, cx: &mut Context<Self>) -> Option<(u64, PathBuf)> {
         let root = path.ancestors().last()?.to_path_buf();
-        if leaf_sys::ftp::is_ftp(path) || root.as_os_str().is_empty() {
+        if crate::remote::is_address_path(path) || root.as_os_str().is_empty() {
             return None;
         }
         let now = std::time::Instant::now();
@@ -5105,7 +5108,6 @@ fn pane_header(view: &Entity<FolderView>, marked: bool, dual: bool, p: &Palette,
     let v = view.read(cx);
     let loc = v.location();
     let place = match loc {
-        Location::Path(path) if leaf_sys::ftp::is_ftp(path) => t!("FTP"),
         Location::Path(path) if crate::archive_view::is_browsable_path(path) => t!("Archive"),
         Location::Path(path) if leaf_sys::network::server_root(path).is_some() => t!("Network"),
         Location::Path(_) => t!("Local"),
@@ -5221,10 +5223,13 @@ fn parse_location(text: &str) -> Option<Location> {
     if lower == "home" {
         return Some(Location::Home);
     }
-    // `mem://demo/` (and later `sftp://...`): a place behind the virtual filesystem; schemes it has no backend for (`ftp://`)
-    // stay paths as before
+    // `mem://demo/`, `sftp://...`, `ftp://...`: a place behind the virtual filesystem; schemes it has no backend for stay paths
+    // as before. An address with a password in it opens nothing (it would land in the history as a path).
     if let Some(remote) = crate::remote::parse_typed(t) {
         return Some(remote);
+    }
+    if crate::remote::refused_address(t).is_some() {
+        return None;
     }
     // Environment variables like %USERPROFILE%
     let expanded = expand_env(t);

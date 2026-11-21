@@ -1066,7 +1066,7 @@ fn follows_property_sort(spec: SortSpec, current: SortSpec) -> bool {
 
 /// The open folder is one whose files the property system can read without a network round trip.
 fn plain_local_path(p: &Path) -> bool {
-    !crate::archive_view::is_browsable_path(p) && !leaf_sys::ftp::is_ftp(p) && !leaf_sys::localized::is_network(p)
+    !crate::archive_view::is_browsable_path(p) && !crate::remote::is_address_path(p) && !leaf_sys::localized::is_network(p)
 }
 
 #[cfg(test)]

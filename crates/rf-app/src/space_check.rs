@@ -8,7 +8,7 @@ use crate::t;
 
 /// Only where it can matter: a move inside one drive is a rename, archives and servers have no local free space.
 pub fn needed(sources: &[PathBuf], dest: &Path) -> bool {
-    if sources.is_empty() || crate::archive_view::split(dest).is_some() || leaf_sys::ftp::is_ftp(dest) {
+    if sources.is_empty() || crate::archive_view::split(dest).is_some() || crate::remote::is_address_path(dest) {
         return false;
     }
     !(cfg!(windows) && sources.iter().all(|s| same_drive(s, dest)))

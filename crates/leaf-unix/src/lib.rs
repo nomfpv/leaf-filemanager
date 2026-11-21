@@ -33,7 +33,6 @@ pub mod fileinfo;
 pub mod fileops;
 pub mod folder_custom;
 pub mod foldersize;
-pub mod ftp;
 pub mod geom;
 pub mod git;
 pub mod glass;

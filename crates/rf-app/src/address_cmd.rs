@@ -53,6 +53,13 @@ impl Workspace {
     ///
     /// Called by the Enter handler of the address field only.
     pub(super) fn enter_address_text(&mut self, text: String, from_completion: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // `ftp://user:password@host`: refused, the password goes nowhere (not into the history, not to a server)
+        if let Some(why) = crate::remote::refused_address(&text) {
+            crate::prompt::notice(t!("This address is not opened"), why, window, cx);
+            self.focus_active(window, cx);
+            cx.notify();
+            return;
+        }
         let Some(loc) = parse_location(&text) else {
             self.focus_active(window, cx);
             cx.notify();
@@ -64,7 +71,7 @@ impl Workspace {
         };
         let tab = self.active_tab().clone();
         let open_dir = match tab.read(cx).location() {
-            Location::Path(p) if !leaf_sys::ftp::is_ftp(p) && leaf_sys::network::server_root(p).is_none() && crate::archive_view::split(p).is_none() => Some(p.clone()),
+            Location::Path(p) if leaf_sys::network::server_root(p).is_none() && crate::archive_view::split(p).is_none() => Some(p.clone()),
             _ => None,
         };
         let command_possible = command_possible(

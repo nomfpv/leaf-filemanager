@@ -1,6 +1,6 @@
 //! Saved hosts in the app (W1b): the list from `hosts.toml` in the config folder, shared by the Settings page "Hosts", the
 //! sidebar section and the Home widget (both only while there are hosts). Opening a host goes to its address as a remote place
-//! (SFTP through `leaf-remote`); a scheme with no backend yet says that connecting is not built yet.
+//! (SFTP, FTP and FTPS through `leaf-remote`); a scheme with no backend yet says that connecting is not built yet.
 //!
 //! The file never holds a password or another secret (see `rf_core::hosts`).
 
@@ -52,11 +52,12 @@ fn change(cx: &mut App, f: impl FnOnce(&mut Hosts)) {
     cx.refresh_windows();
 }
 
-/// Where opening the host goes: its start folder as a remote place; an SFTP host without one opens in the user's home
-/// folder on the server (`/~`).
+/// Where opening the host goes: its start folder as a remote place; an SFTP or FTP host without one opens in the folder the
+/// server logs the user into (`/~`).
 pub fn location(h: &Host) -> Option<Location> {
     let v = VPath::parse(&h.address()).ok()?;
-    let v = if h.start_path.is_none() && h.scheme.eq_ignore_ascii_case("sftp") { v.with_path("/~") } else { v };
+    let login_folder = ["sftp", "ftp", "ftps"].iter().any(|s| h.scheme.eq_ignore_ascii_case(s));
+    let v = if h.start_path.is_none() && login_folder { v.with_path("/~") } else { v };
     Some(Location::Remote(v))
 }
 
@@ -85,6 +86,7 @@ pub fn subtitle(h: &Host) -> String {
 }
 
 const EXAMPLE: &str = "name = sftp://user@example.com:22/folder key=~/.ssh/id_ed25519 jump=bastion";
+const FTP_EXAMPLE: &str = "nas = ftps://user@nas.local/share";
 
 /// The add / edit dialog: one line (`Host::to_line`). `old`: the name of the host being edited.
 fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
@@ -92,7 +94,12 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
     let initial = old.as_ref().map(Host::to_line).unwrap_or_default();
     let old_name = old.map(|h| h.name);
     let title = if old_name.is_some() { t!("Edit host") } else { t!("Add a host") };
-    let message = format!("{}\n{EXAMPLE}\n{}", t!("One line: a name, =, the address, and if needed the key file and a jump host."), t!("Passwords are never saved in this list."));
+    let message = format!(
+        "{}\n{EXAMPLE}\n{FTP_EXAMPLE}\n{}\n{}",
+        t!("One line: a name, =, the address, and if needed the key file and a jump host."),
+        t!("Passwords are never saved in this list."),
+        t!("ftp:// is not encrypted (the password crosses the network as it is); use ftps:// where the server has it.")
+    );
     crate::prompt::show(
         title,
         Some(message),
@@ -146,7 +153,7 @@ fn import(window: &mut Window, cx: &mut App) {
 pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let hosts = all(cx);
     let mut v = vec![
-        card(p, L::Plus, t!("Add a host"), Some(t!("A server you reach over SFTP: its address, user, port, start folder, key file and jump host. No passwords are kept here.")), button("hosts-add", p, t!("Add"), |w, cx| edit_dialog(None, w, cx))),
+        card(p, L::Plus, t!("Add a host"), Some(t!("A server you reach over SFTP, FTPS or FTP: its address, user, port, start folder, key file and jump host. No passwords are kept here.")), button("hosts-add", p, t!("Add"), |w, cx| edit_dialog(None, w, cx))),
         card(
             p,
             L::Download,
@@ -179,7 +186,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         v_flex()
             .pt_3()
             .child(div().text_xs().text_color(p.text_tertiary).child(t!(
-                "Servers are checked against ~/.ssh/known_hosts: a new one is asked about, one whose key changed is refused. Logging in tries your SSH agent, the key file, then asks for a password; passphrases and passwords stay in memory until leaf closes. Browsing, opening and copying to this PC work; uploading, renaming and deleting on a server come next."
+                "SFTP servers are checked against ~/.ssh/known_hosts: a new one is asked about, one whose key changed is refused. Logging in tries your SSH agent, the key file, then asks for a password; passphrases and passwords stay in memory until leaf closes. An FTPS certificate this PC does not trust is asked about; one you trust is kept by its fingerprint. Plain FTP is not encrypted."
             )))
             .into_any_element(),
     );

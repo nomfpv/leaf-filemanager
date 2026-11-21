@@ -1,8 +1,10 @@
 //! Places that are not local folders (`Location::Remote`), listed through `leaf-vfs` on a worker thread. Local folders never
 //! come here: they keep `Location::Path` and the direct listing.
 //!
-//! - `sftp://` (W1a, read-only in this lane): `leaf-remote` serves it. Connecting asks through dialogs here (an unknown host
-//!   key, a key's passphrase, a password); a changed host key is refused with a warning in the pane and no way past it.
+//! - `sftp://` (W1a), `ftp://` and `ftps://` (W1c): `leaf-remote` serves them. Connecting asks through dialogs here (an unknown
+//!   host key, a key's passphrase, a password, an FTPS certificate the system does not trust); a changed host key is refused
+//!   with a warning in the pane and no way past it. A password for plain `ftp://` is asked with a line saying it crosses the
+//!   network unencrypted.
 //! - Opening or looking at a file fetches a size-capped copy into a cache folder first (as archives do), then opens that.
 //! - Copy, Copy to other pane, Copy to..., a drag onto a local pane and Paste in a local folder download through
 //!   `leaf_vfs::copy` as a Status Center job (progress, pause, cancel, names that exist asked; a cut-off file is removed).
@@ -13,7 +15,7 @@
 //!   uploaded (the old version kept as `name.leaf-bak`), refused when the server's file changed since the fetch, with "Save as
 //!   copy on server" offered instead.
 //! - `mem://demo/` (the in-memory demo tree; `mem://offline/` and `mem://locked/` show the error banner) in debug builds, or in
-//!   any build with `LEAF_VFS_DEMO=1`. Schemes without a backend (`ftp://` is still the old WinINet path) stay paths as before.
+//!   any build with `LEAF_VFS_DEMO=1`. Schemes without a backend stay paths as before.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -22,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use futures::StreamExt as _;
 use futures::channel::mpsc;
 use gpui_kit::*;
-use leaf_remote::{HostKeyAnswer, HostKeyQuestion, Prompter, Secret, SecretQuestion};
+use leaf_remote::{CertQuestion, HostKeyAnswer, HostKeyQuestion, Prompter, Secret, SecretQuestion};
 use leaf_vfs::{Fs, FsError, LocalFs};
 use rf_core::Location;
 use rf_core::vpath::VPath;
@@ -52,6 +54,24 @@ pub fn usable(scheme: &str) -> bool {
         "file" => false,
         "mem" => demo_enabled(),
         s => leaf_vfs::has_backend(s),
+    }
+}
+
+/// A path that is an address (`ftp://host/x` kept as a `Location::Path` by an older leaf, in its history or a saved tab):
+/// never a folder of this PC. Reads the name only.
+pub fn is_address_path(p: &Path) -> bool {
+    p.to_str().is_some_and(|s| VPath::looks_like(&s.replace(std::path::MAIN_SEPARATOR, "/")))
+}
+
+/// The remote place an address kept as a path stands for (`ftp://host/pub` from an older leaf's history), when leaf serves
+/// it now. Reads the name only.
+pub fn upgrade_address_path(loc: Location) -> Location {
+    match &loc {
+        Location::Path(p) if is_address_path(p) => match parse_typed(&p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")) {
+            Some(remote) => remote,
+            None => loc,
+        },
+        _ => loc,
     }
 }
 
@@ -90,6 +110,25 @@ pub fn disconnect(v: &VPath, cx: &mut App) {
     .detach();
 }
 
+/// Why typed text that is an address of a place leaf serves is not opened: a password in it (`ftp://user:pw@host`), or
+/// another fault of the address. `None` for text that is no such address (or an address of a scheme leaf does not serve).
+pub fn refused_address(text: &str) -> Option<String> {
+    let t = text.trim().trim_matches('"');
+    if !VPath::looks_like(t) {
+        return None;
+    }
+    let scheme = t.split_once("://").map_or("", |(s, _)| s).to_ascii_lowercase();
+    // (other schemes, `https://` and the like, go on as before: an address command may hand them on)
+    if !usable(&scheme) {
+        return None;
+    }
+    match VPath::parse(t) {
+        Ok(_) => None,
+        Err(rf_core::vpath::VPathError::Password) => Some(t!("Passwords are not written in addresses: leaf asks for the password when it connects, and keeps it in memory only. Type the address without it (ftp://user@host).").to_string()),
+        Err(e) => Some(crate::i18n::td(&e.to_string())),
+    }
+}
+
 /// Lists `dir` (on a worker thread). The error is the text the pane shows.
 pub fn list(dir: &VPath, cancelled: &dyn Fn() -> bool, on_batch: &mut dyn FnMut(Vec<rf_core::Entry>)) -> Result<usize, String> {
     let fs = leaf_vfs::fs_for(dir.scheme()).map_err(message)?;
@@ -120,12 +159,13 @@ pub fn retry_message(err: &str) -> Option<&str> {
 enum Ask {
     HostKey(HostKeyQuestion, Box<dyn FnOnce(HostKeyAnswer) + Send>),
     Secret(SecretQuestion, Box<dyn FnOnce(Option<Secret>) + Send>),
+    Cert(CertQuestion, Box<dyn FnOnce(HostKeyAnswer) + Send>),
 }
 
 impl Ask {
     fn cancel(self) {
         match self {
-            Ask::HostKey(_, r) => r(HostKeyAnswer::Cancel),
+            Ask::HostKey(_, r) | Ask::Cert(_, r) => r(HostKeyAnswer::Cancel),
             Ask::Secret(_, r) => r(None),
         }
     }
@@ -146,9 +186,14 @@ impl Prompter for UiPrompter {
             e.into_inner().cancel();
         }
     }
+    fn certificate(&self, q: CertQuestion, reply: Box<dyn FnOnce(HostKeyAnswer) + Send>) {
+        if let Err(e) = self.0.unbounded_send(Ask::Cert(q, reply)) {
+            e.into_inner().cancel();
+        }
+    }
 }
 
-/// Serves `sftp://` (cheap: nothing connects and no thread starts until the first remote place is opened). Before the
+/// Serves `sftp://`, `ftp://` and `ftps://` (cheap: nothing connects and no thread starts until the first remote place is opened). Before the
 /// command line is read, so `leaf sftp://...` opens the server.
 pub fn register() {
     let (tx, rx) = mpsc::unbounded();
@@ -242,6 +287,37 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                 cx,
             );
         }
+        Ask::Cert(q, reply) => {
+            let reply: Once<HostKeyAnswer> = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));
+            let answer = |a: HostKeyAnswer| {
+                let reply = reply.clone();
+                move |_: Option<String>, _: &mut Window, _: &mut App| {
+                    if let Some(r) = reply.take() {
+                        r(a);
+                    }
+                    Ok(())
+                }
+            };
+            let first = if q.changed {
+                t!("This server shows another certificate than the one you trusted before, and this PC does not trust it either. Someone may be intercepting the connection, or the server got a new certificate.")
+            } else {
+                t!("This PC does not trust the server's certificate. Trust it only if you know it is the server's own (a home server or NAS often has a self-signed one).")
+            };
+            let msg = format!("{first}\n\n{} {}\n{} {}", t!("Reason:"), crate::i18n::td(&q.reason), t!("Fingerprint:"), q.fingerprint);
+            crate::prompt::show(
+                format!("{} {}", t!("Certificate not trusted:"), q.host),
+                Some(msg),
+                None,
+                // Cancel is the default button: Enter never trusts a certificate
+                vec![
+                    Button::new(t!("Trust this certificate"), Kind::Normal, answer(HostKeyAnswer::TrustAndRemember)),
+                    Button::new(t!("Trust once"), Kind::Normal, answer(HostKeyAnswer::TrustOnce)),
+                    Button::new(t!("Cancel"), Kind::Primary, answer(HostKeyAnswer::Cancel)),
+                ],
+                window,
+                cx,
+            );
+        }
         Ask::Secret(q, reply) => {
             let reply: Once<Option<Secret>> = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));
             let ok = {
@@ -266,9 +342,10 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                     let first = if retry { t!("Wrong passphrase. Try again.") } else { t!("This key file is locked with a passphrase.") };
                     crate::prompt::show_secret(t!("Key passphrase"), Some(format!("{first}\n{key_file}\n\n{kept}")), t!("Passphrase").to_string(), buttons, window, cx);
                 }
-                SecretQuestion::Password { account, retry } => {
+                SecretQuestion::Password { account, retry, unencrypted } => {
                     let first = if retry { t!("Wrong password. Try again.") } else { t!("The server asks for a password.") };
-                    crate::prompt::show_secret(format!("{} {account}", t!("Password for")), Some(format!("{first}\n\n{kept}")), t!("Password").to_string(), buttons, window, cx);
+                    let plain = if unencrypted { format!("\n{}", t!("Not encrypted: plain FTP sends the password and the files as they are. Use ftps:// where the server has it.")) } else { String::new() };
+                    crate::prompt::show_secret(format!("{} {account}", t!("Password for")), Some(format!("{first}{plain}\n\n{kept}")), t!("Password").to_string(), buttons, window, cx);
                 }
                 SecretQuestion::Server { account, prompt, echo } => {
                     let title = format!("{account} {}", t!("asks"));
@@ -346,7 +423,7 @@ fn fetch(v: &VPath, max: u64, cancelled: &dyn Fn() -> bool, progress: &mut dyn F
         }
     }
     make_cache_dir(&local)?;
-    let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(22)));
+    let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(if v.scheme().starts_with("ftp") { 21 } else { 22 })));
     leaf_vfs::copy::fetch_file(&*fs, v, &local, max, Some(&from), cancelled, progress)?;
     if let Ok(lm) = std::fs::metadata(&local) {
         let mut perm = lm.permissions();
@@ -672,7 +749,7 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
             (tr.on_progress)(total_files.max(1) as u32, done, cur);
         };
         // every file that arrives carries the download mark (SmartScreen, Office's Protected View)
-        let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(22)));
+        let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(if v.scheme().starts_with("ftp") { 21 } else { 22 })));
         let mut mark = |part: &VPath| {
             if let Err(e) = leaf_sys::fileinfo::mark_downloaded(&LocalFs::native(part), &from) {
                 log::debug!("download: no download mark: {e}");
@@ -786,10 +863,10 @@ pub fn copy_to_dialog(items: Vec<(VPath, bool)>, initial: Option<PathBuf>, windo
 /// Uploads of one file at least this big offer "Verify on server" when they are done.
 const VERIFY_MIN: u64 = 64 << 20;
 
-/// Whether the place of `v` can be written to (uploads, new folders, renames, deletes). `sftp://` only for now: the writes
-/// of other backends (rclone) have not been reviewed, so leaf does not offer them.
+/// Whether the place of `v` can be written to (uploads, new folders, renames, deletes). `sftp://`, `ftp://` and `ftps://`
+/// only: the writes of other backends (rclone) have not been reviewed, so leaf does not offer them.
 pub fn writable(v: &VPath) -> bool {
-    v.scheme() == "sftp" && leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
+    matches!(v.scheme(), "sftp" | "ftp" | "ftps") && leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
 }
 
 /// A server's address as people read it in a title (`host:/path`, no user, never a secret: addresses carry none).

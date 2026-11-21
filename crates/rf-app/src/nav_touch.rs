@@ -408,7 +408,7 @@ mod probe {
                 let _ = crate::archive_view::is_browsable_path(p);
                 let _ = super::may_hold_archive(p);
                 let _ = leaf_sys::network::server_root(p);
-                let _ = leaf_sys::ftp::is_ftp(p);
+                let _ = crate::remote::is_address_path(p);
                 let _ = rf_core::history::Location::Path(p.to_path_buf()).cleaned();
                 println!("{name:5} {round:6} name-only checks              {:9.2} ms", ms(t));
             }

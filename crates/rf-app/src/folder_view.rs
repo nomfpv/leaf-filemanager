@@ -934,6 +934,8 @@ impl FolderView {
     // ---------- navigation ----------
 
     pub fn navigate(&mut self, to: Location, cx: &mut Context<Self>) {
+        // `ftp://...` that an older leaf kept as a path opens as the remote place now
+        let to = crate::remote::upgrade_address_path(to);
         if to == Location::RecycleBin {
             self.recycle = None; // fresh listing each visit
         }
@@ -1488,7 +1490,7 @@ impl FolderView {
             return;
         }
         let Some(path) = self.location().path().map(|p| p.to_path_buf()) else { return };
-        if leaf_sys::ftp::is_ftp(&path) {
+        if crate::remote::is_address_path(&path) {
             return; // no change notifications over FTP; F5 refreshes
         }
         let (tx, mut rx) = mpsc::unbounded::<Option<Vec<(String, Option<Entry>)>>>();
@@ -1758,19 +1760,10 @@ impl FolderView {
         let generation = self.generation;
         let cancel = self.cancel.clone();
         let (tx, mut rx) = mpsc::unbounded::<Msg>();
-        if leaf_sys::ftp::is_ftp(&path) {
-            let url = path.to_string_lossy().into_owned();
-            std::thread::Builder::new()
-                .name("rf-ftp".into())
-                .spawn(move || {
-                    let r = leaf_sys::ftp::list(&url).map(|es| {
-                        let n = es.len();
-                        let _ = tx.unbounded_send(Msg::Batch(es));
-                        n
-                    });
-                    let _ = tx.unbounded_send(Msg::Done(r.map_err(|e| e.to_string())));
-                })
-                .ok();
+        if crate::remote::is_address_path(&path) {
+            // an address kept as a path by an older leaf (history, a saved tab): it opens as a remote place from the address
+            // bar or the Hosts list; as a path there is nothing to list
+            let _ = tx.unbounded_send(Msg::Done(Err(t!("Open this address again from the address bar").to_string())));
         } else if let Some(server) = leaf_sys::network::server_root(&path) {
             std::thread::Builder::new()
                 .name("rf-shares".into())
@@ -3826,7 +3819,7 @@ impl FolderView {
     /// A local folder that downloads may go into (not an archive, FTP, a server's share list or any other special place).
     pub(crate) fn download_dir(&self) -> Option<PathBuf> {
         match self.location() {
-            Location::Path(p) if !leaf_sys::ftp::is_ftp(p) && leaf_sys::network::server_root(p).is_none() && crate::archive_view::split(p).is_none() => Some(p.clone()),
+            Location::Path(p) if !crate::remote::is_address_path(p) && leaf_sys::network::server_root(p).is_none() && crate::archive_view::split(p).is_none() => Some(p.clone()),
             _ => None,
         }
     }
@@ -5967,26 +5960,16 @@ fn is_lnk(path: &std::path::Path) -> bool {
 
 pub(crate) fn open_in_background(path: PathBuf, cx: &mut App) {
     // (the name test first: it costs nothing, and `exists` on a place that has to wake up holds the UI thread)
-    if !leaf_sys::ftp::is_ftp(&path) && crate::nav_touch::may_hold_archive(&path) && !path.exists() && crate::archive_view::split(&path).is_some() {
+    if !crate::remote::is_address_path(&path) && crate::nav_touch::may_hold_archive(&path) && !path.exists() && crate::archive_view::split(&path).is_some() {
         // an item inside an archive: extract just it (Status Center), open the real file
         crate::archive_view::open_items(cx, vec![path]);
         return;
     }
     std::thread::spawn(move || {
-        // FTP: download to a temp copy, then open that
-        let path = if leaf_sys::ftp::is_ftp(&path) {
-            let name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-            let dir = std::env::temp_dir().join("leaf-ftp");
-            let _ = std::fs::create_dir_all(&dir);
-            let local = dir.join(name);
-            if let Err(e) = leaf_sys::ftp::download(&path.to_string_lossy(), &local) {
-                log::warn!("ftp download {path:?}: {e}");
-                return;
-            }
-            local
-        } else {
-            path
-        };
+        // (a server's files are opened through `remote::open_file`; an address kept as a path is no file here)
+        if crate::remote::is_address_path(&path) {
+            return;
+        }
         // (with the user's own program for the file's type when there is one: Settings > File types)
         if let Err(e) = leaf_sys::openrules::open(&path) {
             log::warn!("open {path:?}: {e}");

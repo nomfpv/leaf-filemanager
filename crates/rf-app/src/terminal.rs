@@ -23,7 +23,7 @@ pub fn target(p: &Path) -> Option<PathBuf> {
         Some((archive, _)) => archive.parent()?.to_path_buf(),
         None => p.to_path_buf(),
     };
-    if leaf_sys::ftp::is_ftp(&p) || leaf_sys::network::server_root(&p).is_some() {
+    if crate::remote::is_address_path(&p) || leaf_sys::network::server_root(&p).is_some() {
         return None;
     }
     p.ancestors().filter(|a| !a.as_os_str().is_empty()).find(|a| a.is_dir()).map(Path::to_path_buf)
@@ -61,7 +61,7 @@ pub fn offered(loc: &Location) -> bool {
     if let Location::Remote(v) = loc {
         return ssh_args(v).is_some();
     }
-    location_dir(loc).is_some_and(|p| !leaf_sys::ftp::is_ftp(&p) && leaf_sys::network::server_root(&p).is_none())
+    location_dir(loc).is_some_and(|p| !crate::remote::is_address_path(&p) && leaf_sys::network::server_root(&p).is_none())
 }
 
 /// Opens the terminal of the settings in the folder for `p` (see [`target`]); nothing happens, quietly, when there is none.

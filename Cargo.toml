@@ -87,7 +87,6 @@ windows = { version = "0.62", features = [
     "Win32_NetworkManagement_IpHelper",
     # GetIfEntry2 / MIB_IF_ROW2 (network.rs)
     "Win32_NetworkManagement_Ndis",
-    "Win32_Networking_WinInet",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
