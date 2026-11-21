@@ -369,6 +369,8 @@ struct Probe {
     free: Option<u64>,
     at: Option<std::time::Instant>,
     running: bool,
+    /// Set to use leaf's VPN, which is down: not probed.
+    waits_vpn: bool,
 }
 
 #[derive(Default)]
@@ -378,19 +380,40 @@ impl Global for Probes {}
 /// The probe is looked at again after this long, and only while a tile is drawn.
 const PROBE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// How a host's tile is probed: a host set to use leaf's VPN (not on the local network) only through the tunnel, and not at
+/// all while it is down (a direct probe would show the server this PC's own address, and the PC's resolver its name).
+#[derive(Debug, PartialEq, Eq)]
+enum ProbeWay {
+    Direct,
+    Tunnel,
+    /// It waits for the VPN.
+    None,
+}
+
+fn probe_way(h: &Host, tunnel_up: bool) -> ProbeWay {
+    if !h.vpn || leaf_vpn::route::is_lan_host(&h.host) {
+        ProbeWay::Direct
+    } else if tunnel_up {
+        ProbeWay::Tunnel
+    } else {
+        ProbeWay::None
+    }
+}
+
 fn probe_host(h: &Host) -> Probe {
     use std::net::ToSocketAddrs;
     let scheme = h.scheme.to_ascii_lowercase();
     let port = h.port.unwrap_or(if scheme.starts_with("ftp") { 21 } else if scheme == "smb" { 445 } else { 22 });
     let started = std::time::Instant::now();
-    let online = (h.host.as_str(), port)
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut a| a.find_map(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(2)).ok()))
-        .is_some();
+    let limit = std::time::Duration::from_secs(2);
+    let online = match probe_way(h, leaf_vpn::tunnel().is_some()) {
+        ProbeWay::None => return Probe { waits_vpn: true, at: Some(std::time::Instant::now()), ..Probe::default() },
+        ProbeWay::Tunnel => leaf_vpn::dial_blocking(&h.host, port, limit).is_ok_and(|s| s.through_tunnel()),
+        ProbeWay::Direct => (h.host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.find_map(|a| std::net::TcpStream::connect_timeout(&a, limit).ok())).is_some(),
+    };
     let ping_ms = online.then(|| started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32);
     let free = if online { VPath::parse(&h.address()).ok().and_then(|v| leaf_remote::free_if_connected(&v)) } else { None };
-    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false }
+    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false, waits_vpn: false }
 }
 
 /// Starts the probes of the hosts whose answer is old (the page is redrawn when one comes back).
@@ -438,6 +461,7 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
         let loc = location(&h);
         let probe = cx.global::<Probes>().0.get(&h.name).cloned().unwrap_or_default();
         let (dot, state) = match (probe.online, probe.ping_ms) {
+            _ if probe.waits_vpn => (p.text_tertiary, t!("Waits for the VPN").to_string()),
             (Some(true), Some(ms)) => (p.success, format!("{} \u{b7} {ms} ms", t!("Online"))),
             (Some(true), None) => (p.success, t!("Online").to_string()),
             (Some(false), _) => (p.danger, t!("Not reachable").to_string()),
@@ -489,4 +513,25 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
         );
     }
     Some(grid.into_any_element())
+}
+
+#[cfg(test)]
+mod vpn_probe_tests {
+    // (not `super::*`: that brings gpui's own `test` attribute in with the toolkit's prelude)
+    use super::{ProbeWay, probe_way};
+    use rf_core::hosts::Host;
+
+    #[test]
+    fn a_vpn_host_with_the_tunnel_down_is_never_probed() {
+        let mut h = Host::new("box", "files.example.com");
+        h.vpn = true;
+        assert_eq!(probe_way(&h, false), ProbeWay::None, "no direct probe while the VPN is down");
+        assert_eq!(probe_way(&h, true), ProbeWay::Tunnel);
+        // the same host without the tick, and a ticked host on the local network: probed as before
+        h.vpn = false;
+        assert_eq!(probe_way(&h, false), ProbeWay::Direct);
+        let mut nas = Host::new("nas", "nas.local");
+        nas.vpn = true;
+        assert_eq!(probe_way(&nas, false), ProbeWay::Direct);
+    }
 }
