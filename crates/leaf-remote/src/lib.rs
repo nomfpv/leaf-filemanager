@@ -13,6 +13,8 @@ pub mod checksum;
 mod conn;
 pub mod docker;
 pub mod edit;
+#[cfg(unix)]
+mod gvfs;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
@@ -53,6 +55,12 @@ pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
     leaf_vfs::register("sftp", || sftp_backend() as Arc<dyn leaf_vfs::Fs>);
     // `docker://local/` and `docker://user@host/`: the containers and their mounts, read-only (nothing runs until opened)
     leaf_vfs::register("docker", || Arc::new(docker::DockerFs) as Arc<dyn leaf_vfs::Fs>);
+    // `smb://host/share` and `nfs://host/export` on Linux: mounted through gio, read through the gvfs folder
+    #[cfg(unix)]
+    {
+        leaf_vfs::register("smb", || Arc::new(gvfs::GvfsFs::default()) as Arc<dyn leaf_vfs::Fs>);
+        leaf_vfs::register("nfs", || Arc::new(gvfs::GvfsFs::default()) as Arc<dyn leaf_vfs::Fs>);
+    }
     // `rclone://remote/path`, only when the rclone program is installed (a PATH look-up; nothing runs here)
     if rclone::find_exe().is_some() {
         leaf_vfs::register("rclone", || match rclone::find_exe() {

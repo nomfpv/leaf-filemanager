@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 rf-core.workspace = true
 leaf-vfs.workspace = true
+leaf-sys.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

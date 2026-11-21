@@ -65,6 +65,31 @@ pub fn parse_typed(text: &str) -> Option<Location> {
     usable(v.scheme()).then_some(Location::Remote(v))
 }
 
+/// The place of a Network entry: a mounted `smb://` or `nfs://` share keeps its address, any other target is a folder.
+pub fn network_place(target: PathBuf) -> Location {
+    target.to_str().and_then(parse_typed).unwrap_or(Location::Path(target))
+}
+
+/// "Disconnect" of a mounted network place (`gio mount -u`), off the UI thread; a refusal or a missing `gio` is told in a dialog.
+pub fn disconnect(v: &VPath, cx: &mut App) {
+    let uri = format!("{}://{}{}", v.scheme(), v.authority(), v.path());
+    let work = cx.background_executor().spawn(async move { leaf_sys::network::disconnect(&uri) });
+    cx.spawn(async move |cx| {
+        let Err(e) = work.await else { return };
+        let (title, text) = if e.kind() == std::io::ErrorKind::Unsupported {
+            (t!("Not available"), t!("Network places need gio (gvfs), which is not installed on this system.").to_string())
+        } else {
+            (t!("Could not disconnect"), format!("{}\n\n{e}", t!("The place is still in use or the system refused.")))
+        };
+        let _ = cx.update(|cx| {
+            if let Some(w) = cx.active_window().or_else(|| cx.windows().first().copied()) {
+                let _ = w.update(cx, |_, window, cx| crate::prompt::notice(title, text, window, cx));
+            }
+        });
+    })
+    .detach();
+}
+
 /// Lists `dir` (on a worker thread). The error is the text the pane shows.
 pub fn list(dir: &VPath, cancelled: &dyn Fn() -> bool, on_batch: &mut dyn FnMut(Vec<rf_core::Entry>)) -> Result<usize, String> {
     let fs = leaf_vfs::fs_for(dir.scheme()).map_err(message)?;

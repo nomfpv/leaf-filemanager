@@ -4965,6 +4965,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hmac 0.12.1",
+ "leaf-sys",
  "leaf-vfs",
  "log",
  "rf-core",

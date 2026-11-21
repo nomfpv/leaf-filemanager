@@ -126,6 +126,16 @@ pub fn map_drive_dialog(owner: isize) {
     }
 }
 
+/// The folder of a `smb://` or `nfs://` place: only Linux (gvfs) mounts these; `Unsupported` here.
+pub fn mount_path(_uri: &str) -> std::io::Result<PathBuf> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Lets go of a mounted `smb://` or `nfs://` place: only Linux; `Unsupported` here.
+pub fn disconnect(_uri: &str) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
 /// Windows' "Disconnect network drive" dialog.
 pub fn disconnect_drive_dialog(owner: isize) {
     use windows::Win32::Foundation::HWND;

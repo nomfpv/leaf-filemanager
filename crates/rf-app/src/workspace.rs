@@ -2845,6 +2845,33 @@ impl Workspace {
         self.places.update(cx, |p, cx| p.refresh(cx));
     }
 
+    /// Right-click on a mounted share in the sidebar's Network list: open it, copy its address, disconnect.
+    fn net_menu(&mut self, v: rf_core::vpath::VPath, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::fluent_menu::{Item, Menu, MenuIcon};
+        let me = cx.entity().downgrade();
+        let (a, b, c) = (v.clone(), v.clone(), v.clone());
+        let items = vec![
+            Item::action(t!("Open"), MenuIcon::Lucide(L::SquareArrowOutUpRight), {
+                let me = me.clone();
+                move |w: &mut Window, cx: &mut App| {
+                    let loc = Location::Remote(a.clone());
+                    let _ = me.update(cx, |ws, cx| ws.navigate(loc, w, cx));
+                }
+            }),
+            Item::action(t!("Open in new tab"), MenuIcon::Lucide(L::SquarePlus), move |w: &mut Window, cx: &mut App| {
+                let loc = Location::Remote(b.clone());
+                let _ = me.update(cx, |ws, cx| ws.open_tab(loc, w, cx));
+            }),
+            Item::action(t!("Copy address"), MenuIcon::Lucide(L::ClipboardCopy), {
+                let s = v.to_string();
+                move |_: &mut Window, cx: &mut App| cx.write_to_clipboard(ClipboardItem::new_string(s.clone()))
+            }),
+            Item::Separator,
+            Item::action(t!("Disconnect"), MenuIcon::Lucide(L::Unplug), move |_: &mut Window, cx: &mut App| crate::remote::disconnect(&c, cx)),
+        ];
+        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+    }
+
     /// Right-click on a sidebar folder/drive: the Explorer menu (eject, properties, format…)
     /// plus open in new tab/window and pin/unpin.
     fn sidebar_menu(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -4079,6 +4106,11 @@ impl Workspace {
         });
         let is_wt = matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-wt");
         let two_lines = extra.is_some();
+        // a mounted share of the Network list: its own menu (Disconnect)
+        let net_share = match &target3 {
+            Location::Remote(v) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-net") => Some(v.clone()),
+            _ => None,
+        };
         let tag_dot = target3.path().filter(|p| p.parent().is_some()).and_then(|p| crate::tags::first_color(p, cx));
         h_flex()
             .id(id)
@@ -4163,6 +4195,15 @@ impl Workspace {
                         } else {
                             this.sidebar_menu(path.clone(), window, cx);
                         }
+                    }),
+                )
+            })
+            .when_some(net_share, |d, v| {
+                d.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.net_menu(v.clone(), window, cx);
                     }),
                 )
             })
@@ -4424,7 +4465,7 @@ impl Workspace {
         if !network.is_empty() && shown("network") {
             col = col.child(header(t!("Network")));
             for (i, (name, target)) in network.into_iter().enumerate() {
-                let loc = Location::Path(target);
+                let loc = crate::remote::network_place(target);
                 let active = cur == loc;
                 col = col.child(self.sidebar_item(("sb-net", i).into(), L::Network, p.text_secondary, name, loc, active, None, p, cx));
             }

@@ -196,7 +196,7 @@ pub fn network(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -
                                 .child(div().text_xs().text_color(p.text_secondary).overflow_hidden().text_ellipsis().whitespace_nowrap().child(shown_target)),
                         ),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Path(target.clone()), cx))),
+                .on_click(cx.listener(move |this, _, _, cx| this.navigate(crate::remote::network_place(target.clone()), cx))),
         );
     }
     Some(grid.into_any_element())
