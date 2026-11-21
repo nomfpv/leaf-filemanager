@@ -377,6 +377,35 @@ pub fn dial_blocking(host: &str, port: u16, timeout: Duration) -> io::Result<Blo
     Ok(BlockingStream { stream, rt, read_timeout: None, write_timeout: None })
 }
 
+/// [`dial`] for a client that takes only a plain socket of its own (the FTP client): a listener on 127.0.0.1 that takes ONE
+/// connection within 10 s (from this PC only) and joins it to `host:port` through [`dial`]. The kill switch refuses here, before
+/// anything is opened. The address to connect to is returned.
+pub fn loopback_bridge(host: &str, port: u16, timeout: Duration) -> io::Result<SocketAddr> {
+    if route(host) == Route::Blocked {
+        return Err(blocked());
+    }
+    let rt = runtime().ok_or_else(|| io::Error::other("leaf's VPN is not set up in this copy of leaf"))?;
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    listener.set_nonblocking(true)?;
+    let addr = listener.local_addr()?;
+    let host = host.to_string();
+    rt.spawn(async move {
+        let Ok(l) = tokio::net::TcpListener::from_std(listener) else { return };
+        let Ok(Ok((mut local, peer))) = tokio::time::timeout(Duration::from_secs(10), l.accept()).await else { return };
+        drop(l);
+        if !peer.ip().is_loopback() {
+            return;
+        }
+        match dial(&host, port, timeout).await {
+            Ok(mut remote) => {
+                let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+            }
+            Err(e) => log::info!("vpn: the bridge to port {port} could not connect: {e}"),
+        }
+    });
+    Ok(addr)
+}
+
 /// A [`Stream`] with blocking `Read` and `Write`.
 #[derive(Debug)]
 pub struct BlockingStream {

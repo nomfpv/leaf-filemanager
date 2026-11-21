@@ -10,6 +10,8 @@ publish.workspace = true
 rf-core.workspace = true
 leaf-vfs.workspace = true
 leaf-sys.workspace = true
+# hosts set to "Through VPN" are dialled through leaf's VPN (which runs on this crate's runtime)
+leaf-vpn.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -48,7 +48,16 @@ pub fn agent(o: &Options) -> Result<ureq::Agent, Error> {
     if !o.headers.is_empty() {
         b = b.max_redirects(0);
     }
-    Ok(b.build().into())
+    Ok(match &o.dialer {
+        // (the connections come from the dialer, TLS on top of them as usual)
+        Some(d) => {
+            use ureq::unversioned::transport::{Connector as _, RustlsConnector, TcpConnector};
+            let d = crate::dial::Shared(d.clone());
+            let chain = crate::dial::DialConnector(d.clone()).chain(TcpConnector::default()).chain(RustlsConnector::default());
+            ureq::Agent::with_parts(b.build(), chain, crate::dial::DialResolver(d))
+        }
+        None => b.build().into(),
+    })
 }
 
 fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers, uri: &str) -> ureq::RequestBuilder<B> {
@@ -147,6 +156,11 @@ pub fn retriable_status(s: u16) -> bool {
 
 pub fn map_err(e: ureq::Error) -> Error {
     use ureq::Error as E;
+    if let E::Io(io) = &e
+        && let Some(why) = crate::dial::refusal_of(io)
+    {
+        return Error::Refused(why);
+    }
     match e {
         E::BadUri(_) | E::Http(_) | E::InvalidProxyUrl | E::TooManyRedirects | E::RedirectFailed | E::RequireHttpsOnly(_) => Error::BadUrl(e.to_string()),
         E::Tls(_) | E::Rustls(_) | E::Pem(_) => Error::Secure(e.to_string()),

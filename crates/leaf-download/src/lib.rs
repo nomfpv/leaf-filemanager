@@ -4,6 +4,7 @@
 //! async runtime. The caller (leaf's Status Center) supplies the progress sink and the answer to "that name exists".
 
 mod auth;
+pub mod dial;
 mod headers;
 mod host;
 mod http;
@@ -77,6 +78,8 @@ pub struct Options {
     pub subfolder: Option<String>,
     /// How the requests reach the net.
     pub proxy: ProxyMode,
+    /// Who opens the connections (leaf's VPN); none: plain TCP.
+    pub dialer: Option<Arc<dyn dial::Dialer>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,7 +117,21 @@ pub enum ProxyMode {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default(), categories: Vec::new(), subfolder: None, proxy: ProxyMode::System }
+        Self {
+            segments: 16,
+            max_segments: 32,
+            retries: 6,
+            backoff: Duration::from_secs(1),
+            user_agent: "leaf".into(),
+            connect_timeout: Duration::from_secs(15),
+            read_timeout: Duration::from_secs(30),
+            sha256: None,
+            headers: Headers::default(),
+            categories: Vec::new(),
+            subfolder: None,
+            proxy: ProxyMode::System,
+            dialer: None,
+        }
     }
 }
 
@@ -194,6 +211,8 @@ pub enum Error {
     Auth(Challenge),
     /// The finished file is not the one the checksum names.
     Checksum { expected: String, got: String },
+    /// The dialer refused the connection on purpose (the VPN's kill switch): nothing went out; not tried again here.
+    Refused(String),
     Io(std::io::Error),
 }
 
@@ -207,7 +226,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Cancelled => write!(f, "cancelled"),
-            Error::BadUrl(s) | Error::Network(s) | Error::Secure(s) => write!(f, "{s}"),
+            Error::BadUrl(s) | Error::Network(s) | Error::Secure(s) | Error::Refused(s) => write!(f, "{s}"),
             Error::Http(s) => write!(f, "HTTP {s}"),
             Error::Changed => write!(f, "the file on the server changed"),
             Error::NoRoom(n) => write!(f, "{n} bytes do not fit"),

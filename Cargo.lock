@@ -5190,6 +5190,7 @@ dependencies = [
  "keyring-core",
  "leaf-sys",
  "leaf-vfs",
+ "leaf-vpn",
  "log",
  "rf-core",
  "russh",

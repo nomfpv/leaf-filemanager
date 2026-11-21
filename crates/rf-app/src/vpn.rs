@@ -366,6 +366,66 @@ pub fn settings_changed(before: &Settings, cx: &mut App) {
     }
 }
 
+// ------------------------------------------------------------------------------------------------ what uses it
+
+/// The kill switch's words, for a transfer that waits.
+pub fn held_text() -> String {
+    t!("Waiting for leaf's VPN: it is not connected and the kill switch is on, so nothing goes out directly.").to_string()
+}
+
+/// Whether a connection to `host` that is set to use the VPN would be held by the kill switch now.
+pub fn held(host: &str) -> bool {
+    leaf_vpn::route(host) == leaf_vpn::Route::Blocked
+}
+
+/// A download's connections through the VPN (leaf-download's connector seam): LAN addresses direct, the rest through the
+/// tunnel; while it is down they go direct, or with the kill switch on they are refused.
+pub struct DownloadDialer;
+
+struct VpnConn(leaf_vpn::BlockingStream);
+
+impl std::io::Read for VpnConn {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl std::io::Write for VpnConn {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl leaf_download::dial::Conn for VpnConn {
+    fn set_read_timeout(&mut self, t: Option<Duration>) {
+        self.0.set_read_timeout(t);
+    }
+    fn set_write_timeout(&mut self, t: Option<Duration>) {
+        self.0.set_write_timeout(t);
+    }
+}
+
+impl leaf_download::dial::Dialer for DownloadDialer {
+    fn takes(&self, host: &str) -> bool {
+        leaf_vpn::route(host) != leaf_vpn::Route::Direct
+    }
+
+    fn dial(&self, host: &str, port: u16, timeout: Duration) -> std::io::Result<Option<Box<dyn leaf_download::dial::Conn>>> {
+        match leaf_vpn::route(host) {
+            leaf_vpn::Route::Direct => Ok(None),
+            leaf_vpn::Route::Blocked => Err(leaf_download::dial::refused(held_text())),
+            leaf_vpn::Route::Tunnel => match leaf_vpn::dial_blocking(host, port, timeout) {
+                Ok(s) => Ok(Some(Box::new(VpnConn(s)))),
+                Err(e) if leaf_vpn::is_blocked(&e) => Err(leaf_download::dial::refused(held_text())),
+                Err(e) => Err(e),
+            },
+        }
+    }
+}
+
 /// The state in a word and a line for the title bar's tooltip and the page.
 pub fn describe(state: &leaf_vpn::State) -> (SharedString, Option<String>) {
     match state {
@@ -382,7 +442,9 @@ pub fn describe(state: &leaf_vpn::State) -> (SharedString, Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // (not `super::*`: that brings gpui's own `test` attribute in with the toolkit's prelude)
+    use super::{AccountNumber, Device, Secret, SecretId, Settings, Vault, account_view, forget_sign_in, keep_sign_in, kept, mullvad};
+    use std::sync::{Arc, Mutex};
 
     /// A keyring in memory: the sign-in goes there, and only there.
     #[derive(Default)]

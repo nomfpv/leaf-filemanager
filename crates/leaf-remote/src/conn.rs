@@ -105,6 +105,8 @@ pub(crate) struct Target {
     /// The saved host's key file (`~` expanded), tried before the default ones.
     pub key_file: Option<PathBuf>,
     pub jump: Option<String>,
+    /// The saved host says "Through VPN": the connection goes through leaf's VPN (see `leaf_vpn::dial`).
+    pub vpn: bool,
 }
 
 fn local_user() -> String {
@@ -148,6 +150,7 @@ fn target_for(cfg: &Config, host: &str, port: u16, want_user: Option<&str>) -> R
     Ok(Target {
         key: format!("{user}@{}", known_hosts::host_name(&host, port)),
         key_file: h.as_ref().and_then(|h| h.key_file.as_deref()).map(expand_home),
+        vpn: h.as_ref().is_some_and(|h| h.vpn),
         jump: h.and_then(|h| h.jump),
         host,
         port,
@@ -431,7 +434,10 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     let handle = match hops.first() {
         None => session(cfg, prompter, shared, t, dial(cfg, t).await?).await?,
         Some(first) => {
-            let mut h = session(cfg, prompter, shared, first, dial(cfg, first).await?).await?;
+            // (the route starts at the first jump host: through the VPN when either end says so)
+            let mut first_hop = first.clone();
+            first_hop.vpn |= t.vpn;
+            let mut h = session(cfg, prompter, shared, first, dial(cfg, &first_hop).await?).await?;
             for next in hops.iter().skip(1).chain(std::iter::once(t)) {
                 let ch = tokio::time::timeout(cfg.op_timeout, h.channel_open_direct_tcpip(next.host.clone(), u32::from(next.port), "127.0.0.1", 0))
                     .await
@@ -462,9 +468,26 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
 }
 
+/// What a host set to use leaf's VPN reads while the VPN is down and its kill switch is on.
+pub(crate) const VPN_HELD: &str = "This host is set to go through leaf's VPN, which is not connected, and the kill switch is on: leaf does not connect to it directly. Connect the VPN (title bar or Settings > VPN).";
+
 /// The TCP connection to a machine, its name looked up on the runtime's blocking thread with the connect timeout (a stalled
-/// lookup does not hold this worker).
-async fn dial(cfg: &Config, t: &Target) -> Result<tokio::net::TcpStream, FsError> {
+/// lookup does not hold this worker). A host set to use leaf's VPN is reached through it (its name looked up through it too).
+async fn dial(cfg: &Config, t: &Target) -> Result<leaf_vpn::Stream, FsError> {
+    if t.vpn {
+        return match leaf_vpn::dial(&t.host, t.port, cfg.connect_timeout).await {
+            Ok(s) => {
+                log::info!("remote: {} {}", known_hosts::host_name(&t.host, t.port), if s.through_tunnel() { "through leaf's VPN" } else { "directly (local network, or the VPN is off)" });
+                Ok(s)
+            }
+            Err(e) if leaf_vpn::is_blocked(&e) => Err(FsError::Offline(VPN_HELD.into())),
+            Err(e) => Err(offline(e)),
+        };
+    }
+    Ok(leaf_vpn::Stream::Direct(dial_direct(cfg, t).await?))
+}
+
+async fn dial_direct(cfg: &Config, t: &Target) -> Result<tokio::net::TcpStream, FsError> {
     let addrs: Vec<SocketAddr> = step(cfg.connect_timeout, tokio::net::lookup_host((t.host.as_str(), t.port))).await?.collect();
     if addrs.is_empty() {
         return Err(offline("the server's name has no address"));

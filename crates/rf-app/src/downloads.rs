@@ -85,6 +85,11 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
     let shown = dir.clone();
     let verify = Rc::new(Cell::new(false));
     let verify_on = verify.clone();
+    // (the VPN choice for this one download, offered once a Mullvad account is signed in; it starts as the setting says)
+    let s = cx.global::<Settings>();
+    let offer_vpn = s.vpn_signed_in;
+    let vpn = Rc::new(Cell::new(s.vpn_downloads));
+    let vpn_on = vpn.clone();
     let go = Button::new(t!("Download"), Kind::Primary, move |text, _, cx| {
         let text = text.as_deref().unwrap_or_default();
         let Some((url, sha256)) = url_and_sha(text) else {
@@ -96,15 +101,19 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
             });
         };
         let after = view.update(cx, |v, cx| v.select_arrived(dir.clone(), cx)).ok();
-        start_with(cx, Request { sha256, verify: verify_on.get(), ..Request::new(url, dir.clone()) }, after);
+        let through = offer_vpn.then(|| vpn_on.get());
+        start_with(cx, Request { sha256, verify: verify_on.get(), vpn: through, ..Request::new(url, dir.clone()) }, after);
         Ok(())
     });
-    let check = prompt::Check { label: t!("Verify with the checksum file next to it (address.sha256)").into(), note: "".into(), on: verify, enabled: true };
+    let mut checks = vec![prompt::Check { label: t!("Verify with the checksum file next to it (address.sha256)").into(), note: "".into(), on: verify, enabled: true }];
+    if offer_vpn {
+        checks.push(prompt::Check { label: t!("Through leaf's VPN").into(), note: "".into(), on: vpn, enabled: true });
+    }
     prompt::show_input_checks(
         t!("Download here"),
         Some(format!("{} {}\n{}", t!("The file is saved in"), shown.display(), t!("To check the file, add its SHA-256 after the address."))),
         (initial, "https://example.com/file.zip".to_string()),
-        vec![check],
+        checks,
         vec![go, Button::cancel()],
         window,
         cx,
@@ -274,12 +283,25 @@ pub struct Request {
     pub sort: bool,
     /// The subfolder an earlier run chose (kept in the saved list): reused when the download is taken up again.
     subfolder: Option<String>,
+    /// Through leaf's VPN: this download's own choice; none: the "Downloads through the VPN" setting.
+    pub vpn: Option<bool>,
 }
 
 impl Request {
     pub fn new(url: String, dest: PathBuf) -> Self {
-        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false, sort: false, subfolder: None }
+        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false, sort: false, subfolder: None, vpn: None }
     }
+}
+
+/// The server's name in an address (for the VPN's LAN rule and the kill switch).
+fn host_of(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
+    if let Some(v6) = hostport.strip_prefix('[') {
+        return v6.split(']').next().unwrap_or("").to_string();
+    }
+    hostport.rsplit_once(':').map_or(hostport, |(h, _)| h).to_string()
 }
 
 /// A running (or waiting) download, for what changes while it runs: the speed limit and the saved list.
@@ -382,7 +404,7 @@ pub fn restore(cx: &mut App) {
             continue;
         }
         NEXT_KEY.fetch_max(s.key + 1, Ordering::Relaxed);
-        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, sort: s.sort, subfolder: s.subfolder, ..Request::new(s.url, s.dest) };
+        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, sort: s.sort, subfolder: s.subfolder, vpn: s.vpn, ..Request::new(s.url, s.dest) };
         start_with(cx, req, None);
     }
 }
@@ -402,13 +424,14 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     let limit = limit_for(s, &req.url);
     let settings = (s.download_segments.clamp(1, 32) as usize, limit, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s), rule.map(|r| r.user_agent.trim().to_string()).filter(|u| !u.is_empty()), proxy_of(s));
     apply_host_caps(s);
+    let through_vpn = req.vpn.unwrap_or(s.vpn_downloads);
     let key = req.key.unwrap_or_else(|| NEXT_KEY.fetch_add(1, Ordering::Relaxed));
     crate::download_schedule::note_started();
     {
         let mut st = store();
         st.forget(key);
         // (the headers are not saved: `browser` says the download needs the browser again after a restart)
-        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser, sort: req.sort, subfolder: req.subfolder.clone() });
+        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser, sort: req.sort, subfolder: req.subfolder.clone(), vpn: req.vpn });
     }
     persist_soon();
     let title = format!("{} {} → {}", t!("Downloading"), dl::file_name(None, &req.url), rf_core::history::display_name(&req.dest));
@@ -460,7 +483,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     let live = Live { key, paused: Arc::default(), limit: Arc::new(AtomicU64::new(settings.1)), own_limit: Arc::default(), by_schedule: false, url: req.url.clone(), no_resume: Arc::default() };
     let (limit, own_limit) = (live.limit.clone(), live.own_limit.clone());
     LIVE.lock().unwrap_or_else(|e| e.into_inner()).push(live);
-    let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_req, key, settings, (&limit, &got), &fail_flag), Some(on_done));
+    let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_req, key, settings, through_vpn, (&limit, &got), &fail_flag), Some(on_done));
     id_cell.set(id);
     if id != 0 {
         let limit_now = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|l| l.key == key).map(|l| (l.limit.clone(), own_limit));
@@ -495,7 +518,26 @@ fn ask_limit(limit: Arc<AtomicU64>, own: Arc<AtomicBool>, cx: &mut App) {
     });
 }
 
-fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories, agent, (proxy, proxy_secret)): (usize, u64, usize, Vec<(String, Vec<String>)>, Option<String>, (dl::ProxyMode, Option<leaf_remote::SecretId>)), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
+/// The kill switch holds this download's connections: it waits (as paused, with the reason on its card) until the VPN is
+/// connected or the kill switch is turned off. `false`: it was cancelled meanwhile.
+fn wait_for_vpn(tr: &Tracker, host: &str) -> bool {
+    if !crate::vpn::held(host) {
+        return true;
+    }
+    log::info!("download: held by the VPN's kill switch until the VPN is connected");
+    (tr.on_progress)(0, 0, Some(crate::vpn::held_text()));
+    while crate::vpn::held(host) || tr.paused.load(Ordering::Relaxed) {
+        if tr.cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories, agent, (proxy, proxy_secret)): (usize, u64, usize, Vec<(String, Vec<String>)>, Option<String>, (dl::ProxyMode, Option<leaf_remote::SecretId>)), through_vpn: bool, (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
     // (the saved list reads this job's paused flag, the one the card's pause button flips)
     if let Some(l) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|l| l.key == key) {
         l.paused = tr.paused.clone();
@@ -534,6 +576,13 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
     if let (dl::ProxyMode::Manual(m), Some(id)) = (&mut opts.proxy, &proxy_secret) {
         m.password = leaf_remote::vault().get(id).map(|p| p.as_str().to_string());
     }
+    let host = host_of(&req.url);
+    if through_vpn {
+        opts.dialer = Some(Arc::new(crate::vpn::DownloadDialer));
+        if !wait_for_vpn(tr, &host) {
+            return Ok(false);
+        }
+    }
     if opts.sha256.is_none() && req.verify {
         match dl::fetch_sidecar(&req.url, &opts) {
             Some(sha) => opts.sha256 = Some(sha),
@@ -543,7 +592,14 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
             }
         }
     }
-    let result = loop_sign_in(tr, req, &mut opts, &ctl, &link);
+    // (the VPN dropped while it ran, with the kill switch on: it waits, then carries on from the part already downloaded)
+    let mut result = loop_sign_in(tr, req, &mut opts, &ctl, &link);
+    while through_vpn && matches!(result, Err(dl::Error::Refused(_))) {
+        if !wait_for_vpn(tr, &host) {
+            return Ok(false);
+        }
+        result = loop_sign_in(tr, req, &mut opts, &ctl, &link);
+    }
     match result {
         Ok(dl::Outcome::Saved(p)) => {
             arrived.lock().unwrap_or_else(|e| e.into_inner()).push(p);
@@ -583,6 +639,7 @@ fn fail_text(e: &dl::Error) -> String {
 {} {expected}", t!("expected"))),
         ),
         dl::Error::Cancelled => (t!("Cancelled").to_string(), None),
+        dl::Error::Refused(_) => (crate::vpn::held_text(), None),
     };
     match detail {
         Some(d) if !d.trim().is_empty() => format!("{what}\n{d}"),

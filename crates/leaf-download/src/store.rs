@@ -35,6 +35,9 @@ pub struct Saved {
     /// taken up again, whatever the categories say by then.
     #[serde(default)]
     pub subfolder: Option<String>,
+    /// This download's own VPN choice (none: the "Downloads through the VPN" setting decides).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn: Option<bool>,
 }
 
 /// A download that ended.

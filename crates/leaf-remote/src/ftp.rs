@@ -79,6 +79,8 @@ struct Target {
     port: u16,
     user: String,
     tls: Tls,
+    /// The saved host says "Through VPN".
+    vpn: bool,
 }
 
 impl Target {
@@ -120,8 +122,9 @@ fn target(cfg: &Config, v: &VPath) -> Result<Target, FsError> {
     let h = saved.hosts.into_iter().find(|h| {
         h.scheme.eq_ignore_ascii_case(&scheme) && h.host.eq_ignore_ascii_case(&host) && h.port.unwrap_or(21) == port && (v.user().is_none() || h.user.as_deref() == v.user())
     });
+    let vpn = h.as_ref().is_some_and(|h| h.vpn);
     let user = v.user().map(str::to_string).or_else(|| h.and_then(|h| h.user)).unwrap_or_else(|| "anonymous".into());
-    Ok(Target { key: format!("{scheme}://{user}@{}:{port}", host.to_ascii_lowercase()), host, port, user, tls })
+    Ok(Target { key: format!("{scheme}://{user}@{}:{port}", host.to_ascii_lowercase()), host, port, user, tls, vpn })
 }
 
 // ------------------------------------------------------------------------------------------------ connections
@@ -408,15 +411,29 @@ impl Inner {
 
     fn connect(&self, t: &Target) -> Result<Session, FsError> {
         log::info!("ftp: connecting to {}:{} ({})", t.host, t.port, if t.tls == Tls::None { "not encrypted" } else { "TLS" });
-        let addrs: Vec<SocketAddr> = (t.host.as_str(), t.port).to_socket_addrs().map_err(|_| FsError::Offline("the server's name has no address".into()))?.collect();
-        if addrs.is_empty() {
+        // a host set to use leaf's VPN: through it (the name is looked up through it too), held by its kill switch while it is
+        // down, direct on the local network
+        let through = t.vpn
+            && match leaf_vpn::route(&t.host) {
+                leaf_vpn::Route::Blocked => return Err(FsError::Offline(crate::conn::VPN_HELD.into())),
+                leaf_vpn::Route::Tunnel => true,
+                leaf_vpn::Route::Direct => false,
+            };
+        let addrs: Vec<SocketAddr> = if through {
+            Vec::new()
+        } else {
+            (t.host.as_str(), t.port).to_socket_addrs().map_err(|_| FsError::Offline("the server's name has no address".into()))?.collect()
+        };
+        if addrs.is_empty() && !through {
             return Err(FsError::Offline("the server's name has no address".into()));
         }
         let mut tries = 0;
         loop {
             tries += 1;
             let check = self.cert_check(t)?;
-            match self.open(t, &addrs, check.clone()) {
+            // (through the VPN: each try gets its own bridge, which takes one connection)
+            let addrs = if through { vec![bridge(t, t.port, self.cfg.connect_timeout).map_err(|e| FsError::Offline(e.to_string()))?] } else { addrs.clone() };
+            match self.open(t, &addrs, through, check.clone()) {
                 Ok(s) => return self.login(t, s),
                 Err(e) => {
                     // a certificate the system does not trust: asked (once per connect)
@@ -434,7 +451,7 @@ impl Inner {
     }
 
     /// The control connection, TLS as the scheme says, with the timeouts on every socket.
-    fn open(&self, t: &Target, addrs: &[SocketAddr], check: Arc<CertCheck>) -> Result<RustlsFtpStream, FsError> {
+    fn open(&self, t: &Target, addrs: &[SocketAddr], through: bool, check: Arc<CertCheck>) -> Result<RustlsFtpStream, FsError> {
         let (op, ct) = (self.cfg.op_timeout, self.cfg.connect_timeout);
         let timeouts = move |s: &TcpStream| {
             let _ = s.set_read_timeout(Some(op));
@@ -478,7 +495,11 @@ impl Inner {
             }
         };
         let ipv6 = s.get_ref().peer_addr().is_ok_and(|a| a.is_ipv6());
+        let vt = t.clone();
         let mut s = s.passive_stream_builder(move |addr| {
+            // through the VPN the control connection's peer is the bridge on this PC: the data connection goes through a bridge
+            // of its own to the server's name, at the port the server named
+            let addr = if through { bridge(&vt, addr.port(), ct).map_err(FtpError::ConnectionError)? } else { addr };
             let d = TcpStream::connect_timeout(&addr, ct).map_err(FtpError::ConnectionError)?;
             timeouts(&d);
             Ok(d)
@@ -631,6 +652,18 @@ impl suppaftp::TlsConnector for Timed {
         let _ = stream.set_nodelay(true);
         self.inner.connect(domain, stream)
     }
+}
+
+/// A connection through leaf's VPN as a socket on this PC (the FTP client takes only a plain socket): see
+/// `leaf_vpn::loopback_bridge`.
+fn bridge(t: &Target, port: u16, limit: Duration) -> std::io::Result<SocketAddr> {
+    let r = leaf_vpn::loopback_bridge(&t.host, port, limit);
+    if let Err(e) = &r
+        && leaf_vpn::is_blocked(e)
+    {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, crate::conn::VPN_HELD));
+    }
+    r
 }
 
 fn connect_any(addrs: &[SocketAddr], limit: Duration) -> Result<TcpStream, FsError> {

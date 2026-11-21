@@ -40,6 +40,10 @@ pub struct Host {
     /// the host's icon. A host saved before this field, or with a kind this build does not know, is a server.
     #[serde(default, skip_serializing_if = "HostKind::is_default", deserialize_with = "HostKind::lenient")]
     pub kind: HostKind,
+    /// Connections to it go through leaf's VPN (an address on the local network never does). With the VPN's kill switch on and
+    /// the VPN down, it is not connected at all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vpn: bool,
 }
 
 /// What kind of machine a saved host is.
@@ -165,7 +169,7 @@ fn default_scheme() -> String {
 
 impl Host {
     pub fn new(name: &str, host: &str) -> Host {
-        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false, kind: HostKind::Server }
+        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false, kind: HostKind::Server, vpn: false }
     }
 
     /// Whether a remote place is on this host (same scheme, server, user and port).
