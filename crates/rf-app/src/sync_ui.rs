@@ -14,7 +14,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{Icon, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use leaf_sync::{Action, CompareBy, Counts, Job, Jobs, Mode, Plan, Report};
+use leaf_sync::{Action, CompareBy, Counts, Job, Jobs, Mode, Plan, Report, RunKind, Schedule};
 use leaf_vfs::{Fs, LocalFs, VPath};
 use rf_core::format;
 
@@ -208,6 +208,69 @@ fn confirm_and_run(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut
 /// The jobs whose run is going (two runs of one job would write the same files and the same state file).
 static RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+// ------------------------------------------------------------------------------------------------------------------------ schedule
+
+/// When each job was last started by the schedule in this session (a run that was stopped does not change `last_run_ms`, and must
+/// not be tried again every minute).
+static TRIED: Mutex<Vec<(String, i64)>> = Mutex::new(Vec::new());
+
+/// Starts the clock of the scheduled jobs: a look at them shortly after leaf starts (runs missed while it was closed, jobs set to
+/// "when leaf starts"), then every minute. Nothing runs while leaf is closed; there is no system task.
+pub fn start_scheduler(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(std::time::Duration::from_secs(20)).await;
+        let mut first = true;
+        loop {
+            let at_start = std::mem::replace(&mut first, false);
+            let _ = cx.update(|cx| tick(at_start, cx));
+            cx.background_executor().timer(std::time::Duration::from_secs(60)).await;
+        }
+    })
+    .detach();
+}
+
+fn tick(at_start: bool, cx: &mut App) {
+    let now = leaf_sync_now();
+    let offset = i64::from(chrono::Local::now().offset().local_minus_utc());
+    for job in jobs(cx) {
+        if job.schedule.kind == RunKind::Manual || is_running(&job.id) {
+            continue;
+        }
+        let tried = TRIED.lock().ok().and_then(|g| g.iter().find(|(i, _)| *i == job.id).map(|(_, t)| *t)).unwrap_or(0);
+        if !job.schedule.due(job.last_run_ms.max(tried), now, offset, at_start) {
+            continue;
+        }
+        if let Ok(mut g) = TRIED.lock() {
+            g.retain(|(i, _)| *i != job.id);
+            g.push((job.id.clone(), now));
+        }
+        scheduled_run(job, cx);
+    }
+}
+
+/// One scheduled run: it never asks. A refusal (a side missing or empty, anything else the plan refuses) or a plan that would
+/// need the second confirmation ends as a failed card in the Status Center, and nothing is changed.
+fn scheduled_run(job: Job, cx: &mut App) {
+    let name = job.name.clone();
+    let work = cx.background_executor().spawn(async move {
+        let (l, r) = job.sides()?;
+        let (lf, rf) = (side_fs(&l)?, side_fs(&r)?);
+        leaf_sync::plan_scheduled(&job, &*lf, &*rf, &state_dir(), &|| false)
+    });
+    cx.spawn(async move |cx| {
+        let got = work.await;
+        let _ = cx.update(|cx| match got {
+            Ok(plan) if is_running(&plan.job.id) => {}
+            Ok(plan) => start_run(plan, cx),
+            Err(e) => {
+                let text = error_text(&e);
+                crate::status_center::start_with_id(cx, format!("{} {name}", t!("Scheduled sync stopped:")), move |_| Err(anyhow::anyhow!(text)), None);
+            }
+        });
+    })
+    .detach();
+}
+
 fn is_running(job_id: &str) -> bool {
     RUNNING.lock().is_ok_and(|g| g.iter().any(|j| j == job_id))
 }
@@ -400,6 +463,9 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
     let exclude = cx.new(|cx| InputState::new(window, cx).default_value(init.exclude.join(", ")).placeholder("*.tmp, node_modules"));
     let mode: Entity<Mode> = cx.new(|_| init.mode);
     let flags: Entity<[bool; 5]> = cx.new(|_| [init.skip_hidden, init.gitignore, init.compare == CompareBy::Hash, init.keep_overwritten, init.verify]);
+    let sched: Entity<RunKind> = cx.new(|_| init.schedule.kind);
+    let every = cx.new(|cx| InputState::new(window, cx).default_value(init.schedule.hours.to_string()).placeholder("6"));
+    let at = cx.new(|cx| InputState::new(window, cx).default_value(format!("{:02}:{:02}", init.schedule.minute / 60, init.schedule.minute % 60)).placeholder("03:00"));
     let error: Entity<Option<String>> = cx.new(|_| None);
     let focus_first = std::cell::Cell::new(true);
     window.open_alert_dialog(cx, move |dialog, window, cx| {
@@ -432,6 +498,37 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                     }),
             );
         }
+        let sched_now = *sched.read(cx);
+        let mut sched_row = h_flex().gap_1().items_center();
+        for (i, (k, label)) in [(RunKind::Manual, tx("Manually")), (RunKind::Hours, tx("Every N hours")), (RunKind::Daily, tx("Daily at")), (RunKind::Start, tx("When leaf starts"))].into_iter().enumerate() {
+            let ent = sched.clone();
+            sched_row = sched_row.child(
+                div()
+                    .id(("sync-sched", i))
+                    .px_3()
+                    .py_1()
+                    .rounded(theme::RADIUS_SM)
+                    .border_1()
+                    .border_color(if sched_now == k { pal.accent } else { pal.border })
+                    .when(sched_now == k, |d| d.bg(pal.selection))
+                    .cursor_pointer()
+                    .text_sm()
+                    .child(label)
+                    .on_click(move |_, _, cx| {
+                        ent.update(cx, |v, cx| {
+                            *v = k;
+                            cx.notify();
+                        });
+                        cx.refresh_windows();
+                    }),
+            );
+        }
+        if sched_now == RunKind::Hours {
+            sched_row = sched_row.child(div().w(px(70.)).child(Input::new(&every)));
+        }
+        if sched_now == RunKind::Daily {
+            sched_row = sched_row.child(div().w(px(90.)).child(Input::new(&at)));
+        }
         let f = *flags.read(cx);
         let flag = |i: usize, label: &'static str| {
             let ent = flags.clone();
@@ -449,6 +546,7 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
         };
         let (name_v, left_v, right_v, inc_v, exc_v, mode_v, flags_v, err) =
             (name.clone(), left_in.clone(), right_in.clone(), include.clone(), exclude.clone(), mode.clone(), flags.clone(), error.clone());
+        let (sched_v, every_v, at_v) = (sched.clone(), every.clone(), at.clone());
         let (current, init, after) = (current.clone(), init.clone(), after.clone());
         dialog
             .title(if current.is_some() { tx("Sync job") } else { tx("New sync job") })
@@ -473,6 +571,9 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                             .child(v_flex().gap_2().flex_1().min_w_0().child(tx("Only these files (optional)")).child(Input::new(&include)))
                             .child(v_flex().gap_2().flex_1().min_w_0().child(tx("Leave out (optional)")).child(Input::new(&exclude))),
                     )
+                    .child(tx("Run"))
+                    .child(sched_row)
+                    .child(div().text_xs().text_color(pal.text_secondary).child(tx("Scheduled runs happen only while leaf is running; a time missed while it was closed is made up once at the next start. A scheduled run never asks: if it would need a confirmation or a side is missing, it stops and leaves a notice in the Status Center. A job is first run by hand.")))
                     .child(
                         h_flex()
                             .flex_wrap()
@@ -517,6 +618,22 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                 job.compare = if f[2] { CompareBy::Hash } else { CompareBy::Time };
                 job.keep_overwritten = f[3];
                 job.verify = f[4];
+                let mut schedule = Schedule { kind: *sched_v.read(cx), ..init.schedule };
+                if schedule.kind == RunKind::Hours {
+                    match every_v.read(cx).value().trim().parse::<u32>() {
+                        Ok(h) if (1..=720).contains(&h) => schedule.hours = h,
+                        _ => return fail(t!("Give the number of hours between runs (1 to 720).").to_string(), cx),
+                    }
+                }
+                if schedule.kind == RunKind::Daily {
+                    let text = at_v.read(cx).value();
+                    let parsed = text.trim().split_once(':').and_then(|(h, m)| Some((h.trim().parse::<u32>().ok()?, m.trim().parse::<u32>().ok()?)));
+                    match parsed {
+                        Some((h, m)) if h < 24 && m < 60 => schedule.minute = h * 60 + m,
+                        _ => return fail(t!("Give the time of day as HH:MM, for example 03:00.").to_string(), cx),
+                    }
+                }
+                job.schedule = schedule;
                 if let Err(e) = job.sides() {
                     return fail(error_text(&e), cx);
                 }
@@ -771,7 +888,7 @@ impl SyncView {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_sm().text_color(p.text).truncate().child(format!("{} \u{b7} {}", job.name, mode_text(job.mode))))
+                            .child(div().text_sm().text_color(p.text).truncate().child(format!("{} \u{b7} {}{}", job.name, mode_text(job.mode), if job.schedule.kind == RunKind::Manual { String::new() } else { format!(" \u{b7} {}", job.schedule.text()) })))
                             .child(div().text_xs().text_color(p.text_secondary).truncate().child(format!(
                                 "{}  {}  {}",
                                 shown_side(&job.left),

@@ -319,3 +319,22 @@ fn a_folder_taken_whole_that_got_a_new_file_is_not_removed() {
     assert_eq!(read(&fs, "mem://t/r/old/sub/new.txt").as_deref(), Some(&b"saved later"[..]));
     assert_eq!(read(&fs, "mem://t/r/old/a.txt").as_deref(), Some(&b"a"[..]));
 }
+
+#[test]
+fn a_scheduled_run_never_deletes_when_a_side_is_empty() {
+    let state = temp("sched-empty");
+    let fs = MemFs::new();
+    fs.put_file(&v("mem://t/left/a.txt"), b"keep".to_vec(), T0);
+    fs.put_file(&v("mem://t/right/a.txt"), b"keep".to_vec(), T0);
+    let job = Job::new("m", "mem://t/left", "mem://t/right");
+    let no = || false;
+    let p = crate::plan_scheduled(&job, &fs, &fs, &state, &no).unwrap();
+    go(&p, &fs, &fs, &state, &no_trash);
+    fs.remove(&v("mem://t/left/a.txt"), false).unwrap();
+    // the scheduled plan refuses (a notice, not a run); only the manual "anyway" plan carries the removal
+    let e = crate::plan_scheduled(&job, &fs, &fs, &state, &no).err().expect("refused");
+    assert!(e.side_gone, "{e}");
+    assert_eq!(read(&fs, "mem://t/right/a.txt").as_deref(), Some(&b"keep"[..]));
+    let p = crate::plan_anyway(&job, &fs, &fs, &state, &no).unwrap();
+    assert_eq!(p.counts().delete_right, 1);
+}

@@ -361,6 +361,30 @@ pub(crate) fn hash(fs: &dyn Fs, p: &VPath, cancelled: &dyn Fn() -> bool) -> Resu
 
 /// Reads both sides of `job` and says what a run would do. `state_dir`: where the job's state is kept (leaf's data folder).
 pub fn plan(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Plan, Error> {
+    plan_with(job, left_fs, right_fs, state_dir, cancelled, false)
+}
+
+/// Like [`plan`], but a side that is missing or empty (the refusal with `side_gone`) is taken as meant: for one manual run, after
+/// the user said so. Never for a scheduled run, which uses [`plan_scheduled`].
+pub fn plan_anyway(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Plan, Error> {
+    plan_with(job, left_fs, right_fs, state_dir, cancelled, true)
+}
+
+/// The plan of a scheduled run, which never asks anything: a refusal stays a refusal, and a plan that would need the second
+/// confirmation (it removes a large share of a side) is an error too, so the caller leaves a notice instead of running it.
+pub fn plan_scheduled(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Plan, Error> {
+    let p = plan_with(job, left_fs, right_fs, state_dir, cancelled, false)?;
+    if p.needs_second_ask() {
+        let share = (p.delete_share() * 100.0).round() as u32;
+        return Err(Error::new(
+            format!("The scheduled run was not started: it would remove {share}% of the files of one side. Run the job by hand to look at the preview"),
+            String::new(),
+        ));
+    }
+    Ok(p)
+}
+
+fn plan_with(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, cancelled: &dyn Fn() -> bool, anyway: bool) -> Result<Plan, Error> {
     let (lroot, rroot) = job.sides()?;
     let fold = folds(&lroot, &rroot);
     let filter = Filter::of(job);
@@ -370,21 +394,25 @@ pub fn plan(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, ca
 
     // a missing or empty side that had files at the last run: the drive is not there, the share is not mounted...
     let gone = |which: &str, s: &Scan, before: u64| -> Result<(), Error> {
-        if before > 0 && (s.missing || s.files == 0) {
-            return Err(Error::new(
+        if before > 0 && (s.missing || s.files == 0) && !anyway {
+            let mut e = Error::new(
                 format!(
                     "The {which} folder is {} now, but the last run found {before} files there. The drive may not be connected; nothing was changed",
                     if s.missing { "not there" } else { "empty" }
                 ),
                 String::new(),
-            ));
+            );
+            e.side_gone = true;
+            return Err(e);
         }
         Ok(())
     };
     gone("left", &l, state.left_files)?;
     gone("right", &r, state.right_files)?;
-    if l.missing && job.mode != Mode::TwoWay {
-        return Err(Error::new("The left folder is not there. The drive may not be connected; nothing was changed", lroot.to_string()));
+    if l.missing && job.mode != Mode::TwoWay && !anyway {
+        let mut e = Error::new("The left folder is not there. The drive may not be connected; nothing was changed", lroot.to_string());
+        e.side_gone = true;
+        return Err(e);
     }
 
     let out: BTreeSet<String> = l.out.union(&r.out).cloned().collect();

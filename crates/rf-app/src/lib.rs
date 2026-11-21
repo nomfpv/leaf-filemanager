@@ -746,6 +746,8 @@ pub fn main() {
             downloads::restore(cx);
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);
+            // sync jobs with a schedule (only while leaf runs)
+            sync_ui::start_scheduler(cx);
         }
         // leaf-look ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
         if cx.global::<settings::Settings>().look_enabled && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {

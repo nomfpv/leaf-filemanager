@@ -27,6 +27,7 @@
 pub mod filter;
 mod plan;
 mod run;
+mod schedule;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -36,7 +37,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 pub use leaf_vfs::{Fs, FsError, VPath};
-pub use plan::{Action, Counts, Info, Plan, Row, forget_state, plan};
+pub use plan::{Action, Counts, Info, Plan, Row, forget_state, plan, plan_anyway, plan_scheduled};
+pub use schedule::{RunKind, Schedule};
 pub use run::{Control, Progress, Report, TRASH_DIR, purge, restore_from_trash, run};
 
 /// The name of the jobs file in the config folder.
@@ -110,6 +112,9 @@ pub struct Job {
     pub last_run_ms: i64,
     #[serde(default)]
     pub last_result: String,
+    /// When leaf starts this job by itself (only while leaf runs).
+    #[serde(default)]
+    pub schedule: Schedule,
 }
 
 impl Job {
@@ -129,6 +134,7 @@ impl Job {
             verify: false,
             last_run_ms: 0,
             last_result: String::new(),
+            schedule: Schedule::default(),
         }
     }
 
@@ -240,11 +246,13 @@ impl Jobs {
 pub struct Error {
     pub message: String,
     pub details: String,
+    /// A side is missing or empty although the last run saw files there: the one refusal a manual run may override ([`plan_anyway`]).
+    pub side_gone: bool,
 }
 
 impl Error {
     pub fn new(message: impl Into<String>, details: impl Into<String>) -> Self {
-        Self { message: message.into(), details: details.into() }
+        Self { message: message.into(), details: details.into(), side_gone: false }
     }
 }
 
