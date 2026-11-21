@@ -159,6 +159,35 @@ pub fn run(rows: &[Row], moves: &[Move], rules: NameRules, rename: &mut dyn FnMu
     out
 }
 
+/// Runs a batch the dialog previewed (`preview`, rows after [`rename_plan::check`]): lists the
+/// folders again, checks again, and runs what may still run. `Err` (nothing was renamed) when
+/// the batch can no longer run as a whole, e.g. a new collision while "skip items with
+/// problems" is off.
+///
+/// A row that the preview showed as renamed but that is a problem now (another program took
+/// its new name meanwhile, say) is not renamed and is listed in [`Outcome::failed`] with the
+/// reason: it is never left out silently.
+pub fn apply_batch(preview: &[Row], skip_problems: bool, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> Result<Outcome, String> {
+    let rules = NameRules::native();
+    // the folders as they are now: something may have changed since the preview
+    let existing = listings(preview.iter().map(|r| r.dir.as_path()));
+    let mut rows = preview.to_vec();
+    rename_plan::check(&mut rows, &existing, rules);
+    if !rename_plan::Summary::of(&rows).can_run(skip_problems) {
+        return Err(crate::t!("The folder changed since the preview: check the list and try again").to_string());
+    }
+    let moves = rename_plan::order(&rows, &existing, rules, &salt());
+    let mut out = run(&rows, &moves, rules, rename);
+    for (before, now) in preview.iter().zip(&rows) {
+        if before.status.runs()
+            && let Status::Problem(p) = &now.status
+        {
+            out.failed.push(Failure { path: now.dir.join(&now.old), to: now.new.clone(), reason: format!("{} {p}", crate::t!("Not renamed, the folder changed since the preview:")), left_at: None });
+        }
+    }
+    Ok(out)
+}
+
 /// Renames (old path -> new path) pairs within their folders with the same checks and the same
 /// safe order as a batch: undo (the pairs reversed) and redo of a bulk rename. A pair that can
 /// no longer be done (the file is gone, the name is taken) is reported, the rest still run.
@@ -455,6 +484,41 @@ mod tests {
         assert_contents(&before, &after, &moved_map(&out));
         let back = run_pairs(&inverse(&out.done), &mut native_rename);
         assert!(back.failed.is_empty(), "{:?}", back.failed);
+        assert_eq!(s.state(), before);
+    }
+
+    #[test]
+    fn a_row_that_becomes_a_problem_before_apply_is_reported_not_skipped_silently() {
+        let s = Sandbox::new("recheck");
+        for n in ["a", "b", "c"] {
+            s.write(n, n.as_bytes());
+        }
+        // preview: a -> x and b -> y would run, c has a problem ("skip items with problems" is on)
+        let pairs: Vec<(String, String)> = [("a", "x"), ("b", "y"), ("c", "c?")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        let (preview, _) = rows_for(&s, &pairs);
+        assert_eq!(Summary::of(&preview).rename, 2);
+        assert!(Summary::of(&preview).can_run(true));
+        // then another program creates "x"
+        s.write("x", b"someone else's x");
+        let before = s.state();
+        let out = apply_batch(&preview, true, &mut native_rename).unwrap();
+        assert_eq!(moved_map(&out), HashMap::from([("b".to_string(), "y".to_string())]));
+        assert_eq!(out.failed.len(), 1, "{:?}", out.failed);
+        assert_eq!(out.failed[0].path, s.0.join("a"));
+        assert!(out.failed[0].reason.contains("already exists"), "{:?}", out.failed);
+        let after = s.state();
+        assert_contents(&before, &after, &moved_map(&out));
+        assert_eq!(after.get("x"), before.get("x"), "the other program's file is untouched");
+        // without "skip items with problems" the whole batch is refused and nothing moves
+        let s = Sandbox::new("recheck2");
+        for n in ["a", "b"] {
+            s.write(n, n.as_bytes());
+        }
+        let (preview, _) = rows_for(&s, &[("a".to_string(), "x".to_string()), ("b".to_string(), "y".to_string())]);
+        assert!(Summary::of(&preview).can_run(false));
+        s.write("x", b"new");
+        let before = s.state();
+        assert!(apply_batch(&preview, false, &mut native_rename).is_err());
         assert_eq!(s.state(), before);
     }
 

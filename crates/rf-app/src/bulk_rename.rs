@@ -23,7 +23,7 @@ use rf_core::organize::rule::parse_ext_list;
 use rf_core::organize::summary::SizeUnit;
 use rf_core::organize::{Cmp, Condition, FileFact, FileKind, NameOp, TimeField};
 use rf_core::rename::RenameItem;
-use rf_core::rename_plan::{self, NameRules, Row, Status, Summary};
+use rf_core::rename_plan::{NameRules, Row, Status, Summary};
 use rf_core::rename_rules::{self, At, Case, Op, Part, Preset, RuleStep};
 
 use crate::organizer::editor::{Field, cmp_label, kind_label, name_op_label, parse_number, value_hint};
@@ -557,18 +557,7 @@ impl BulkRename {
         let rows: Vec<Row> = (*self.rows).clone();
         let skip = self.skip_problems;
         self.applying = true;
-        let work = cx.background_spawn(async move {
-            let rules = NameRules::native();
-            // the folders as they are now: something may have changed since the preview
-            let existing = crate::rename_exec::listings(rows.iter().map(|r| r.dir.as_path()));
-            let mut rows = rows;
-            rename_plan::check(&mut rows, &existing, rules);
-            if !Summary::of(&rows).can_run(skip) {
-                return Err(t!("The folder changed since the preview: check the list and try again").to_string());
-            }
-            let moves = rename_plan::order(&rows, &existing, rules, &crate::rename_exec::salt());
-            Ok(crate::rename_exec::run(&rows, &moves, rules, &mut crate::rename_exec::native_rename))
-        });
+        let work = cx.background_spawn(async move { crate::rename_exec::apply_batch(&rows, skip, &mut crate::rename_exec::native_rename) });
         self._task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |v, cx| {
