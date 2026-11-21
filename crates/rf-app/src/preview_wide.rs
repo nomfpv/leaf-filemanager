@@ -180,7 +180,7 @@ impl Preview {
                     .border_1()
                     .border_color(p.border)
                     .text_xs()
-                    .when(!md, |d| d.font_family("Cascadia Mono").text_color(p.text_secondary).child(text.clone()))
+                    .when(!md, |d| d.font_family(crate::platform::fonts::mono()).text_color(p.text_secondary).child(text.clone()))
                     .when(md, |d| d.child(gpui_kit::component::text::TextView::markdown("pv-md", text.clone())))
                     .into_any_element(),
             )

@@ -4,6 +4,7 @@
 
 #[allow(dead_code)]
 pub mod gpui;
+pub(crate) mod fonts;
 
 use gpui_kit::Window;
 
@@ -22,4 +23,9 @@ pub(crate) fn owner_of(window: &Window) -> leaf_sys::Owner {
 }
 
 /// The default log filter: the hybrid renderer of our GPUI fork logs its GPU/CPU switches at info level.
+#[cfg(windows)]
 pub(crate) const LOG_FILTER: &str = "warn,gpui_windows=info";
+/// Off Windows: GPUI warns once when `.SystemUIFont` has to go through its fallback list (it lands on the desktop's face, which the
+/// theme then names), and zbus warns when the private session has no portal settings service; neither is a fault.
+#[cfg(not(windows))]
+pub(crate) const LOG_FILTER: &str = "warn,gpui::text_system=error,zbus=error";

@@ -222,7 +222,7 @@ impl Preview {
                 .rounded(theme::RADIUS_SM)
                 .bg(p.content_bg)
                 .text_sm()
-                .when(!is_markdown(&e), |d| d.font_family("Cascadia Mono").child(text.clone()))
+                .when(!is_markdown(&e), |d| d.font_family(crate::platform::fonts::mono()).child(text.clone()))
                 .when(is_markdown(&e), |d| d.child(gpui_kit::component::text::TextView::markdown("ql-md", text.clone())))
                 .into_any_element()
         } else {
@@ -1018,7 +1018,7 @@ impl Render for Preview {
                         .border_1()
                         .border_color(p.border)
                         .text_xs()
-                        .when(!md, |d| d.font_family("Cascadia Mono").text_color(p.text_secondary).child(text.clone()))
+                        .when(!md, |d| d.font_family(crate::platform::fonts::mono()).text_color(p.text_secondary).child(text.clone()))
                         .when(md, |d| d.child(gpui_kit::component::text::TextView::markdown("pv-md", text.clone()))),
                 );
             }

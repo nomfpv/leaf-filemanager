@@ -1118,10 +1118,12 @@ pub fn apply_component_theme(cx: &mut App) {
     // the chosen font, else the theme's (a font that is not installed falls back to the system's), else Windows 11's own typeface
     // (optical sizes) when present
     let theme_font = crate::theme::Palette::dark().font_ui;
-    if let Some(f) = cx.global::<Settings>().font.clone() {
+    if let Some(f) = cx.global::<Settings>().font.clone().filter(|f| crate::platform::fonts::installed(f)) {
         Theme::update(cx, |t| t.font_family = f.into());
     } else if !theme_font.is_empty() {
         Theme::update(cx, |t| t.font_family = theme_font.into());
+    } else if !cfg!(windows) {
+        Theme::update(cx, |t| t.font_family = crate::platform::fonts::ui().into());
     } else if std::path::Path::new(r"C:\Windows\Fonts\SegUIVar.ttf").exists() {
         Theme::update(cx, |t| t.font_family = "Segoe UI Variable Text".into());
     }

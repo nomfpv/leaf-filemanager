@@ -199,7 +199,7 @@ impl Viewer for CsvViewer {
             .bg(p.content_bg)
             .text_color(p.text)
             .text_sm()
-            .font_family("Cascadia Mono")
+            .font_family(crate::platform::fonts::mono())
             .child(div().flex().flex_col().w(px(total)).h_full().children(header).child(list))
             .into_any_element()
     }

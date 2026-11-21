@@ -108,7 +108,7 @@ impl Render for HexView {
         } else {
             rf_core::format::size(self.total)
         };
-        let mono = || div().font_family("Cascadia Mono").text_size(px(13.));
+        let mono = || div().font_family(crate::platform::fonts::mono()).text_size(px(13.));
         let (text_c, dim_c, faint_c) = (p.text, p.text_secondary, p.text_tertiary);
         let head = h_flex()
             .px_4()

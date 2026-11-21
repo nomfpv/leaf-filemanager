@@ -105,7 +105,7 @@ pub fn main() {
     crate::install_panic_log();
     leaf_sys::shell::suppress_critical_error_dialogs();
     leaf_sys::thumbs::keep_gdiplus_alive();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).target(env_logger::Target::Stderr).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(if cfg!(windows) { "warn" } else { crate::platform::LOG_FILTER })).target(env_logger::Target::Stderr).init();
     crate::background::LOOK_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let raw: Vec<String> = std::env::args().skip(1).collect();
