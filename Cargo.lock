@@ -4997,6 +4997,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-copy"
+version = "0.9.4"
+dependencies = [
+ "crc32fast",
+ "libc",
+]
+
+[[package]]
 name = "leaf-decode"
 version = "0.9.4"
 dependencies = [
@@ -5096,6 +5104,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "leaf-common",
+ "leaf-copy",
  "leaf-decode",
  "libc",
  "log",
@@ -7618,6 +7627,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "leaf-common",
+ "leaf-copy",
  "leaf-decode",
  "log",
  "md-5",
