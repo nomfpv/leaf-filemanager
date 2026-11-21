@@ -202,6 +202,9 @@ enum MoveErr {
     Taken,
     /// The source is not the file that was copied any more (saved or replaced meanwhile): it stays, the copy was taken back.
     Changed,
+    /// Another program opened the source for writing while it was copied: it stays (unlinking it would lose what that program
+    /// writes from then on), the copy was taken back.
+    InUse,
     Io(std::io::Error),
 }
 
@@ -210,6 +213,7 @@ impl std::fmt::Display for MoveErr {
         match self {
             MoveErr::Taken => f.write_str(tx("The name is already taken at the destination")),
             MoveErr::Changed => f.write_str(tx("Changed during the move: the original was kept")),
+            MoveErr::InUse => f.write_str(Why::InUse.text()),
             MoveErr::Io(e) => write!(f, "{e}"),
         }
     }
@@ -255,7 +259,8 @@ fn move_file(src: &Path, target: &Path, numbered: bool) -> Result<PathBuf, MoveE
 /// 2. the source compared with what was copied (device, inode, size, mtime, ctime): a source saved meanwhile keeps its place and the
 ///    copy goes;
 /// 3. the copy renamed to the first free name without replacing (same folder, so the same device);
-/// 4. the folder fsynced, the source compared once more, and only then unlinked. If it changed, the copy is taken back (only the very
+/// 4. the folder fsynced, the source compared once more and checked for a writer (`free_to_take`), and only then unlinked. If it
+///    changed or a program has it open for writing, the copy is taken back (only the very
 ///    inode this function made) and the file stays where it was. If the unlink reports an error, the copy is taken back only while
 ///    the source is still there unchanged; a source that is gone means the unlink took effect and the move is done.
 ///
@@ -318,6 +323,11 @@ fn move_by_copy_with(src: &Path, target: &Path, numbered: bool, unlink: &dyn Fn(
     if !still(src, &was) {
         remove_own_file(&at, copy_id);
         return Err(MoveErr::Changed);
+    }
+    // (opened for writing during the copy, not written yet: Linux would let the unlink through under the writer, Windows would not)
+    if !free_to_take(src) {
+        remove_own_file(&at, copy_id);
+        return Err(MoveErr::InUse);
     }
     if let Err(e) = unlink(src) {
         // An error does not prove the unlink did not happen (NFS: the reply was lost and the retry says ENOENT; FUSE: EIO after
@@ -540,6 +550,7 @@ pub fn run(steps: &[Step], opts: &RunOptions, recycler: &dyn Recycler, progress:
             Dest::Move(dest) => match do_move(&st.source, dest, &mut rep.record.created_dirs) {
                 Ok(done) => rep.record.moves.push((st.source.clone(), done)),
                 Err(MoveErr::Changed) => rep.skipped.push(Skip { path: st.source.clone(), why: Why::Changed }),
+                Err(MoveErr::InUse) => rep.skipped.push(Skip { path: st.source.clone(), why: Why::InUse }),
                 Err(e) => rep.failed.push(Failure { path: st.source.clone(), message: e.to_string() }),
             },
         }
@@ -895,6 +906,25 @@ mod tests {
         assert!(move_by_copy_with(&b, &d.p("hedef/b.txt"), true, &refuse).is_err());
         assert_eq!(d.read("b.txt"), "bee");
         assert_eq!(d.names("hedef"), ["a.txt"]);
+    }
+
+    #[test]
+    fn a_source_opened_for_writing_during_the_copy_is_kept_and_the_copy_goes() {
+        let d = Dir::new("writer");
+        std::fs::create_dir_all(d.p("hedef")).unwrap();
+        let a = d.write("db.sqlite", "pages");
+        // a program has it open for writing but has not written yet (the size and times still match the copy); move_by_copy runs
+        // no `inspect`, so this is the writer that turned up after the step's first check
+        let writer = std::fs::OpenOptions::new().write(true).open(&a).unwrap();
+        assert!(matches!(move_by_copy(&a, &d.p("hedef/db.sqlite"), true), Err(MoveErr::InUse)));
+        assert_eq!(d.read("db.sqlite"), "pages");
+        assert!(d.names("hedef").is_empty(), "the copy is taken back, no .part left");
+        // the run reports it as skipped, in use (retried later)
+        let rep = go(&[step(&d, &a, Dest::Move(d.p("hedef/db.sqlite")))]);
+        assert_eq!(rep.skipped, [Skip { path: a.clone(), why: Why::InUse }]);
+        drop(writer);
+        assert_eq!(move_by_copy(&a, &d.p("hedef/db.sqlite"), true).unwrap(), d.p("hedef/db.sqlite"));
+        assert!(!exists(&a));
     }
 
     #[test]
