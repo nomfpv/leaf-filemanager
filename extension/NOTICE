@@ -1,0 +1,11 @@
+leaf browser capture
+
+This extension contains code adapted from AB Download Manager browser integration
+https://github.com/amir1376/ab-download-manager-browser-integration
+Copyright AmirHossein Abdolmotallebi
+Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE-2.0).
+
+Adapted parts: the recording of a download's request headers (webRequest.onSendHeaders with extraHeaders) and the
+take-over of a new download through downloads.onCreated, from src/linkgrabber/DownloadLinkInterceptor.ts. They were
+rewritten as plain JavaScript in src/background.js and changed for leaf (see the comment at the top of that file).
+Everything else in this folder is leaf's own and under leaf's licence (MIT).

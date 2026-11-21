@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>leaf browser capture</title>
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --text: #1c1c1c; --muted: #5f6368; --line: #d9d9d9; --ok: #1e7a3c; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1f1f1f; --text: #ececec; --muted: #a8a8a8; --line: #3a3a3a; --ok: #6cc98a; --bad: #f2928b; } }
+  body { margin: 0; padding: 20px 16px; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; max-width: 560px; }
+  h1 { font-size: 16px; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; }
+  p.note { color: var(--muted); margin: 0 0 16px; }
+  label.row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+  label.row small { display: block; color: var(--muted); }
+  textarea { width: 100%; box-sizing: border-box; min-height: 72px; margin-top: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+  #status { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+  #status.ok { color: var(--ok); }
+  #status.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<h1><img src="icons/leaf-32.png" width="20" height="20" alt="">leaf browser capture</h1>
+<p class="note">Downloads you start in this browser go to leaf. If leaf is not running it is started; if leaf cannot take a download, the browser keeps it. The minimum size is set in leaf (Settings, Advanced, Downloads).</p>
+<label class="row"><input type="checkbox" id="enabled"><span>Send downloads to leaf</span></label>
+<label class="row"><input type="checkbox" id="noCookies"><span>Do not send cookies or sign-in<small>Downloads that need you to be signed in will then fail in leaf.</small></span></label>
+<label class="row" for="excluded"><span style="flex:1">Sites the browser keeps (one per line, e.g. example.com)<textarea id="excluded" spellcheck="false"></textarea></span></label>
+<div id="status">Looking for leaf…</div>
+<script src="options.js"></script>
+</body>
+</html>

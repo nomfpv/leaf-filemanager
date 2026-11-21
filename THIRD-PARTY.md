@@ -35,6 +35,7 @@ licence in the tree (file-level; the crates are used unmodified from crates.io).
 |---|---|---|
 | Lucide icons (about 1800 SVGs) | embedded by the `gpui-kit-assets` crate | ISC, Copyright (c) Lucide Icons and Contributors; the Feather-derived ones MIT, Copyright (c) 2013-present Cole Bemis. Full text in that crate's `LICENSE-LUCIDE`; the ISC text is reproduced below. |
 | Glass shader `glass.hlsl` | `crates/rf-win/src/glass` | Written for leaf after the numbers and formulas of tomacco/amazing-glass (MIT, Copyright (c) 2026 Ivan Tomac); the file says no code is copied. |
+| Browser extension `extension/src/background.js` | `extension/` (the leaf browser capture extension, shipped to the browser stores, not in the app) | Adapted from AB Download Manager browser integration (Apache-2.0, Copyright AmirHossein Abdolmotallebi); the licence text and a NOTICE of the changes are in `extension/LICENSE-APACHE-2.0` and `extension/NOTICE`. |
 | Fonts | none bundled | Segoe UI, Segoe UI Variable, Cascadia Mono and Consolas are used from the system. |
 | `crates/rf-app/assets/leaf*.png`, `leaf.ico` | app icon | leaf's own; artwork supplied by the project owner. |
 | Test media `crates/rf-player/tests/data`, `crates/rustdecoder/tests/data`, `crates/rf-win/tests/data/look` | test inputs only, not shipped | Provenance not recorded in the repository (to be confirmed by the owner). |
