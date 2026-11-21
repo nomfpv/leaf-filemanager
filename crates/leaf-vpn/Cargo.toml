@@ -1,0 +1,25 @@
+[package]
+name = "leaf-vpn"
+description = "leaf: a VPN for leaf's own connections only (userspace WireGuard + TCP/IP, no driver, no admin), Mullvad as the first provider"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# WireGuard's handshake and packets, sans-IO (BSD-3-Clause); no `device` feature: no tun, no admin
+boringtun = { version = "0.7.1", default-features = false }
+# the TCP/IP stack inside the tunnel (0BSD): IPv4, TCP and DNS sockets, wakers for tokio
+smoltcp = { version = "0.14", default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "socket-tcp", "socket-dns", "async"] }
+# leaf-remote's runtime is used (its handle is given to `init`); no runtime of its own
+tokio = { version = "1", default-features = false, features = ["net", "time", "sync", "io-util", "macros", "rt"] }
+# HTTPS to Mullvad's API and to the exit check: rustls with ring and the system's certificates, as leaf-remote has them
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-platform-verifier = "0.7"
+base64 = "0.22"
+zeroize = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
