@@ -170,7 +170,7 @@ pub struct Workspace {
     /// Files' "Filter by" strip under the command bar (name filter for this folder).
     filter_bar: bool,
     /// Folder compare of one tab's two panes (`compare_mode`).
-    compare: Option<crate::compare_mode::State>,
+    pub(crate) compare: Option<crate::compare_mode::State>,
     filter_input: Entity<InputState>,
     sidebar_open: bool,
     sidebar_w: f32,
@@ -1248,6 +1248,24 @@ impl Workspace {
     pub(crate) fn compare_set_chip(&mut self, chip: crate::compare_mode::Chip, cx: &mut Context<Self>) {
         if let Some(st) = &mut self.compare {
             st.chip = if st.chip == chip { crate::compare_mode::Chip::All } else { chip };
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn compare_contents(&mut self, cx: &mut Context<Self>) {
+        crate::compare_mode::start_content(self, cx);
+    }
+
+    pub(crate) fn compare_contents_cancel(&mut self, cx: &mut Context<Self>) {
+        if let Some(st) = &mut self.compare {
+            st.stop_content();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn compare_contents_all_toggle(&mut self, cx: &mut Context<Self>) {
+        if let Some(st) = &mut self.compare {
+            st.content_all = !st.content_all;
         }
         cx.notify();
     }

@@ -49,6 +49,7 @@ when unset; code in `crates/rf-app/src/check_script.rs`). One line per step, `#`
   `settings <general|appearance|layout|files|filetypes|actions|tags|preview|search|nearby|advanced|speed|organizer|features|about>`
 - `changes <path>` (the change feed page of the git repository the folder is in), `changes-pick <part of a path>` (selects that row; its diff shows in the preview pane)
 - `dups newest` (the duplicate finder page: tick all but the newest copy of every group), `dups delete` (its Delete ticked button, opens the question; `key enter` answers it)
+- `compare-contents [all]` (folder compare on: the Compare contents chip; `all` also checks same-size, same-time pairs)
 - `tag <name>` (toggles that tag on the selection), `gototag <name>` (the tag's page)
 - `shot <name>`: prints `LEAF_SHOT <name>` on stdout; if `LEAF_CHECK_SHOTDIR` is set it waits (15 s at most) for
   `<dir>/<name>.png` to appear, else 1.5 s. The wrapper takes the picture.

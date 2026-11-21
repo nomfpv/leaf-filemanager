@@ -1023,7 +1023,7 @@ impl FolderView {
                     .relative()
                     .when(selected, |d| d.bg(p.selection).child(theme::selection_pill(&p)))
                     .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
-                    .when(cmp == Some(crate::compare_mode::Look::Same), |d| d.opacity(0.55))
+                    .when(cmp.is_some_and(|l| l.is_same()), |d| d.opacity(0.55))
                     .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
                     .child(link_marked(
                         match &shell_icon {
@@ -3163,7 +3163,7 @@ impl FolderView {
                     .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { p.selection_inactive }))
                     .when(!selected, |d| d.border_1().border_color(transparent_black()))
                     .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
-                    .when(cmp == Some(crate::compare_mode::Look::Same), |d| d.opacity(0.55))
+                    .when(cmp.is_some_and(|l| l.is_same()), |d| d.opacity(0.55))
                     .when(!selected && part.is_none(), |d| d.hover(|s| s.bg(p.hover)))
                     .when(!selected && part.is_some() && self.grid_hover.is_some_and(|(h, _)| h == vi), |d| d.bg(p.hover))
                     .on_mouse_down(
@@ -4750,7 +4750,7 @@ impl FolderView {
                 .relative()
                 .when(striped, |d| d.bg(p.stripe))
                 .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
-                .when(cmp == Some(crate::compare_mode::Look::Same), |d| d.opacity(0.55))
+                .when(cmp.is_some_and(|l| l.is_same()), |d| d.opacity(0.55))
                 .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
                 .when(selected && inactive, |d| d.bg(p.selection_inactive))
                 .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
@@ -6069,7 +6069,7 @@ impl FolderView {
 
     /// Folder compare: the shown items that differ from the other pane are the selection.
     pub(crate) fn select_differing(&mut self, cx: &mut Context<Self>) {
-        let sel: HashSet<u32> = self.visible.iter().copied().filter(|&i| self.compare_look(i).is_some_and(|l| l != crate::compare_mode::Look::Same)).collect();
+        let sel: HashSet<u32> = self.visible.iter().copied().filter(|&i| self.compare_look(i).is_some_and(|l| !l.is_same())).collect();
         self.selected = sel;
         cx.notify();
     }

@@ -229,6 +229,13 @@ impl Workspace {
                     br.update(cx, |br, cx| br.apply(cx));
                 }
             }
+            // folder compare: the "Compare contents" chip (`all`: with the identical-looking pairs too)
+            "compare-contents" => {
+                if arg == "all" {
+                    self.compare_contents_all_toggle(cx);
+                }
+                self.compare_contents(cx);
+            }
             "pane" => {
                 let ix = self.active;
                 if let Some(t) = self.tabs.get_mut(ix) {
