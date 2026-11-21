@@ -6,6 +6,7 @@
 mod headers;
 mod host;
 mod http;
+mod mark;
 mod name;
 pub mod queue;
 pub mod store;
@@ -413,6 +414,8 @@ fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control
             }
             std::fs::rename(&part, &dest)?;
             remove_state(&part);
+            // (as a browser would: SmartScreen and Protected View still warn about it)
+            mark::mark(&dest, &probe.uri, opts.headers.get("Referer"));
             Ok(Outcome::Saved(dest))
         }
         Err(Error::Cancelled) => {
