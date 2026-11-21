@@ -144,15 +144,31 @@ fn is_picture(rel: &str) -> bool {
     matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff" | "svg")
 }
 
-/// Bytes to a file under the temp folder named by their content (so a picture shown is never a stale cached one).
+/// Bytes to a file in leaf's own data folder of this user (never a shared temp folder), named by their content so a picture
+/// shown is never a stale cached one. Made with `create_new`: a name that is there already is this same content, written before.
 fn to_temp(bytes: &[u8], rel: &str) -> Option<PathBuf> {
-    let ext = rel.rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default();
-    let dir = std::env::temp_dir().join("leaf-review");
+    use std::io::Write as _;
+    let ext: String = rel.rsplit_once('.').map(|(_, e)| e.chars().filter(|c| c.is_ascii_alphanumeric()).collect()).unwrap_or_default();
+    let dir = crate::settings::local_data_dir()?.join("review-pictures");
     std::fs::create_dir_all(&dir).ok()?;
     let s = Stamp::of_bytes(bytes);
     let p = dir.join(format!("{:016x}{:x}.{ext}", s.hash, s.len));
-    if !p.exists() {
-        std::fs::write(&p, bytes).ok()?;
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+        Ok(mut f) => {
+            if f.write_all(bytes).is_err() {
+                drop(f);
+                let _ = std::fs::remove_file(&p);
+                return None;
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // (only a plain file of exactly that size counts as the one written before)
+            let m = std::fs::symlink_metadata(&p).ok()?;
+            if !m.is_file() || m.len() != bytes.len() as u64 {
+                return None;
+            }
+        }
+        Err(_) => return None,
     }
     Some(p)
 }
