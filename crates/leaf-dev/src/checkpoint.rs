@@ -755,6 +755,11 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
 
 // ---------------------------------------------------------------------------------------------------------------- restore
 
+/// Two relative paths name the same file on this system (Windows and macOS ignore case).
+fn same_path(a: &str, b: &str) -> bool {
+    if cfg!(any(windows, target_os = "macos")) { a.to_lowercase() == b.to_lowercase() } else { a == b }
+}
+
 /// Is this a link of any kind (a symbolic link; on Windows also a junction or another reparse point)?
 fn is_link(m: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
@@ -865,7 +870,10 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
         }
         // "comes back" yet something is there: a file git ignores now, or a link the copy store does not list. The automatic
         // checkpoint does not hold it, so it is never overwritten: it goes to the Trash first, or the file is left as it is.
+        // (a name that only changed its case is one file: its content now is in the automatic checkpoint under the other spelling)
+        let renamed = plan.items.iter().any(|o| o.change == Change::Added && same_path(&o.rel, &it.rel));
         if it.change == Change::Back
+            && !renamed
             && let Ok(m) = std::fs::symlink_metadata(&path)
         {
             if m.is_dir() {
@@ -902,7 +910,13 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
     }
     drop(blobs);
     if let Some(remove) = remove {
-        let gone: Vec<String> = plan.items.iter().filter(|i| i.change == Change::Added && remove.contains(&i.rel)).map(|i| i.rel.clone()).collect();
+        // (never a file just written under another case of its name)
+        let gone: Vec<String> = plan
+            .items
+            .iter()
+            .filter(|i| i.change == Change::Added && remove.contains(&i.rel) && !done.written.iter().any(|w| same_path(w, &i.rel)))
+            .map(|i| i.rel.clone())
+            .collect();
         if !gone.is_empty() {
             let paths: Vec<PathBuf> = gone.iter().map(|r| folder.join(r)).collect();
             match trash(&paths) {
@@ -1096,6 +1110,30 @@ mod tests {
         assert_eq!(done.failed.len(), 1, "{:?}", done.failed);
         assert!(std::fs::read_dir(&outside).unwrap().next().is_none(), "nothing was written outside the folder");
         let _ = std::fs::remove_dir(d.join("sub"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_name_that_only_changed_case_is_not_sent_to_the_trash() {
+        let d = temp("case");
+        write(&d, "A.txt", b"then");
+        let store = Store::Copy { folder: d.clone(), base: temp("case-data").join("checkpoints").join("k") };
+        let cp = create(&store, "", false, None).unwrap();
+        std::fs::rename(d.join("A.txt"), d.join("a.txt")).unwrap();
+        write(&d, "a.txt", b"now");
+        let trashed = std::cell::RefCell::new(Vec::<PathBuf>::new());
+        let trash = |paths: &[PathBuf]| -> Result<(), String> {
+            trashed.borrow_mut().extend(paths.iter().cloned());
+            Ok(())
+        };
+        let added: Vec<String> = plan(&store, &cp).unwrap().items.iter().filter(|i| i.change == Change::Added).map(|i| i.rel.clone()).collect();
+        let done = restore(&store, &cp, Some(&added), &trash).unwrap();
+        assert!(trashed.borrow().is_empty(), "{:?}", trashed.borrow());
+        assert_eq!(std::fs::read(d.join("A.txt")).unwrap(), b"then");
+        let undo = restore(&store, &done.auto, Some(&done.back), &trash).unwrap();
+        assert!(trashed.borrow().is_empty(), "{:?} {:?}", trashed.borrow(), undo);
+        assert_eq!(std::fs::read(d.join("a.txt")).unwrap(), b"now");
         let _ = std::fs::remove_dir_all(&d);
     }
 
