@@ -33,3 +33,36 @@ fn a_reset_through_the_tunnel_is_an_error_not_the_end_of_the_stream() {
     }
     assert!(tunnel::read_end(S::Closed, true).is_ok());
 }
+
+#[test]
+fn an_idle_tunnel_is_not_declared_lost() {
+    use std::time::Instant;
+    use tunnel::{Liveness, Tick};
+    let t0 = Instant::now();
+    let at = |s: u64| t0 + Duration::from_secs(s);
+    // ten idle minutes: a ping every 30 s, each one answered: never lost
+    let mut live = Liveness::new(t0);
+    let mut probes = 0;
+    for s in (1..=600).step_by(1) {
+        match live.tick(at(s)) {
+            Tick::Probe => {
+                probes += 1;
+                live.on_rx(at(s) + Duration::from_millis(80));
+            }
+            Tick::Dead => panic!("an answered idle tunnel was declared lost at {s} s"),
+            Tick::Fine => {}
+        }
+    }
+    assert!((15..=21).contains(&probes), "{probes} pings in ten minutes");
+    // nothing answers any more: lost after three unanswered pings, not before
+    let mut live = Liveness::new(t0);
+    let mut dead_at = None;
+    for s in 1..=300 {
+        if live.tick(at(s)) == Tick::Dead {
+            dead_at = Some(s);
+            break;
+        }
+    }
+    let d = dead_at.expect("a silent server is noticed");
+    assert!((100..=130).contains(&d), "lost after {d} s");
+}

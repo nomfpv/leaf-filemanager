@@ -35,10 +35,73 @@ const MTU: usize = 1380;
 /// Per TCP stream (a download segment fills a window of this).
 const RX_BUF: usize = 512 << 10;
 const TX_BUF: usize = 128 << 10;
-/// How long the first handshake may take.
-const HANDSHAKE_WAIT: Duration = Duration::from_secs(10);
-/// No handshake for this long: the server is gone (WireGuard renews every 2 minutes while traffic flows; keepalives every 25 s).
-const DEAD_AFTER: Duration = Duration::from_secs(190);
+/// How long the first handshake may take (more right after a sign-in: see [`Tunnel::start`]).
+pub const HANDSHAKE_WAIT: Duration = Duration::from_secs(10);
+/// With nothing coming in for this long, a ping goes to the server's side of the tunnel (10.64.0.1). It is data, so it also
+/// makes WireGuard renew its keys, which keepalives alone do not; the relay answers it.
+const PROBE_EVERY: Duration = Duration::from_secs(30);
+/// This many pings in a row without anything coming back: the server is gone.
+const DEAD_PROBES: u32 = 3;
+
+/// Whether the other side still answers: nothing else decides that the tunnel is lost (an idle tunnel is not).
+#[derive(Debug)]
+pub(crate) struct Liveness {
+    last_rx: Instant,
+    last_probe: Option<Instant>,
+    unanswered: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Tick {
+    Fine,
+    /// Send a ping now.
+    Probe,
+    Dead,
+}
+
+impl Liveness {
+    pub(crate) fn new(now: Instant) -> Liveness {
+        Liveness { last_rx: now, last_probe: None, unanswered: 0 }
+    }
+    /// A datagram of the server's came in (any: data, a keepalive, a handshake).
+    pub(crate) fn on_rx(&mut self, now: Instant) {
+        self.last_rx = now;
+        self.unanswered = 0;
+    }
+    pub(crate) fn tick(&mut self, now: Instant) -> Tick {
+        if now.duration_since(self.last_rx) < PROBE_EVERY || self.last_probe.is_some_and(|p| now.duration_since(p) < PROBE_EVERY) {
+            return Tick::Fine;
+        }
+        if self.unanswered >= DEAD_PROBES {
+            return Tick::Dead;
+        }
+        self.unanswered += 1;
+        self.last_probe = Some(now);
+        Tick::Probe
+    }
+}
+
+/// An ICMP echo request from `src` to `dst` as one IPv4 packet (20 bytes of header, 8 of ICMP, a few of data).
+fn ping(src: Ipv4Addr, dst: Ipv4Addr, seq: u16) -> Vec<u8> {
+    fn sum(b: &[u8]) -> u16 {
+        let mut s: u32 = b.chunks(2).map(|c| u32::from(u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)]))).sum();
+        while s > 0xffff {
+            s = (s & 0xffff) + (s >> 16);
+        }
+        !(s as u16)
+    }
+    let mut icmp = vec![8u8, 0, 0, 0, 0x6c, 0x66, (seq >> 8) as u8, seq as u8, b'l', b'e', b'a', b'f'];
+    let c = sum(&icmp);
+    icmp[2..4].copy_from_slice(&c.to_be_bytes());
+    let total = (20 + icmp.len()) as u16;
+    let mut ip = vec![0x45, 0, (total >> 8) as u8, total as u8, 0, 0, 0x40, 0, 64, 1, 0, 0];
+    ip.extend_from_slice(&src.octets());
+    ip.extend_from_slice(&dst.octets());
+    let c = sum(&ip);
+    ip[10..12].copy_from_slice(&c.to_be_bytes());
+    ip.extend_from_slice(&icmp);
+    ip
+}
 
 /// A WireGuard private key. Its `Debug` shows nothing of it; it is wiped when dropped.
 #[derive(Clone)]
@@ -246,8 +309,9 @@ impl Drop for Tunnel {
 }
 
 impl Tunnel {
-    /// Opens the tunnel and waits for the first handshake. Must run on a tokio runtime (the driver is spawned on it).
-    pub async fn start(cfg: TunnelConfig) -> Result<Tunnel, TunnelError> {
+    /// Opens the tunnel and waits up to `wait` for the first handshake (the handshake is sent again every few seconds by
+    /// WireGuard's timers meanwhile). Must run on a tokio runtime (the driver is spawned on it).
+    pub async fn start(cfg: TunnelConfig, wait: Duration) -> Result<Tunnel, TunnelError> {
         let bind: SocketAddr = if cfg.endpoint.is_ipv4() { "0.0.0.0:0".parse().unwrap() } else { "[::]:0".parse().unwrap() };
         let udp = UdpSocket::bind(bind).await.map_err(TunnelError::Socket)?;
         udp.connect(cfg.endpoint).await.map_err(TunnelError::Socket)?;
@@ -276,9 +340,9 @@ impl Tunnel {
             started,
         });
         log::info!("vpn: connecting to {}", cfg.endpoint);
-        tokio::spawn(drive(shared.clone(), udp, tunn));
+        tokio::spawn(drive(shared.clone(), udp, tunn, cfg.address));
         let tunnel = Tunnel { shared };
-        let deadline = Instant::now() + HANDSHAKE_WAIT;
+        let deadline = Instant::now() + wait;
         while !tunnel.shared.up.load(Ordering::Acquire) {
             if Instant::now() >= deadline || tunnel.shared.closed.load(Ordering::Acquire) {
                 return Err(TunnelError::NoAnswer);
@@ -421,15 +485,41 @@ async fn send(udp: &UdpSocket, b: &[u8]) {
     }
 }
 
-/// Moves packets: stack -> Tunn -> UDP, UDP -> Tunn -> stack, and runs WireGuard's timers.
-async fn drive(shared: Arc<Shared>, udp: UdpSocket, mut tunn: Tunn) {
+/// One datagram from the server: through Tunn, an IP packet for the stack, or an answer to send back. `true`: it was one of
+/// the server's (it counts as a sign of life).
+async fn take_datagram(tunn: &mut Tunn, udp: &UdpSocket, data: &[u8], out: &mut [u8], to_stack: &mut Vec<Vec<u8>>) -> bool {
+    match tunn.decapsulate(None, data, out) {
+        TunnResult::WriteToNetwork(b) => {
+            send(udp, b).await;
+            // (packets that waited for the handshake go now)
+            while let TunnResult::WriteToNetwork(b) = tunn.decapsulate(None, &[], out) {
+                send(udp, b).await;
+            }
+            true
+        }
+        TunnResult::WriteToTunnelV4(p, _) => {
+            to_stack.push(p.to_vec());
+            true
+        }
+        TunnResult::WriteToTunnelV6(..) | TunnResult::Done => true,
+        TunnResult::Err(e) => {
+            log::debug!("vpn: a packet was dropped: {e:?}");
+            false
+        }
+    }
+}
+
+/// Moves packets: stack -> Tunn -> UDP, UDP -> Tunn -> stack, runs WireGuard's timers, and pings the server's side while
+/// nothing comes in (see [`Liveness`]): only pings that stay unanswered end the tunnel, never a quiet spell.
+async fn drive(shared: Arc<Shared>, udp: UdpSocket, mut tunn: Tunn, me: Ipv4Addr) {
     let mut out = vec![0u8; 65536];
     let mut inb = vec![0u8; 65536];
     if let TunnResult::WriteToNetwork(b) = tunn.format_handshake_initiation(&mut out, false) {
         send(&udp, b).await;
     }
     let mut last_timers = Instant::now();
-    let mut last_alive = Instant::now();
+    let mut live = Liveness::new(Instant::now());
+    let mut seq: u16 = 0;
     while !shared.closed.load(Ordering::Acquire) {
         let (packets, delay) = {
             let mut g = shared.lock();
@@ -452,24 +542,14 @@ async fn drive(shared: Arc<Shared>, udp: UdpSocket, mut tunn: Tunn) {
             r = udp.recv(&mut inb) => match r {
                 Ok(len) => {
                     let mut to_stack = Vec::new();
-                    match tunn.decapsulate(None, &inb[..len], &mut out) {
-                        TunnResult::WriteToNetwork(b) => {
-                            send(&udp, b).await;
-                            // (packets that waited for the handshake go now)
-                            while let TunnResult::WriteToNetwork(b) = tunn.decapsulate(None, &[], &mut out) {
-                                send(&udp, b).await;
-                            }
-                        }
-                        TunnResult::WriteToTunnelV4(p, _) => to_stack.push(p.to_vec()),
-                        TunnResult::WriteToTunnelV6(..) | TunnResult::Done => {}
-                        TunnResult::Err(e) => log::debug!("vpn: a packet was dropped: {e:?}"),
+                    if take_datagram(&mut tunn, &udp, &inb[..len], &mut out, &mut to_stack).await {
+                        live.on_rx(Instant::now());
                     }
                     if !to_stack.is_empty() {
                         shared.lock().dev.rx.extend(to_stack);
                     }
                     if tunn.time_since_last_handshake().is_some() {
                         shared.up.store(true, Ordering::Release);
-                        last_alive = Instant::now();
                     }
                 }
                 // (Windows reports an ICMP "port unreachable" on a connected UDP socket as an error: nothing to do)
@@ -489,14 +569,20 @@ async fn drive(shared: Arc<Shared>, udp: UdpSocket, mut tunn: Tunn) {
                 TunnResult::Err(e) => log::debug!("vpn: timers: {e:?}"),
                 _ => {}
             }
-            if let Some(since) = tunn.time_since_last_handshake()
-                && since < DEAD_AFTER
-            {
-                last_alive = Instant::now();
-            }
-            if shared.up.load(Ordering::Acquire) && last_alive.elapsed() > DEAD_AFTER {
-                log::warn!("vpn: the server has not answered for {} s; the tunnel is closed", DEAD_AFTER.as_secs());
-                break;
+            if shared.up.load(Ordering::Acquire) {
+                match live.tick(Instant::now()) {
+                    Tick::Fine => {}
+                    Tick::Probe => {
+                        seq = seq.wrapping_add(1);
+                        if let TunnResult::WriteToNetwork(b) = tunn.encapsulate(&ping(me, Ipv4Addr::new(10, 64, 0, 1), seq), &mut out) {
+                            send(&udp, b).await;
+                        }
+                    }
+                    Tick::Dead => {
+                        log::warn!("vpn: the server did not answer {DEAD_PROBES} pings; the tunnel is closed");
+                        break;
+                    }
+                }
             }
         }
     }

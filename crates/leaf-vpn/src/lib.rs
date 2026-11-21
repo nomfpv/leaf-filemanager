@@ -154,52 +154,111 @@ pub fn connect(provider: Arc<dyn Provider>) {
         }
         m.generation
     };
+    bump_route();
     set_state(generation, State::Connecting { place: String::new() });
-    rt.spawn(async move {
-        let prepared = match provider.prepare().await {
-            Ok(p) => p,
-            Err(why) => return set_state(generation, State::Failed(why)),
-        };
-        set_state(generation, State::Connecting { place: format!("{}, {}", prepared.country, prepared.city) });
-        let server_ip = prepared.config_endpoint_ip();
-        let Prepared { config, country, city, server } = prepared;
-        let t = match Tunnel::start(config).await {
-            Ok(t) => Arc::new(t),
-            Err(e) => return set_state(generation, State::Failed(e.to_string())),
-        };
-        {
-            let mut m = manager();
-            if m.generation != generation {
-                t.close();
-                return;
+    rt.spawn(run(provider, generation));
+}
+
+/// Waits between tries to bring a lost tunnel back.
+const RECONNECT_BACKOFF: [u64; 6] = [2, 5, 10, 20, 30, 60];
+
+/// One connection's life: up, then up again whenever it is lost (state `Connecting` meanwhile, so the kill switch holds what
+/// is set to use it), until a newer connect or disconnect. `Failed` only when the provider refuses, or after the last try.
+async fn run(provider: Arc<dyn Provider>, generation: u64) {
+    let mut tries = 0usize;
+    let mut was_up = false;
+    loop {
+        match up_once(&*provider, generation).await {
+            Ok(Some(t)) => {
+                was_up = true;
+                tries = 0;
+                // the tunnel ends by itself when the server stops answering its pings
+                while t.is_alive() {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if manager().generation != generation {
+                        return;
+                    }
+                }
+                {
+                    let mut m = manager();
+                    if m.generation != generation {
+                        return;
+                    }
+                    m.tunnel = None;
+                }
+                bump_route();
+                log::warn!("vpn: the connection was lost; connecting again");
+                set_state(generation, State::Connecting { place: String::new() });
             }
-            m.tunnel = Some(t.clone());
-        }
-        let exit = provider.exit_check(&t).await.unwrap_or_default();
-        set_state(
-            generation,
-            State::On {
-                country: exit.country.unwrap_or(country),
-                city: exit.city.unwrap_or(city),
-                server,
-                // (without the provider's check: the server's own address, which is where Mullvad's traffic leaves)
-                exit_ip: exit.ip.or(Some(IpAddr::V4(server_ip))),
-            },
-        );
-        // the tunnel ends by itself when the server stops answering
-        while t.is_alive() {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            if manager().generation != generation {
-                return;
+            // a newer connect or disconnect took over
+            Ok(None) => return,
+            Err(Refusal::Provider(why)) => return set_state(generation, State::Failed(why)),
+            Err(Refusal::Tunnel(why)) => {
+                // (a first connect that never came up says so at once; a lost one is tried again for a while)
+                if !was_up || tries >= RECONNECT_BACKOFF.len() {
+                    let why = if was_up { format!("The VPN connection was lost and did not come back.\n{why}") } else { why };
+                    return set_state(generation, State::Failed(why));
+                }
+                let wait = RECONNECT_BACKOFF[tries];
+                tries += 1;
+                log::info!("vpn: try {tries} failed, the next in {wait} s");
+                set_state(generation, State::Connecting { place: String::new() });
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                if manager().generation != generation {
+                    return;
+                }
             }
         }
+    }
+}
+
+enum Refusal {
+    /// The provider said no (account, place): trying again does not help.
+    Provider(String),
+    /// The tunnel did not come up (no answer): worth another try.
+    Tunnel(String),
+}
+
+/// Brings the tunnel up once; `Ok(None)` when a newer connect or disconnect came meanwhile.
+async fn up_once(provider: &dyn Provider, generation: u64) -> Result<Option<Arc<Tunnel>>, Refusal> {
+    let prepared = provider.prepare().await.map_err(Refusal::Provider)?;
+    set_state(generation, State::Connecting { place: format!("{}, {}", prepared.country, prepared.city) });
+    let server_ip = prepared.config_endpoint_ip();
+    let Prepared { config, country, city, server } = prepared;
+    let t = Arc::new(Tunnel::start(config, tunnel::HANDSHAKE_WAIT).await.map_err(|e| Refusal::Tunnel(e.to_string()))?);
+    {
         let mut m = manager();
-        if m.generation == generation {
-            m.tunnel = None;
-            drop(m);
-            set_state(generation, State::Failed("The VPN connection was lost: the server stopped answering.".into()));
+        if m.generation != generation {
+            t.close();
+            return Ok(None);
         }
-    });
+        m.tunnel = Some(t.clone());
+    }
+    bump_route();
+    let exit = provider.exit_check(&t).await.unwrap_or_default();
+    set_state(
+        generation,
+        State::On {
+            country: exit.country.unwrap_or(country),
+            city: exit.city.unwrap_or(city),
+            server,
+            // (without the provider's check: the server's own address, which is where Mullvad's traffic leaves)
+            exit_ip: exit.ip.or(Some(IpAddr::V4(server_ip))),
+        },
+    );
+    Ok(Some(t))
+}
+
+static ROUTE_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Goes up whenever the tunnel comes up or goes down: a connection opened before (direct or through it) no longer is on the
+/// route leaf would take now.
+pub fn generation() -> u64 {
+    ROUTE_GEN.load(Ordering::Acquire)
+}
+
+fn bump_route() {
+    ROUTE_GEN.fetch_add(1, Ordering::AcqRel);
 }
 
 impl Prepared {
@@ -220,6 +279,7 @@ pub fn disconnect() {
         }
         m.generation
     };
+    bump_route();
     set_state(generation, State::Off);
 }
 
