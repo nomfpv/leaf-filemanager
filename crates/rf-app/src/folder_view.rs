@@ -369,6 +369,8 @@ enum Msg {
     View(View),
     /// Search hits: entries plus their parent folders.
     Hits(Vec<Entry>, Vec<Arc<std::path::Path>>),
+    /// Search in file contents: the first matching line of each hit (path, line number, text).
+    Lines(Vec<(PathBuf, usize, String)>),
     /// Shell folder items (a phone, Network…): entries plus what the shell knows about each.
     Shell(Vec<Entry>, Vec<leaf_sys::shellfolder::ShellChild>),
     /// The shell's own name for the folder being listed.
@@ -390,6 +392,8 @@ pub(crate) enum SearchStage {
     WindowsSilent,
     /// The disk is walked (no index covers the folder).
     Walk,
+    /// Files are read for the text (search in file contents).
+    Contents,
 }
 
 impl SearchStage {
@@ -399,6 +403,7 @@ impl SearchStage {
             SearchStage::Windows => crate::t!("Asking Windows Search…"),
             SearchStage::WindowsSilent => crate::t!("Windows Search did not answer, scanning the disk…"),
             SearchStage::Walk => crate::t!("Scanning the disk…"),
+            SearchStage::Contents => crate::t!("Reading files…"),
         }
     }
 }
@@ -477,6 +482,8 @@ pub struct FolderView {
     pub(crate) entries: Vec<Entry>,
     /// Search mode only: parent folder of each entry (aligned with `entries`).
     parents: Vec<Arc<std::path::Path>>,
+    /// Search in file contents: the matching line shown for each hit, by full path.
+    hit_lines: std::collections::HashMap<PathBuf, (usize, String)>,
     /// Shell folders only: what the shell knows about each entry (aligned with `entries`).
     pub(crate) shell_items: Vec<leaf_sys::shellfolder::ShellChild>,
     /// Shell folders only: the shell's name for the folder (when the location carries none).
@@ -733,6 +740,7 @@ impl FolderView {
             compare: None,
             cloud_cache: Default::default(),
             parents: Vec::new(),
+            hit_lines: Default::default(),
             shell_items: Vec::new(),
             shell_title: None,
             search_stage: None,
@@ -1550,6 +1558,7 @@ impl FolderView {
             self.entries.clear();
             self.entries_gen += 1;
             self.parents.clear();
+            self.hit_lines.clear();
             self.shell_items.clear();
             self.shell_title = None;
             self.search_stage = None;
@@ -1795,9 +1804,45 @@ impl FolderView {
                     crate::tags::eval_query(&crate::tags::parse_query(expr), &with, &all)
                 })
             };
+            // "content:text" / "regex:pattern": the files are read for it (see rf_core::content_search)
+            let content = rf_core::content_search::matcher(&query);
             std::thread::Builder::new()
                 .name("rf-search".into())
                 .spawn(move || {
+                    if let Some(re) = content {
+                        let _ = tx.unbounded_send(Msg::Stage(SearchStage::Contents));
+                        let re = match re {
+                            Ok(re) => re,
+                            Err(e) => {
+                                let _ = tx.unbounded_send(Msg::Done(Err(format!("{}: {e}", crate::t!("Not a valid pattern")))));
+                                return;
+                            }
+                        };
+                        let (mut es, mut ps, mut ls) = (Vec::new(), Vec::new(), Vec::new());
+                        let mut last = std::time::Instant::now();
+                        let flush = |es: &mut Vec<Entry>, ps: &mut Vec<Arc<std::path::Path>>, ls: &mut Vec<(PathBuf, usize, String)>| {
+                            if !es.is_empty() {
+                                let _ = tx.unbounded_send(Msg::Lines(std::mem::take(ls)));
+                                let _ = tx.unbounded_send(Msg::Hits(std::mem::take(es), std::mem::take(ps)));
+                            }
+                        };
+                        let n = rf_core::content_search::search(&root, &re, include_hidden, 5_000, &|| cancel.load(Ordering::Relaxed), &mut |p, size, line, text| {
+                            use leaf_sys::fileattr::MetadataExt;
+                            let ms = |t: std::io::Result<std::time::SystemTime>| t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64);
+                            let (mod_ms, cre_ms, attrs) = std::fs::metadata(p).map_or((0, 0, 0), |m| (ms(m.modified()), ms(m.created()), m.file_attributes()));
+                            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            es.push(Entry::new(&name, rf_core::EntryKind::File, size, mod_ms, cre_ms, attrs));
+                            ps.push(p.parent().unwrap_or(p).into());
+                            ls.push((p.to_path_buf(), line, text.to_string()));
+                            if es.len() >= 32 || last.elapsed() > std::time::Duration::from_millis(120) {
+                                flush(&mut es, &mut ps, &mut ls);
+                                last = std::time::Instant::now();
+                            }
+                        });
+                        flush(&mut es, &mut ps, &mut ls);
+                        let _ = tx.unbounded_send(Msg::Done(Ok(n)));
+                        return;
+                    }
                     if let Some(paths) = tag_paths {
                         let mut es = Vec::new();
                         let mut ps: Vec<Arc<std::path::Path>> = Vec::new();
@@ -2014,6 +2059,11 @@ impl FolderView {
                     self.entries_gen += 1;
                     self.parents.extend(ps);
                 }
+                Msg::Lines(ls) => {
+                    for (p, n, text) in ls {
+                        self.hit_lines.insert(p, (n, text));
+                    }
+                }
                 Msg::Shell(es, items) => {
                     self.entries.extend(es);
                     self.entries_gen += 1;
@@ -2120,7 +2170,7 @@ impl FolderView {
                         p.extend(b)
                     }
                 }
-                Msg::Hits(..) | Msg::Shell(..) | Msg::ShellName(_) | Msg::Stage(_) => {}
+                Msg::Hits(..) | Msg::Lines(_) | Msg::Shell(..) | Msg::ShellName(_) | Msg::Stage(_) => {}
                 Msg::Done(Err(e)) if e.contains("not found") => {
                     // The folder we are showing was deleted/renamed away: step up.
                     self.soft_pending = None;
@@ -5105,7 +5155,10 @@ impl FolderView {
                         .overflow_hidden()
                         .text_ellipsis()
                         .child(if search_mode {
-                            self.parent_of(ei).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default()
+                            match self.path_of(ei).and_then(|p| self.hit_lines.get(&p)) {
+                                Some((n, text)) => format!("{n}: {text}"),
+                                None => self.parent_of(ei).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
+                            }
                         } else {
                             icons::type_label(e)
                         }),

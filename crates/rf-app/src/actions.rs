@@ -30,6 +30,7 @@ gpui_kit::actions!(
         ReopenClosedTab,
         FocusAddress,
         FocusSearch,
+        SearchInContents,
         ToggleHidden,
         OpenTerminal,
         Properties,

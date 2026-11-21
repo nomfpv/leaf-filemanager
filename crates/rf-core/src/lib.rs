@@ -21,6 +21,7 @@ pub mod rename;
 pub mod rename_plan;
 pub mod rename_rules;
 pub mod search_date;
+pub mod content_search;
 pub mod basket;
 pub mod shelf;
 pub mod sort;

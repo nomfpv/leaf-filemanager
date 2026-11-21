@@ -2208,6 +2208,40 @@ impl Workspace {
             );
         }
         list = list.child(chips);
+        // "Look in": names, file contents (plain text) or file contents (regular expression): writes the query's `content:` / `regex:` word
+        {
+            use rf_core::content_search::{Mode, mode_of, with_mode};
+            let mode = mode_of(&value).0;
+            let mut modes = h_flex().px_3().py_1().gap_2().items_center().text_sm().child(div().text_color(p.text_secondary).child(t!("Look in")));
+            for (i, (m, label)) in [(Mode::Names, t!("Names")), (Mode::Text, t!("Contents")), (Mode::Regex, t!("Contents (regex)"))].into_iter().enumerate() {
+                let on = mode == m;
+                let value = value.clone();
+                modes = modes.child(
+                    div()
+                        .id(("search-mode", i))
+                        .px_2()
+                        .h(px(24.))
+                        .flex()
+                        .items_center()
+                        .rounded(theme::RADIUS_SM)
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(p.selection))
+                        .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+                        .child(label)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                let q = with_mode(&value, m);
+                                this.search.update(cx, |s, cx| s.set_value(q.clone(), window, cx));
+                                this.run_search(q, window, cx);
+                                cx.notify();
+                            }),
+                        ),
+                );
+            }
+            list = list.child(modes);
+        }
         let row = |id: ElementId| h_flex().id(id).mx_1().px_2().h(px(28.)).gap_2().items_center().rounded(theme::RADIUS_SM).text_sm().hover(|s| s.bg(p.hover)).cursor_pointer();
         for (i, q) in history.into_iter().enumerate() {
             let query = q.clone();
@@ -3315,6 +3349,12 @@ impl Workspace {
                 })
                 .into_any_element(),
         )
+    }
+
+    /// "Search in file contents": the search box with `content:` already in it, for the text to be typed after it.
+    fn enter_content_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_search(window, cx);
+        self.search.update(cx, |s, cx| s.set_value("content:", window, cx));
     }
 
     fn enter_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5865,6 +5905,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ViewList, _, cx| {
                 this.with_tab(cx, |v, cx| v.set_layout(ViewMode::Grid, crate::folder_view::GridStyle::List, cx))
+            }))
+            .on_action(cx.listener(|this, _: &SearchInContents, window, cx| {
+                this.enter_content_search(window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
                 this.enter_search(window, cx);
