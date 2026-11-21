@@ -37,7 +37,16 @@ enum Phase {
 
 enum Ev {
     Progress(u64, u64),
-    Done(Result<Hashes, String>, bool),
+    /// The result, whether it was cancelled, and the SHA-256 the `.sha256` file beside the file holds (read off the UI thread).
+    Done(Result<Hashes, String>, bool, Option<String>),
+}
+
+#[derive(Clone, PartialEq)]
+enum HostCheck {
+    Idle,
+    Running,
+    Done,
+    Failed(String),
 }
 
 pub struct HashPanel {
@@ -49,9 +58,16 @@ pub struct HashPanel {
     cancel: Arc<AtomicBool>,
     compare: Vec<Entity<InputState>>,
     copied: Option<usize>,
+    /// The SHA-256 a `.sha256` file beside the file holds, put into the compare field of SHA-256 once.
+    fill: Option<String>,
+    host_input: Option<Entity<InputState>>,
+    host: HostCheck,
+    /// What saving the `.sha256` file said.
+    saved: Option<String>,
     _subs: Vec<Subscription>,
     _task: Option<Task<()>>,
     _copy_task: Option<Task<()>>,
+    _host_task: Option<Task<()>>,
 }
 
 impl Drop for HashPanel {
@@ -71,9 +87,14 @@ impl HashPanel {
             cancel: Arc::new(AtomicBool::new(false)),
             compare: Vec::new(),
             copied: None,
+            fill: None,
+            host_input: None,
+            host: HostCheck::Idle,
+            saved: None,
             _subs: Vec::new(),
             _task: None,
             _copy_task: None,
+            _host_task: None,
         };
         this.set_path(path, cx);
         this
@@ -94,6 +115,10 @@ impl HashPanel {
         self.total = 0; // filled in by the first progress event (no stat on the UI thread)
         self.hashes = None;
         self.copied = None;
+        self.fill = None;
+        self.host = HostCheck::Idle;
+        self._host_task = None;
+        self.saved = None;
         // Reset compare fields (created lazily on first render).
         self.compare.clear();
         self._subs.clear();
@@ -120,7 +145,8 @@ impl HashPanel {
                     Err(e) if e.downcast_ref::<Cancelled>().is_some() => (Err(String::new()), true),
                     Err(e) => (Err(format!("{e:#}")), false),
                 };
-                let _ = tx.unbounded_send(Ev::Done(res, cancelled));
+                let side = if res.is_ok() { sidecar_of(&path) } else { None };
+                let _ = tx.unbounded_send(Ev::Done(res, cancelled, side));
             })
             .ok();
 
@@ -139,8 +165,9 @@ impl HashPanel {
                                     v.done = d;
                                     v.total = t;
                                 }
-                                Ev::Done(r, cancelled) => {
+                                Ev::Done(r, cancelled, side) => {
                                     finished = true;
+                                    v.fill = side.or(v.fill.take());
                                     match r {
                                         Ok(h) => {
                                             v.done = h.size;
@@ -179,6 +206,9 @@ impl HashPanel {
         if !self.compare.is_empty() {
             return;
         }
+        if self.host_input.is_none() {
+            self.host_input = Some(cx.new(|cx| InputState::new(window, cx).placeholder(crate::t!("Same file on a server: sftp://host/path"))));
+        }
         for _ in 0..ALGOS.len() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(crate::t!("Compare: paste a hash")));
             self._subs.push(cx.subscribe_in(&input, window, |_, _, ev: &InputEvent, _, cx| {
@@ -188,6 +218,62 @@ impl HashPanel {
             }));
             self.compare.push(input);
         }
+    }
+
+    /// Asks the server for the SHA-256 of the file at the address typed in (`sha256sum` there, over the SSH connection): the
+    /// answer goes into the compare field of SHA-256, which shows whether it matches.
+    fn check_on_host(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = &self.host_input else { return };
+        let text = input.read(cx).value().trim().to_string();
+        let addr = match leaf_remote::VPath::parse(&text) {
+            Ok(a) if a.scheme() == "sftp" => a,
+            _ => {
+                self.host = HostCheck::Failed(crate::t!("Type the file's address on the server: sftp://host/path/file").to_string());
+                cx.notify();
+                return;
+            }
+        };
+        self.host = HostCheck::Running;
+        let (tx, rx) = futures::channel::oneshot::channel::<Result<String, String>>();
+        std::thread::Builder::new()
+            .name("rf-hash-host".into())
+            .spawn(move || {
+                let r = leaf_remote::remote_sum(&addr, leaf_remote::checksum::Algo::Sha256, &|| false).map_err(|e| e.to_string());
+                let _ = tx.send(r);
+            })
+            .ok();
+        self._host_task = Some(cx.spawn(async move |this, cx| {
+            let r = rx.await.unwrap_or_else(|_| Err("cancelled".into()));
+            let _ = this.update(cx, |v, cx| {
+                match r {
+                    Ok(h) => {
+                        v.fill = Some(h);
+                        v.host = HostCheck::Done;
+                    }
+                    Err(m) => v.host = HostCheck::Failed(m),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// Writes `<file>.sha256` beside the file (`hash  name`); never replaces one that is there.
+    fn save_sidecar(&mut self, cx: &mut Context<Self>) {
+        let Some(h) = self.hashes.as_ref().map(|h| h.sha256.to_string()) else { return };
+        let name = self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut side = self.path.clone().into_os_string();
+        side.push(".sha256");
+        let r = std::fs::OpenOptions::new().write(true).create_new(true).open(&side).and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(leaf_remote::checksum::format_sidecar(&h, &name).as_bytes())
+        });
+        self.saved = Some(match r {
+            Ok(()) => crate::t!("Saved the .sha256 file beside the file.").to_string(),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => crate::t!("A .sha256 file is there already.").to_string(),
+            Err(e) => e.to_string(),
+        });
+        cx.notify();
     }
 
     fn copy(&mut self, i: usize, text: String, cx: &mut Context<Self>) {
@@ -202,6 +288,18 @@ impl HashPanel {
         }));
         cx.notify();
     }
+}
+
+/// The SHA-256 in `<file>.sha256` beside the file, when there is such a small file with a line for it.
+fn sidecar_of(path: &Path) -> Option<String> {
+    let mut side = path.to_path_buf().into_os_string();
+    side.push(".sha256");
+    let side = PathBuf::from(side);
+    if std::fs::metadata(&side).ok()?.len() > 64 * 1024 {
+        return None;
+    }
+    let text = std::fs::read_to_string(side).ok()?;
+    leaf_remote::checksum::parse_sidecar(&text, &path.file_name()?.to_string_lossy())
 }
 
 /// Lowercases and strips whitespace / `0x` so pasted hashes compare cleanly.
@@ -293,6 +391,10 @@ impl Render for HashPanel {
             Phase::Done => div().into_any_element(),
         };
 
+        // a hash from the `.sha256` file or from the server goes into the SHA-256 compare field (once)
+        if let Some(h) = self.fill.take() {
+            self.compare[2].update(cx, |s, cx| s.set_value(h, window, cx));
+        }
         let values = self.values();
         let mut rows = v_flex().gap_2();
         for (i, algo) in ALGOS.iter().enumerate() {
@@ -365,6 +467,34 @@ impl Render for HashPanel {
             );
         }
 
-        v_flex().w_full().gap_3().p_3().child(header).child(status).child(rows)
+        let host_state: AnyElement = match &self.host {
+            HostCheck::Idle => div().into_any_element(),
+            HostCheck::Running => div().text_xs().text_color(p.text_tertiary).child(t!("Asking the server...")).into_any_element(),
+            HostCheck::Done => div().text_xs().text_color(p.text_secondary).child(t!("The server's SHA-256 is in the compare field above.")).into_any_element(),
+            HostCheck::Failed(m) => div().text_xs().text_color(p.danger).child(m.clone()).into_any_element(),
+        };
+        let can_save = self.hashes.is_some();
+        let button = |id: &'static str, label: String, on: bool| {
+            div().id(id).px_2().py_0p5().rounded(theme::RADIUS_SM).text_xs().bg(p.hover).child(label).when(on, |d| d.cursor_pointer().hover(|s| s.bg(p.pressed))).when(!on, |d| d.opacity(0.4))
+        };
+        let extras = v_flex()
+            .gap_1()
+            .p_2()
+            .rounded(theme::RADIUS)
+            .bg(p.hover)
+            .child(h_flex().gap_1().items_center().child(div().flex_1().min_w_0().child(Input::new(self.host_input.as_ref().expect("made in ensure_inputs"))))
+                .child(button("hp-host", t!("Check on server").to_string(), true).on_click(cx.listener(|this, _, _, cx| this.check_on_host(cx)))))
+            .child(host_state)
+            .child(
+                h_flex().gap_2().items_center()
+                    .child(button("hp-save", t!("Save .sha256").to_string(), can_save).on_click(cx.listener(move |this, _, _, cx| {
+                        if can_save {
+                            this.save_sidecar(cx);
+                        }
+                    })))
+                    .children(self.saved.clone().map(|m| div().flex_1().min_w_0().text_xs().text_color(p.text_secondary).child(m))),
+            );
+
+        v_flex().w_full().gap_3().p_3().child(header).child(status).child(rows).child(extras)
     }
 }

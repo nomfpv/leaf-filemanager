@@ -676,3 +676,54 @@ async fn agent() -> Option<Agent> {
         }
     }
 }
+
+/// What a command run on the server printed (standard output only, capped) and how it ended.
+#[derive(Debug, Clone, Default)]
+pub struct ExecOut {
+    pub stdout: String,
+    /// The command's exit code; none when the server did not tell.
+    pub code: Option<u32>,
+    /// More output came than `EXEC_CAP` and was dropped.
+    pub truncated: bool,
+}
+
+/// The most output of a command that is kept.
+const EXEC_CAP: usize = 4 * 1024 * 1024;
+
+impl Conn {
+    /// Runs `command` (the server's shell parses it) on a new channel of this connection and collects what it prints, waiting
+    /// at most `limit` in all.
+    pub async fn exec(&self, command: &str, limit: Duration) -> Result<ExecOut, FsError> {
+        let mut ch = step(self.limit_open(), self.handle.channel_open_session()).await?;
+        step(self.limit_open(), ch.exec(true, command.as_bytes().to_vec())).await?;
+        let mut out = ExecOut::default();
+        let mut bytes: Vec<u8> = Vec::new();
+        let read = async {
+            while let Some(msg) = ch.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { data } => {
+                        let room = EXEC_CAP.saturating_sub(bytes.len());
+                        if data.len() > room {
+                            out.truncated = true;
+                        }
+                        bytes.extend_from_slice(&data[..data.len().min(room)]);
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => out.code = Some(exit_status),
+                    russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+        };
+        if tokio::time::timeout(limit, read).await.is_err() {
+            let _ = ch.close().await;
+            return Err(offline("the server did not finish the command in time"));
+        }
+        self.touch();
+        out.stdout = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(out)
+    }
+
+    fn limit_open(&self) -> Duration {
+        Duration::from_secs(30)
+    }
+}

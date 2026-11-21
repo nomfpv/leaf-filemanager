@@ -8,6 +8,7 @@
 //!
 //! The app calls [`register`] once at start (cheap: nothing connects, no thread starts) with its dialogs as the [`Prompter`].
 
+pub mod checksum;
 mod conn;
 pub mod known_hosts;
 mod prompt;
@@ -17,7 +18,7 @@ mod tests;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-pub use conn::Config;
+pub use conn::{Config, ExecOut};
 pub use leaf_vfs::{FsError, VPath};
 pub use prompt::{HostKeyAnswer, HostKeyQuestion, NoPrompter, Prompter, Secret, SecretQuestion};
 pub use sftp::SftpFs;
@@ -67,4 +68,18 @@ pub fn free_if_connected(v: &VPath) -> Option<u64> {
         return None;
     }
     sftp_backend().free_if_connected(&v.with_path("/~")).map(|s| s.free)
+}
+
+/// The sum of a file on the server, computed there by `sha256sum` or `xxhsum` over the open (or a new) connection; nothing of
+/// the file crosses the line. Blocks: call from a worker thread. `Unsupported` for an address that is not `sftp://`.
+pub fn remote_sum(v: &VPath, algo: checksum::Algo, cancelled: &dyn Fn() -> bool) -> Result<String, FsError> {
+    if v.scheme() != "sftp" {
+        return Err(FsError::Unsupported);
+    }
+    let out = sftp_backend().exec(v, &checksum::command(algo, v.path()), std::time::Duration::from_secs(30 * 60), cancelled)?;
+    match checksum::parse_output(algo, &out.stdout) {
+        Some(h) if out.code.unwrap_or(0) == 0 => Ok(h),
+        _ if out.code == Some(127) => Err(FsError::Other(format!("The server has no {}", algo.program()))),
+        _ => Err(FsError::Other(format!("{} gave no sum for this file", algo.program()))),
+    }
 }

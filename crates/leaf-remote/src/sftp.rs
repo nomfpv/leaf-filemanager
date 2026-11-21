@@ -86,6 +86,19 @@ impl SftpFs {
         self.free_space(v).ok().flatten()
     }
 
+    /// Runs a shell command on the server of `v` over the connection that is open (or a new one) and returns what it printed.
+    /// The command text is parsed by the server's shell: quote every value that comes from outside (`crate::checksum::quote`).
+    pub fn exec(&self, v: &VPath, command: &str, limit: std::time::Duration, cancelled: &dyn Fn() -> bool) -> Result<conn::ExecOut, FsError> {
+        let t = self.target(v)?;
+        block_on(cancelled, async {
+            let c = self.shared.conn(&self.cfg, &self.prompter, &t).await?;
+            c.busy.fetch_add(1, Ordering::Relaxed);
+            let r = c.exec(command, limit).await;
+            c.busy.fetch_sub(1, Ordering::Relaxed);
+            r
+        })
+    }
+
     /// The folder the server logs the user into (its home), as an address on the same server.
     pub fn home(&self, v: &VPath) -> Result<VPath, FsError> {
         let p = self.with(v, &|| false, async |c| Ok(c.home.clone()))?;
