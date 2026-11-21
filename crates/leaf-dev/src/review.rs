@@ -39,6 +39,8 @@ pub struct RHunk {
     /// The hunk exactly as git printed it, byte for byte (header, lines, "\ No newline" markers): the patch for
     /// `git apply --cached`. `None` for a hunk not made by `git diff` (a new file, a checkpoint comparison).
     pub raw: Option<Vec<u8>>,
+    /// git marked the old side's last line "\ No newline at end of file": a revert writes it without a line end.
+    pub old_no_eol: bool,
     /// All its lines were read (a diff cut short leaves its last hunk incomplete: nothing may be done with it).
     pub complete: bool,
 }
@@ -122,6 +124,7 @@ pub fn parse_hunks(text: &[u8], max_lines: usize) -> RDiff {
                 bytes: Vec::new(),
                 exact: true,
                 raw: Some(raw_line.to_vec()),
+                old_no_eol: false,
                 complete: true,
             });
             continue;
@@ -147,6 +150,10 @@ pub fn parse_hunks(text: &[u8], max_lines: usize) -> RDiff {
             Some(b'\\') => {
                 if let Some(r) = h.raw.as_mut() {
                     r.extend_from_slice(raw_line);
+                }
+                // (the marker is about the line before it: a removed or unchanged one is the old side's last)
+                if h.lines.last().is_some_and(|l| l.kind != LineKind::Added) {
+                    h.old_no_eol = true;
                 }
                 continue;
             }
@@ -222,7 +229,7 @@ pub fn from_file_diff(f: FileDiff, swap: bool) -> RDiff {
         let bytes: Vec<Vec<u8>> = lines.iter().map(|l| l.text.as_bytes().to_vec()).collect();
         // (text decoded with replacement characters is not the file's bytes)
         let exact = !lines.iter().any(|l| l.text.contains('\u{FFFD}'));
-        d.hunks.push(RHunk { old_start: os, old_count: oc, new_start: ns, new_count: nc, header, lines, bytes, exact, raw: None, complete: !(f.truncated && i == last) });
+        d.hunks.push(RHunk { old_start: os, old_count: oc, new_start: ns, new_count: nc, header, lines, bytes, exact, raw: None, old_no_eol: false, complete: !(f.truncated && i == last) });
     }
     d
 }
@@ -450,11 +457,24 @@ pub fn reverted_bytes(bytes: &[u8], hunk: &RHunk) -> Option<Vec<u8>> {
             }
         }
     }
-    // a file without a line end at its end keeps it that way
-    let at_end = end == lines.len();
-    let had_end = bytes.last().is_none_or(|&b| b == b'\n');
-    if at_end && !had_end && hunk.lines.last().is_some_and(|l| l.kind == LineKind::Removed) {
-        out.truncate(out.len() - eol.len());
+    let wrote_old = hunk.lines.iter().any(|l| l.kind != LineKind::Added);
+    if hunk.raw.is_some() {
+        // git said whether the old side's last line had a line end: it is written back the same way
+        if hunk.old_no_eol && wrote_old {
+            if out.ends_with(b"\n") {
+                out.pop();
+                if out.ends_with(b"\r") {
+                    out.pop();
+                }
+            }
+        }
+    } else {
+        // (no marker known) a file without a line end at its end keeps it that way
+        let at_end = end == lines.len();
+        let had_end = bytes.last().is_none_or(|&b| b == b'\n');
+        if at_end && !had_end && hunk.lines.last().is_some_and(|l| l.kind == LineKind::Removed) {
+            out.truncate(out.len() - eol.len());
+        }
     }
     for l in &lines[end..] {
         out.extend_from_slice(l);
