@@ -52,10 +52,12 @@ pub fn agent(o: &Options) -> Result<ureq::Agent, Error> {
 }
 
 fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers, uri: &str) -> ureq::RequestBuilder<B> {
-    if let Some(a) = h.web_auth() {
+    // (the sign-in goes to the server that asked for it only; there it replaces an Authorization the browser sent)
+    let signed = h.web_auth().filter(|a| *a.origin() == origin_of(uri));
+    if let Some(a) = signed {
         req = req.header("Authorization", a.header(uri));
     }
-    for (n, v) in h.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("user-agent")) {
+    for (n, v) in h.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("user-agent") && !(signed.is_some() && n.eq_ignore_ascii_case("authorization"))) {
         req = req.header(n, v);
     }
     req
@@ -197,7 +199,10 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
         }
         401 => {
             let lines: Vec<String> = resp.headers().get_all("www-authenticate").iter().filter_map(|v| v.to_str().ok()).map(str::to_string).collect();
-            return Err(Challenge::parse(&lines).map_or(Error::Http(401), Error::Auth));
+            return Err(Challenge::parse(&lines).map_or(Error::Http(401), |mut c| {
+                c.origin = origin_of(&p.uri);
+                Error::Auth(c)
+            }));
         }
         s if retriable_status(s) => return Err(status_error(s)),
         s => return Err(Error::Http(s)),

@@ -433,3 +433,40 @@ fn web_sign_in_is_asked_for_and_never_reaches_a_file() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_sign_in_goes_to_the_server_that_asked_and_not_to_the_first_address() {
+    let hop = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sent = WebAuth::new(&Challenge::parse(&["Basic realm=\"x\"".to_string()]).unwrap(), "bob", "pw-1").header("http://h/f");
+    let target = serve_basic(data(1 << 20), sent);
+    // the first address only redirects to the server that wants the sign-in, and keeps every request head it sees
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let aport = l.local_addr().unwrap().port();
+    let (seen, to) = (hop.clone(), target.port);
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut head = String::new();
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            seen.lock().unwrap().push(head.to_ascii_lowercase());
+            let mut s = s;
+            let _ = write!(s, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{to}/r.bin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    let dir = tmp("web-redirect");
+    let u = format!("http://127.0.0.1:{aport}/short");
+    let Err(Error::Auth(ch)) = download(&u, &dir, &opts(0), &Control::default(), &host(Resolve::KeepBoth)) else { panic!("expected a challenge") };
+    assert_eq!(ch.origin.2, target.port, "the challenge names the server that answered, not the first address");
+    let mut o = opts(0);
+    o.headers.set_web_auth(WebAuth::new(&ch, "bob", "pw-1"));
+    let out = download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)).expect("the sign-in is accepted where it was asked for");
+    assert!(matches!(out, Outcome::Saved(_)));
+    assert!(hop.lock().unwrap().iter().all(|h| !h.contains("authorization")), "the first address saw the sign-in");
+    let _ = std::fs::remove_dir_all(&dir);
+}

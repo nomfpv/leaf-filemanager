@@ -68,9 +68,10 @@ impl Headers {
         self.1.is_some() || self.names().any(Self::is_credential)
     }
 
-    /// The same without Cookie and Authorization (for a redirect to another origin: scheme, host or port).
+    /// The same without Cookie and Authorization (for a redirect to another origin: scheme, host or port). A web sign-in stays: it
+    /// is tied to the origin that asked for it and is sent only there.
     pub fn without_credentials(&self) -> Headers {
-        Headers(self.0.iter().filter(|(n, _)| !Self::is_credential(n)).cloned().collect(), None)
+        Headers(self.0.iter().filter(|(n, _)| !Self::is_credential(n)).cloned().collect(), self.1.clone())
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {

@@ -660,7 +660,7 @@ fn loop_sign_in(tr: &Tracker, req: &Request, opts: &mut dl::Options, ctl: &dl::C
             Err(dl::Error::Auth(ch)) => ch,
             other => return other,
         };
-        let (scheme, host, port) = dl::origin(&req.url);
+        let (scheme, host, port) = ch.origin.clone();
         let id = leaf_remote::SecretId::web(&scheme, &host, port, &ch.realm);
         let plain_basic = scheme == "http" && ch.scheme == dl::AuthScheme::Basic;
         // the saved one was just refused: forgotten, so the dialog is next

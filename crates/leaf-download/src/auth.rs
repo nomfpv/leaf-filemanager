@@ -27,6 +27,8 @@ pub struct Challenge {
     pub scheme: AuthScheme,
     pub realm: String,
     digest: Option<DigestParams>,
+    /// Scheme, host and port of the server that asked (the address the 401 came from, after any redirects).
+    pub origin: (String, String, u16),
 }
 
 /// The value of `name="value"` or `name=value` in a challenge's parameters.
@@ -62,10 +64,10 @@ impl Challenge {
                 let qop = param(rest, "qop");
                 let qop_auth = qop.as_deref().is_some_and(|q| q.split(',').any(|x| x.trim().eq_ignore_ascii_case("auth")));
                 if (algo == "MD5" || sha256) && (qop.is_none() || qop_auth) && let Some(nonce) = param(rest, "nonce") {
-                    return Some(Challenge { scheme: AuthScheme::Digest, realm: param(rest, "realm").unwrap_or_default(), digest: Some(DigestParams { nonce, opaque: param(rest, "opaque"), sha256, qop_auth }) });
+                    return Some(Challenge { scheme: AuthScheme::Digest, realm: param(rest, "realm").unwrap_or_default(), origin: Default::default(), digest: Some(DigestParams { nonce, opaque: param(rest, "opaque"), sha256, qop_auth }) });
                 }
             } else if scheme.eq_ignore_ascii_case("basic") && basic.is_none() {
-                basic = Some(Challenge { scheme: AuthScheme::Basic, realm: param(rest, "realm").unwrap_or_default(), digest: None });
+                basic = Some(Challenge { scheme: AuthScheme::Basic, realm: param(rest, "realm").unwrap_or_default(), origin: Default::default(), digest: None });
             }
         }
         basic
@@ -83,6 +85,11 @@ pub struct WebAuth {
 impl WebAuth {
     pub fn new(challenge: &Challenge, user: &str, password: &str) -> WebAuth {
         WebAuth { user: user.to_string(), password: password.to_string(), challenge: challenge.clone(), nc: AtomicU32::new(0) }
+    }
+
+    /// The server this sign-in is for: it is sent there and nowhere else.
+    pub(crate) fn origin(&self) -> &(String, String, u16) {
+        &self.challenge.origin
     }
 
     /// The `Authorization` header's value for a GET of `uri` (an absolute address).
