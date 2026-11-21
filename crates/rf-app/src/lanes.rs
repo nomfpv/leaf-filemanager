@@ -65,15 +65,14 @@ fn save(cx: &App) {
         Ok(t) => t,
         Err(_) => return,
     };
-    std::thread::spawn(move || {
-        if let Some(d) = f.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
-        let tmp = f.with_extension("json.tmp");
-        if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &f)) {
-            log::warn!("lanes: {} not saved: {e}", f.display());
-        }
-    });
+    // (a small file, written in place of the old one at once: two saves in a row never race)
+    if let Some(d) = f.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let tmp = f.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &f)) {
+        log::warn!("lanes: {} not saved: {e}", f.display());
+    }
 }
 
 /// The lane layer is on (the agent layer's master switch).

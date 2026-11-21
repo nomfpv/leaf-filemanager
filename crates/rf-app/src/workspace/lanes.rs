@@ -92,7 +92,7 @@ impl Workspace {
             "{}\n{} {}",
             t!("A lane is a new worktree on a branch of its own, for one piece of work. Nothing that exists is changed."),
             t!("Folder:"),
-            crate::lanes::folder_for(&pattern, &main, "<name>").display()
+            pattern.replace("<repo>", &main.to_string_lossy())
         );
         let me = cx.entity().downgrade();
         let create = Button::new(t!("Create"), Kind::Primary, move |text, window, cx| {
