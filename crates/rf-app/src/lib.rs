@@ -91,6 +91,7 @@ mod recycle_settings_view;
 mod recycle_text;
 mod remote;
 mod hosts_ui;
+mod settings_bundle;
 mod recycle_view;
 mod registry;
 mod rename_exec;

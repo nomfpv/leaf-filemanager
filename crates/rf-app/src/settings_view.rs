@@ -3389,7 +3389,8 @@ enum PickTarget {
 }
 
 /// Runs a Windows file dialog on the shell thread and applies the result.
-fn pick_into(_window: &mut Window, cx: &mut App, title: &str, target: PickTarget) {
+fn pick_into(window: &mut Window, cx: &mut App, title: &str, target: PickTarget) {
+    let handle = window.window_handle();
     let title = title.to_string();
     let (tx, rx) = futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
     let images = [(t!("Pictures"), "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif")];
@@ -3425,26 +3426,53 @@ fn pick_into(_window: &mut Window, cx: &mut App, title: &str, target: PickTarget
             0 => settings::update(cx, |s| s.background_image = Some(path)),
             1 => settings::update(cx, |s| s.ide_path = path.display().to_string()),
             2 => {
-                let s = cx.global::<Settings>().clone();
-                std::thread::spawn(move || {
-                    if let Ok(text) = toml::to_string_pretty(&s) {
-                        let _ = std::fs::write(&path, text);
-                    }
+                let live = toml::to_string_pretty(cx.global::<Settings>()).unwrap_or_default();
+                let _ = handle.update(cx, |_, window, cx| {
+                    let rx = crate::prompt::ask(t!("Export settings"), t!("Include your tags too? Settings, your actions, hosts and themes are always included; no passwords are kept in any of them.").to_string(), window, cx);
+                    cx.spawn(async move |_| {
+                        let with_tags = rx.await.unwrap_or(false);
+                        std::thread::spawn(move || {
+                            let Some(dir) = settings::app_dir() else { return };
+                            let b = crate::settings_bundle::build(&dir, live, with_tags);
+                            if let Ok(text) = crate::settings_bundle::to_text(&b) {
+                                let _ = std::fs::write(&path, text);
+                            }
+                        });
+                    })
+                    .detach();
                 });
             }
             _ => {
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    if let Ok(new) = Settings::parse_lenient_pub(text.trim_start_matches('\u{feff}')) {
-                        // keep this machine's window placement and session
-                        settings::update(cx, |s| {
-                            let (window, tabs, active) = (s.window, s.session_tabs.clone(), s.session_active);
-                            *s = new;
-                            s.window = window;
-                            s.session_tabs = tabs;
-                            s.session_active = active;
+                let Some(dir) = settings::app_dir() else { return };
+                let _ = handle.update(cx, |_, window, cx| {
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    let bundle = match crate::settings_bundle::parse(&text) {
+                        Ok(b) => b,
+                        Err(e) => return crate::prompt::notice(t!("Import settings"), format!("{}: {e}", path.display()), window, cx),
+                    };
+                    let plan = crate::settings_bundle::plan(&dir, &bundle, true);
+                    let msg = format!("{}\n\n{}", crate::settings_bundle::summary(&plan), t!("The old files are kept in the backup folder of the leaf config folder. Hosts, actions and tags apply after leaf restarts. Continue?"));
+                    let h2 = window.window_handle();
+                    let rx = crate::prompt::ask(t!("Import settings"), msg, window, cx);
+                    cx.spawn(async move |cx| {
+                        if !rx.await.unwrap_or(false) {
+                            return;
+                        }
+                        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+                        let done = crate::settings_bundle::apply(&dir, &bundle, true, stamp);
+                        let _ = h2.update(cx, |_, window, cx| match done {
+                            Ok(backup) => {
+                                let new = std::fs::read_to_string(dir.join("settings.toml")).ok().and_then(|t| Settings::parse_lenient_pub(t.trim_start_matches('\u{feff}')).ok());
+                                if let Some(new) = new {
+                                    settings::update(cx, |s| *s = new);
+                                }
+                                crate::prompt::notice(t!("Import settings"), format!("{} {}", t!("Done. Old files:"), backup.display()), window, cx);
+                            }
+                            Err(e) => crate::prompt::notice(t!("Import settings"), e.to_string(), window, cx),
                         });
-                    }
-                }
+                    })
+                    .detach();
+                });
             }
         });
     })
