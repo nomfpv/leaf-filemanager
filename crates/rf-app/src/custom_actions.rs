@@ -246,7 +246,7 @@ pub fn run(a: CustomAction, files: Vec<PathBuf>, dir: Option<PathBuf>, window: &
     let question = a.confirm.then(|| format!("{}
 
 {}", a.name, a.command));
-    let (name, terminal) = (a.name.clone(), a.terminal);
+    let (name, terminal) = (a.name.clone(), a.terminal.then(|| cx.global::<crate::settings::Settings>().terminal));
     let go = move |window: &mut Window, cx: &mut App| start(name.clone(), terminal, argv.clone(), env.clone(), dir.clone(), window, cx);
     if let Some(shown) = question {
         let handle = window.window_handle();
@@ -266,7 +266,7 @@ fn failed(name: &str, message: String, window: &mut Window, cx: &mut App) {
     crate::prompt::notice(format!("{} {name}", tx("Your action failed:")), message, window, cx);
 }
 
-fn start(name: String, terminal: bool, argv: Vec<OsString>, env: Vec<(&'static str, OsString)>, dir: Option<PathBuf>, window: &mut Window, cx: &mut App) {
+fn start(name: String, terminal: Option<rf_core::terminal::Terminal>, argv: Vec<OsString>, env: Vec<(&'static str, OsString)>, dir: Option<PathBuf>, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     let (send, receive) = futures::channel::oneshot::channel();
     std::thread::spawn(move || {
@@ -302,9 +302,9 @@ fn resolve(program: &OsString, dir: Option<&Path>) -> anyhow::Result<PathBuf> {
 }
 
 /// Starts the program with the arguments as a list (no shell, nothing glued together). Off the UI thread. Hidden: waits for the
-/// program to end and reports a failure (its exit code and the end of what it wrote to stderr). In a terminal: opens it in Windows
-/// Terminal (or a console window) and does not wait.
-fn launch(argv: Vec<OsString>, env: Vec<(&'static str, OsString)>, dir: Option<PathBuf>, terminal: bool) -> anyhow::Result<()> {
+/// program to end and reports a failure (its exit code and the end of what it wrote to stderr). In a terminal: runs inside the
+/// terminal chosen in Settings, in the folder, and the window stays open after the program ends; not waited for.
+fn launch(argv: Vec<OsString>, env: Vec<(&'static str, OsString)>, dir: Option<PathBuf>, terminal: Option<rf_core::terminal::Terminal>) -> anyhow::Result<()> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut it = argv.into_iter();
@@ -312,45 +312,20 @@ fn launch(argv: Vec<OsString>, env: Vec<(&'static str, OsString)>, dir: Option<P
     let args: Vec<OsString> = it.collect();
     let work = dir.filter(|d| d.is_dir());
     let exe = resolve(&program, work.as_deref())?;
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    let mut cmd;
-    let mut console = false;
-    #[cfg(windows)]
-    let wt = if terminal { resolve(&OsString::from("wt"), None).ok() } else { None };
-    #[cfg(not(windows))]
-    let wt: Option<PathBuf> = None;
-    if let Some(wt) = wt {
-        // (a `;` would start another tab in Windows Terminal's own command line)
-        anyhow::ensure!(!args.iter().any(|a| a.to_string_lossy().contains(';')), "{}", tx("A terminal action cannot pass a semicolon in its arguments."));
-        cmd = Command::new(wt);
-        if let Some(w) = &work {
-            cmd.arg("-d").arg(w);
-        }
-        cmd.arg(&exe).args(&args);
-    } else {
-        cmd = Command::new(&exe);
-        cmd.args(&args);
-        console = terminal;
+    if let Some(kind) = terminal {
+        let at = work.as_deref().and_then(crate::terminal::target).or_else(|| dirs::home_dir()).unwrap_or_else(std::env::temp_dir);
+        return leaf_sys::shell::open_terminal_running(kind, &at, &exe, &args, &env);
     }
-    cmd.envs(env);
+    let mut cmd = Command::new(&exe);
+    cmd.args(&args).envs(env);
     if let Some(w) = &work {
         cmd.current_dir(w);
     }
     #[cfg(windows)]
     {
-        const CREATE_NEW_CONSOLE: u32 = 0x10;
+        use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        if !terminal {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        } else if console {
-            cmd.creation_flags(CREATE_NEW_CONSOLE);
-        }
-    }
-    let _ = console;
-    if terminal {
-        cmd.spawn()?;
-        return Ok(());
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;

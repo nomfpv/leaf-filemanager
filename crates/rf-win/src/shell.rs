@@ -218,6 +218,79 @@ pub fn open_terminal_with(kind: Terminal, custom: &str, dir: &Path) -> anyhow::R
     Ok(())
 }
 
+/// Base64 of `text` as UTF-16LE: what PowerShell's `-EncodedCommand` takes (no quoting layer can touch it).
+fn encoded_command(text: &str) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let mut out = String::with_capacity(bytes.len() * 4 / 3 + 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// A PowerShell single-quoted string (every kind of single quote doubled).
+fn ps_quote(s: &str) -> String {
+    let mut o = String::from("'");
+    for c in s.chars() {
+        o.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            o.push(c);
+        }
+    }
+    o.push('\'');
+    o
+}
+
+/// Runs `program` with `args` (and `env` set) inside the terminal `kind` in `dir`, and leaves the window open when it ends. The
+/// command goes to PowerShell as an encoded script, so no quoting of the terminal's own command line can change it. Windows
+/// Terminal, PowerShell 7, Windows PowerShell and cmd run it themselves; Git Bash, WSL and a custom command cannot take a Windows
+/// program line, so those use the automatic terminal.
+pub fn open_terminal_running(kind: Terminal, dir: &Path, program: &Path, args: &[std::ffi::OsString], env: &[(&str, std::ffi::OsString)]) -> anyhow::Result<()> {
+    let mut script = format!("Set-Location -LiteralPath {}; ", ps_quote(&dir.to_string_lossy()));
+    for (k, v) in env {
+        script.push_str(&format!("$env:{k} = {}; ", ps_quote(&v.to_string_lossy())));
+    }
+    script.push_str(&format!("& {}", ps_quote(&program.to_string_lossy())));
+    for a in args {
+        script.push(' ');
+        script.push_str(&ps_quote(&a.to_string_lossy()));
+    }
+    let b64 = encoded_command(&script);
+    let ps = terminal_exe(Terminal::WindowsPowerShell).unwrap_or_else(|| PathBuf::from("powershell.exe"));
+    let ps_args = format!("-NoExit -NoProfile -EncodedCommand {b64}");
+    let kind = match kind {
+        Terminal::Wsl | Terminal::GitBash | Terminal::Custom => Terminal::Auto,
+        k => k,
+    };
+    let own = |exe: PathBuf, args: String, console: bool| Launch { program: exe, args, cwd: (!is_unc(dir)).then(|| dir.to_path_buf()), console };
+    let chosen = match kind {
+        Terminal::Auto | Terminal::WindowsTerminal => terminal_exe(kind)
+            .map(|wt| Launch { program: wt, args: format!("-d {} \"{}\" {ps_args}", quoted(dir), ps.to_string_lossy()), cwd: None, console: false }),
+        Terminal::Pwsh | Terminal::WindowsPowerShell => terminal_exe(kind).map(|exe| own(exe, ps_args.clone(), true)),
+        Terminal::Cmd => terminal_exe(kind).map(|exe| own(exe, format!("/K {} -NoProfile -EncodedCommand {b64}", ps.to_string_lossy()), true)),
+        _ => None,
+    };
+    if let Some(l) = chosen {
+        if spawn(&l).is_ok() {
+            return Ok(());
+        }
+    }
+    // no such terminal here: Windows Terminal by name, else a PowerShell console
+    let wt = Launch { program: "wt.exe".into(), args: format!("-d {} powershell.exe {ps_args}", quoted(dir)), cwd: None, console: false };
+    if spawn(&wt).is_err() {
+        spawn(&own(ps, ps_args, true))?;
+    }
+    Ok(())
+}
+
 /// Opens an elevated terminal in `dir` (Windows asks for permission: UAC). Windows Terminal if
 /// present, else PowerShell. Declining the permission prompt is not an error.
 pub fn open_terminal_admin(dir: &Path) -> anyhow::Result<()> {

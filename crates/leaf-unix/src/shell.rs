@@ -170,3 +170,50 @@ pub fn open_terminal_with(kind: Terminal, custom: &str, dir: &Path) -> anyhow::R
     anyhow::bail!("no terminal program found")
 }
 
+
+/// Runs `program` with `args` (and `env` set) inside the terminal `kind` in `dir`; the window stays open until Enter is pressed.
+pub fn open_terminal_running(kind: Terminal, dir: &Path, program: &Path, args: &[OsString], env: &[(&str, OsString)]) -> anyhow::Result<()> {
+    // sh runs the program, then waits so the output can be read
+    let mut payload: Vec<OsString> = vec!["sh".into(), "-c".into(), "\"$0\" \"$@\"; echo; printf 'Press Enter to close '; read _".into(), program.into()];
+    payload.extend(args.iter().cloned());
+    let kind = if kind == Terminal::Custom { Terminal::Auto } else { kind };
+    let mut candidates: Vec<Terminal> = Vec::new();
+    if kind != Terminal::Auto {
+        candidates.push(kind);
+    }
+    if std::env::var_os("TERMINAL").is_some() {
+        candidates.push(Terminal::EnvTerminal);
+    }
+    candidates.extend(installed_terminals().iter().copied());
+    for k in candidates {
+        let Some(exe) = terminal_exe(k) else { continue };
+        let mut c = terminal_command(k, &exe, dir);
+        match k {
+            Terminal::Kitty | Terminal::Foot => {}
+            Terminal::WezTerm => {
+                c.arg("--");
+            }
+            Terminal::EnvTerminal => {
+                // $TERMINAL may carry its own words after the program
+                let t = std::env::var("TERMINAL").unwrap_or_default();
+                c.args(t.split_whitespace().skip(1)).arg("-e");
+            }
+            _ => {
+                c.arg("-e");
+            }
+        }
+        c.args(&payload).envs(env.iter().map(|(k, v)| (*k, v.clone())));
+        return spawn_reaped(c);
+    }
+    if let Some(exe) = which("gnome-terminal") {
+        let mut c = Command::new(exe);
+        c.arg("--working-directory").arg(dir).arg("--").args(&payload).current_dir(dir).envs(env.iter().map(|(k, v)| (*k, v.clone())));
+        return spawn_reaped(c);
+    }
+    if let Some(exe) = which("xterm") {
+        let mut c = Command::new(exe);
+        c.arg("-e").args(&payload).current_dir(dir).envs(env.iter().map(|(k, v)| (*k, v.clone())));
+        return spawn_reaped(c);
+    }
+    anyhow::bail!("no terminal program found")
+}
