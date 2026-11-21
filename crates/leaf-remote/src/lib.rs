@@ -12,6 +12,7 @@ pub mod checksum;
 mod conn;
 pub mod known_hosts;
 mod prompt;
+pub mod rclone;
 mod sftp;
 #[cfg(test)]
 mod tests;
@@ -47,6 +48,13 @@ fn sftp_backend() -> Arc<SftpFs> {
 pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
     *setup().lock().unwrap_or_else(|e| e.into_inner()) = Some((cfg, prompter));
     leaf_vfs::register("sftp", || sftp_backend() as Arc<dyn leaf_vfs::Fs>);
+    // `rclone://remote/path`, only when the rclone program is installed (a PATH look-up; nothing runs here)
+    if rclone::find_exe().is_some() {
+        leaf_vfs::register("rclone", || match rclone::find_exe() {
+            Some(exe) => Arc::new(rclone::RcloneFs::new(exe)) as Arc<dyn leaf_vfs::Fs>,
+            None => Arc::new(NoRclone),
+        });
+    }
 }
 
 /// The home folder the server logs the user into (for an address that names only the server).
@@ -81,5 +89,38 @@ pub fn remote_sum(v: &VPath, algo: checksum::Algo, cancelled: &dyn Fn() -> bool)
         Some(h) if out.code.unwrap_or(0) == 0 => Ok(h),
         _ if out.code == Some(127) => Err(FsError::Other(format!("The server has no {}", algo.program()))),
         _ => Err(FsError::Other(format!("{} gave no sum for this file", algo.program()))),
+    }
+}
+
+/// Stands in when rclone went away after the start.
+struct NoRclone;
+
+impl leaf_vfs::Fs for NoRclone {
+    fn caps(&self) -> leaf_vfs::Caps {
+        leaf_vfs::Caps::default()
+    }
+    fn list(&self, _: &VPath, _: usize, _: &dyn Fn() -> bool, _: &mut dyn FnMut(Vec<leaf_vfs::Entry>)) -> Result<usize, FsError> {
+        Err(FsError::Other("rclone is not installed".into()))
+    }
+    fn stat(&self, _: &VPath) -> Result<leaf_vfs::Meta, FsError> {
+        Err(FsError::Unsupported)
+    }
+    fn open_read(&self, _: &VPath, _: u64) -> Result<Box<dyn std::io::Read + Send>, FsError> {
+        Err(FsError::Unsupported)
+    }
+    fn open_write(&self, _: &VPath, _: leaf_vfs::WriteOpts) -> Result<Box<dyn leaf_vfs::WriteSink>, FsError> {
+        Err(FsError::Unsupported)
+    }
+    fn mkdir(&self, _: &VPath) -> Result<(), FsError> {
+        Err(FsError::Unsupported)
+    }
+    fn rename(&self, _: &VPath, _: &VPath, _: bool) -> Result<(), FsError> {
+        Err(FsError::Unsupported)
+    }
+    fn remove(&self, _: &VPath, _: bool) -> Result<(), FsError> {
+        Err(FsError::Unsupported)
+    }
+    fn set_meta(&self, _: &VPath, _: &leaf_vfs::MetaChange) -> Result<(), FsError> {
+        Err(FsError::Unsupported)
     }
 }

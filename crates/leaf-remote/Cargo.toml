@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "leaf-remote"
 description = "leaf: places on other machines (SFTP over russh) behind the leaf-vfs interface"
 version.workspace = true
@@ -10,6 +10,9 @@ publish.workspace = true
 rf-core.workspace = true
 leaf-vfs.workspace = true
 log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
 # pure Rust SSH; `ring` instead of the default aws-lc-rs (that one needs cmake and nasm to build on Windows)
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
 russh-sftp = "3.0"

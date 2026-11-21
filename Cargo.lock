@@ -4894,12 +4894,15 @@ name = "leaf-remote"
 version = "0.9.4"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "hmac 0.12.1",
  "leaf-vfs",
  "log",
  "rf-core",
  "russh",
  "russh-sftp",
+ "serde",
+ "serde_json",
  "sha1 0.10.7",
  "tokio",
  "zeroize",

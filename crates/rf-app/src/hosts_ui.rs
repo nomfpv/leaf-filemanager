@@ -24,7 +24,16 @@ pub fn all(cx: &mut App) -> Vec<Host> {
         let hosts = crate::settings::app_dir().map(|d| Hosts::load(&d)).unwrap_or_default();
         cx.set_global(Store(hosts));
     }
-    cx.global::<Store>().0.hosts.clone()
+    let mut hosts = cx.global::<Store>().0.hosts.clone();
+    // the remotes rclone knows (when it is installed): listed beside the saved hosts, never written to hosts.toml
+    for r in leaf_remote::rclone::remotes_cached() {
+        if !hosts.iter().any(|h| h.scheme == "rclone" && h.host == r) {
+            let mut h = Host::new(&format!("rclone: {r}"), &r);
+            h.scheme = "rclone".into();
+            hosts.push(h);
+        }
+    }
+    hosts
 }
 
 fn change(cx: &mut App, f: impl FnOnce(&mut Hosts)) {
