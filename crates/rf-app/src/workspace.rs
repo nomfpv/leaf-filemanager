@@ -3466,8 +3466,11 @@ impl Workspace {
         let preview_open = self.preview_open;
         let filter_on = self.filter_bar;
 
-        // a command: its icon and, as in the mockups, its name (Share, Properties and the like stay icons)
+        // a command: its icon and, as in the mockups, its name (Share, Properties and the like stay icons); in a window of 1200 px or
+        // less the commands are their icons, the mockups' narrow bar
+        let narrow_bar = self.viewport_w <= 1200.;
         let cmd = |id: &'static str, icon: L, label: Option<&'static str>, tip: &'static str, enabled: bool, cx: &mut Context<Self>, run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
+            let label = label.filter(|_| !narrow_bar);
             h_flex()
                 .id(id)
                 .h(px(28.))
@@ -3829,7 +3832,7 @@ impl Workspace {
                     .when(preview_open, |d| d.bg(p.selection))
                     .when(!preview_open, |d| d.hover(|s| s.bg(p.hover).text_color(p.text)))
                     .child(Icon::new(L::Eye).size(px(16.)))
-                    .child(t!("Preview"))
+                    .when(!narrow_bar, |d| d.child(t!("Preview")))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.toggle_preview(cx);
                     }))
