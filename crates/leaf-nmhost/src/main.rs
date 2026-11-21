@@ -101,6 +101,24 @@ fn settings_dir() -> Option<std::path::PathBuf> {
     leaf_sys::portable::data_dir().or_else(|| dirs::config_dir().map(|d| d.join("leaf")))
 }
 
+/// "Capture browser downloads" and "Smallest download to capture" (MB) from leaf's settings file; leaf's defaults (on, 1 MB) when
+/// the file or the key is not there.
+fn capture_settings(text: Option<&str>) -> (bool, u64) {
+    let table = text.and_then(|t| t.parse::<toml::Table>().ok()).unwrap_or_default();
+    let on = table.get("capture_browser").and_then(toml::Value::as_bool).unwrap_or(true);
+    let min_mb = table.get("capture_min_mb").and_then(toml::Value::as_integer).map_or(1, |n| n.max(0) as u64);
+    (on, min_mb)
+}
+
+/// leaf would refuse this download (capture off, or smaller than the minimum): then a leaf that is not running is not started for
+/// it (a window would open only to say no).
+fn settings_refuse(msg: &Value) -> bool {
+    let text = settings_dir().and_then(|d| std::fs::read_to_string(d.join("settings.toml")).ok());
+    let (on, min_mb) = capture_settings(text.as_deref());
+    let size = msg.get("size").and_then(Value::as_i64).filter(|&s| s >= 0);
+    !on || size.is_some_and(|s| (s as u64) < min_mb << 20)
+}
+
 /// Held while this host starts leaf and waits for it: a page that starts two downloads at once runs two hosts, and only one of them
 /// may start leaf (the second start would land in the first as a launch without a folder and open another window).
 fn start_lock(until: Instant) -> Option<std::fs::File> {
@@ -164,8 +182,10 @@ fn handle(frame: &[u8]) -> Value {
             if line.len() > MAX_LINE || line.contains(['\r', '\n']) {
                 return answer(false, "too-large");
             }
-            match ask(&line, true) {
+            let refuse = settings_refuse(&msg);
+            match ask(&line, !refuse) {
                 Ok(()) => answer(true, ""),
+                Err(e) if refuse && e == NOT_RUNNING => answer(false, "refused"),
                 Err(e) => answer(false, why_of(&e)),
             }
         }
