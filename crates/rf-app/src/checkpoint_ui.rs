@@ -95,7 +95,7 @@ pub fn new_checkpoint(dir: PathBuf, tab: WeakEntity<FolderView>, window: &mut Wi
     let d2 = dir.clone();
     let work = cx.background_spawn(async move {
         let store = store_of(&d2)?;
-        let est = if store.is_git() { None } else { Some(checkpoint::estimate(&store)) };
+        let est = Some(checkpoint::estimate(&store));
         Ok::<_, checkpoint::Error>((store, est))
     });
     let cap = cap_bytes(cx);
@@ -127,7 +127,7 @@ fn ask(dir: PathBuf, store: Store, est: Option<Result<(u64, u64), checkpoint::Er
                 t!("The folder is too big for a checkpoint"),
                 format!(
                     "{} {} ({} {}). {} {}. {}",
-                    t!("This folder holds"),
+                    if store.is_git() { t!("The files git does not track here hold") } else { t!("This folder holds") },
                     format::size(*bytes),
                     files,
                     t!("files"),
@@ -140,6 +140,15 @@ fn ask(dir: PathBuf, store: Store, est: Option<Result<(u64, u64), checkpoint::Er
             );
             return;
         }
+        Some(Ok((files, bytes))) if store.is_git() => format!(
+            "{}\n{}\n{} {} ({}) {}",
+            t!("A hidden snapshot inside the git repository of every file that is not ignored. Your files, the index, the branch and the stash stay as they are."),
+            store.folder().display(),
+            files,
+            t!("files git does not track yet"),
+            format::size(*bytes),
+            t!("are added to the repository's storage.")
+        ),
         Some(Ok((files, bytes))) => format!(
             "{} {} {} ({}) {}",
             t!("About"),

@@ -443,14 +443,29 @@ fn copy_skip(folder: &Path, base: &Path) -> Option<PathBuf> {
     top.starts_with(folder).then(|| top.to_path_buf())
 }
 
-/// What a checkpoint would take: (files, bytes). For a repository it is what the work tree holds (git keeps a changed file once).
+/// What a checkpoint would add: (files, bytes). Outside a repository the whole folder (it is copied); in one the files git does not
+/// track and does not ignore (what is tracked is in the repository already; git keeps each content once).
 pub fn estimate(store: &Store) -> Result<(u64, u64), Error> {
-    let (folder, skip) = match store {
-        Store::Git { root, .. } => (root.clone(), Some(root.join(".git"))),
-        Store::Copy { folder, base } => (folder.clone(), copy_skip(folder, base)),
-    };
-    let files = walk(&folder, skip.as_deref())?;
-    Ok((files.len() as u64, files.values().map(|(_, s)| *s).sum()))
+    match store {
+        Store::Git { root, .. } => {
+            let raw = run(with_args(plain_git(root), &["ls-files", "--others", "--exclude-standard", "-z"]), &[0], LONG)?;
+            let mut n = 0;
+            let mut bytes = 0;
+            for rel in raw.split(|&b| b == 0).filter(|r| !r.is_empty()) {
+                n += 1;
+                bytes += std::fs::symlink_metadata(root.join(String::from_utf8_lossy(rel).as_ref())).map_or(0, |m| m.len());
+            }
+            Ok((n, bytes))
+        }
+        Store::Copy { folder, base } => {
+            let files = walk(folder, copy_skip(folder, base).as_deref())?;
+            Ok((files.len() as u64, files.values().map(|(_, s)| *s).sum()))
+        }
+    }
+}
+
+fn too_big(size: u64, cap: u64) -> Error {
+    Error::new("The folder is bigger than the checkpoint size limit", format!("{size} > {cap} bytes"))
 }
 
 fn same_content(a: &Path, b: &Path) -> bool {
@@ -576,6 +591,12 @@ pub fn create(store: &Store, note: &str, auto: bool, cap: Option<u64>) -> Result
     let (id, time_ms) = fresh_id(&taken);
     match store {
         Store::Git { root, git_dir, key, empty_tree } => {
+            if let Some(c) = cap {
+                let (_, size) = estimate(store)?;
+                if size > c {
+                    return Err(too_big(size, c));
+                }
+            }
             let tree = snapshot_tree(root, git_dir, empty_tree)?;
             let (files, size) = tree_size(root, git_dir, empty_tree, &tree);
             let msg = meta_text(time_ms, note, auto, files, size);
@@ -592,7 +613,7 @@ pub fn create(store: &Store, note: &str, auto: bool, cap: Option<u64>) -> Result
             let files = walk(folder, copy_skip(folder, base).as_deref())?;
             let size: u64 = files.values().map(|(_, s)| *s).sum();
             if let Some(c) = cap.filter(|c| size > *c) {
-                return Err(Error::new("The folder is bigger than the checkpoint size limit", format!("{size} > {c} bytes")));
+                return Err(too_big(size, c));
             }
             let fail = |what: &str, e: std::io::Error| Error::new("The checkpoint could not be written", format!("{what}: {e}"));
             std::fs::create_dir_all(base).map_err(|e| fail(&base.display().to_string(), e))?;
