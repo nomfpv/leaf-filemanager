@@ -425,7 +425,7 @@ fn walk(dir: &Path, skip: Option<&Path>) -> Result<BTreeMap<String, (PathBuf, u6
             if e.file_name() == ".git" {
                 continue;
             }
-            let name = e.file_name().to_string_lossy().into_owned();
+            let name = name_text(&e.file_name());
             let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };
             if ft.is_symlink() {
                 continue;
@@ -438,6 +438,84 @@ fn walk(dir: &Path, skip: Option<&Path>) -> Result<BTreeMap<String, (PathBuf, u6
         }
     }
     Ok(out)
+}
+
+/// A file name as text that keeps every byte: valid text as it is; a `\u{FFFD}` in a name, and bytes that are not UTF-8, as
+/// `\u{FFFD}x<hex bytes>;`. [`name_from_text`] gives the exact name back, so a copy checkpoint never renames a file.
+fn name_text(n: &std::ffi::OsStr) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        fn escape(out: &mut String, b: &[u8]) {
+            out.push('\u{FFFD}');
+            out.push('x');
+            for x in b {
+                out.push_str(&format!("{x:02x}"));
+            }
+            out.push(';');
+        }
+        fn valid(out: &mut String, t: &str) {
+            for c in t.chars() {
+                if c == '\u{FFFD}' {
+                    escape(out, "\u{FFFD}".as_bytes());
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+        let mut out = String::new();
+        let mut rest = n.as_bytes();
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(t) => {
+                    valid(&mut out, t);
+                    return out;
+                }
+                Err(e) => {
+                    let (good, bad) = rest.split_at(e.valid_up_to());
+                    valid(&mut out, std::str::from_utf8(good).unwrap_or_default());
+                    let n = e.error_len().unwrap_or(bad.len()).max(1);
+                    escape(&mut out, &bad[..n]);
+                    rest = &bad[n..];
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        n.to_string_lossy().into_owned()
+    }
+}
+
+/// The exact name (or `/`-separated relative path) a [`name_text`] text stands for.
+fn name_from_text(t: &str) -> std::ffi::OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let mut out: Vec<u8> = Vec::new();
+        let mut it = t.char_indices().peekable();
+        while let Some((i, c)) = it.next() {
+            if c == '\u{FFFD}'
+                && let Some(end) = t[i..].find(';').map(|e| e + i)
+                && let Some(hex) = t[i + c.len_utf8()..end].strip_prefix('x')
+                && hex.len() % 2 == 0
+                && hex.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                out.extend((0..hex.len()).step_by(2).filter_map(|k| u8::from_str_radix(&hex[k..k + 2], 16).ok()));
+                while it.peek().is_some_and(|(j, _)| *j <= end) {
+                    it.next();
+                }
+                continue;
+            }
+            let mut b = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
+        }
+        std::ffi::OsString::from_vec(out)
+    }
+    #[cfg(not(unix))]
+    {
+        t.into()
+    }
 }
 
 /// A path as the file system resolves it (links and `..` followed), with `/`, without the `\\?\` prefix, case folded on Windows:
@@ -640,7 +718,7 @@ pub fn create(store: &Store, note: &str, auto: bool, cap: Option<u64>) -> Result
             let result = (|| {
                 std::fs::create_dir_all(&into).map_err(|e| fail(&into.display().to_string(), e))?;
                 for (rel, (src, _)) in &files {
-                    let dst = into.join(rel);
+                    let dst = into.join(name_from_text(rel));
                     if let Some(p) = dst.parent() {
                         std::fs::create_dir_all(p).map_err(|e| fail(rel, e))?;
                     }
@@ -804,8 +882,8 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
             Some(parse(raw))
         }
         Store::Copy { folder, .. } => {
-            let mine = folder.join(rel);
-            let theirs = plan.cp_files.as_ref()?.join(rel);
+            let mine = folder.join(name_from_text(rel));
+            let theirs = plan.cp_files.as_ref()?.join(name_from_text(rel));
             let read = |p: &Path| {
                 let mut b = Vec::new();
                 std::fs::File::open(p).ok()?.take(1024 * 1024).read_to_end(&mut b).ok()?;
@@ -849,14 +927,18 @@ fn is_link(m: &std::fs::Metadata) -> bool {
 
 /// Every folder from `folder` down to the parent of `rel` that exists must be a real folder: a link there would carry the write
 /// out of the folder.
-fn no_link_on_the_way(folder: &Path, rel: &str) -> Result<(), String> {
+fn no_link_on_the_way(folder: &Path, rel: &str, copy: bool) -> Result<(), String> {
     let mut cur = folder.to_path_buf();
     let parts: Vec<&str> = rel.split('/').collect();
     for part in &parts[..parts.len().saturating_sub(1)] {
         if part.is_empty() || *part == "." || *part == ".." {
             return Err("the path is not valid".into());
         }
-        cur.push(part);
+        if copy {
+            cur.push(name_from_text(part));
+        } else {
+            cur.push(part);
+        }
         match std::fs::symlink_metadata(&cur) {
             Ok(m) if is_link(&m) => return Err(format!("{} is a link now: nothing is written through it", cur.display())),
             Ok(_) => {}
@@ -874,8 +956,10 @@ fn put(path: &Path, fill: impl FnOnce(&Path) -> std::io::Result<()>) -> Result<(
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.leaf-restore"));
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(path.file_name().unwrap_or_default());
+    tmp_name.push(".leaf-restore");
+    let tmp = path.with_file_name(tmp_name);
     let _ = std::fs::remove_file(&tmp);
     if let Err(e) = fill(&tmp) {
         let _ = std::fs::remove_file(&tmp);
@@ -932,6 +1016,9 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
         Store::Copy { .. } => plan(store, cp)?,
     };
     let folder = store.folder().to_path_buf();
+    // (a copy checkpoint's paths keep every byte of a name, see `name_text`)
+    let copy = matches!(store, Store::Copy { .. });
+    let real = |rel: &str| if copy { folder.join(name_from_text(rel)) } else { folder.join(rel) };
     let mut blobs = match store {
         Store::Git { root, git_dir, empty_tree, .. } => Some(Blobs::open(root, git_dir, empty_tree)?),
         Store::Copy { .. } => None,
@@ -939,8 +1026,8 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
     let mut done = Restored { auto, written: Vec::new(), back: Vec::new(), trashed: Vec::new(), failed: Vec::new() };
     done.failed.extend(plan.unreadable.iter().map(|n| (n.clone(), "the name is not valid Unicode: left as it is".to_string())));
     for it in plan.items.iter().filter(|i| i.change != Change::Added) {
-        let path = folder.join(&it.rel);
-        if let Err(e) = no_link_on_the_way(&folder, &it.rel) {
+        let path = real(&it.rel);
+        if let Err(e) = no_link_on_the_way(&folder, &it.rel, copy) {
             done.failed.push((it.rel.clone(), e));
             continue;
         }
@@ -994,7 +1081,7 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
             .map(|i| i.rel.clone())
             .collect();
         if !gone.is_empty() {
-            let paths: Vec<PathBuf> = gone.iter().map(|r| folder.join(r)).collect();
+            let paths: Vec<PathBuf> = gone.iter().map(|r| real(r)).collect();
             match trash(&paths) {
                 Ok(()) => {
                     for (rel, p) in gone.into_iter().zip(&paths) {
@@ -1225,6 +1312,35 @@ mod tests {
             assert!(left.contains(want), "{want} kept: {left:?}");
         }
         assert!(!left.contains(&mine[0].id));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A name that is not valid UTF-8 (or holds U+FFFD) is copied under its exact name and put back under it.
+    #[cfg(unix)]
+    #[test]
+    fn copy_checkpoint_keeps_names_that_are_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = temp("bytes");
+        let odd = d.join(std::ffi::OsStr::from_bytes(b"sub/caf\xe9 \xff.txt"));
+        let fffd = d.join("sub/real\u{FFFD}x41;.txt");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        if std::fs::write(&odd, b"odd name").is_err() {
+            return; // (a file system that refuses such names)
+        }
+        std::fs::write(&fffd, b"replacement char").unwrap();
+        let store = Store::Copy { folder: d.clone(), base: temp("bytes-data").join("checkpoints").join("k") };
+        let cp = create(&store, "", false, None).unwrap();
+        assert_eq!(cp.files, 2);
+        let kept = PathBuf::from(&cp.handle).join("files");
+        assert_eq!(std::fs::read(kept.join(odd.strip_prefix(&d).unwrap())).unwrap(), b"odd name");
+        std::fs::remove_file(&odd).unwrap();
+        std::fs::write(&fffd, b"changed").unwrap();
+        let done = restore(&store, &cp, None, &|_: &[PathBuf]| Ok(())).unwrap();
+        assert!(done.failed.is_empty(), "{:?}", done.failed);
+        assert_eq!(std::fs::read(&odd).unwrap(), b"odd name");
+        assert_eq!(std::fs::read(&fffd).unwrap(), b"replacement char");
+        // nothing under a lossy spelling
+        assert!(!d.join("sub/caf\u{FFFD} \u{FFFD}.txt").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 
