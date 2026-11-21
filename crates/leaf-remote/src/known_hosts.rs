@@ -20,10 +20,14 @@ use russh::keys::{HashAlg, PublicKey};
 pub enum Verdict {
     /// A line has this very key for this host.
     Known,
-    /// No line has a key of this type for the host. `other_types` lists key types the files do have for it.
-    Unknown { other_types: Vec<String> },
+    /// No line has any key for the host: asked.
+    Unknown,
     /// A line has a key of the same type for this host, and it is a different key. Refused.
     Changed { file: PathBuf, line: usize },
+    /// The files have keys for this host, but only of other types (`known`) than the one the server shows. Refused like
+    /// `Changed`: an attacker who cannot show the known key would otherwise offer another type and get the "unknown" dialog.
+    /// (leaf asks the server for the known types first, so an honest server that has one shows it.)
+    OtherType { known: Vec<String>, file: PathBuf, line: usize },
     /// The key is marked `@revoked`. Refused.
     Revoked { file: PathBuf, line: usize },
 }
@@ -96,7 +100,8 @@ fn hashed_match(rest: &str, name: &str) -> bool {
     let Some((salt, hash)) = rest.split_once('|') else { return false };
     let (Ok(salt), Ok(hash)) = (B64.decode(salt), B64.decode(hash)) else { return false };
     let Ok(mut mac) = Hmac::<sha1::Sha1>::new_from_slice(&salt) else { return false };
-    mac.update(name.as_bytes());
+    // OpenSSH hashes the name in lower case
+    mac.update(name.to_ascii_lowercase().as_bytes());
     mac.verify_slice(&hash).is_ok()
 }
 
@@ -133,6 +138,7 @@ pub fn check_texts(files: &[(PathBuf, String)], host: &str, port: u16, key: &Pub
     let mut known = false;
     let mut changed = None;
     let mut other_types = Vec::new();
+    let mut other_at = None;
     for (file, text) in files {
         for (n, raw) in text.lines().enumerate() {
             let Some(l) = parse_line(raw) else { continue };
@@ -156,19 +162,51 @@ pub fn check_texts(files: &[(PathBuf, String)], host: &str, port: u16, key: &Pub
                 changed.get_or_insert((file.clone(), n + 1));
             } else {
                 let t = key_type(&recorded);
+                other_at.get_or_insert((file.clone(), n + 1));
                 if t != want_type && !other_types.contains(&t) {
                     other_types.push(t);
                 }
             }
         }
     }
-    // a revoked mark anywhere wins (handled above); then a matching line; a different key of the same type is refused
+    // a revoked mark anywhere wins (handled above); then a matching line; a different key of the same type is refused, and so
+    // is a key of a type the files do not have when they have another one for this host
     if known {
         Verdict::Known
     } else if let Some((file, line)) = changed {
         Verdict::Changed { file, line }
+    } else if let Some((file, line)) = other_at {
+        Verdict::OtherType { known: other_types, file, line }
     } else {
-        Verdict::Unknown { other_types }
+        Verdict::Unknown
+    }
+}
+
+/// The key types the files have for `host:port` (not counting revoked lines), for the negotiation: leaf asks the server for
+/// these first, as OpenSSH does.
+pub fn known_types(paths: &[PathBuf], host: &str, port: u16) -> Vec<String> {
+    let name = host_name(host, port);
+    let mut out = Vec::new();
+    for p in paths {
+        let Ok(b) = std::fs::read(p) else { continue };
+        for raw in String::from_utf8_lossy(&b).lines() {
+            if let Some(l) = parse_line(raw)
+                && !l.revoked
+                && names_host(l.patterns, &name)
+                && !out.iter().any(|t: &String| t == l.key_type)
+            {
+                out.push(l.key_type.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The family name of a host key algorithm (`ssh-rsa` for every RSA signature hash), as known_hosts writes the key type.
+pub fn family(a: &russh::keys::Algorithm) -> String {
+    match a {
+        russh::keys::Algorithm::Rsa { .. } => "ssh-rsa".into(),
+        a => a.as_str().to_string(),
     }
 }
 
@@ -259,7 +297,7 @@ mod tests {
         .join("\n");
         let files = [(PathBuf::from("known_hosts"), text)];
         let v = |h: &str, p: u16, k: &PublicKey| check_texts(&files, h, p, k);
-        let unknown = Verdict::Unknown { other_types: vec![] };
+        let unknown = Verdict::Unknown;
         // plain names, a second name on the line, the case of the name
         assert_eq!(v("example.com", 22, &ed), Verdict::Known);
         assert_eq!(v("EXAMPLE.com", 22, &ed), Verdict::Known);
@@ -270,10 +308,12 @@ mod tests {
         assert_eq!(v("example.com", 2223, &ed), unknown);
         // changed key on the default port
         assert_eq!(v("example.com", 22, &ed_other), Verdict::Changed { file: "known_hosts".into(), line: 3 });
-        // a key of another type than the one known: asked, with the known types named
-        assert_eq!(v("example.com", 22, &ec), Verdict::Unknown { other_types: vec!["ssh-ed25519".into()] });
-        // hashed names, with and without a port
+        // a key of another type than the one known: refused, with the known types named
+        assert_eq!(v("example.com", 22, &ec), Verdict::OtherType { known: vec!["ssh-ed25519".into()], file: "known_hosts".into(), line: 3 });
+        // hashed names, with and without a port; the name is hashed in lower case, as OpenSSH does
         assert_eq!(v("hashed.example.com", 22, &ed), Verdict::Known);
+        assert_eq!(v("Hashed.Example.COM", 22, &ed), Verdict::Known);
+        assert_eq!(v("Hashed.Example.COM", 22, &ed_other), Verdict::Changed { file: "known_hosts".into(), line: 5 });
         assert_eq!(v("hashed.example.com", 2200, &ec), Verdict::Known);
         assert_eq!(v("hashed.example.com", 2201, &ec), unknown);
         assert_eq!(v("other.example.com", 22, &ed), unknown);

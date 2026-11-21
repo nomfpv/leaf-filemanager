@@ -189,7 +189,7 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                     Ok(())
                 }
             };
-            let mut msg = format!(
+            let msg = format!(
                 "{}\n\n{} {}\n{} {}",
                 t!("leaf has not seen this server's key before. Check that it is the key the server's owner gave you before you trust it."),
                 t!("Key type:"),
@@ -197,17 +197,16 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                 t!("Fingerprint:"),
                 q.fingerprint
             );
-            if !q.other_types.is_empty() {
-                msg.push_str(&format!("\n\n{} {}", t!("known_hosts has a key of another type for this server:"), q.other_types.join(", ")));
-            }
+            // (a key of another type than the known one never comes here: it is refused like a changed key)
             crate::prompt::show(
                 format!("{} {}", t!("Unknown server:"), q.host),
                 Some(msg),
                 None,
+                // Cancel is the default button: Enter (and the keyboard's first stop) never trusts a key
                 vec![
-                    Button::new(t!("Trust and remember"), Kind::Primary, answer(HostKeyAnswer::TrustAndRemember)),
+                    Button::new(t!("Trust and remember"), Kind::Normal, answer(HostKeyAnswer::TrustAndRemember)),
                     Button::new(t!("Trust once"), Kind::Normal, answer(HostKeyAnswer::TrustOnce)),
-                    Button::new(t!("Cancel"), Kind::Normal, answer(HostKeyAnswer::Cancel)),
+                    Button::new(t!("Cancel"), Kind::Primary, answer(HostKeyAnswer::Cancel)),
                 ],
                 window,
                 cx,

@@ -646,3 +646,31 @@ fn self_containing_folder_ends_in_an_error() {
     });
     assert_eq!(r, Err(leaf_vfs::copy::too_deep()));
 }
+
+/// Must-fix 4: no downgrade by key type. known_hosts holds the server's ECDSA key only: leaf asks for ECDSA first, so a
+/// server that also has Ed25519 (russh's first choice) connects without a question. A server that then shows only an Ed25519
+/// key (an attacker without the known key) is refused like a changed key, and nobody is asked.
+#[test]
+fn other_key_type_is_refused_not_asked() {
+    let tmp = Temp::new("ktype");
+    let served = Temp::new("ktype-served");
+    let password = format!("pw-{}-ktype", std::process::id());
+    let ec = PrivateKey::random(&mut russh::keys::key::safe_rng(), Algorithm::Ecdsa { curve: russh::keys::EcdsaCurve::NistP256 }).unwrap();
+    let ed = new_key();
+    let server = TestServer::start_with(&served.0, &password, new_key().public_key().clone(), vec![ed.clone(), ec.clone()], false);
+    let line = crate::known_hosts::line_for("127.0.0.1", server.port, ec.public_key()).unwrap();
+    std::fs::write(tmp.0.join("known_hosts"), format!("{line}\n")).unwrap();
+
+    let ans = Answers::with(&[HostKeyAnswer::TrustAndRemember], &[Some(&password)]);
+    let fs = SftpFs::new(config(&tmp.0), ans.clone());
+    assert!(fs.stat(&server.addr("/")).unwrap().is_dir());
+    assert_eq!(ans.asked(), [format!("password {USER}@127.0.0.1 retry=false")], "the known ECDSA key was negotiated");
+
+    *server.keys.lock().unwrap() = vec![ed];
+    let ans = Answers::with(&[HostKeyAnswer::TrustAndRemember], &[Some(&password)]);
+    let fs = SftpFs::new(config(&tmp.0), ans.clone());
+    let e = fs.stat(&server.addr("/")).unwrap_err();
+    assert!(matches!(&e, FsError::Other(m) if m.contains("another type") && m.contains("does not connect")), "{e:?}");
+    assert!(ans.asked().is_empty(), "no trust dialog, no password");
+    assert_eq!(std::fs::read_to_string(tmp.0.join("known_hosts")).unwrap(), format!("{line}\n"), "nothing written");
+}

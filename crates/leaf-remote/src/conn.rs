@@ -289,11 +289,22 @@ impl client::Handler for Client {
                     file.display()
                 )))
             }
-            Verdict::Unknown { other_types } => {
+            Verdict::OtherType { known, file, line } => {
+                log::warn!("remote: {name} showed a {} key, known_hosts has only {}; refused", known_hosts::key_type(&key), known.join(", "));
+                refuse(FsError::Other(format!(
+                    "WARNING: {name} showed a key of another type ({} {fp}) than the one known_hosts has for it ({}). Someone \
+                     may be intercepting the connection. leaf does not connect. If the server's keys really changed, remove \
+                     line {line} from {} yourself and connect again.",
+                    known_hosts::key_type(&key),
+                    known.join(", "),
+                    file.display()
+                )))
+            }
+            Verdict::Unknown => {
                 if lock(&self.shared.trusted_once).contains(&(name.clone(), fp.clone())) {
                     return Ok(true);
                 }
-                let q = HostKeyQuestion { host: name.clone(), key_type: known_hosts::key_type(&key), fingerprint: fp.clone(), other_types };
+                let q = HostKeyQuestion { host: name.clone(), key_type: known_hosts::key_type(&key), fingerprint: fp.clone() };
                 match prompt::ask_host_key(&*self.prompter, q).await {
                     HostKeyAnswer::TrustAndRemember => {
                         match &self.remember_to {
@@ -333,15 +344,16 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         .map_err(|_| offline("no answer"))?
         .map_err(offline)?;
     let _ = tcp.set_nodelay(true);
+    let refusal: Refusal = Arc::default();
+    let mut files: Vec<PathBuf> = cfg.known_hosts.iter().cloned().collect();
+    files.extend(cfg.extra_known_hosts.iter().cloned());
     let ssh_cfg = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(30)),
         keepalive_max: 3,
         nodelay: true,
+        preferred: preferred_for(&known_hosts::known_types(&files, &t.host, t.port)),
         ..Default::default()
     });
-    let refusal: Refusal = Arc::default();
-    let mut files: Vec<PathBuf> = cfg.known_hosts.iter().cloned().collect();
-    files.extend(cfg.extra_known_hosts.iter().cloned());
     let handler = Client {
         host: t.host.clone(),
         port: t.port,
@@ -366,6 +378,15 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     };
     log::info!("remote: connected (SFTP version {}, statvfs {statvfs})", version.version);
     Ok(Conn { sftp: Arc::new(sftp), statvfs, home, handle, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+}
+
+/// russh's algorithms with the host key types known_hosts has for this server first (as OpenSSH orders them): an honest
+/// server that has the known key shows it, so a key of another type can be refused.
+fn preferred_for(known: &[String]) -> russh::Preferred {
+    let all = russh::Preferred::DEFAULT.key.to_vec();
+    let (mut first, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|a| known.contains(&known_hosts::family(a)));
+    first.extend(rest);
+    russh::Preferred { key: std::borrow::Cow::Owned(first), ..russh::Preferred::DEFAULT }
 }
 
 fn allows(methods: &Option<MethodSet>, m: MethodKind) -> bool {

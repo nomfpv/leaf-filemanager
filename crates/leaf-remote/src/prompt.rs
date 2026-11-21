@@ -14,8 +14,6 @@ pub struct HostKeyQuestion {
     pub key_type: String,
     /// `SHA256:...`
     pub fingerprint: String,
-    /// Key types the files have for this host already (the server offered another one).
-    pub other_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
