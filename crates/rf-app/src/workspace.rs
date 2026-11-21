@@ -5848,6 +5848,8 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h_0()
                     .px(px(p.gap))
+                    // (the mockups: a gap under the tab strip too, the address sheet floats like the others)
+                    .pt(px(p.gap))
                     .pb(px(p.gap))
                     .gap(px(p.gap))
                     .child(
