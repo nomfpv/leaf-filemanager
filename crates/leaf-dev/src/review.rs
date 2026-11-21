@@ -230,7 +230,8 @@ pub fn from_file_diff(f: FileDiff, swap: bool) -> RDiff {
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
     c.arg("-C").arg(root).args(["--no-pager", "-c", "core.quotepath=false"]);
-    c.env("GIT_TERMINAL_PROMPT", "0");
+    // (a path is a path: "[ab].txt" or ":(top)x" must never match other files)
+    c.env("GIT_TERMINAL_PROMPT", "0").env("GIT_LITERAL_PATHSPECS", "1");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -563,6 +564,38 @@ mod tests {
         let out = Command::new("git").current_dir(&dir).args(["diff", "--no-index", "--no-color", "-U1", "--", "a", "b"]).output().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         parse_hunks(&out.stdout, MAX_LINES)
+    }
+
+    #[test]
+    fn a_file_named_like_a_pattern_stages_and_reverts_only_itself() {
+        let dir = temp("glob");
+        let g = |args: &[&str]| {
+            let o = Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap();
+            assert!(o.status.success(), "{args:?}");
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        g(&["init", "-q"]);
+        for n in ["a.txt", "b.txt", "[ab].txt"] {
+            std::fs::write(dir.join(n), "one\n").unwrap();
+        }
+        g(&["add", "-A"]);
+        g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+        for n in ["a.txt", "b.txt", "[ab].txt"] {
+            std::fs::write(dir.join(n), "two\n").unwrap();
+        }
+        stage_file(&dir, "[ab].txt").unwrap();
+        assert_eq!(g(&["diff", "--cached", "--name-only"]).trim(), "[ab].txt");
+        unstage_file(&dir, "[ab].txt").unwrap();
+        stage_file(&dir, "a.txt").unwrap();
+        unstage_file(&dir, "[ab].txt").unwrap();
+        assert_eq!(g(&["diff", "--cached", "--name-only"]).trim(), "a.txt", "unstaging [ab].txt left a.txt staged");
+        let kept = dir.join("kept.txt");
+        let k2 = kept.clone();
+        gitread::revert_file(&dir, "[ab].txt", &move |p| std::fs::rename(p, &k2).map_err(|e| e.to_string())).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("[ab].txt")).unwrap().trim(), "one");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "two\n");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "two\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
