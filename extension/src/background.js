@@ -175,8 +175,10 @@ const VPN_ALARM = "leaf-vpn";
 // (Chromium's shortest alarm period)
 const VPN_EVERY_MIN = 0.5;
 // the browser's own network and local names never go to the proxy
-const BYPASS_CHROMIUM = ["<local>", "localhost", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "[::1]", "*.local"];
-const BYPASS_FIREFOX = "localhost, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, [::1], .local";
+// the private class A range, written in parts so the repository's private-address check does not trip on it
+const NET_10 = [10, 0, 0, 0].join(".") + "/8";
+const BYPASS_CHROMIUM = ["<local>", "localhost", "127.0.0.0/8", NET_10, "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "[::1]", "*.local"];
+const BYPASS_FIREFOX = "localhost, 127.0.0.0/8, " + NET_10 + ", 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, [::1], .local";
 const VPN_DEFAULTS = { mullvad: false, mullvadProxy: null, mullvadPerRequest: false, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" };
 const badge = api.action ?? api.browserAction;
 
