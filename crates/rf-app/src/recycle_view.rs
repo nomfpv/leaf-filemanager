@@ -57,6 +57,8 @@ pub struct RecycleView {
     /// The shared cache of the shell's own icons: a row asks it for the picture of the item's stored copy.
     images: Entity<ImageCache>,
     _images_sub: Subscription,
+    /// The page's width as last drawn (measured): the columns that do not fit are left out, the toolbar loses its words.
+    width: Pixels,
 }
 
 /// The rows to show: those matching `query` (name or original location, case-insensitive), by
@@ -103,6 +105,7 @@ impl RecycleView {
             _settings_sub: None,
             images,
             _images_sub,
+            width: px(1000.),
         };
         this.reload(cx);
         this
@@ -323,7 +326,21 @@ impl RecycleView {
     }
 }
 
-fn button(id: &'static str, icon: L, label: &'static str, enabled: bool, p: &Palette) -> Stateful<Div> {
+/// Which columns a page of this width has room for: the width of the location column (`None` = left out) and whether the
+/// date column stays; the name and the size always do.
+fn columns_for(width: f32) -> (Option<f32>, bool) {
+    if width >= 730. {
+        (Some(260.), true)
+    } else if width >= 630. {
+        (Some(170.), true)
+    } else if width >= 470. {
+        (None, true)
+    } else {
+        (None, false)
+    }
+}
+
+fn button(id: &'static str, icon: L, label: &'static str, enabled: bool, compact: bool, p: &Palette) -> Stateful<Div> {
     h_flex()
         .id(id)
         .h(px(30.))
@@ -336,7 +353,8 @@ fn button(id: &'static str, icon: L, label: &'static str, enabled: bool, p: &Pal
         .when(enabled, |d| d.hover(|s| s.bg(p.pressed)).cursor_pointer())
         .when(!enabled, |d| d.opacity(0.5))
         .child(Icon::new(icon).size(px(14.)))
-        .child(label)
+        .when(!compact, |d| d.child(label))
+        .when(compact, |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(label).build(w, cx)))
 }
 
 /// The kind of a row by its name, for the glyph drawn until the shell's own icon has arrived (or when it cannot be had): a folder only
@@ -383,6 +401,27 @@ impl Render for RecycleView {
             }
         };
         let filtered = self.order.len() != self.items.len();
+        let (loc_w, show_del) = columns_for(f32::from(self.width));
+        let compact = f32::from(self.width) < 700.;
+        let this = cx.entity();
+        let width_probe = canvas(
+            move |bounds, window, cx| {
+                let changed = this.update(cx, |v, cx| {
+                    let changed = v.width != bounds.size.width;
+                    if changed {
+                        v.width = bounds.size.width;
+                        cx.notify();
+                    }
+                    changed
+                });
+                if changed {
+                    window.request_animation_frame();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         let (sort_col, sort_desc) = self.sort;
         let col_head = |id: &'static str, label: &'static str, col: Col| {
             h_flex()
@@ -409,13 +448,14 @@ impl Render for RecycleView {
             // (the width of a row's icon)
             .child(div().w(px(16.)).flex_shrink_0())
             .child(col_head("rb-h-name", t!("Name"), Col::Name).flex_1().min_w_0())
-            .child(col_head("rb-h-loc", t!("Original location"), Col::Location).w(px(260.)).flex_shrink_0())
-            .child(col_head("rb-h-del", t!("Date deleted"), Col::Deleted).w(px(130.)).flex_shrink_0())
+            .children(loc_w.map(|w| col_head("rb-h-loc", t!("Original location"), Col::Location).w(px(w)).flex_shrink_0()))
+            .children(show_del.then(|| col_head("rb-h-del", t!("Date deleted"), Col::Deleted).w(px(130.)).flex_shrink_0()))
             .child(col_head("rb-h-size", t!("Size"), Col::Size).w(px(90.)).flex_shrink_0().justify_end());
         let header = h_flex()
             .px_4()
             .py_3()
             .gap_2()
+            .flex_wrap()
             .items_center()
             .border_b_1()
             .border_color(p.divider)
@@ -423,6 +463,7 @@ impl Render for RecycleView {
             .child(
                 v_flex()
                     .flex_1()
+                    .min_w(px(140.))
                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Recycle Bin")))
                     .child(div().text_xs().text_color(p.text_secondary).child(if filtered {
                         format!("{} / {} · {}", self.order.len(), crate::i18n::items(self.items.len()), format::size(total))
@@ -435,7 +476,7 @@ impl Render for RecycleView {
             )
             .child(
                 h_flex()
-                    .w(px(220.))
+                    .w(px(if compact { 150. } else { 220. }))
                     .h(px(30.))
                     .px_2()
                     .gap_1()
@@ -446,19 +487,19 @@ impl Render for RecycleView {
                     .child(Input::new(&search).appearance(false).cleanable(true)),
             )
             .child(
-                button("rb-restore", L::Undo2, t!("Restore"), has_sel && !self.busy, &p)
+                button("rb-restore", L::Undo2, t!("Restore"), has_sel && !self.busy, compact, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.restore_selected(cx))),
             )
             .child(
-                button("rb-delete", L::TrashOff, t!("Delete permanently"), has_sel && !self.busy, &p)
+                button("rb-delete", L::TrashOff, t!("Delete permanently"), has_sel && !self.busy, compact, &p)
                     .on_click(cx.listener(|this, _, window, cx| this.delete_selected(window, cx))),
             )
             .child(
-                button("rb-empty", L::Trash, t!("Empty Recycle Bin"), !self.items.is_empty() && !self.busy, &p)
+                button("rb-empty", L::Trash, t!("Empty Recycle Bin"), !self.items.is_empty() && !self.busy, compact, &p)
                     .on_click(cx.listener(|this, _, window, cx| this.empty_bin(window, cx))),
             )
             .child(
-                button("rb-settings", L::Settings, t!("Settings"), true, &p).on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+                button("rb-settings", L::Settings, t!("Settings"), true, compact, &p).on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             );
 
         let body: AnyElement = if self.loading && self.items.is_empty() {
@@ -504,17 +545,17 @@ impl Render for RecycleView {
                                     None => Icon::new(row_icon(it)).size(px(16.)).text_color(theme::kind_color(row_category(it), p.dark)).into_any_element(),
                                 })
                                 .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(it.name.clone()))
-                                .child(
+                                .children(loc_w.map(|w| {
                                     div()
-                                        .w(px(260.))
+                                        .w(px(w))
                                         .flex_shrink_0()
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
                                         .text_color(p.text_secondary)
-                                        .child(it.original_location.clone()),
-                                )
-                                .child(div().w(px(130.)).flex_shrink_0().text_color(p.text_secondary).child(format::datetime(it.deleted_ms)))
+                                        .child(it.original_location.clone())
+                                }))
+                                .children(show_del.then(|| div().w(px(130.)).flex_shrink_0().text_color(p.text_secondary).child(format::datetime(it.deleted_ms))))
                                 .child(
                                     div()
                                         .w(px(90.))
@@ -581,6 +622,7 @@ impl Render for RecycleView {
                     this.context_menu(None, window, cx);
                 }),
             )
+            .child(width_probe)
             .child(header)
             .when(!self.items.is_empty(), |d| d.child(columns))
             .child(body)
