@@ -141,8 +141,12 @@ fn proxy() -> std::sync::MutexGuard<'static, Option<Running>> {
 /// Starts the proxy on 127.0.0.1:`port` (a free port when that one cannot be had), with `credentials` asked when given. A proxy
 /// already running is stopped first. Returns the port it listens on.
 pub fn start(port: u16, credentials: Option<Credentials>) -> io::Result<u16> {
+    // (a restart, for a new password: the port it had is wanted again, and it is free once the old listener has gone, a moment
+    // after it was told to stop; so programs set to it need no new address)
+    let before = proxy().as_ref().map(|r| r.port);
     stop();
-    let (port, stop_tx) = launch(port, credentials, Arc::new(Tunneled))?;
+    let again = before.filter(|b| *b != 0);
+    let (port, stop_tx) = launch_with(port, again, credentials, Arc::new(Tunneled))?;
     *proxy() = Some(Running { port, stop: stop_tx });
     log::info!("vpn: the SOCKS proxy listens on 127.0.0.1:{port}");
     Ok(port)
@@ -161,18 +165,46 @@ pub fn port() -> Option<u16> {
     proxy().as_ref().map(|r| r.port)
 }
 
-/// Binds 127.0.0.1:`port` (or a free port) and serves it on the runtime with `up`. The sender stops it.
+/// Binds 127.0.0.1:`port` (or a free port) and serves it on the runtime with `up` (the tests' stand-in for the tunnel). The
+/// sender stops it.
+#[cfg(test)]
 pub(crate) fn launch<U: Upstream>(port: u16, credentials: Option<Credentials>, up: Arc<U>) -> io::Result<(u16, watch::Sender<bool>)> {
-    let rt = crate::runtime().ok_or_else(|| io::Error::other("leaf's VPN is not set up in this copy of leaf"))?;
-    let listener = match std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
-        Ok(l) => l,
-        // (in use, or a port Windows keeps for itself: any free one; the page shows which)
-        Err(e) if port != 0 => {
-            log::info!("vpn: port {port} for the SOCKS proxy cannot be had ({e}); a free one is used");
-            std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
+    launch_with(port, None, credentials, up)
+}
+
+/// Binds `port`; else `again` (the port the proxy just stopped had: tried for up to a second while the old listener goes); else
+/// any free port.
+fn bind(port: u16, again: Option<u16>) -> io::Result<std::net::TcpListener> {
+    let try_bind = |p: u16| std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, p));
+    let mut first = None;
+    for (i, p) in std::iter::once(port).chain(again).enumerate() {
+        if p == 0 {
+            continue;
         }
-        Err(e) => return Err(e),
-    };
+        let deadline = std::time::Instant::now() + if Some(p) == again { Duration::from_secs(1) } else { Duration::ZERO };
+        loop {
+            match try_bind(p) {
+                Ok(l) => return Ok(l),
+                Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                Err(e) => {
+                    if i == 0 {
+                        first = Some(e);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    // (in use, or a port Windows keeps for itself: any free one; the page shows which)
+    if let Some(e) = first {
+        log::info!("vpn: port {port} for the SOCKS proxy cannot be had ({e}); another one is used");
+    }
+    try_bind(0)
+}
+
+fn launch_with<U: Upstream>(port: u16, again: Option<u16>, credentials: Option<Credentials>, up: Arc<U>) -> io::Result<(u16, watch::Sender<bool>)> {
+    let rt = crate::runtime().ok_or_else(|| io::Error::other("leaf's VPN is not set up in this copy of leaf"))?;
+    let listener = bind(port, again)?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let (tx, rx) = watch::channel(false);
