@@ -127,7 +127,7 @@ pub fn mount_path(uri: &str) -> std::io::Result<PathBuf> {
 }
 
 /// [`mount_path`] with a user name, domain and password from leaf's own dialog or the keyring: `gio mount` asks on its input
-/// and is answered there, each question once, by what it asks (`User`, `Domain`, `Password`; "anonymously" is answered no).
+/// and is answered there, each question once, by what it asks (exactly `User:`, `Domain:`, `Password:`; see [`answer_for`]).
 /// The password never goes on the command line or into the environment. A question asked a second time (the server refused
 /// the answer) ends the input, so gio gives up: one try per call, `PermissionDenied`. Blocks: worker threads only.
 pub fn mount_path_login(uri: &str, user: &str, domain: &str, password: &str) -> std::io::Result<PathBuf> {
@@ -168,23 +168,17 @@ struct Answered {
 }
 
 /// What to say to one question of `gio mount` (the text it printed since the last answer). `None`: not a question yet.
+/// Only a last line shaped exactly like gio's own questions (`LC_ALL=C`) is answered: `User:`, `Domain:` or `Password:`,
+/// each maybe with a default in brackets (`User [neo]:`). Never a word found inside other text: a header such as
+/// "Password required for share s on [fe80::1]", or a user name `password` in `User [password]:`, must not get the password.
 fn answer_for<'a>(said: &str, user: &'a str, domain: &'a str, password: &'a str) -> Option<(&'static str, &'a str)> {
-    let t = said.trim_end();
-    if !t.ends_with(':') && !t.ends_with('?') && !t.ends_with(']') {
-        return None;
-    }
-    let last = t.lines().last().unwrap_or("").to_ascii_lowercase();
-    if last.contains("anonymous") {
-        Some(("anonymous", "n"))
-    } else if last.contains("password") {
-        Some(("password", password))
-    } else if last.contains("domain") {
-        Some(("domain", domain))
-    } else if last.contains("user") {
-        Some(("user", user))
-    } else {
-        None
-    }
+    let last = said.rsplit('\n').next().unwrap_or("").trim();
+    let q = last.strip_suffix(':')?;
+    [("User", "user", user), ("Domain", "domain", domain), ("Password", "password", password)].into_iter().find_map(|(word, what, answer)| {
+        let rest = q.strip_prefix(word)?;
+        let shaped = rest.is_empty() || rest.strip_prefix(" [").and_then(|r| r.strip_suffix(']')).is_some_and(|d| !d.contains([']', '[']));
+        shaped.then_some((what, answer))
+    })
 }
 
 /// Runs `gio` with its questions answered on its input (see [`mount_path_login`]).
@@ -306,4 +300,29 @@ pub enum LinkType {
 
 pub fn lan_link() -> Option<(LinkType, u32)> {
     stub!("network::lan_link")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::answer_for;
+
+    /// Only gio's own question lines get an answer, the password only `Password:`: never a header ending in `]` (an IPv6
+    /// server), never a `User [..]:` whose default holds the word "password".
+    #[test]
+    fn gio_questions_answered_only_on_exact_prompt_lines() {
+        let a = |said: &str| answer_for(said, "neo", "WORK", "pw").map(|(w, _)| w);
+        assert_eq!(a("Password required for share s on [fe80::1]"), None);
+        assert_eq!(a("Password required for share s on [fe80::1]\n"), None);
+        assert_eq!(a("Password required for share s on host:"), None);
+        assert_eq!(a("User [password]: "), Some("user"));
+        assert_eq!(answer_for("User [password]: ", "neo", "WORK", "pw").map(|(_, t)| t), Some("neo"));
+        assert_eq!(a("Password required for share s on [fe80::1]\nUser [neo]: "), Some("user"));
+        assert_eq!(a("Domain [WORKGROUP]: "), Some("domain"));
+        assert_eq!(a("Password: "), Some("password"));
+        assert_eq!(a("Domain [my domain]: "), Some("domain"));
+        assert_eq!(a("Us"), None);
+        assert_eq!(a("Username: "), None);
+        assert_eq!(a("User [a]b]: "), None);
+        assert_eq!(a("Login anonymously? [y/N]"), None);
+    }
 }
