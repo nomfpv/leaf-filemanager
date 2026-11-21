@@ -166,8 +166,7 @@ pub struct CommandSpec {
     pub action: fn() -> Box<dyn Action>,
     /// Makes one of its key bindings (`KeyBinding::new` wants the action's own type).
     pub bind: fn(&'static str, Option<&'static str>) -> KeyBinding,
-    /// The leaf version it came with (for a later "What's new" page).
-    #[allow(dead_code)]
+    /// The leaf version it came with (Settings > What's new groups the rows by it).
     pub since: &'static str,
     pub platforms: Platforms,
     /// The name of the user's own action (`actions.toml`) when this row is one; empty for the built-in rows.
@@ -273,7 +272,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CustomizeHome, View, "Customize Home", "Opens Home with buttons to add, remove, resize and reorder its widgets.", LayoutGrid, [], keywords: &["dashboard", "widgets", "edit layout"], since: "0.9.5"),
     c!(ResetHome, View, "Reset Home", "Puts the Home page back to its default widgets.", RotateCcw, [], keywords: &["dashboard", "widgets", "default"], since: "0.9.5"),
     c!(GoSettings, App, "Settings", "Opens leaf's settings.", Settings, [w("ctrl-,")], keywords: &["options", "preferences"]),
-    c!(ShowFeatures, App, "What leaf can do", "Lists every command with what it does and its shortcut.", Sparkles, [], keywords: &["features", "commands", "help", "shortcuts"], since: "0.9.4"),
+    c!(ShowFeatures, App, "What leaf can do", "Lists every command with what it does and its shortcut.", Sparkles, [], keywords: &["features", "commands", "help", "shortcuts"], since: "0.9.5"),
     c!(GoRecycleBin, Navigation, "Recycle Bin", "Opens the Recycle Bin.", Trash, [], keywords: &["trash", "deleted"]),
     c!(FocusAddress, Navigation, "Focus address bar", "Puts the keyboard in the address bar to type a path.", TextCursorInput, [w("ctrl-l"), w("alt-d")], keywords: &["path", "location"]),
     c!(FocusSearch, Navigation, "Search", "Searches this folder.", Search, [w("ctrl-f"), w("ctrl-e")], keywords: &["find", "filter"]),
@@ -330,13 +329,13 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(Undo, Files, "Undo", "Takes back the last copy, move, rename or delete.", Undo2, [f("ctrl-z")]),
     c!(CopyPath, CopyPath, "Copy path", "Copies the full path of the selected items.", Link, [f("ctrl-shift-c")]),
     c!(CopyPathQuoted, CopyPath, "Copy path as quoted", "Copies the paths in quotes, ready for a command line.", Link, [f("ctrl-alt-c")]),
-    c!(CopyPathName, CopyPath, "Copy path as name only", "Copies just the names of the selected items.", Link, [], since: "0.9.4"),
-    c!(CopyPathFolder, CopyPath, "Copy path as folder path", "Copies the path of the folder the items are in.", Link, [], since: "0.9.4"),
-    c!(CopyPathSlashes, CopyPath, "Copy path with forward slashes", "Copies the paths written with / instead of \\.", Link, [], since: "0.9.4"),
-    c!(CopyPathRelative, CopyPath, "Copy path relative to repository", "Copies the paths from the root of their Git repository.", Link, [], keywords: &["git"], since: "0.9.4"),
-    c!(CopyPathAt, CopyPath, "Copy path as @path", "Copies the paths with an @ in front, as coding assistants take them.", Link, [], keywords: &["ai", "agent"], since: "0.9.4"),
-    c!(CopyPathWsl, CopyPath, "Copy path as WSL path", "Copies the paths as Linux under WSL sees them (/mnt/c/...).", Link, [], keywords: &["linux"], since: "0.9.4", platforms: Platforms::WINDOWS),
-    c!(CopyPathUrl, CopyPath, "Copy path as file URL", "Copies the paths as file:/// addresses.", Link, [], keywords: &["uri", "link"], since: "0.9.4"),
+    c!(CopyPathName, CopyPath, "Copy path as name only", "Copies just the names of the selected items.", Link, [], since: "0.9.5"),
+    c!(CopyPathFolder, CopyPath, "Copy path as folder path", "Copies the path of the folder the items are in.", Link, [], since: "0.9.5"),
+    c!(CopyPathSlashes, CopyPath, "Copy path with forward slashes", "Copies the paths written with / instead of \\.", Link, [], since: "0.9.5"),
+    c!(CopyPathRelative, CopyPath, "Copy path relative to repository", "Copies the paths from the root of their Git repository.", Link, [], keywords: &["git"], since: "0.9.5"),
+    c!(CopyPathAt, CopyPath, "Copy path as @path", "Copies the paths with an @ in front, as coding assistants take them.", Link, [], keywords: &["ai", "agent"], since: "0.9.5"),
+    c!(CopyPathWsl, CopyPath, "Copy path as WSL path", "Copies the paths as Linux under WSL sees them (/mnt/c/...).", Link, [], keywords: &["linux"], since: "0.9.5", platforms: Platforms::WINDOWS),
+    c!(CopyPathUrl, CopyPath, "Copy path as file URL", "Copies the paths as file:/// addresses.", Link, [], keywords: &["uri", "link"], since: "0.9.5"),
     c!(CopyAsContext, CopyPath, "Copy as context", "Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files.", FileText, [], keywords: &["ai", "llm", "prompt", "claude", "chatgpt", "tokens", "agent"], since: "0.9.5"),
     c!(OpenWith, Files, "Open with…", "Opens the selected file in a program you choose.", AppWindow, []),
     c!(Properties, Files, "Properties", "Shows the details of the selected items.", Info, [f("alt-enter")], keywords: &["info", "size", "attributes"]),

@@ -6,6 +6,7 @@ mod background;
 pub mod bench;
 mod fast_start;
 mod features_page;
+mod whats_new_page;
 mod bench_view;
 mod nearby;
 mod archive_view;
@@ -643,6 +644,7 @@ pub fn main() {
                     "filetypes" => settings_view::Page::FileTypes,
                     "hypersearch" => settings_view::Page::Search,
                     "features" => settings_view::Page::Features,
+                    "whatsnew" => settings_view::Page::WhatsNew,
                     "advanced" => settings_view::Page::Advanced,
                     _ => settings_view::Page::Look,
                 },

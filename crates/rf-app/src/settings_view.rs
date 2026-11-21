@@ -38,10 +38,11 @@ pub enum Page {
     Speed,
     Organizer,
     Features,
+    WhatsNew,
     About,
 }
 
-const PAGES: [(Page, L, &str); 16] = [
+const PAGES: [(Page, L, &str); 17] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -57,6 +58,7 @@ const PAGES: [(Page, L, &str); 16] = [
     (Page::Speed, L::Gauge, "Speed test"),
     (Page::Organizer, L::WandSparkles, "File organizer"),
     (Page::Features, L::Sparkles, "What leaf can do"),
+    (Page::WhatsNew, L::Bell, "What's new"),
     (Page::About, L::Info, "About"),
 ];
 
@@ -225,6 +227,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Speed => crate::bench_view::page(p, cx),
         Page::Organizer => crate::organizer::page::page(p, cx),
         Page::Features => crate::features_page::page(p, cx),
+        Page::WhatsNew => crate::whats_new_page::page(p, cx),
         Page::About => about(p, cx),
     }
 }
@@ -509,6 +512,8 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
                 .when(on && lens, |d| d.child(crate::glass::lens_probe(crate::glass::SLOT_SETTINGS, crate::glass::key_of(&i))))
                 .when(!on, |d| d.hover(|s| s.bg(p.hover)))
                 .child(Icon::new(icon).size(px(16.)).text_color(if on { p.accent } else { p.text_secondary }))
+                // a small "new" dot until the page has been opened once after an update
+                .when(pg == Page::WhatsNew && !on && crate::whats_new_page::unseen(&s), |d| d.child(div().absolute().right(px(strip.then_some(14.).unwrap_or(12.))).top(px(14.)).size(px(7.)).rounded_full().bg(p.accent)))
                 .when(!strip, |d| d.child(h_flex().gap_2().items_center().child(crate::i18n::t(label)).when(experimental(pg), |d| d.child(experimental_pill(p)))))
                 .on_click({
                     let search = search.clone();
@@ -524,6 +529,9 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
     // (Nearby's page on screen shows this PC to everyone while it is: `nearby::page_seen`)
     if query.is_empty() && page == Page::Nearby {
         crate::nearby::page_seen(window.window_handle(), cx);
+    }
+    if query.is_empty() && page == Page::WhatsNew {
+        crate::whats_new_page::seen(&s, cx);
     }
     let (title, body): (String, Vec<AnyElement>) = if query.is_empty() {
         (PAGES.iter().find(|x| x.0 == page).map(|x| page_title(x.0, crate::i18n::t(x.2))).unwrap_or_default(), build_page(page, p, &s, cx))

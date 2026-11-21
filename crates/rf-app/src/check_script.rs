@@ -209,6 +209,7 @@ impl Workspace {
                     "speed" => Page::Speed,
                     "organizer" => Page::Organizer,
                     "features" => Page::Features,
+                    "whatsnew" => Page::WhatsNew,
                     "about" => Page::About,
                     _ => return false,
                 };
