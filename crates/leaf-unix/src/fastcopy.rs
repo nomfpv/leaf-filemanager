@@ -156,7 +156,10 @@ fn scan(src: &Path, dst: &Path, bytes: &mut u64, conflicts: &mut Vec<Conflict>, 
         Err(_) => *bytes += tree_bytes(src, cancel),
         Ok(dm) => {
             let dk = kind(&dm);
-            if sk == Kind::Dir && dk == Kind::Dir {
+            if same_item(&sm, &dm) {
+                // (one item under two paths: not a conflict, never offered for replacing)
+                *bytes += tree_bytes(src, cancel);
+            } else if sk == Kind::Dir && dk == Kind::Dir {
                 if let Ok(rd) = std::fs::read_dir(src) {
                     for e in rd.flatten() {
                         scan(&e.path(), &dst.join(e.file_name()), bytes, conflicts, cancel);
@@ -191,11 +194,60 @@ fn tree_bytes(p: &Path, cancel: &std::sync::atomic::AtomicBool) -> u64 {
     }
 }
 
-/// The source files and folders a copy has verified, for removing exactly them after a move.
+/// What a source item was when it was copied: removed after a move only while all of it still matches (a file saved or replaced
+/// meanwhile has another inode, size, mtime or ctime and is kept).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Ident {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+
+impl Ident {
+    fn of(m: &std::fs::Metadata) -> Self {
+        Self { dev: m.dev(), ino: m.ino(), size: m.len(), mtime: (m.mtime(), m.mtime_nsec()), ctime: (m.ctime(), m.ctime_nsec()) }
+    }
+}
+
+/// Whether two items are one and the same (one inode seen through two paths: a hard link, a bind mount, a share mounted twice).
+fn same_item(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// The source items a copy has verified, as they were then, for removing exactly them after a move (children before their folder).
+/// Folders carry only their device and inode (their times change as their contents go).
 #[derive(Default)]
 struct Copied {
-    files: Vec<PathBuf>,
-    dirs: Vec<PathBuf>,
+    files: Vec<(PathBuf, Ident)>,
+    dirs: Vec<(PathBuf, (u64, u64))>,
+}
+
+/// Removes one copied source file or link, but only while it is still the item that was copied.
+fn remove_source_file(job: &mut Job, p: &Path, was: &Ident) {
+    match std::fs::symlink_metadata(p) {
+        Ok(now) if Ident::of(&now) == *was => {
+            if let Err(e) = std::fs::remove_file(p) {
+                job.fail(p, format_args!("copied, but the original could not be removed: {e}"));
+            }
+        }
+        Ok(_) => job.fail(p, "changed during the move: the original was kept"),
+        Err(_) => {}
+    }
+}
+
+/// Removes one source folder after its contents went: only the same folder (device and inode), and only when empty.
+fn remove_source_dir(job: &mut Job, p: &Path, was: (u64, u64)) {
+    match std::fs::symlink_metadata(p) {
+        Ok(now) if now.is_dir() && (now.dev(), now.ino()) == was => {
+            if let Err(e) = std::fs::remove_dir(p) {
+                job.fail(p, format_args!("copied, but the original folder could not be removed: {e}"));
+            }
+        }
+        Ok(_) => job.fail(p, "changed during the move: the original was kept"),
+        Err(_) => {}
+    }
 }
 
 fn set_times_fd(fd: i32, m: &std::fs::Metadata) -> io::Result<()> {
@@ -265,7 +317,7 @@ fn read_full(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
 
 /// Copies one regular file to `dst`, which must not exist. Progress, pause, cancel and limit between chunks; fsync; mode and times
 /// kept; checked as `verify` says (and always for size). On any failure the partly written `dst` is removed.
-fn copy_file(job: &mut Job, src: &Path, dst: &Path, verify: Verify) -> io::Result<()> {
+fn copy_file(job: &mut Job, src: &Path, dst: &Path, verify: Verify) -> io::Result<Ident> {
     let from = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(src)?;
     let sm = from.metadata()?;
     if !sm.file_type().is_file() {
@@ -326,26 +378,41 @@ fn copy_file(job: &mut Job, src: &Path, dst: &Path, verify: Verify) -> io::Resul
     if r.is_err() {
         let _ = std::fs::remove_file(dst);
     }
-    r
+    r.map(|_| Ident::of(&sm))
 }
 
 /// Copies the tree at `src` to `dst` (which must not exist), links as links. Files that fail are named and left out; a cancel ends
-/// it. `Ok(true)` when every part was copied. `copied` lists the source items whose copies are complete (a folder only when
-/// everything inside it was copied), children before their folder.
-fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut Copied) -> io::Result<bool> {
+/// it. `Ok(true)` when every part was copied. With `remove_now` (a move) each source file is removed right after its own copy was
+/// verified, and each folder after its contents; otherwise `copied` lists the verified source items (a folder only when everything
+/// inside it was copied), children before their folder.
+fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut Copied, remove_now: bool) -> io::Result<bool> {
     job.check()?;
     let m = std::fs::symlink_metadata(src)?;
     match kind(&m) {
         Kind::File => {
-            copy_file(job, src, dst, verify)?;
-            copied.files.push(src.to_path_buf());
+            let was = copy_file(job, src, dst, verify)?;
+            if remove_now {
+                remove_source_file(job, src, &was);
+            } else {
+                copied.files.push((src.to_path_buf(), was));
+            }
             Ok(true)
         }
         Kind::Link => {
             let target = std::fs::read_link(src)?;
             std::os::unix::fs::symlink(&target, dst)?;
             let _ = set_times_path(dst, &m, true);
-            copied.files.push(src.to_path_buf());
+            // (the link read is the link copied only if it did not change around the read)
+            let was = Ident::of(&m);
+            if std::fs::symlink_metadata(src).map(|n| Ident::of(&n)).ok() != Some(was) {
+                job.fail(src, "changed during the copy");
+                return Ok(false);
+            }
+            if remove_now {
+                remove_source_file(job, src, &was);
+            } else {
+                copied.files.push((src.to_path_buf(), was));
+            }
             Ok(true)
         }
         Kind::Special => {
@@ -358,7 +425,7 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
             for e in std::fs::read_dir(src)? {
                 let e = e?;
                 let s = e.path();
-                match copy_tree(job, &s, &dst.join(e.file_name()), verify, copied) {
+                match copy_tree(job, &s, &dst.join(e.file_name()), verify, copied, remove_now) {
                     Ok(c) => all &= c,
                     Err(e) if is_cancel(&e) => return Err(e),
                     Err(e) => {
@@ -370,7 +437,11 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
             let _ = std::fs::set_permissions(dst, std::os::unix::fs::PermissionsExt::from_mode(kept_mode(&m)));
             let _ = set_times_path(dst, &m, false);
             if all {
-                copied.dirs.push(src.to_path_buf());
+                if remove_now {
+                    remove_source_dir(job, src, (m.dev(), m.ino()));
+                } else {
+                    copied.dirs.push((src.to_path_buf(), (m.dev(), m.ino())));
+                }
             }
             Ok(all)
         }
@@ -379,16 +450,12 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
 /// Removes exactly the source items of a finished move that `copied` lists: files and links, then folders deepest first and only
 /// when empty (something added meanwhile keeps its folder).
 fn remove_copied(job: &mut Job, copied: &Copied) {
-    for f in &copied.files {
-        if let Err(e) = std::fs::remove_file(f) {
-            job.fail(f, format_args!("copied, but the original could not be removed: {e}"));
-        }
+    for (f, was) in &copied.files {
+        remove_source_file(job, f, was);
     }
     // (`dirs` lists children before their parents: a folder is pushed after its contents)
-    for d in &copied.dirs {
-        if let Err(e) = std::fs::remove_dir(d) {
-            job.fail(d, format_args!("copied, but the original folder could not be removed: {e}"));
-        }
+    for (d, was) in &copied.dirs {
+        remove_source_dir(job, d, *was);
     }
 }
 
@@ -413,6 +480,15 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
     let mut replace = false;
     if let Ok(dm) = std::fs::symlink_metadata(&dst) {
         let (sk, dk) = (kind(&sm), kind(&dm));
+        if same_item(&sm, &dm) {
+            // one item under two paths (hard link, bind mount, a share mounted twice): never replaced, never removed. A move has
+            // nothing to do; a copy keeps both.
+            if kind_of_job == Transfer::Move {
+                return Ok(());
+            }
+            dst = keep_both_name(&dst);
+            return copy_new(job, kind_of_job, src, &sm, dst, false);
+        }
         // (a decision exists for every conflict that was asked, and for a copy into the item's own folder: keep both, never a merge
         // of a folder with itself)
         let decision = job.decide.get(src).copied();
@@ -440,7 +516,12 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
             Resolve::Replace => replace = true,
         }
     }
-    if kind(&sm) == Kind::Special {
+    copy_new(job, kind_of_job, src, &sm, dst, replace)
+}
+
+/// The rest of [`item`]: `src` becomes `dst` (a free name, or the file the user chose to replace).
+fn copy_new(job: &mut Job, kind_of_job: Transfer, src: &Path, sm: &std::fs::Metadata, dst: PathBuf, replace: bool) -> io::Result<()> {
+    if kind(sm) == Kind::Special {
         job.skip(src);
         return Ok(());
     }
@@ -468,10 +549,19 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
     let verify = if kind_of_job == Transfer::Move && job.verify == Verify::Off { Verify::Quick } else { job.verify };
     let target = if replace { job.temp_name(parent) } else { dst.clone() };
     let mut copied = Copied::default();
-    let r = copy_tree(job, src, &target, verify, &mut copied);
+    // (a replace removes the source only after the new file took the old one's place, below)
+    let remove_now = kind_of_job == Transfer::Move && !replace;
+    let r = copy_tree(job, src, &target, verify, &mut copied, remove_now);
     if replace {
         match &r {
-            Ok(true) => std::fs::rename(&target, &dst)?,
+            Ok(true) => {
+                // the old file must still not be the source itself (seen through another path)
+                if std::fs::symlink_metadata(&dst).is_ok_and(|dm| same_item(sm, &dm)) {
+                    let _ = crate::fastdelete::remove_tree(&target);
+                    return Ok(());
+                }
+                std::fs::rename(&target, &dst)?
+            }
             _ => {
                 // the old file stays as it was; the unfinished new one goes
                 if std::fs::symlink_metadata(&target).is_ok() {
@@ -487,7 +577,7 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
         job.tracker.results.lock().unwrap().push((src.to_path_buf(), dst.clone()));
     }
     r?;
-    if kind_of_job == Transfer::Move {
+    if kind_of_job == Transfer::Move && replace {
         remove_copied(job, &copied);
     }
     Ok(())
@@ -503,16 +593,18 @@ pub fn transfer(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: A
 fn run(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: Arc<Tracker>, force_copy: bool) -> anyhow::Result<bool> {
     anyhow::ensure!(std::fs::metadata(dest_dir).is_ok_and(|m| m.is_dir()), "{}: not a folder", dest_dir.display());
     let dest_abs = std::fs::canonicalize(dest_dir)?;
+    // the destination folder and every folder above it, by device and inode (a bind mount or a second mount of the same share is
+    // the same folder under another path)
+    let dest_chain: Vec<(u64, u64)> = dest_abs.ancestors().filter_map(|a| std::fs::metadata(a).ok()).map(|m| (m.dev(), m.ino())).collect();
     let mut jobs = Vec::new();
     for s in sources {
         let name = s.file_name().ok_or_else(|| anyhow::anyhow!("{}: not an item that can be copied", s.display()))?;
         let m = std::fs::symlink_metadata(s).map_err(|e| anyhow::anyhow!("{}: {e}", s.display()))?;
         let parent = s.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        let src_abs = std::fs::canonicalize(parent)?.join(name);
-        if m.is_dir() && dest_abs.starts_with(&src_abs) {
+        if m.is_dir() && dest_chain.contains(&(m.dev(), m.ino())) {
             anyhow::bail!("{}: a folder cannot be copied or moved into itself", s.display());
         }
-        let own_folder = std::fs::canonicalize(parent).is_ok_and(|p| p == dest_abs);
+        let own_folder = std::fs::metadata(parent).is_ok_and(|p| Some(&(p.dev(), p.ino())) == dest_chain.first());
         if own_folder && kind == Transfer::Move {
             // moving into the folder it is in: nothing to do
             continue;
@@ -596,7 +688,7 @@ pub(crate) fn move_across(src: &Path, dst: &Path) -> anyhow::Result<()> {
         temp_seq: 0,
     };
     let mut copied = Copied::default();
-    let r = copy_tree(&mut job, src, dst, Verify::Quick, &mut copied);
+    let r = copy_tree(&mut job, src, dst, Verify::Quick, &mut copied, false);
     if !matches!(r, Ok(true)) || job.failed_count > 0 || !job.skipped.is_empty() {
         let theirs = matches!(&r, Err(e) if e.kind() == io::ErrorKind::AlreadyExists);
         if !theirs && std::fs::symlink_metadata(dst).is_ok() {
@@ -686,6 +778,25 @@ mod tests {
         assert!(std::fs::symlink_metadata(root.join("src")).is_err());
         assert_eq!(std::fs::read(moved.join("src/sub/b.txt")).unwrap(), b"b");
         assert_eq!(std::fs::read(root.join("outside/o.txt")).unwrap(), b"o");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_same_item_under_two_paths_is_never_replaced_nor_removed() {
+        // a hard link stands in for a bind mount or a share mounted twice: one inode under two paths
+        let root = std::env::temp_dir().join(format!("leaf-unix-fastcopy-same-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        std::fs::write(root.join("a/x.txt"), b"only copy").unwrap();
+        std::fs::hard_link(root.join("a/x.txt"), root.join("b/x.txt")).unwrap();
+        for force in [false, true] {
+            let mut t = Tracker::new(Box::new(|_, _, _| {}), Default::default());
+            t.ask = Some(Box::new(|c: &[Conflict]| Some(vec![Resolve::Replace; c.len()])));
+            let _ = run(Transfer::Move, &[root.join("a/x.txt")], &root.join("b"), Arc::new(t), force);
+            assert_eq!(std::fs::read(root.join("a/x.txt")).unwrap(), b"only copy");
+            assert_eq!(std::fs::read(root.join("b/x.txt")).unwrap(), b"only copy");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
