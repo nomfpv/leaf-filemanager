@@ -528,8 +528,8 @@ impl FolderView {
             return;
         }
         if self.remote_writable_dir().is_some() {
-            // on a server: always permanent (no Trash there), asked first as leaf asks
-            crate::remote::delete(self.selection_remote_all(), cx.entity().downgrade(), window, cx);
+            // on a server: into leaf's trash there (Shift+Delete: permanent), asked first as leaf asks
+            crate::remote::delete(self.selection_remote_all(), permanent, cx.entity().downgrade(), window, cx);
             return;
         }
         let paths = self.selection_paths();

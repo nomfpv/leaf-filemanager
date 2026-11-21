@@ -9,8 +9,11 @@
 //! - Copy, Copy to other pane, Copy to..., a drag onto a local pane and Paste in a local folder download through
 //!   `leaf_vfs::copy` as a Status Center job (progress, pause, cancel, names that exist asked; a cut-off file is removed).
 //! - Changes on a server (W1a part 2): paste, a drop, Copy to other pane and "Copy to..." upload (or, within one server, move);
-//!   new folder, rename, delete (asked first, always permanent: a server has no Trash) as Status Center jobs. A big upload
-//!   offers "Verify on server" (the server's SHA-256 against this PC's).
+//!   new folder, rename, delete (asked first) as Status Center jobs. A big upload offers "Verify on server" (the server's
+//!   SHA-256 against this PC's).
+//! - Deletes on an SFTP or FTP host (B7) go into leaf's trash on that server (`leaf_remote::trash`: `.leaf-trash/<time>/...`
+//!   in the login folder, by a rename), undone with Ctrl+Z; Shift+Delete, "Delete permanently" in the question, or a host
+//!   with `trash=off` delete for good. "Empty server trash" on the host's menu.
 //! - "Edit" on a file on a server (H10): a writable copy in the cache, opened in the local editor and watched; each save is
 //!   uploaded (the old version kept as `name.leaf-bak`), refused when the server's file changed since the fetch, with "Save as
 //!   copy on server" offered instead.
@@ -1231,28 +1234,100 @@ pub fn rename(cx: &mut App, from: VPath, name: String, view: WeakEntity<crate::f
     );
 }
 
-/// Deletes items on a server, after leaf's usual question (Settings → "Confirm before deleting", as a permanent delete): a
-/// server has no Trash, so the dialog says the delete cannot be undone. Folders go with everything in them; a link is
-/// unlinked, what it points to is left alone.
-pub fn delete(items: Vec<(VPath, bool)>, view: WeakEntity<crate::folder_view::FolderView>, window: &mut Window, cx: &mut App) {
+/// Whether deletes on the server of `v` go into leaf's trash there (B7): SFTP and FTP hosts, unless the saved host has it
+/// turned off (`trash=off`).
+fn trash_on(v: &VPath, cx: &mut App) -> bool {
+    matches!(v.scheme(), "sftp" | "ftp" | "ftps") && !crate::hosts_ui::all(cx).iter().any(|h| h.no_trash && h.is_server_of(v))
+}
+
+/// Deletes items on a server. Into leaf's trash on that server (`.leaf-trash` in the login folder; Ctrl+Z puts them back)
+/// unless `permanent` (Shift+Delete) or the host has it turned off; asked first as leaf asks (Settings → "Confirm before
+/// deleting"), with "Delete permanently" offered in the question. A permanent delete is always asked when confirming is on:
+/// it cannot be undone. Folders go with everything in them; a link is unlinked, what it points to is left alone.
+pub fn delete(items: Vec<(VPath, bool)>, permanent: bool, view: WeakEntity<crate::folder_view::FolderView>, window: &mut Window, cx: &mut App) {
     use crate::settings::DeletePref;
     if items.is_empty() {
         return;
     }
     let ask = !matches!(cx.global::<crate::settings::Settings>().confirm_delete, DeletePref::Never);
+    if !permanent && trash_on(&items[0].0, cx) {
+        if !ask {
+            trash_now(items, view, cx);
+            return;
+        }
+        let what = match items.as_slice() {
+            [(v, _)] => format!("\"{}\"", v.name()),
+            _ => crate::i18n::items(items.len()),
+        };
+        let msg = format!(
+            "{what} {} {}\n\n{}",
+            t!("will be deleted on"),
+            items[0].0.host(),
+            t!("Moves to leaf's trash on this server (.leaf-trash in the folder you log in to). Ctrl+Z puts it back; \"Empty server trash\" on the host's menu deletes it for good.")
+        );
+        let (a, b) = ((items.clone(), view.clone()), (items, view));
+        crate::prompt::show(
+            t!("Move to the server's trash?"),
+            Some(msg),
+            None,
+            vec![
+                crate::prompt::Button::new(t!("Move to trash"), crate::prompt::Kind::Primary, move |_, _, cx| {
+                    trash_now(a.0.clone(), a.1.clone(), cx);
+                    Ok(())
+                }),
+                crate::prompt::Button::new(t!("Delete permanently"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                    delete_now(b.0.clone(), b.1.clone(), cx);
+                    Ok(())
+                }),
+                crate::prompt::Button::cancel(),
+            ],
+            window,
+            cx,
+        );
+        return;
+    }
     if !ask {
         delete_now(items, view, cx);
         return;
     }
+    ask_permanent(items, None, view, window, cx);
+}
+
+/// "Delete permanently?" for `items` on a server; `why`: the reason they did not go into leaf's trash.
+fn ask_permanent(items: Vec<(VPath, bool)>, why: Option<String>, view: WeakEntity<crate::folder_view::FolderView>, window: &mut Window, cx: &mut App) {
     let what = match items.as_slice() {
         [(v, _)] => format!("\"{}\"", v.name()),
         _ => crate::i18n::items(items.len()),
     };
+    if let Some(why) = why {
+        let msg = format!(
+            "{what} {}\n{}\n\n{}",
+            t!("could not be moved into leaf's trash on this server:"),
+            crate::i18n::td(&why),
+            t!("Delete it permanently instead? This cannot be undone. Folders are deleted with everything in them.")
+        );
+        crate::prompt::show(
+            t!("Delete permanently?"),
+            Some(msg),
+            None,
+            vec![
+                crate::prompt::Button::new(t!("Delete permanently"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                    delete_now(items.clone(), view.clone(), cx);
+                    Ok(())
+                }),
+                // Cancel is the default: Enter never deletes for good what was meant for the trash
+                crate::prompt::Button::new(t!("Cancel"), crate::prompt::Kind::Primary, |_, _, _| Ok(())),
+            ],
+            window,
+            cx,
+        );
+        return;
+    }
     let msg = format!(
         "{what} {} {}\n\n{}",
         t!("will be deleted on"),
         items[0].0.host(),
-        t!("A server has no Trash: this cannot be undone. Folders are deleted with everything in them.")
+        t!("This cannot be undone. Folders are deleted with everything in them.")
     );
     crate::prompt::show(
         t!("Delete permanently?"),
@@ -1295,6 +1370,156 @@ fn delete_now(items: Vec<(VPath, bool)>, view: WeakEntity<crate::folder_view::Fo
         },
         Some(refresh_when_done(view)),
     );
+}
+
+// ------------------------------------------------------------------------------------------------ leaf's trash on a server (B7)
+
+/// In a window of the app (the active one, else the first).
+fn in_some_window(cx: &mut App, f: impl FnOnce(&mut Window, &mut App)) {
+    if let Some(w) = cx.active_window().or_else(|| cx.windows().first().copied()) {
+        let _ = w.update(cx, |_, window, cx| f(window, cx));
+    }
+}
+
+/// Moves `items` into leaf's trash on their server as a Status Center job; what went is one undo step (Ctrl+Z). Items the
+/// server would not move there are asked about afterwards ("Delete permanently?"), never deleted without that answer.
+fn trash_now(items: Vec<(VPath, bool)>, view: WeakEntity<crate::folder_view::FolderView>, cx: &mut App) {
+    use leaf_remote::trash::{self, TrashError, Trashed};
+    let what = match items.as_slice() {
+        [(v, _)] => v.name().to_string(),
+        _ => crate::i18n::items(items.len()),
+    };
+    let title = format!("{} {what} ({})", t!("Moving to the server's trash:"), items[0].0.host());
+    // (what went, under which login folder; what stayed, with the server's reason)
+    type Outcome = (Option<VPath>, Vec<Trashed>, Vec<(VPath, bool)>, Option<String>);
+    let out: Arc<Mutex<Outcome>> = Arc::new(Mutex::new((None, Vec::new(), Vec::new(), None)));
+    let work_out = out.clone();
+    let done: crate::status_center::OnDone = Box::new(move |_, cx| {
+        let (home, moved, left, why) = std::mem::take(&mut *out.lock().unwrap_or_else(|e| e.into_inner()));
+        if let Some(home) = home
+            && !moved.is_empty()
+        {
+            crate::undo::push(crate::undo::UndoOp::RemoteTrashed { home, items: moved });
+        }
+        let _ = view.update(cx, |v, cx| v.refresh(cx));
+        if !left.is_empty() {
+            in_some_window(cx, |window, cx| ask_permanent(left, why, view, window, cx));
+        }
+    });
+    crate::status_center::start_with(
+        cx,
+        title,
+        move |tr| {
+            let fs = leaf_vfs::fs_for(items[0].0.scheme()).map_err(anyhow_of)?;
+            let home = leaf_remote::home(&items[0].0).map_err(anyhow_of)?;
+            let stamp = trash::stamp_now();
+            let mut o = work_out.lock().unwrap_or_else(|e| e.into_inner());
+            o.0 = Some(home.clone());
+            for (i, (v, is_dir)) in items.iter().enumerate() {
+                if tr.cancel.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                (tr.on_progress)(items.len() as u32, i as u32, Some(v.name().to_string()));
+                match trash::move_to_trash(&*fs, &home, v, &stamp) {
+                    Ok(in_trash) => o.1.push(Trashed { original: v.clone(), in_trash }),
+                    Err(TrashError::Fs(FsError::NotFound)) => {}
+                    Err(TrashError::CannotMove(why)) => {
+                        o.2.push((v.clone(), *is_dir));
+                        o.3.get_or_insert(why);
+                    }
+                    Err(TrashError::Fs(e)) => return Err(anyhow::anyhow!("{}: {}", v.name(), crate::i18n::td(&e.to_string()))),
+                }
+            }
+            Ok(true)
+        },
+        Some(done),
+    );
+}
+
+/// Ctrl+Z of a delete into a server's trash: every item back where it was (never over something that took its place).
+pub fn undo_trashed(home: VPath, items: Vec<leaf_remote::trash::Trashed>, cx: &mut App) {
+    let title = format!("{} {}", t!("Restoring from the server's trash:"), crate::i18n::items(items.len()));
+    crate::status_center::start(cx, title, move |_| {
+        let fs = leaf_vfs::fs_for(home.scheme()).map_err(anyhow_of)?;
+        let mut failed = Vec::new();
+        for t in items.iter().rev() {
+            if let Err(e) = leaf_remote::trash::restore(&*fs, &home, t) {
+                failed.push(format!("{}: {}", t.original.name(), crate::i18n::td(&e.to_string())));
+            }
+        }
+        anyhow::ensure!(failed.is_empty(), "{}", failed.join("; "));
+        Ok(true)
+    });
+}
+
+/// Ctrl+Y of it: the same items into the same places of the trash again.
+pub fn redo_trashed(home: VPath, items: Vec<leaf_remote::trash::Trashed>, cx: &mut App) {
+    let title = format!("{} {}", t!("Moving to the server's trash:"), crate::i18n::items(items.len()));
+    crate::status_center::start(cx, title, move |_| {
+        let fs = leaf_vfs::fs_for(home.scheme()).map_err(anyhow_of)?;
+        let root = leaf_remote::trash::root(&home);
+        for t in &items {
+            // the delete's folder in the trash: the first name below `.leaf-trash`
+            let stamp = t.in_trash.path().strip_prefix(root.path()).and_then(|r| r.trim_start_matches('/').split('/').next()).unwrap_or_default().to_string();
+            leaf_remote::trash::move_to_trash(&*fs, &home, &t.original, &stamp).map_err(|e| match e {
+                leaf_remote::trash::TrashError::CannotMove(why) => anyhow::anyhow!("{}: {}", t.original.name(), crate::i18n::td(&why)),
+                leaf_remote::trash::TrashError::Fs(e) => anyhow::anyhow!("{}: {}", t.original.name(), crate::i18n::td(&e.to_string())),
+            })?;
+        }
+        Ok(true)
+    });
+}
+
+/// "Empty server trash" on a host's menu: counts what is in leaf's trash on that server (connecting when needed), asks with
+/// the count and size, then deletes it for good. Nothing outside the trash folder is touched.
+pub fn empty_trash(v: VPath, cx: &mut App) {
+    let host = v.host().to_string();
+    let probe = v.clone();
+    let work = cx.background_executor().spawn(async move {
+        let fs = leaf_vfs::fs_for(probe.scheme())?;
+        let home = leaf_remote::home(&probe)?;
+        let (n, bytes) = leaf_remote::trash::usage(&*fs, &home, &|| false)?;
+        Ok::<_, FsError>((home, n, bytes))
+    });
+    cx.spawn(async move |cx| {
+        let r = work.await;
+        cx.update(|cx| {
+            in_some_window(cx, |window, cx| match r {
+                Err(e) => crate::prompt::notice(t!("Empty server trash"), format!("{host}: {}", crate::i18n::td(&e.to_string())), window, cx),
+                Ok((_, 0, _)) => crate::prompt::notice(t!("Empty server trash"), format!("{} {host}.", t!("leaf's trash is empty on")), window, cx),
+                Ok((home, n, bytes)) => {
+                    let msg = format!(
+                        "{} {host}: {} ({})\n\n{}",
+                        t!("leaf's trash on"),
+                        crate::i18n::items(n as usize),
+                        rf_core::format::size(bytes),
+                        t!("Everything in it is deleted for good. This cannot be undone.")
+                    );
+                    crate::prompt::show(
+                        t!("Empty server trash?"),
+                        Some(msg),
+                        None,
+                        vec![
+                            crate::prompt::Button::new(t!("Empty"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                                let home = home.clone();
+                                let title = format!("{} ({})", t!("Emptying the server's trash"), home.host());
+                                crate::status_center::start(cx, title, move |tr| {
+                                    let fs = leaf_vfs::fs_for(home.scheme()).map_err(anyhow_of)?;
+                                    leaf_remote::trash::empty(&*fs, &home, &|| tr.cancel.load(Ordering::Relaxed)).map_err(anyhow_of)?;
+                                    Ok(true)
+                                });
+                                Ok(())
+                            }),
+                            crate::prompt::Button::new(t!("Cancel"), crate::prompt::Kind::Primary, |_, _, _| Ok(())),
+                        ],
+                        window,
+                        cx,
+                    );
+                }
+            });
+        });
+    })
+    .detach();
 }
 
 // ------------------------------------------------------------------------------------------------ editing a file on a server

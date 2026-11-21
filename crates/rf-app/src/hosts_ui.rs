@@ -6,6 +6,7 @@
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rf_core::Location;
 use rf_core::hosts::{Host, Hosts};
@@ -175,6 +176,19 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                 let name = remove.clone();
                 change(cx, move |hs| hs.hosts.retain(|o| o.name != name));
             }))
+            // B7: deletes into leaf's trash on the server, or permanent (per host)
+            .when(matches!(h.scheme.as_str(), "sftp" | "ftp" | "ftps"), |d| {
+                let name = h.name.clone();
+                let label = if h.no_trash { t!("Server trash: off") } else { t!("Server trash: on") };
+                d.child(button(("host-trash", i), p, label, move |_, cx| {
+                    let name = name.clone();
+                    change(cx, move |hs| {
+                        if let Some(o) = hs.hosts.iter_mut().find(|o| o.name == name) {
+                            o.no_trash = !o.no_trash;
+                        }
+                    });
+                }))
+            })
             .into_any_element();
         let mut desc = subtitle(&h);
         if let Some(k) = &h.key_file {

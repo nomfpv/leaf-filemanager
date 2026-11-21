@@ -2904,7 +2904,9 @@ impl Workspace {
         ];
         if matches!(v.scheme(), "sftp" | "ftp" | "ftps") {
             items.push(Item::Separator);
+            let d = c.clone();
             items.push(Item::action(t!("Forget saved password"), MenuIcon::Lucide(L::Lock), move |_: &mut Window, cx: &mut App| crate::hosts_ui::forget_for(&c, cx)));
+            items.push(Item::action(t!("Empty server trash"), MenuIcon::Lucide(L::Trash), move |_: &mut Window, cx: &mut App| crate::remote::empty_trash(d.clone(), cx)));
         }
         crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
     }

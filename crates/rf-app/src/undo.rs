@@ -27,6 +27,8 @@ pub enum UndoOp {
     Flattened { dir: PathBuf, rec: crate::ops::Flattened },
     /// One run of the folder organizer (all its moves, renames and recycled files).
     Organized { rec: crate::organizer::Record },
+    /// Items deleted on a server into leaf's trash there (B7): `home` is the login folder the trash is in.
+    RemoteTrashed { home: rf_core::vpath::VPath, items: Vec<leaf_remote::trash::Trashed> },
 }
 
 static STACK: Mutex<Vec<UndoOp>> = Mutex::new(Vec::new());
@@ -56,6 +58,7 @@ fn label(op: &UndoOp) -> &'static str {
         UndoOp::Restored { .. } => t!("Restore (back to the bin as a new deletion)"),
         UndoOp::Flattened { .. } => t!("Flatten folder"),
         UndoOp::Organized { .. } => t!("Organize"),
+        UndoOp::RemoteTrashed { .. } => t!("Delete"),
     }
 }
 
@@ -219,6 +222,7 @@ fn undo_op(op: UndoOp, cx: &mut App) {
             }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *done.lock().unwrap())))));
         }
         UndoOp::Organized { rec } => crate::organizer::undo_run(rec, None, cx),
+        UndoOp::RemoteTrashed { home, items } => crate::remote::undo_trashed(home, items, cx),
     }
 }
 
@@ -308,5 +312,6 @@ pub fn redo(cx: &mut App) {
             }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *done.lock().unwrap())))));
         }
         UndoOp::Organized { rec } => crate::organizer::redo_run(rec, cx),
+        UndoOp::RemoteTrashed { home, items } => crate::remote::redo_trashed(home, items, cx),
     }
 }

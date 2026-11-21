@@ -357,7 +357,7 @@ impl FolderView {
                 items.push(Item::action(t!("Rename"), icon(L::PencilLine), act(&me, |v, window, cx| v.begin_rename(window, cx))).hint("F2"));
             }
             if !all.is_empty() {
-                items.push(Item::action(t!("Delete"), icon(L::Trash), act(&me, |v, window, cx| v.delete_selected(true, window, cx))).hint("Del"));
+                items.push(Item::action(t!("Delete"), icon(L::Trash), act(&me, |v, window, cx| v.delete_selected(false, window, cx))).hint("Del"));
             }
             items.push(Item::action(t!("New folder"), icon(L::FolderPlus), act(&me, |v, _, cx| v.create_new(true, cx))).hint("Ctrl+Shift+N"));
         } else {

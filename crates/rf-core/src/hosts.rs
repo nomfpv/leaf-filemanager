@@ -33,6 +33,9 @@ pub struct Host {
     /// Folders on the server kept as bookmarks (paths as the server writes them); shown under the host in the sidebar.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bookmarks: Vec<String>,
+    /// Deletes on this host are permanent: leaf's trash on the server (`.leaf-trash` in the login folder) is not used.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_trash: bool,
 }
 
 fn default_scheme() -> String {
@@ -41,7 +44,7 @@ fn default_scheme() -> String {
 
 impl Host {
     pub fn new(name: &str, host: &str) -> Host {
-        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new() }
+        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false }
     }
 
     /// Whether a remote place is on this host (same scheme, server, user and port).
@@ -85,6 +88,9 @@ impl Host {
         if let Some(j) = &self.jump {
             s.push_str(&format!(" jump={}", quote(j)));
         }
+        if self.no_trash {
+            s.push_str(" trash=off");
+        }
         s
     }
 
@@ -111,7 +117,8 @@ impl Host {
             match p.split_once('=') {
                 Some(("key", k)) if !k.is_empty() => h.key_file = Some(k.to_string()),
                 Some(("jump", j)) if !j.is_empty() => h.jump = Some(j.to_string()),
-                _ => return Err(format!("\"{p}\" is not understood (key=... or jump=...)")),
+                Some(("trash", t)) if t.eq_ignore_ascii_case("off") || t.eq_ignore_ascii_case("on") => h.no_trash = t.eq_ignore_ascii_case("off"),
+                _ => return Err(format!("\"{p}\" is not understood (key=..., jump=... or trash=off)")),
             }
         }
         Ok(h)
