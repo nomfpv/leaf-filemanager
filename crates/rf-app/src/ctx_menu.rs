@@ -346,6 +346,11 @@ impl FolderView {
                 items.push(Item::action(t!("Cut"), icon(L::Scissors), act(&me, |v, window, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, window, cx))).hint("Ctrl+X"));
             }
             items.push(Item::action(t!("Paste"), icon(L::Clipboard), act(&me, |v, window, cx| v.paste(window, cx))).hint("Ctrl+V"));
+            let one_file = (!background && self.selected.len() == 1).then(|| self.remote_look_target()).flatten();
+            if let Some((v, size)) = one_file.filter(|(v, _)| v.scheme() == "sftp") {
+                // fetched, opened in the local editor, every save uploaded (refused when the server's copy changed)
+                items.push(Item::action(t!("Edit"), icon(L::FilePen), act(&me, move |_, _, cx| crate::remote::edit_file(cx, v.clone(), size))));
+            }
             if !background && self.selected.len() == 1 {
                 items.push(Item::action(t!("Rename"), icon(L::PencilLine), act(&me, |v, window, cx| v.begin_rename(window, cx))).hint("F2"));
             }

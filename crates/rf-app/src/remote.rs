@@ -9,6 +9,9 @@
 //! - Changes on a server (W1a part 2): paste, a drop, Copy to other pane and "Copy to..." upload (or, within one server, move);
 //!   new folder, rename, delete (asked first, always permanent: a server has no Trash) as Status Center jobs. A big upload
 //!   offers "Verify on server" (the server's SHA-256 against this PC's).
+//! - "Edit" on a file on a server (H10): a writable copy in the cache, opened in the local editor and watched; each save is
+//!   uploaded (the old version kept as `name.leaf-bak`), refused when the server's file changed since the fetch, with "Save as
+//!   copy on server" offered instead.
 //! - `mem://demo/` (the in-memory demo tree; `mem://offline/` and `mem://locked/` show the error banner) in debug builds, or in
 //!   any build with `LEAF_VFS_DEMO=1`. Schemes without a backend (`ftp://` is still the old WinINet path) stay paths as before.
 
@@ -1066,4 +1069,192 @@ fn delete_now(items: Vec<(VPath, bool)>, view: WeakEntity<crate::folder_view::Fo
         },
         Some(refresh_when_done(view)),
     );
+}
+
+// ------------------------------------------------------------------------------------------------ editing a file on a server
+
+/// A file on a server open for editing: its cache copy is watched, every save goes back (H10).
+struct Editing {
+    remote: VPath,
+    /// What the server had when it was fetched or last saved (shared with the save that runs).
+    fetched: Arc<Mutex<leaf_remote::edit::Fetched>>,
+    /// The local copy's (size, time) last sent or fetched: the watcher sends nothing for a change that is not one.
+    stamp: Arc<Mutex<Option<(u64, std::time::SystemTime)>>>,
+    /// One save at a time per file.
+    saving: Arc<Mutex<()>>,
+    _watch: leaf_sys::watch::DirWatch,
+}
+
+static EDITS: Mutex<Vec<(PathBuf, Editing)>> = Mutex::new(Vec::new());
+static EDIT_TX: Mutex<Option<mpsc::UnboundedSender<PathBuf>>> = Mutex::new(None);
+
+/// The editing copy of a server's file: `<cache>/edit/<hash>/<name>`, writable (the open-only copies are read-only).
+fn edit_path(v: &VPath) -> PathBuf {
+    let open = cache_path(v);
+    let hash = open.parent().and_then(|p| p.file_name()).map(|n| n.to_os_string()).unwrap_or_default();
+    cache_root().join("edit").join(hash).join(leaf_vfs::names::safe_local_name(v.name()))
+}
+
+fn local_stamp(p: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let m = std::fs::metadata(p).ok()?;
+    Some((m.len(), m.modified().ok()?))
+}
+
+/// Starts the loop that turns the watchers' news into saves (on the UI thread), once.
+fn edit_channel(cx: &mut App) -> mpsc::UnboundedSender<PathBuf> {
+    let mut g = EDIT_TX.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(tx) = g.as_ref() {
+        return tx.clone();
+    }
+    let (tx, mut rx) = mpsc::unbounded::<PathBuf>();
+    cx.spawn(async move |cx| {
+        while let Some(local) = rx.next().await {
+            cx.update(|cx| save_edit(local, cx));
+        }
+    })
+    .detach();
+    *g = Some(tx.clone());
+    tx
+}
+
+/// "Edit" on a file on a server: fetched into the cache (as a writable copy), opened in the program files of its type open
+/// with, and watched: each save there is uploaded, unless the server's file changed meanwhile.
+pub fn edit_file(cx: &mut App, v: VPath, size: u64) {
+    let name = v.name().to_string();
+    if size > OPEN_MAX {
+        crate::status_center::start(cx, format!("{} {name}", t!("Editing from the server:")), |_| {
+            Err(anyhow::anyhow!(t!("This file is too big to edit straight from the server (over 512 MB).")))
+        });
+        return;
+    }
+    let local = edit_path(&v);
+    // already open for editing: the same copy again (what was saved is on the server already)
+    let open_already = EDITS.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(l, e)| *l == local && e.remote == v);
+    if open_already {
+        if let Err(e) = leaf_sys::openrules::open(&local) {
+            log::warn!("edit {}: {e}", local.display());
+        }
+        return;
+    }
+    let tx = edit_channel(cx);
+    crate::status_center::start(cx, format!("{} {name}", t!("Editing from the server:")), move |tr| {
+        let cancel = tr.cancel.clone();
+        let mut progress = |d: u64, total: u64| {
+            tr.bytes.set(d, total);
+            (tr.on_progress)(total.max(1) as u32, d.min(u32::MAX as u64) as u32, None);
+        };
+        let fs = leaf_vfs::fs_for(v.scheme()).map_err(anyhow_of)?;
+        make_cache_dir(&local).map_err(anyhow_of)?;
+        let meta = match leaf_vfs::copy::fetch_file(&*fs, &v, &local, OPEN_MAX, None, &|| cancel.load(Ordering::Relaxed), &mut progress) {
+            Ok(m) => m,
+            Err(FsError::Cancelled) => return Ok(false),
+            Err(e) => return Err(anyhow_of(e)),
+        };
+        let dir = local.parent().map(Path::to_path_buf).ok_or_else(|| anyhow::anyhow!("no folder"))?;
+        let stamp = Arc::new(Mutex::new(local_stamp(&local)));
+        let watch = {
+            let (stamp, local, tx) = (stamp.clone(), local.clone(), tx.clone());
+            let file = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            leaf_sys::watch::watch_dir_changes(&dir, std::time::Duration::from_millis(500), move |c| {
+                if !c.rescan && !c.names.iter().any(|n| *n == file) {
+                    return;
+                }
+                // (editors save in steps; only a copy that is there and differs from the last one counts)
+                let now = local_stamp(&local);
+                if now.is_some() && now != *stamp.lock().unwrap_or_else(|e| e.into_inner()) {
+                    let _ = tx.unbounded_send(local.clone());
+                }
+            })?
+        };
+        let e = Editing { remote: v.clone(), fetched: Arc::new(Mutex::new(leaf_remote::edit::Fetched::of(&meta))), stamp, saving: Arc::default(), _watch: watch };
+        {
+            let mut edits = EDITS.lock().unwrap_or_else(|e| e.into_inner());
+            edits.retain(|(l, _)| *l != local);
+            edits.push((local.clone(), e));
+        }
+        if let Err(e) = leaf_sys::openrules::open(&local) {
+            log::warn!("edit {}: {e}", local.display());
+        }
+        Ok(true)
+    });
+}
+
+/// The editing copy `local` was saved: uploaded over the server's file (the old version kept as `name.leaf-bak`), or, when
+/// the server's file changed since it was fetched, refused with the choice of saving it as a copy on the server.
+fn save_edit(local: PathBuf, cx: &mut App) {
+    let found = EDITS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(l, _)| *l == local).map(|(_, e)| (e.remote.clone(), e.fetched.clone(), e.stamp.clone(), e.saving.clone()));
+    let Some((remote, fetched, stamp, saving)) = found else { return };
+    let changed: Arc<Mutex<bool>> = Arc::default();
+    let refused = changed.clone();
+    let (r2, l2) = (remote.clone(), local.clone());
+    let done: crate::status_center::OnDone = Box::new(move |_, cx| {
+        if *refused.lock().unwrap_or_else(|e| e.into_inner()) {
+            offer_copy(r2, l2, cx);
+        }
+    });
+    let title = format!("{} {}", t!("Saving to the server:"), remote.name());
+    crate::status_center::start_with(
+        cx,
+        title,
+        move |tr| {
+            let _one = saving.lock().unwrap_or_else(|e| e.into_inner());
+            let now = local_stamp(&local);
+            if now.is_none() || now == *stamp.lock().unwrap_or_else(|e| e.into_inner()) {
+                // (a save that came in while the one before ran: already sent)
+                return Ok(true);
+            }
+            let before = *fetched.lock().unwrap_or_else(|e| e.into_inner());
+            match leaf_remote::edit::save_back(&remote, &local, &before, &|| tr.cancel.load(Ordering::Relaxed)) {
+                Ok(after) => {
+                    *fetched.lock().unwrap_or_else(|e| e.into_inner()) = after;
+                    *stamp.lock().unwrap_or_else(|e| e.into_inner()) = now;
+                    Ok(true)
+                }
+                Err(leaf_remote::edit::SaveError::Changed(_)) => {
+                    *changed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                    Err(anyhow::anyhow!(t!("The file on the server changed since you opened it. Your version was not uploaded; nothing there was overwritten.")))
+                }
+                Err(leaf_remote::edit::SaveError::Fs(FsError::Cancelled)) => Ok(false),
+                Err(leaf_remote::edit::SaveError::Fs(e)) => Err(anyhow_of(e)),
+            }
+        },
+        Some(done),
+    );
+}
+
+/// The server's file changed under an edit: say so, and offer to put this version beside it under a new name.
+fn offer_copy(remote: VPath, local: PathBuf, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let Some(w) = crate::workspace::main_windows(cx).first().copied() else { return };
+    let _ = w.update(cx, |_, window, cx| {
+        let msg = format!(
+            "{}\n\n{}",
+            remote.name(),
+            t!("Someone or something changed this file on the server after you opened it. leaf did not upload your version, so their change is kept. You can save yours next to it under a new name.")
+        );
+        crate::prompt::show(
+            t!("The file changed on the server"),
+            Some(msg),
+            None,
+            vec![
+                Button::new(t!("Save as copy on server"), Kind::Primary, move |_, _, cx| {
+                    let (remote, local) = (remote.clone(), local.clone());
+                    crate::status_center::start(cx, format!("{} {}", t!("Saving a copy on the server:"), remote.name()), move |tr| {
+                        match leaf_remote::edit::save_as_copy(&remote, &local, &|| tr.cancel.load(Ordering::Relaxed)) {
+                            Ok(to) => {
+                                log::info!("remote: the edit was saved as {}", to.name());
+                                Ok(true)
+                            }
+                            Err(FsError::Cancelled) => Ok(false),
+                            Err(e) => Err(anyhow_of(e)),
+                        }
+                    });
+                    Ok(())
+                }),
+                Button::cancel(),
+            ],
+            window,
+            cx,
+        );
+    });
 }

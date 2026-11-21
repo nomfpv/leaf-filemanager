@@ -1,4 +1,5 @@
-﻿//! leaf-remote: places on other machines behind the `leaf-vfs` interface (PLAN 2.2, W1a). Today: SFTP, read-only.
+﻿//! leaf-remote: places on other machines behind the `leaf-vfs` interface (PLAN 2.2, W1a). Today: SFTP (read and write),
+//! editing a file on a server (`edit`, H10), Docker and rclone views.
 //!
 //! - `SftpFs` serves `sftp://user@host:port/path` over `russh` + `russh-sftp` (pure Rust).
 //! - One connection per server, shared by every pane; it is opened again when it broke, and closed after a while unused.
@@ -11,6 +12,7 @@
 pub mod checksum;
 mod conn;
 pub mod docker;
+pub mod edit;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
