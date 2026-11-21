@@ -190,7 +190,7 @@ struct Job<'a> {
     stay_on: Option<u64>,
     /// Files go through part files (the engine's jobs; the trash's and the organizer's single moves write their target directly).
     parts: bool,
-    /// In part file names: the journal's id, else the process id.
+    /// In part file names: the journal's id, else the process id and a number of its own (two jobs never share a part name).
     tag: String,
     jr: Option<Jr>,
     /// A resumed job: what its journal knew.
@@ -216,7 +216,10 @@ impl<'a> Job<'a> {
             temp_seq: 0,
             stay_on,
             parts: false,
-            tag: std::process::id().to_string(),
+            tag: {
+                static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
+            },
             jr: None,
             resume: None,
             cut: false,
@@ -661,8 +664,11 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
             at
         }
         Decision::Restart => {
-            // (a part of ours from an earlier try, or a crash: the tag makes the name ours)
-            let _ = std::fs::remove_file(&part);
+            // (a resumed job: a part of ours from before the cut, the tag makes the name ours; a new job's tag is new, so a part of
+            // that name is not ours and is never removed: making ours below fails instead)
+            if job.resume.is_some() {
+                let _ = std::fs::remove_file(&part);
+            }
             0
         }
     };
@@ -675,6 +681,9 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
         job.record(&["Y", &pf, &sm.len().to_string(), &sm.mtime().to_string(), &sm.mtime_nsec().to_string()], false);
         f
     };
+    // (the part under its name must be the file written here, for the check, the rename and the clean-up)
+    let ours = to.metadata()?;
+    let still_ours = || std::fs::symlink_metadata(&part).is_ok_and(|m| same_item(&m, &ours));
     let r = (|| -> io::Result<()> {
         use std::io::Seek;
         (&from).seek(io::SeekFrom::Start(start))?;
@@ -737,6 +746,9 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
         if !verified(src, &part, sm.len(), verify)? {
             return Err(io::Error::other("the copy differs from the original"));
         }
+        if !still_ours() {
+            return Err(io::Error::other("the part file was replaced while copying: nothing was renamed"));
+        }
         if replace {
             // the old file must still not be the source itself (seen through another path)
             if std::fs::symlink_metadata(dst).is_ok_and(|m| same_item(&sm, &m)) {
@@ -754,7 +766,7 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
             Ok(Ident::of(&sm))
         }
         Err(e) => {
-            if !is_cut(&e) {
+            if !is_cut(&e) && still_ours() {
                 let _ = std::fs::remove_file(&part);
             }
             Err(e)
