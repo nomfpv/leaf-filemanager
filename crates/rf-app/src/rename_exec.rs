@@ -12,6 +12,12 @@
 //!
 //! [`Outcome::done`] lists exactly the items that have their new names (for undo and tags),
 //! [`Outcome::failed`] every item that does not, with the reason.
+//!
+//! Before the first move, a journal of the batch (every old -> new full path, and the
+//! temporary name of each cycle) is written to the config folder as
+//! `rename-journal-{salt}.toml`, and it is deleted when the batch ends. One that is still there
+//! at the next start is from a batch that did not end (crash, power loss): [`report_journals`]
+//! logs it and keeps it, nothing is done to the files.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -65,10 +71,95 @@ pub fn listings<'a>(dirs: impl IntoIterator<Item = &'a Path>) -> HashMap<PathBuf
     out
 }
 
-/// Part of the temporary names: this process and this moment.
+/// Part of the temporary names and of the journal's name: this process, this moment, and a
+/// count (two batches started in the same millisecond still differ).
 pub fn salt() -> String {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    format!("{}-{}", std::process::id(), ms % 100_000_000)
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{}-{n}", std::process::id(), ms % 100_000_000)
+}
+
+const JOURNAL_PREFIX: &str = "rename-journal-";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct JournalFile {
+    pid: u32,
+    started_ms: u64,
+    #[serde(default, rename = "item")]
+    items: Vec<JournalItem>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct JournalItem {
+    from: String,
+    to: String,
+    /// The name the item has between the first and the last move of its cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    temp: Option<String>,
+}
+
+/// The config folder, where the journals go (`None`: there is none; the batch then runs
+/// without a journal, as nothing else of leaf could be kept either).
+pub fn journal_dir() -> Option<PathBuf> {
+    crate::settings::app_dir()
+}
+
+/// Writes the journal of `moves` to `dir` (a temporary file, then renamed into place).
+fn write_journal(dir: &Path, salt: &str, rows: &[Row], moves: &[Move]) -> std::io::Result<PathBuf> {
+    let mut temp: HashMap<usize, String> = HashMap::new();
+    for m in moves.iter().filter(|m| m.kind == MoveKind::ToTemp) {
+        temp.insert(m.row, m.dir.join(&m.to).to_string_lossy().into_owned());
+    }
+    let mut seen = HashSet::new();
+    let items = moves
+        .iter()
+        .filter(|m| seen.insert(m.row))
+        .map(|m| {
+            let r = &rows[m.row];
+            JournalItem { from: r.dir.join(&r.old).to_string_lossy().into_owned(), to: r.dir.join(&r.new).to_string_lossy().into_owned(), temp: temp.remove(&m.row) }
+        })
+        .collect();
+    let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let text = toml::to_string(&JournalFile { pid: std::process::id(), started_ms, items }).map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("{JOURNAL_PREFIX}{salt}.toml"));
+    let part = dir.join(format!("{JOURNAL_PREFIX}{salt}.toml.part"));
+    std::fs::write(&part, text)?;
+    std::fs::rename(&part, &path)?;
+    Ok(path)
+}
+
+/// Journals left in `dir` by batches that did not end. Each is logged and kept (a later
+/// version can offer to put the names back); nothing is done to the files.
+pub fn report_journals(dir: &Path) -> Vec<PathBuf> {
+    let found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(JOURNAL_PREFIX))).collect())
+        .unwrap_or_default();
+    for p in &found {
+        let items = rf_core::read_config(p).ok().and_then(|t| toml::from_str::<JournalFile>(&t).ok()).map(|j| j.items.len());
+        log::warn!(
+            "bulk rename: {} is left from a batch that did not finish ({} items; or one still running in another leaf process). Each item has its old name, its new name, or the temporary name listed there. Kept, nothing changed.",
+            p.display(),
+            items.map(|n| n.to_string()).unwrap_or_else(|| "unreadable".into())
+        );
+    }
+    found
+}
+
+/// [`run`] with the journal around it. `Err`: the journal could not be written, nothing ran.
+fn run_journaled(rows: &[Row], moves: &[Move], rules: NameRules, salt: &str, journal: Option<&Path>, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> Result<Outcome, String> {
+    let written = match journal {
+        Some(dir) if !moves.is_empty() => Some(write_journal(dir, salt, rows, moves).map_err(|e| format!("{} {e}", crate::t!("Nothing was renamed: the rename journal could not be written:")))?),
+        _ => None,
+    };
+    let out = run(rows, moves, rules, rename);
+    if let Some(p) = written
+        && let Err(e) = std::fs::remove_file(&p)
+    {
+        log::warn!("bulk rename: the journal {} could not be removed: {e}", p.display());
+    }
+    Ok(out)
 }
 
 /// Runs `moves` (made by `order` from `rows`).
@@ -167,7 +258,7 @@ pub fn run(rows: &[Row], moves: &[Move], rules: NameRules, rename: &mut dyn FnMu
 /// A row that the preview showed as renamed but that is a problem now (another program took
 /// its new name meanwhile, say) is not renamed and is listed in [`Outcome::failed`] with the
 /// reason: it is never left out silently.
-pub fn apply_batch(preview: &[Row], skip_problems: bool, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> Result<Outcome, String> {
+pub fn apply_batch(preview: &[Row], skip_problems: bool, journal: Option<&Path>, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> Result<Outcome, String> {
     let rules = NameRules::native();
     // the folders as they are now: something may have changed since the preview
     let existing = listings(preview.iter().map(|r| r.dir.as_path()));
@@ -176,8 +267,9 @@ pub fn apply_batch(preview: &[Row], skip_problems: bool, rename: &mut dyn FnMut(
     if !rename_plan::Summary::of(&rows).can_run(skip_problems) {
         return Err(crate::t!("The folder changed since the preview: check the list and try again").to_string());
     }
-    let moves = rename_plan::order(&rows, &existing, rules, &salt());
-    let mut out = run(&rows, &moves, rules, rename);
+    let salt = salt();
+    let moves = rename_plan::order(&rows, &existing, rules, &salt);
+    let mut out = run_journaled(&rows, &moves, rules, &salt, journal, rename)?;
     for (before, now) in preview.iter().zip(&rows) {
         if before.status.runs()
             && let Status::Problem(p) = &now.status
@@ -191,7 +283,7 @@ pub fn apply_batch(preview: &[Row], skip_problems: bool, rename: &mut dyn FnMut(
 /// Renames (old path -> new path) pairs within their folders with the same checks and the same
 /// safe order as a batch: undo (the pairs reversed) and redo of a bulk rename. A pair that can
 /// no longer be done (the file is gone, the name is taken) is reported, the rest still run.
-pub fn run_pairs(pairs: &[(PathBuf, PathBuf)], rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> Outcome {
+pub fn run_pairs(pairs: &[(PathBuf, PathBuf)], journal: Option<&Path>, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> Outcome {
     let rules = NameRules::native();
     let existing = listings(pairs.iter().filter_map(|(a, _)| a.parent()));
     let mut rows = rename_plan::rows_for_pairs(pairs, &existing, rules);
@@ -201,8 +293,15 @@ pub fn run_pairs(pairs: &[(PathBuf, PathBuf)], rename: &mut dyn FnMut(&Path, &Pa
             r.status = Status::Problem(rename_plan::Problem::Missing);
         }
     }
-    let moves = rename_plan::order(&rows, &existing, rules, &salt());
-    let mut out = run(&rows, &moves, rules, rename);
+    let salt = salt();
+    let moves = rename_plan::order(&rows, &existing, rules, &salt);
+    let mut out = match run_journaled(&rows, &moves, rules, &salt, journal, rename) {
+        Ok(out) => out,
+        Err(reason) => Outcome {
+            done: Vec::new(),
+            failed: rows.iter().filter(|r| r.status.runs()).map(|r| Failure { path: r.dir.join(&r.old), to: r.new.clone(), reason: reason.clone(), left_at: None }).collect(),
+        },
+    };
     for r in &rows {
         if let Status::Problem(p) = &r.status {
             out.failed.push(Failure { path: r.dir.join(&r.old), to: r.new.clone(), reason: p.to_string(), left_at: None });
@@ -326,7 +425,7 @@ mod tests {
         assert_eq!(after.get("keep_1.txt"), before.get("keep_1.txt"));
         assert_eq!(after.get("f000.txt"), before.get("f299.txt"));
         // undo: the exact original names
-        let back = run_pairs(&inverse(&out.done), &mut native_rename);
+        let back = run_pairs(&inverse(&out.done), None, &mut native_rename);
         assert!(back.failed.is_empty(), "{:?}", back.failed);
         assert_eq!(s.state(), before);
     }
@@ -350,7 +449,7 @@ mod tests {
         assert_contents(&before, &after, &moved_map(&out));
         // the letter case is what was asked for (not only the same name ignoring case)
         assert!(after.contains_key("mixed.txt") && after.contains_key("P") && after.contains_key("Q"), "{after:?}");
-        let back = run_pairs(&inverse(&out.done), &mut native_rename);
+        let back = run_pairs(&inverse(&out.done), None, &mut native_rename);
         assert!(back.failed.is_empty(), "{:?}", back.failed);
         assert_eq!(s.state(), before);
     }
@@ -373,7 +472,7 @@ mod tests {
             let first = seen.insert(a.to_path_buf());
             let name = a.file_name().unwrap().to_string_lossy().into_owned();
             let to = b.file_name().unwrap().to_string_lossy().into_owned();
-            let is_temp = name.starts_with("~leaf-rename");
+            let is_temp = name.contains(".~leaf-");
             let forward = is_temp && to[1..4].parse::<usize>().is_ok_and(|i| i % 2 == 1);
             if first && forward {
                 temps += 1;
@@ -397,7 +496,7 @@ mod tests {
             let old = f.path.file_name().unwrap().to_string_lossy().into_owned();
             assert_eq!(after.get(&old), before.get(&old), "{old} was reported as not renamed");
         }
-        let back = run_pairs(&inverse(&out.done), &mut native_rename);
+        let back = run_pairs(&inverse(&out.done), None, &mut native_rename);
         assert!(back.failed.is_empty(), "{:?}", back.failed);
         assert_eq!(s.state(), before);
     }
@@ -482,7 +581,7 @@ mod tests {
         assert_eq!(out.failed[0].path.file_name().unwrap(), "f010.txt");
         let after = s.state();
         assert_contents(&before, &after, &moved_map(&out));
-        let back = run_pairs(&inverse(&out.done), &mut native_rename);
+        let back = run_pairs(&inverse(&out.done), None, &mut native_rename);
         assert!(back.failed.is_empty(), "{:?}", back.failed);
         assert_eq!(s.state(), before);
     }
@@ -501,7 +600,7 @@ mod tests {
         // then another program creates "x"
         s.write("x", b"someone else's x");
         let before = s.state();
-        let out = apply_batch(&preview, true, &mut native_rename).unwrap();
+        let out = apply_batch(&preview, true, None, &mut native_rename).unwrap();
         assert_eq!(moved_map(&out), HashMap::from([("b".to_string(), "y".to_string())]));
         assert_eq!(out.failed.len(), 1, "{:?}", out.failed);
         assert_eq!(out.failed[0].path, s.0.join("a"));
@@ -518,8 +617,55 @@ mod tests {
         assert!(Summary::of(&preview).can_run(false));
         s.write("x", b"new");
         let before = s.state();
-        assert!(apply_batch(&preview, false, &mut native_rename).is_err());
+        assert!(apply_batch(&preview, false, None, &mut native_rename).is_err());
         assert_eq!(s.state(), before);
+    }
+
+    #[test]
+    fn a_swap_writes_a_journal_and_its_temporary_name_keeps_the_original_name() {
+        let s = Sandbox::new("journal");
+        let jd = Sandbox::new("journal-cfg");
+        // a 250-character name: its temporary name has to be shortened
+        let long = "l".repeat(246) + ".jpg";
+        s.write(&long, b"long one");
+        s.write("short.jpg", b"short one");
+        let before = s.state();
+        let (preview, _) = rows_for(&s, &[(long.clone(), "short.jpg".to_string()), ("short.jpg".to_string(), long.clone())]);
+        let mut temps = Vec::new();
+        let mut journals = Vec::new();
+        let mut watch = |a: &Path, b: &Path| {
+            journals.push(std::fs::read_dir(&jd.0).unwrap().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap()).collect::<Vec<_>>());
+            let to = b.file_name().unwrap().to_str().unwrap().to_string();
+            if to.contains(".~leaf-") {
+                temps.push(to);
+            }
+            native_rename(a, b)
+        };
+        let out = apply_batch(&preview, false, Some(&jd.0), &mut watch).unwrap();
+        assert!(out.failed.is_empty(), "{:?}", out.failed);
+        assert_contents(&before, &s.state(), &moved_map(&out));
+        assert_eq!(temps.len(), 1);
+        let t = &temps[0];
+        assert!(t.encode_utf16().count() <= rf_core::rename_plan::MAX_NAME_UNITS && !t.ends_with(".tmp"), "{t}");
+        assert!(t.starts_with(&long[..200]) || t.starts_with("short.jpg"), "the original name is kept: {t}");
+        // before every move there was exactly one journal naming both items and the temporary name
+        for j in &journals {
+            assert_eq!(j.len(), 1);
+            let f: JournalFile = toml::from_str(&j[0]).unwrap();
+            let full = |n: &str| s.0.join(n).to_string_lossy().into_owned();
+            assert_eq!(f.items.len(), 2, "{}", j[0]);
+            assert!(f.items.iter().any(|i| i.from == full(&long) && i.to == full("short.jpg")), "{}", j[0]);
+            assert!(f.items.iter().any(|i| i.from == full("short.jpg") && i.to == full(&long)), "{}", j[0]);
+            assert!(f.items.iter().any(|i| i.temp.as_deref() == Some(full(t).as_str())), "{}", j[0]);
+        }
+        assert_eq!(std::fs::read_dir(&jd.0).unwrap().count(), 0, "the journal is gone once the batch ended");
+        // one left by a batch that did not end is reported and kept
+        let rows: Vec<Row> = rows_for(&s, &[("short.jpg".to_string(), "x.jpg".to_string())]).0;
+        let moves = order(&rows, &listings([s.0.as_path()]), RULES, "t");
+        let left = write_journal(&jd.0, "t", &rows, &moves).unwrap();
+        assert_eq!(report_journals(&jd.0), vec![left.clone()]);
+        assert!(left.exists());
+        assert!(s.0.join("short.jpg").exists(), "nothing was done to the files");
     }
 
     #[test]
@@ -530,7 +676,7 @@ mod tests {
         }
         // a -> x was done; meanwhile someone made a new "a" and deleted b's result
         let d = &s.0;
-        let out = run_pairs(&[(d.join("z"), d.join("a")), (d.join("gone"), d.join("b2"))], &mut native_rename);
+        let out = run_pairs(&[(d.join("z"), d.join("a")), (d.join("gone"), d.join("b2"))], None, &mut native_rename);
         assert!(out.done.is_empty());
         assert_eq!(out.failed.len(), 2);
         assert!(out.failed.iter().any(|f| f.reason.contains("already exists")), "{:?}", out.failed);

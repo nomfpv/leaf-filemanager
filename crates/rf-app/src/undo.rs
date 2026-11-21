@@ -188,7 +188,7 @@ fn run_bulk(cx: &mut App, title: String, pairs: Vec<(PathBuf, PathBuf)>) {
     let done = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let done_out = done.clone();
     crate::status_center::start_with(cx, title, move |_| {
-        let out = crate::rename_exec::run_pairs(&pairs, &mut crate::rename_exec::native_rename);
+        let out = crate::rename_exec::run_pairs(&pairs, crate::rename_exec::journal_dir().as_deref(), &mut crate::rename_exec::native_rename);
         *done_out.lock().unwrap() = out.done;
         if out.failed.is_empty() {
             Ok(true)

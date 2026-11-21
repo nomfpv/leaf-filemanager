@@ -353,6 +353,10 @@ pub fn main() {
         .format_timestamp_millis()
         .init();
     start_mark("logging");
+    // a bulk rename that did not end (crash, power loss) left its journal: logged and kept, the files are not touched
+    if let Some(dir) = rename_exec::journal_dir() {
+        std::thread::spawn(move || rename_exec::report_journals(&dir));
+    }
 
     // As default file manager we also receive shell namespaces (Control Panel = "::{…}") and
     // non-folders: hand those back to Explorer so nothing becomes unreachable.

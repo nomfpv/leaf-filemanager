@@ -285,10 +285,28 @@ pub struct Move {
     pub cycle: Option<usize>,
 }
 
+/// The temporary name of an item on a cycle: `{old}.~leaf-{salt}-{n}`. It keeps the original
+/// name (someone who finds it after a crash sees what it was) and does not end in `.tmp`
+/// (cleanup tools delete those). An original name too long for the suffix is shortened from
+/// its end, whole characters only, so the result is at most [`MAX_NAME_UNITS`] UTF-16 units.
+pub fn temp_name(old: &str, salt: &str, n: usize) -> String {
+    let suffix = format!(".~leaf-{salt}-{n}");
+    let room = MAX_NAME_UNITS.saturating_sub(suffix.encode_utf16().count());
+    let (mut units, mut keep) = (0, 0);
+    for (i, c) in old.char_indices() {
+        if units + c.len_utf16() > room {
+            break;
+        }
+        units += c.len_utf16();
+        keep = i + c.len_utf8();
+    }
+    format!("{}{suffix}", &old[..keep])
+}
+
 /// The moves for the rows that run (`Status::Rename` / `CaseOnly`), in a safe order. Rows with
 /// any other status are left out: they keep their names, and [`check`] made sure no running row
-/// targets such a name. A temporary name is `~leaf-rename-{salt}-{n}.tmp`, with `n` chosen so it
-/// is neither in `existing` nor any old or new name of the batch.
+/// targets such a name. A temporary name is [`temp_name`], with `n` chosen so it is neither in
+/// `existing` nor any old or new name of the batch.
 ///
 /// Call it only on rows that went through [`check`]: it relies on the new names being unique.
 pub fn order(rows: &[Row], existing: &HashMap<PathBuf, Vec<String>>, rules: NameRules, salt: &str) -> Vec<Move> {
@@ -353,7 +371,7 @@ pub fn order(rows: &[Row], existing: &HashMap<PathBuf, Vec<String>>, rules: Name
                 continue;
             }
             let tmp = loop {
-                let t = format!("~leaf-rename-{salt}-{n}.tmp");
+                let t = temp_name(&rows[c].old, salt, n);
                 n += 1;
                 if taken.insert(rules.key(&t)) {
                     break t;
@@ -554,7 +572,7 @@ mod tests {
         let m = order(&r, &listing(&["a", "b"]), W, "t");
         assert_eq!(m.len(), 3);
         assert_eq!((m[0].kind, m[1].kind, m[2].kind), (MoveKind::ToTemp, MoveKind::Direct, MoveKind::FromTemp));
-        assert_eq!(m[0].to, "~leaf-rename-t-0.tmp");
+        assert_eq!(m[0].to, "a.~leaf-t-0");
         assert!(m.iter().all(|m| m.cycle == Some(0)));
         assert_eq!(simulate(&["a", "b"], &m, W), sorted(&["a", "b"]));
         // and the contents really swapped places: track them
@@ -589,9 +607,9 @@ mod tests {
 
     #[test]
     fn temporary_names_avoid_every_name_in_the_folder_and_batch() {
-        let r = checked(&[("a", "b"), ("b", "a")], &["~leaf-rename-t-0.tmp", "~LEAF-RENAME-T-1.TMP"], W);
-        let m = order(&r, &listing(&["a", "b", "~leaf-rename-t-0.tmp", "~LEAF-RENAME-T-1.TMP"]), W, "t");
-        assert_eq!(m[0].to, "~leaf-rename-t-2.tmp");
+        let r = checked(&[("a", "b"), ("b", "a")], &["a.~leaf-t-0", "A.~LEAF-T-1"], W);
+        let m = order(&r, &listing(&["a", "b", "a.~leaf-t-0", "A.~LEAF-T-1"]), W, "t");
+        assert_eq!(m[0].to, "a.~leaf-t-2");
     }
 
     #[test]

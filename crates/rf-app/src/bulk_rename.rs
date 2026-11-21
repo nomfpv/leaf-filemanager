@@ -568,7 +568,7 @@ impl BulkRename {
             cx,
             title,
             move |_| {
-                let r = crate::rename_exec::apply_batch(&rows, skip, &mut crate::rename_exec::native_rename);
+                let r = crate::rename_exec::apply_batch(&rows, skip, crate::rename_exec::journal_dir().as_deref(), &mut crate::rename_exec::native_rename);
                 // the Status Center keeps the failures too (the dialog may be gone by the time it ends)
                 let failure = match &r {
                     Ok(out) if out.failed.is_empty() => None,
