@@ -74,6 +74,7 @@ mod settings_view;
 mod share;
 mod shelf_view;
 mod status_center;
+mod sync_ui;
 mod mcp_host;
 mod space_check;
 mod downloads;

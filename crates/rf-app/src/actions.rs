@@ -119,6 +119,8 @@ gpui_kit::actions!(
         FollowRemoteFile,
         Checkpoint,
         ShowCheckpoints,
+        SyncJobs,
+        SyncWith,
         ShowWorktrees,
         OpenDocker,
         NewWorktree,

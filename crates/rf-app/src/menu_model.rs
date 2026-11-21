@@ -152,6 +152,7 @@ pub enum Slot {
     FindDuplicates,
     FindBuildJunk,
     Checkpoint,
+    SyncWith,
     ShowHidden,
     HideIgnored,
     Terminal,

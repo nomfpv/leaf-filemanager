@@ -446,6 +446,7 @@ fn session_text(loc: &Location) -> String {
         Location::Search { root, .. } => root.to_string_lossy().into_owned(),
         Location::RecycleBin => "shell:RecycleBinFolder".into(),
         Location::Downloads => "leaf:downloads".into(),
+        Location::SyncJobs => "leaf:sync".into(),
         Location::Shell { parsing, name } => format!("{SHELL_PREFIX}{parsing}\t{name}"),
         // (an address never holds a password: VPath refuses one)
         Location::Remote(v) if crate::remote::usable(v.scheme()) => v.to_string(),
@@ -1206,7 +1207,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_) | Location::Brain(_));
+                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_) | Location::Changes(_) | Location::Brain(_) | Location::SyncJobs);
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -6092,6 +6093,28 @@ impl Render for Workspace {
                     Some(d) => crate::checkpoint_ui::show_list(d, v.downgrade(), cx),
                     None => crate::prompt::notice(t!("Checkpoints"), t!("Checkpoints are kept for folders on this computer. Open one first.").to_string(), window, cx),
                 }
+            }))
+            .on_action(cx.listener(|this, _: &SyncJobs, _, cx| {
+                this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::SyncJobs)));
+            }))
+            .on_action(cx.listener(|this, _: &SyncWith, window, cx| {
+                // the folder shown (the selected folder when one is) on the left, the other pane's folder on the right
+                let v = this.active_view();
+                let left = {
+                    let v = v.read(cx);
+                    let sel: Vec<PathBuf> = v.selection_paths().into_iter().filter(|p| p.is_dir()).collect();
+                    if sel.len() == 1 {
+                        crate::sync_ui::address_of_location(&Location::Path(sel[0].clone()))
+                    } else {
+                        crate::sync_ui::address_of_location(v.location())
+                    }
+                };
+                let right = this.other_pane(&v).and_then(|o| crate::sync_ui::address_of_location(o.read(cx).location()));
+                let tab = v.downgrade();
+                let open: std::rc::Rc<dyn Fn(&mut Window, &mut App)> = std::rc::Rc::new(move |_, cx| {
+                    let _ = tab.update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::SyncJobs)));
+                });
+                crate::sync_ui::sync_with(left, right, open, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ShowWorktrees, window, cx| this.show_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.new_worktree(window, cx)))

@@ -7482,6 +7482,7 @@ dependencies = [
  "leaf-dev",
  "leaf-download",
  "leaf-remote",
+ "leaf-sync",
  "leaf-sys",
  "leaf-vfs",
  "log",

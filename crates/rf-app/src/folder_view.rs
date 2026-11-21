@@ -605,6 +605,8 @@ pub struct FolderView {
     junk: Option<Entity<crate::junk_view::JunkView>>,
     /// The project brain page of this tab.
     brain: Option<Entity<crate::brain_view::BrainView>>,
+    /// The Sync jobs page of this tab.
+    sync: Option<Entity<crate::sync_ui::SyncView>>,
     /// Follow mode (Alt+F) on a file of a server: its tail is read again every 2 seconds while this tab lives.
     remote_tail: Option<crate::remote::Tail>,
     /// The change feed's page of this tab.
@@ -822,6 +824,7 @@ impl FolderView {
             dups: None,
             junk: None,
             brain: None,
+            sync: None,
             remote_tail: None,
             ignored_n: 0,
             ignore_on: false,
@@ -917,6 +920,7 @@ impl FolderView {
             Location::Changes(_) => L::GitCompare,
             Location::Brain(_) => L::Brain,
             Location::Downloads => L::ArrowDownToLine,
+            Location::SyncJobs => L::FolderSync,
             Location::Remote(_) => L::Server,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
@@ -4264,6 +4268,7 @@ impl FolderView {
             Location::BuildJunk(_) => self.junk.as_ref()?.read(cx).status_text(),
             Location::Changes(_) => self.changes.as_ref()?.read(cx).status_text(),
             Location::Brain(_) => self.brain.as_ref()?.read(cx).status_text(),
+            Location::SyncJobs => self.sync.as_ref()?.read(cx).status_text(cx),
             _ => return None,
         };
         (!text.is_empty()).then_some(text)
@@ -6139,6 +6144,18 @@ impl Render for FolderView {
             }
             // (the HyperDownload page is cut: a tab restored on it shows nothing)
             Location::Downloads => div().size_full().into_any_element(),
+            Location::SyncJobs => {
+                let sv = match &self.sync {
+                    Some(sv) => sv.clone(),
+                    None => {
+                        let sv = cx.new(crate::sync_ui::SyncView::new);
+                        cx.observe(&sv, |_, _, cx| cx.notify()).detach();
+                        self.sync = Some(sv.clone());
+                        sv
+                    }
+                };
+                div().size_full().child(sv).into_any_element()
+            }
             Location::RecycleBin => {
                 let rv = match &self.recycle {
                     Some(rv) => rv.clone(),
