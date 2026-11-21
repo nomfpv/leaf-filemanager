@@ -1,5 +1,6 @@
 //! `smb://host/share/dir` and `nfs://host/export/dir` on Linux, through the desktop's gvfs: the place is mounted with `gio mount`
-//! (the desktop's own prompt asks for a password; leaf never sees it) and its files are read and written through the folder gvfs
+//! (an `smb://` share that wants a login gets leaf's own password dialog, or the password saved in the keyring, answered on
+//! gio's input: `smb::mount_with_login`) and its files are read and written through the folder gvfs
 //! makes under `$XDG_RUNTIME_DIR/gvfs`. The address stays the `smb://` form everywhere; only this file knows the disk path.
 
 use std::collections::HashMap;
@@ -35,7 +36,12 @@ impl GvfsFs {
             }
         }
         let uri = format!("{}://{}{}", v.scheme(), v.authority(), v.path());
-        let p = leaf_sys::network::mount_path(&uri).map_err(mount_error)?;
+        let p = match leaf_sys::network::mount_path(&uri) {
+            Ok(p) => p,
+            // a share that wants a login: leaf's own dialog (or the saved password), answered on gio's input
+            Err(e) if v.scheme() == "smb" && e.kind() == std::io::ErrorKind::PermissionDenied => crate::smb::mount_with_login(v, &uri)?,
+            Err(e) => return Err(mount_error(e)),
+        };
         self.known.lock().unwrap_or_else(|e| e.into_inner()).insert(v.clone(), p.clone());
         Ok(p)
     }

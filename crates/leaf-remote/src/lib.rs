@@ -26,6 +26,7 @@ pub mod rclone;
 pub mod secrets;
 pub mod server_copy;
 mod sftp;
+pub mod smb;
 pub mod trash;
 #[cfg(test)]
 mod tests;
@@ -117,6 +118,8 @@ pub fn forget_saved(id: &SecretId) -> Result<(), String> {
             _ => {}
         },
         SecretId::Passphrase { fingerprint, .. } => sftp_backend().forget_key(fingerprint),
+        // (Windows keeps an SMB session itself: the host's Disconnect ends it)
+        SecretId::Share { .. } => {}
     }
     vault().forget(id)
 }

@@ -447,6 +447,7 @@ impl Prompter for Answers {
             SecretQuestion::Passphrase { retry, .. } => format!("passphrase retry={retry}"),
             SecretQuestion::Password { account, retry, .. } => format!("password {account} retry={retry}"),
             SecretQuestion::Server { prompt, .. } => format!("server {prompt}"),
+            SecretQuestion::Login { place, retry, .. } => format!("login {place} retry={retry}"),
         });
         let remember = self.remember.load(Ordering::Relaxed);
         let a = self.secrets.lock().unwrap().pop().flatten().map(|s| Secret::new(s).remembered(remember));

@@ -30,11 +30,18 @@ pub enum SecretId {
     Password { scheme: String, user: String, host: String, port: u16 },
     /// The passphrase of a key file: the SHA-256 of its path, and the file's name (for the list).
     Passphrase { fingerprint: String, file_name: String },
+    /// The password of `user` (`name`, `DOMAIN\name` or `name@domain`) for the Windows share `share` on `host` (SMB; the
+    /// share `IPC$` stands for the server itself, its list of shares).
+    Share { user: String, host: String, share: String },
 }
 
 impl SecretId {
     pub fn password(scheme: &str, user: &str, host: &str, port: u16) -> SecretId {
         SecretId::Password { scheme: scheme.to_ascii_lowercase(), user: user.to_string(), host: host.to_ascii_lowercase(), port }
+    }
+
+    pub fn share(user: &str, host: &str, share: &str) -> SecretId {
+        SecretId::Share { user: user.to_string(), host: host.to_ascii_lowercase(), share: share.to_ascii_lowercase() }
     }
 
     pub fn passphrase(key_file: &std::path::Path) -> SecretId {
@@ -44,12 +51,13 @@ impl SecretId {
         SecretId::Passphrase { fingerprint, file_name }
     }
 
-    /// The name of the keyring entry (`sftp://user@host:22`, `key:<sha-256>:<file name>`); [`SecretId::from_account`]
+    /// The name of the keyring entry (`sftp://user@host:22`, `smb://user@host/share`, `key:<sha-256>:<file name>`); [`SecretId::from_account`]
     /// reads it back.
     fn account(&self) -> String {
         match self {
             SecretId::Password { scheme, user, host, port } => format!("{scheme}://{user}@{host}:{port}"),
             SecretId::Passphrase { fingerprint, file_name } => format!("key:{fingerprint}:{file_name}"),
+            SecretId::Share { user, host, share } => format!("smb://{user}@{host}/{share}"),
         }
     }
 
@@ -59,6 +67,12 @@ impl SecretId {
             let (fingerprint, file_name) = rest.split_once(':')?;
             let hex = fingerprint.len() == 64 && fingerprint.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
             return hex.then(|| SecretId::Passphrase { fingerprint: fingerprint.to_string(), file_name: file_name.to_string() });
+        }
+        if let Some(rest) = account.strip_prefix("smb://") {
+            let (server, share) = rest.rsplit_once('/')?;
+            let (user, host) = server.rsplit_once('@')?;
+            let ok = !user.is_empty() && !host.is_empty() && !share.is_empty() && !host.contains(['/', '\\']);
+            return Some(SecretId::share(user, host, share)).filter(|id| ok && id.account() == account);
         }
         let (scheme, rest) = account.split_once("://")?;
         if !matches!(scheme, "sftp" | "ftp" | "ftps") {
@@ -75,6 +89,8 @@ impl SecretId {
         match self {
             SecretId::Password { scheme, user, host, port } => format!("{user}@{host}:{port} ({})", scheme.to_ascii_uppercase()),
             SecretId::Passphrase { file_name, .. } => format!("Key file {file_name}"),
+            SecretId::Share { user, host, share } if share == "ipc$" => format!("{user}@{host} (SMB)"),
+            SecretId::Share { user, host, share } => format!("{user}@{host}/{share} (SMB)"),
         }
     }
 
@@ -82,8 +98,14 @@ impl SecretId {
     /// (any port otherwise), of `user` when given.
     pub fn is_for(&self, scheme: &str, host: &str, port: Option<u16>, user: Option<&str>) -> bool {
         let family = |s: &str| if s.eq_ignore_ascii_case("ftps") { "ftp".to_string() } else { s.to_ascii_lowercase() };
-        matches!(self, SecretId::Password { scheme: s, user: u, host: h, port: p }
-            if family(s) == family(scheme) && h.eq_ignore_ascii_case(host) && port.is_none_or(|w| w == *p) && user.is_none_or(|w| w == u))
+        match self {
+            SecretId::Password { scheme: s, user: u, host: h, port: p } => {
+                family(s) == family(scheme) && h.eq_ignore_ascii_case(host) && port.is_none_or(|w| w == *p) && user.is_none_or(|w| w == u)
+            }
+            // (SMB has no port of its own in leaf: every share of the server counts)
+            SecretId::Share { user: u, host: h, .. } => scheme.eq_ignore_ascii_case("smb") && h.eq_ignore_ascii_case(host) && user.is_none_or(|w| w == u),
+            SecretId::Passphrase { .. } => false,
+        }
     }
 }
 
@@ -366,12 +388,15 @@ fn saved_ids_read_back_from_their_keyring_names() {
         SecretId::password("sftp", "bob", "[::1]", 2222),
         SecretId::passphrase(std::path::Path::new("C:/Users/x/.ssh/id_ed25519")),
         SecretId::passphrase(std::path::Path::new("/home/x/keys/a:b.key")),
+        SecretId::share("alice", "nas", "photos"),
+        SecretId::share("WORK\\bob", "files.example.org", "ipc$"),
+        SecretId::share("bob@work.example", "192.0.2.7", "my share"),
     ];
     for id in &ids {
         assert_eq!(SecretId::from_account(&id.account()).as_ref(), Some(id), "{}", id.account());
     }
     // names that are not leaf's ids are not read as one (so never listed, never deleted by "Forget all")
-    for other in ["leaf-saved-list", "key:abc:x", "http://a@b:1", "sftp://a@b:99999", "sftp://a@B:22", "sftp://nobody", "sftp://a@:22", ""] {
+    for other in ["leaf-saved-list", "key:abc:x", "http://a@b:1", "sftp://a@b:99999", "sftp://a@B:22", "sftp://nobody", "sftp://a@:22", "smb://a@b", "smb://@b/c", "smb://a@b/", "smb://a@B/c", ""] {
         assert_eq!(SecretId::from_account(other), None, "{other}");
     }
 }

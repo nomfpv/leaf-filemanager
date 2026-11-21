@@ -35,6 +35,9 @@ pub enum SecretQuestion {
     Password { account: String, retry: bool, unencrypted: bool, keyring: Keyring },
     /// A question of the server's (keyboard-interactive login), with the server's own text. Never remembered.
     Server { account: String, prompt: String, echo: bool },
+    /// The user name and password of a Windows share (SMB): `place` is `\\host\share`, `user` the name to show in the box
+    /// (empty: none known). The answer carries the name typed ([`Secret::user`]).
+    Login { place: String, user: String, retry: bool, keyring: Keyring },
 }
 
 /// Whether the dialog can offer "Remember" for this secret.
@@ -52,11 +55,22 @@ pub enum Keyring {
 pub struct Secret {
     text: Zeroizing<String>,
     remember: bool,
+    /// The user name typed with it (a [`SecretQuestion::Login`]); not a secret.
+    user: Option<String>,
 }
 
 impl Secret {
     pub fn new(text: String) -> Secret {
-        Secret { text: Zeroizing::new(text), remember: false }
+        Secret { text: Zeroizing::new(text), remember: false, user: None }
+    }
+    /// The same secret with the user name typed beside it.
+    pub fn with_user(mut self, user: String) -> Secret {
+        self.user = Some(user);
+        self
+    }
+    /// The user name typed beside it (a login dialog), if any.
+    pub fn user(&self) -> Option<&str> {
+        self.user.as_deref()
     }
     /// The same secret, to be kept in the keyring after a login it worked for.
     pub fn remembered(mut self, remember: bool) -> Secret {
