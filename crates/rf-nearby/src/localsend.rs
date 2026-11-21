@@ -116,6 +116,13 @@ pub trait LsListener: Send + Sync {
     /// At most about ten times a second per transfer, and once more at the end.
     fn progress(&self, transfer: u64, done: u64, total: u64);
     fn finished(&self, transfer: u64, result: LsResult);
+    /// A request ended without the app answering it (the sender gave up, or the two minutes ran out): its question can go away.
+    fn request_ended(&self, _id: u64) {}
+    /// The device `alias` asks for a PIN before it takes files; `wrong` when the last one was refused. Blocks until the user has
+    /// answered (the crate runs it off its async threads); `None` gives up.
+    fn pin(&self, _alias: &str, _wrong: bool) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,6 +158,7 @@ impl LocalSend {
             // (far from the other engine's ids: the app keeps one list of transfers for both)
             next: AtomicU64::new(ID_BASE),
             alias: Mutex::new(cfg.alias.clone()),
+            pin: Mutex::new(cfg.pin.clone().filter(|p| !p.is_empty())),
             last_scan: Mutex::new(None),
             cancelled: Mutex::new(HashSet::new()),
             receiving: AtomicBool::new(false),
@@ -189,6 +197,11 @@ impl LocalSend {
     }
 
     /// The name the other devices see from now on.
+    /// The PIN other devices must give before they send here (empty or `None`: none).
+    pub fn set_pin(&self, pin: Option<&str>) {
+        *self.inner.pin.lock().unwrap_or_else(|e| e.into_inner()) = pin.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
+    }
+
     pub fn set_alias(&self, alias: &str) {
         *self.inner.alias.lock().unwrap_or_else(|e| e.into_inner()) = alias.to_string();
     }
@@ -366,6 +379,8 @@ struct Inner {
     udp: Mutex<Option<Arc<Udp>>>,
     scanning: AtomicBool,
     alias: Mutex<String>,
+    /// The PIN senders must give (None: no PIN); changes with the app's setting.
+    pin: Mutex<Option<String>>,
     last_scan: Mutex<Option<Instant>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
@@ -927,7 +942,8 @@ fn plan_targets(dest: &Path, names: &[String]) -> Vec<PathBuf> {
 
 /// The sender's request: asked of our user; the answer is the session (its tokens) or a refusal.
 async fn prepare(inner: &Arc<Inner>, q: &HashMap<String, String>, json: &[u8]) -> (u16, Vec<u8>) {
-    if let Some(pin) = &inner.cfg.pin
+    let pin = inner.pin.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(pin) = &pin
         && q.get("pin") != Some(pin)
     {
         return (401, message("Pin required"));
@@ -956,6 +972,14 @@ async fn prepare(inner: &Arc<Inner>, q: &HashMap<String, String>, json: &[u8]) -
         }
         pending.insert(rid, tx);
     }
+    // (however this ends: answered, timed out or the sender gone, the app is told so it can close the question)
+    struct Ended<'a>(&'a Inner, u64);
+    impl Drop for Ended<'_> {
+        fn drop(&mut self) {
+            self.0.listener.request_ended(self.1);
+        }
+    }
+    let _ended = Ended(inner, rid);
     let total: u64 = entries.iter().map(|(_, f)| f.size).sum();
     inner.listener.request(LsRequest {
         id: rid,
@@ -1096,6 +1120,11 @@ async fn upload<R: AsyncBufRead + Unpin>(inner: &Arc<Inner>, s: &mut R, q: &Hash
 
 // -------------------------------------------------------------------------------------------------------------------- sending
 
+/// A query value, percent-encoded.
+fn pct(v: &str) -> String {
+    v.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
 fn mime_of(name: &str) -> &'static str {
     match name.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
         "jpg" | "jpeg" => "image/jpeg",
@@ -1140,7 +1169,24 @@ async fn send_task(inner: &Arc<Inner>, tid: u64, dev: &LsDevice, paths: Vec<Path
     let body = serde_json::to_vec(&serde_json::json!({ "info": inner.info(None), "files": dto }))?;
     let path = format!("{API}/prepare-upload");
     let fp = Some(dev.fingerprint.as_str());
-    let r = call(inner, dev.ip, dev.port, fp, "POST", &path, Some(body), DECISION + Duration::from_secs(20)).await.map_err(|e| anyhow!("{e:#}"))?;
+    // a device with a PIN answers 401 until it is given (three tries)
+    let mut pin: Option<String> = None;
+    let mut tries = 0;
+    let r = loop {
+        let p = match &pin {
+            Some(pin) => format!("{path}?pin={}", pct(pin)),
+            None => path.clone(),
+        };
+        let r = call(inner, dev.ip, dev.port, fp, "POST", &p, Some(body.clone()), DECISION + Duration::from_secs(20)).await.map_err(|e| anyhow!("{e:#}"))?;
+        if r.status != 401 {
+            break r;
+        }
+        ensure!(tries < 3, "the PIN was not right");
+        let (l, alias, wrong) = (inner.listener.clone(), dev.alias.clone(), tries > 0);
+        pin = tokio::task::spawn_blocking(move || l.pin(&alias, wrong)).await?;
+        ensure!(pin.is_some(), "the other device asks for a PIN");
+        tries += 1;
+    };
     match r.status {
         200 => {}
         403 => bail!("the other device declined"),
@@ -1306,6 +1352,80 @@ mod tests {
         assert_eq!(std::fs::read(into.join("photo.bin")).unwrap(), b"mine");
         assert_eq!(std::fs::read(into.join("photo (2).bin")).unwrap(), bytes);
         assert_eq!(recv.paths.len(), 1);
+    }
+
+    /// A listener that answers the PIN question from a list (and notes what was asked).
+    struct Pins(L, Mutex<Vec<String>>, Mutex<Vec<bool>>);
+
+    impl LsListener for Pins {
+        fn devices_changed(&self, d: Vec<LsDevice>) {
+            self.0.devices_changed(d)
+        }
+        fn request(&self, r: LsRequest) {
+            self.0.request(r)
+        }
+        fn progress(&self, _: u64, _: u64, _: u64) {}
+        fn finished(&self, t: u64, r: LsResult) {
+            self.0.finished(t, r)
+        }
+        fn pin(&self, _: &str, wrong: bool) -> Option<String> {
+            self.2.lock().unwrap().push(wrong);
+            let mut v = self.1.lock().unwrap();
+            if v.is_empty() { None } else { Some(v.remove(0)) }
+        }
+    }
+
+    #[test]
+    fn a_device_with_a_pin_is_asked_for_it_up_to_three_times() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mk = |name: &str, l: Arc<dyn LsListener>| {
+            let cfg = LsConfig { alias: name.into(), model: "test".into(), state_dir: tmp.path().join(name).to_string_lossy().into_owned(), port: 0, multicast: false, local_only: true, pin: None };
+            LocalSend::new(cfg, l).unwrap()
+        };
+        let (btx, brx) = channel();
+        let b = mk("b", Arc::new(L(Mutex::new(btx))));
+        b.set_pin(Some("4321"));
+        let port = b.set_receiving(true).unwrap();
+        let src = tmp.path().join("f.txt");
+        std::fs::write(&src, b"hello").unwrap();
+        let into = tmp.path().join("in");
+        // (B's user says yes to whatever reaches it)
+        let (b2, into2) = (b.clone(), into.clone());
+        std::thread::spawn(move || {
+            while let Ok(ev) = brx.recv() {
+                if let Ev::Request(r) = ev {
+                    b2.accept(r.id, into2.clone());
+                }
+            }
+        });
+        for (answers, ok) in [(vec!["1", "4321"], true), (vec!["1", "2", "3", "4"], false)] {
+            let (atx, arx) = channel();
+            let pins = Arc::new(Pins(L(Mutex::new(atx)), Mutex::new(answers.iter().map(|s| s.to_string()).collect()), Mutex::default()));
+            let a = mk(if ok { "a1" } else { "a2" }, pins.clone());
+            a.add_device(SocketAddr::from(([127, 0, 0, 1], port)));
+            let dev = loop {
+                if let Ev::Devices(d) = next(&arx) {
+                    if let Some(d) = d.into_iter().next() {
+                        break d;
+                    }
+                }
+            };
+            a.send(&dev.fingerprint, vec![src.clone()]).unwrap();
+            loop {
+                if let Ev::Done(r) = next(&arx) {
+                    assert_eq!(r.ok, ok, "{r:?}");
+                    break;
+                }
+            }
+            a.stop();
+            let asked = pins.2.lock().unwrap().clone();
+            if ok {
+                assert_eq!(asked, vec![false, true]);
+            } else {
+                assert_eq!(asked, vec![false, true, true], "three tries, then it gives up");
+            }
+        }
+        b.stop();
     }
 
     #[test]
