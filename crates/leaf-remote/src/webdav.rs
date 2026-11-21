@@ -206,14 +206,28 @@ impl WebDavFs {
             Some(_) if src.is_dir || replace => return Err(FsError::Unsupported),
             Some(_) => return Err(FsError::Exists),
         };
-        let r = self.inner.call(&t, "COPY", from.path(), &[("Destination", self.inner.destination(&t, to.path())), ("Overwrite", flag(overwrite))], Payload::None)?;
-        match r.status {
-            200 | 201 | 204 => Ok(()),
-            412 => Err(FsError::Exists),
-            // (a server without COPY, or one that copies no folders: the generic copy does it)
-            405 | 501 => Err(FsError::Unsupported),
-            s => Err(status_error(s)),
+        // the copy is made under a name beside the target and put in place when it is whole: a COPY that fails partway (a 207, a
+        // timeout) leaves no half folder under the final name, and a replace that fails has not lost the old file
+        let to_path = spath(to.path());
+        let (dir, name) = match to_path.trim_end_matches('/').rsplit_once('/') {
+            Some((d, n)) => (d.to_string(), n.to_string()),
+            None => (String::new(), to_path.clone()),
+        };
+        let part = format!("{dir}/{}", side_name(&name, "leaf-cp"));
+        let done = (|| {
+            let r = self.inner.call(&t, "COPY", from.path(), &[("Destination", self.inner.destination(&t, &part)), ("Overwrite", flag(false))], Payload::None)?;
+            match r.status {
+                200 | 201 | 204 => {}
+                // (a server without COPY, or one that copies no folders: the generic copy does it)
+                405 | 501 => return Err(FsError::Unsupported),
+                s => return Err(status_error(s)),
+            }
+            self.inner.move_to(&t, &part, &to_path, overwrite)
+        })();
+        if done.is_err() {
+            let _ = self.inner.delete(&t, &part);
         }
+        done
     }
 }
 
