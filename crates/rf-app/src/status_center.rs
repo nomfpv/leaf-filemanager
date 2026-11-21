@@ -1209,6 +1209,79 @@ pub fn delete(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool) {
     delete_ex(cx, paths, permanent, true)
 }
 
+/// What the user chose for items that lie on a drive without a trash.
+#[cfg(not(windows))]
+enum NoTrashChoice {
+    Permanent,
+    HomeTrash,
+}
+
+/// A question from a delete job to the window: how many items have no trash, and where the answer goes.
+#[cfg(not(windows))]
+type NoTrashAsk = (usize, std::sync::mpsc::Sender<NoTrashChoice>);
+
+/// "This drive has no trash." Delete permanently / Move to home trash / Cancel. A dialog put away without an answer drops the
+/// sender, which the job reads as Cancel.
+#[cfg(not(windows))]
+fn ask_no_trash(count: usize, reply: std::sync::mpsc::Sender<NoTrashChoice>, origin: Option<AnyWindowHandle>, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let Some(w) = origin.or_else(|| cx.active_window()).or_else(|| cx.windows().first().copied()) else { return };
+    let reply = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));
+    let answer = |c: Option<fn() -> NoTrashChoice>| {
+        let reply = reply.clone();
+        move |_: Option<String>, _: &mut Window, _: &mut App| {
+            if let (Some(tx), Some(c)) = (reply.take(), c) {
+                let _ = tx.send(c());
+            }
+            Ok(())
+        }
+    };
+    let message = if count == 1 {
+        t!("This drive has no trash. Delete the item permanently, or move it to the trash in your home folder (it is copied there first, which can take a while)?").to_string()
+    } else {
+        format!(
+            "{} {}",
+            crate::i18n::items(count),
+            t!("lie on a drive that has no trash. Delete them permanently, or move them to the trash in your home folder (they are copied there first, which can take a while)?")
+        )
+    };
+    let buttons = vec![
+        Button::new(t!("Delete permanently"), Kind::Danger, answer(Some(|| NoTrashChoice::Permanent))),
+        Button::new(t!("Move to home trash"), Kind::Primary, answer(Some(|| NoTrashChoice::HomeTrash))),
+        Button::new(t!("Cancel"), Kind::Normal, answer(None)),
+    ];
+    let _ = w.update(cx, |_, window, cx| crate::prompt::show(t!("This drive has no trash"), Some(message), None, buttons, window, cx));
+}
+
+/// A delete that answered `NoTrash`: asks the user (nothing was moved yet), puts the items that do have a trash there, and does what
+/// was chosen with the others.
+#[cfg(not(windows))]
+fn resolve_no_trash(
+    none: Vec<std::path::PathBuf>,
+    all: &[std::path::PathBuf],
+    t: &Arc<Tracker>,
+    ask: &mpsc::UnboundedSender<NoTrashAsk>,
+) -> anyhow::Result<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    ask.unbounded_send((none.len(), tx)).map_err(|_| anyhow::anyhow!("There is no window to ask in"))?;
+    let choice = loop {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(c) => break Some(c),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !t.cancel.load(Ordering::Relaxed) => {}
+            Err(_) => break None,
+        }
+    };
+    let Some(choice) = choice else { return Ok(false) };
+    let rest: Vec<std::path::PathBuf> = all.iter().filter(|p| !none.contains(p)).cloned().collect();
+    if !rest.is_empty() && !leaf_sys::recycle::trash_tracked(&rest, t.clone())? {
+        return Ok(false);
+    }
+    match choice {
+        NoTrashChoice::Permanent => leaf_sys::fastdelete::delete_permanent(&none, t.clone(), leaf_sys::fastdelete::threads_for(&none)),
+        NoTrashChoice::HomeTrash => leaf_sys::recycle::to_home_trash(&none, t.clone()),
+    }
+}
+
 pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, record: bool) {
     // a pinned folder that is deleted leaves the sidebar (its question was answered before this)
     for p in &paths {
@@ -1223,12 +1296,33 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let marker = mark.clone();
     let lock_paths = paths.clone();
+    // a drive without a trash: the job asks here, on the UI side, and waits for the answer
+    #[cfg(not(windows))]
+    let ask_tx = {
+        let (qtx, mut qrx) = mpsc::unbounded::<NoTrashAsk>();
+        let origin = cx.active_window();
+        cx.spawn(async move |cx| {
+            while let Some((count, reply)) = qrx.next().await {
+                cx.update(|cx| ask_no_trash(count, reply, origin, cx));
+            }
+        })
+        .detach();
+        qtx
+    };
     let id = start_with_id(cx, title, move |t| {
         // permanent: our parallel delete (the shell takes what it can't); recycle bin: the shell
         let r = if permanent && fast {
             leaf_sys::fastdelete::delete_permanent(&paths, t.clone(), leaf_sys::fastdelete::threads_for(&paths))
         } else {
             fileops::delete_tracked(&paths, permanent, t.clone())
+        };
+        #[cfg(not(windows))]
+        let r = match r {
+            Err(e) => match e.downcast::<leaf_sys::recycle::NoTrash>() {
+                Ok(no) => resolve_no_trash(no.paths, &paths, &t, &ask_tx),
+                Err(e) => Err(e),
+            },
+            ok => ok,
         };
         let pairs = t.results.lock().unwrap().clone();
         if record && !permanent && !pairs.is_empty() {

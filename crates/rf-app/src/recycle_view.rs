@@ -169,10 +169,33 @@ impl RecycleView {
         }
     }
 
-    fn empty_bin(&mut self, cx: &mut Context<Self>) {
+    fn empty_bin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.status = None;
-        // confirm = true → Windows asks the user first
-        self.run(cx, || leaf_sys::recycle::empty(true));
+        // Windows asks the user itself (confirm = true)
+        #[cfg(windows)]
+        {
+            let _ = window;
+            self.run(cx, || leaf_sys::recycle::empty(true));
+        }
+        // Linux has no system dialog: our own, then the call that does not ask
+        #[cfg(not(windows))]
+        {
+            let me = cx.entity().downgrade();
+            crate::prompt::show(
+                t!("Empty Recycle Bin"),
+                Some(t!("Every item in the Recycle Bin will be deleted for good. This cannot be undone.").to_string()),
+                None,
+                vec![
+                    crate::prompt::Button::new(t!("Empty Recycle Bin"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                        let _ = me.update(cx, |v, cx| v.run(cx, || leaf_sys::recycle::empty(false)));
+                        Ok(())
+                    }),
+                    crate::prompt::Button::cancel(),
+                ],
+                window,
+                cx,
+            );
+        }
     }
 
     /// Delete, Shift+Delete and Ctrl+D reach the page also while the search box has the keyboard (the box does not take the
@@ -430,7 +453,7 @@ impl Render for RecycleView {
             )
             .child(
                 button("rb-empty", L::Trash, t!("Empty Recycle Bin"), !self.items.is_empty() && !self.busy, &p)
-                    .on_click(cx.listener(|this, _, _, cx| this.empty_bin(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.empty_bin(window, cx))),
             )
             .child(
                 button("rb-settings", L::Settings, t!("Settings"), true, &p).on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
