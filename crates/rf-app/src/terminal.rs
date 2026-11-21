@@ -29,8 +29,38 @@ pub fn target(p: &Path) -> Option<PathBuf> {
     p.ancestors().filter(|a| !a.as_os_str().is_empty()).find(|a| a.is_dir()).map(Path::to_path_buf)
 }
 
+/// The `ssh` arguments that open a login shell in a server folder, as a list (no shell string is built from the server's names
+/// on this side): `-l user`, `-p port`, a terminal (`-t`), `--` before the host (a host cannot pass for an option), and one remote
+/// command, `cd` to the folder (quoted for the remote shell) and then the user's login shell. `None` for anything but an
+/// `sftp://` place with a host and user name that can be passed on as they are.
+pub fn ssh_args(v: &rf_core::vpath::VPath) -> Option<Vec<std::ffi::OsString>> {
+    if v.scheme() != "sftp" || !leaf_remote::known_hosts::valid_host(v.host()) {
+        return None;
+    }
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    if let Some(user) = v.user() {
+        if user.starts_with('-') || user.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '@' | '\'' | '"')) {
+            return None;
+        }
+        args.extend(["-l".into(), user.into()]);
+    }
+    if let Some(port) = v.port() {
+        args.extend(["-p".into(), port.to_string().into()]);
+    }
+    args.extend(["-t".into(), "--".into(), v.host().into(), format!("cd -- {} && exec \"${{SHELL:-/bin/sh}}\" -l", sh_quote(v.path())).into()]);
+    Some(args)
+}
+
+/// `s` as one word for a POSIX shell: in single quotes, a quote inside as `'''`.
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// Whether a terminal button has anything to open for this location (from the location alone: it runs every frame).
 pub fn offered(loc: &Location) -> bool {
+    if let Location::Remote(v) = loc {
+        return ssh_args(v).is_some();
+    }
     location_dir(loc).is_some_and(|p| !leaf_sys::ftp::is_ftp(&p) && leaf_sys::network::server_root(&p).is_none())
 }
 
@@ -49,6 +79,10 @@ pub fn open(p: PathBuf, cx: &App) {
 
 /// [`open`] for the folder a location shows.
 pub fn open_location(loc: &Location, cx: &App) {
+    if let Location::Remote(v) = loc {
+        open_ssh(v, cx);
+        return;
+    }
     if let Some(p) = location_dir(loc) {
         open(p, cx);
     }
@@ -63,4 +97,32 @@ pub fn open_admin(p: PathBuf) {
             }
         }
     });
+}
+
+/// The terminal of the settings, running the system `ssh` into the server folder (it asks for the password itself, in its window).
+fn open_ssh(v: &rf_core::vpath::VPath, cx: &App) {
+    let Some(args) = ssh_args(v) else { return };
+    let kind = cx.global::<crate::settings::Settings>().terminal;
+    std::thread::spawn(move || {
+        let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+        if let Err(e) = leaf_sys::shell::open_terminal_running(kind, &home, std::path::Path::new("ssh"), &args, &[]) {
+            log::warn!("terminal (ssh): {e:#}");
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_remote_path_is_quoted_for_the_remote_shell() {
+        assert_eq!(sh_quote("/srv/it's $HOME;rm -rf"), r"'/srv/it'\''s $HOME;rm -rf'");
+        let v = rf_core::vpath::VPath::parse("sftp://me@nas.local:2222/srv/it's here").unwrap();
+        let a: Vec<String> = ssh_args(&v).unwrap().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(&a[..6], ["-l", "me", "-p", "2222", "-t", "--"]);
+        assert_eq!(a[6], "nas.local");
+        assert!(a[7].starts_with(r"cd -- '/srv/it'\''s here' && exec "));
+        assert!(ssh_args(&rf_core::vpath::VPath::parse("sftp://-oProxyCommand=x/").unwrap()).is_none());
+    }
 }

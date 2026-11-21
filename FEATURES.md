@@ -32,7 +32,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Forward | Goes forward again after going back. | `Alt+→` |
 | Up one level | Opens the folder this one is in. | `Alt+↑` |
 | Home | Opens the Home page. | `Alt+Home` |
-| Recycle Bin | Opens the Recycle Bin. |  |
+| Trash | Opens the Trash. |  |
 | Focus address bar | Puts the keyboard in the address bar to type a path. | `Ctrl+L`, `Alt+D` |
 | Search | Searches this folder. | `Ctrl+F`, `Ctrl+E` |
 | Go to folder alias | Opens a folder by its short name: type @ and the name in the address bar. | `@` |
@@ -72,8 +72,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Paste | Puts the copied or cut items into this folder. | `Ctrl+V` |
 | Paste into selected folder | Puts the copied items into the selected folder. | `Ctrl+Shift+V` |
 | Paste as shortcut | Makes shortcuts to the copied items here. |  |
-| Move to Recycle Bin | Moves the selected items to the Recycle Bin. | `Del`, `Ctrl+D` |
-| Delete permanently | Deletes the selected items without the Recycle Bin. | `Shift+Del` |
+| Move to Trash | Moves the selected items to the Trash. | `Del`, `Ctrl+D` |
+| Delete permanently | Deletes the selected items without the Trash. | `Shift+Del` |
 | Rename | Renames the selected item. | `F2` |
 | Duplicate | Makes a copy of the selected items next to them. | `Ctrl+Alt+D` |
 | Undo | Takes back the last copy, move, rename or delete. | `Ctrl+Z` |
@@ -139,12 +139,12 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Disconnect network drive | Removes a mapped network drive. (Windows only) |  |
 | Rotate right | Turns the selected pictures a quarter to the right. |  |
 | Rotate left | Turns the selected pictures a quarter to the left. |  |
-| Open in terminal | Opens a terminal in this folder. | `` Ctrl+Shift+` `` |
+| Open in terminal | Opens a terminal in this folder; in a server (sftp://) folder it runs ssh into it. | `` Ctrl+Shift+` `` |
 | Open in Terminal as administrator | Opens an elevated terminal in this folder. (Windows only) |  |
 | Open in editor | Opens this folder in your code editor. |  |
 | Compare folders | Marks what differs between the two panes' folders: only here, newer, older, other size. |  |
 | Find duplicates | Looks for files with identical content in this folder or the selected folders. |  |
-| Find build junk | Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin. |  |
+| Find build junk | Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Trash. |  |
 | Show changes | Lists every changed, new, deleted and renamed file of the git repository this folder is in, grouped by folder, with the difference of each in the preview pane. It only reads: nothing in the repository is changed. |  |
 | Worktrees | Lists the worktrees of the git repository this folder is in, by branch, to jump to one. It only reads. |  |
 | New worktree | Adds a second working folder to the git repository this folder is in, on a new branch from the current head or on an existing branch, and opens it in a new tab. Nothing that exists is changed. |  |
