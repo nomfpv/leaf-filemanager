@@ -7,14 +7,14 @@ use std::path::PathBuf;
 use futures::channel::oneshot;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
-use rf_win::ctxmenu::MenuOutcome;
-use rf_win::fileops::{self, Transfer};
+use leaf_sys::ctxmenu::MenuOutcome;
+use leaf_sys::fileops::{self, Transfer};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::folder_view::FolderView;
-use rf_win::ctxmenu::ExtraItem;
+use leaf_sys::ctxmenu::ExtraItem;
 
 const MENU_NEW_TAB: u32 = 1;
 const MENU_PIN: u32 = 2;
@@ -203,8 +203,8 @@ impl FolderView {
             return;
         }
         // OpenClipboard can wait on other apps: never on the UI thread.
-        rf_win::sta::run(move |owner| {
-            if let Err(e) = rf_win::clipboard::set_files(owner, &paths, kind) {
+        leaf_sys::sta::run(move |owner| {
+            if let Err(e) = leaf_sys::clipboard::set_files(owner, &paths, kind) {
                 log::warn!("clipboard: {e:#}");
             }
         });
@@ -232,7 +232,7 @@ impl FolderView {
         let paths: Vec<PathBuf> = self
             .selection_paths()
             .into_iter()
-            .filter(|p| rf_win::rotate::can_rotate(p) && crate::archive_view::split(p).is_none())
+            .filter(|p| leaf_sys::rotate::can_rotate(p) && crate::archive_view::split(p).is_none())
             .collect();
         if paths.is_empty() {
             return;
@@ -240,7 +240,7 @@ impl FolderView {
         let task = cx.background_spawn(async move {
             let mut errors = Vec::new();
             for p in &paths {
-                if let Err(e) = rf_win::rotate::rotate(p, clockwise) {
+                if let Err(e) = leaf_sys::rotate::rotate(p, clockwise) {
                     errors.push(format!("{}: {e:#}", p.file_name().unwrap_or_default().to_string_lossy()));
                 }
             }
@@ -293,12 +293,12 @@ impl FolderView {
             return;
         }
         let Some(dir) = self.current_dir() else { return };
-        if rf_win::ftp::is_ftp(&dir) {
+        if leaf_sys::ftp::is_ftp(&dir) {
             return;
         }
         let (tx, rx) = oneshot::channel();
-        rf_win::sta::run(move |owner| {
-            let _ = tx.send(rf_win::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
+        leaf_sys::sta::run(move |owner| {
+            let _ = tx.send(leaf_sys::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
         });
         cx.spawn(async move |this, cx| {
             let Ok(Some((paths, _))) = rx.await else { return };
@@ -312,7 +312,7 @@ impl FolderView {
                         link = dir.join(format!("{stem} ({n}).lnk"));
                         n += 1;
                     }
-                    if let Err(e) = rf_win::shortcut::create(&link, &p) {
+                    if let Err(e) = leaf_sys::shortcut::create(&link, &p) {
                         log::warn!("shortcut {link:?}: {e:#}");
                     }
                 }
@@ -326,17 +326,17 @@ impl FolderView {
     pub(crate) fn paste_to(&mut self, dir: PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
         // GetClipboardData can block on a slow source app (delayed rendering).
         let (tx, rx) = oneshot::channel();
-        rf_win::sta::run(move |owner| {
-            let _ = tx.send(rf_win::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
+        leaf_sys::sta::run(move |owner| {
+            let _ = tx.send(leaf_sys::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
         });
-        if rf_win::ftp::is_ftp(&dir) {
+        if leaf_sys::ftp::is_ftp(&dir) {
             // FTP: upload the clipboard files (folders are skipped), then refresh
             let url = dir.to_string_lossy().into_owned();
             cx.spawn(async move |this, cx| {
                 if let Ok(Some((paths, _))) = rx.await {
                     let work = cx.background_spawn(async move {
                         for p in paths.iter().filter(|p| p.is_file()) {
-                            if let Err(e) = rf_win::ftp::upload(p, &url) {
+                            if let Err(e) = leaf_sys::ftp::upload(p, &url) {
                                 log::warn!("ftp upload {p:?}: {e}");
                             }
                         }
@@ -351,8 +351,8 @@ impl FolderView {
         cx.spawn(async move |this, cx| {
             let clip = rx.await.ok().flatten();
             // No files with paths: files that live only in the program that copied them (a remote desktop session, a tool that
-            // carries the clipboard between PCs) are pasted from that program's own data (`rf_win::vfiles`).
-            if clip.is_none() && !rf_win::vfiles::clipboard_has() {
+            // carries the clipboard between PCs) are pasted from that program's own data (`leaf_sys::vfiles`).
+            if clip.is_none() && !leaf_sys::vfiles::clipboard_has() {
                 let _ = cx.update(|cx| {
                     let item = cx.read_from_clipboard();
                     let text = item.as_ref().and_then(|c| c.text());
@@ -401,7 +401,7 @@ impl FolderView {
             return;
         }
         let Some(dir) = self.current_dir() else { return };
-        if rf_win::ftp::is_ftp(&dir) || crate::archive_view::split(&dir).is_some() {
+        if leaf_sys::ftp::is_ftp(&dir) || crate::archive_view::split(&dir).is_some() {
             return;
         }
         let paths = self.selection_paths();
@@ -767,7 +767,7 @@ impl FolderView {
             vec![
                 item(MENU_NEW_FOLDER, t!("New folder\tCtrl+Shift+N")),
                 item(MENU_NEW_TEXT, t!("New text document")),
-                ExtraItem { id: MENU_PASTE, label: t!("Paste\tCtrl+V").into(), enabled: rf_win::clipboard::can_paste() },
+                ExtraItem { id: MENU_PASTE, label: t!("Paste\tCtrl+V").into(), enabled: leaf_sys::clipboard::can_paste() },
                 item(MENU_TERMINAL, t!("Open in terminal")),
                 item(MENU_COPY_PATH, t!("Copy path")),
             ]
@@ -814,15 +814,15 @@ impl FolderView {
         let (tx, rx) = oneshot::channel::<(MenuOutcome, Option<(Vec<PathBuf>, Transfer)>)>();
         // Read Shift here: the shell thread has its own input state.
         let extended = unsafe { GetKeyState(VK_SHIFT.0 as i32) < 0 };
-        rf_win::sta::run(move |owner| {
+        leaf_sys::sta::run(move |owner| {
             let mut pt = POINT::default();
             unsafe {
                 let _ = GetCursorPos(&mut pt);
             }
             let r = if background {
-                rf_win::ctxmenu::show_for_background(owner, &dir, (pt.x, pt.y), extended, &extra)
+                leaf_sys::ctxmenu::show_for_background(owner, &dir, (pt.x, pt.y), extended, &extra)
             } else {
-                rf_win::ctxmenu::show_for_items(owner, &items, (pt.x, pt.y), extended, &extra)
+                leaf_sys::ctxmenu::show_for_items(owner, &items, (pt.x, pt.y), extended, &extra)
             };
             let r = r.unwrap_or_else(|e| {
                 log::warn!("context menu: {e:#}");
@@ -830,7 +830,7 @@ impl FolderView {
             });
             // Read the clipboard right here on the shell thread; the UI starts the transfer.
             let clip = if r == MenuOutcome::Custom(MENU_PASTE) {
-                rf_win::clipboard::get_files(owner).ok().flatten()
+                leaf_sys::clipboard::get_files(owner).ok().flatten()
             } else {
                 None
             };
@@ -842,7 +842,7 @@ impl FolderView {
                 MenuOutcome::Custom(MENU_PASTE) => {
                     if let Some((paths, kind)) = clip {
                         crate::status_center::transfer(cx, kind, paths, paste_dir_ui.clone());
-                    } else if rf_win::vfiles::clipboard_has() {
+                    } else if leaf_sys::vfiles::clipboard_has() {
                         crate::status_center::paste_virtual(cx, paste_dir_ui.clone(), |_, _| {});
                     }
                 }
@@ -856,7 +856,7 @@ impl FolderView {
                 MenuOutcome::Custom(MENU_TERMINAL) => {
                     let d = target_dir.clone();
                     std::thread::spawn(move || {
-                        let _ = rf_win::shell::open_terminal(&d);
+                        let _ = leaf_sys::shell::open_terminal(&d);
                     });
                 }
                 MenuOutcome::Custom(MENU_NEW_TAB) => {
@@ -932,7 +932,7 @@ impl FolderView {
 const DRAG_EXTRACT_MAX: u64 = 256 << 20;
 
 /// [`drag_paths_out`] for members of an archive: extracted on a thread of their own first (the window does not wait), then dragged
-/// as real files that may only be copied. A button let go before the extraction ended starts no drag (see `rf_win::dnd::drag_out`).
+/// as real files that may only be copied. A button let go before the extraction ended starts no drag (see `leaf_sys::dnd::drag_out`).
 /// What the clipboard held when it had no files: text, or a picture.
 enum Pasted {
     Text(String),
@@ -990,8 +990,8 @@ pub(crate) fn drag_archive_items_out(items: Vec<PathBuf>) {
                 return;
             }
         };
-        rf_win::sta::run(move |owner| {
-            if let Err(e) = rf_win::dnd::drag_out_copy_only(owner, ui_thread, &real) {
+        leaf_sys::sta::run(move |owner| {
+            if let Err(e) = leaf_sys::dnd::drag_out_copy_only(owner, ui_thread, &real) {
                 log::warn!("drag: {e:#}");
             }
         });
@@ -1008,8 +1008,8 @@ pub(crate) fn drag_paths_out(items: Vec<PathBuf>) {
         unsafe {
             let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
         }
-        rf_win::sta::run(move |owner| {
-            if let Err(e) = rf_win::dnd::drag_out(owner, ui_thread, &items) {
+        leaf_sys::sta::run(move |owner| {
+            if let Err(e) = leaf_sys::dnd::drag_out(owner, ui_thread, &items) {
                 log::warn!("drag: {e:#}");
             }
         });
@@ -1029,12 +1029,12 @@ impl FolderView {
             })
             .collect();
         let (tx, rx) = oneshot::channel::<Option<u32>>();
-        rf_win::sta::run(move |owner| {
+        leaf_sys::sta::run(move |owner| {
             let mut pt = POINT::default();
             unsafe {
                 let _ = GetCursorPos(&mut pt);
             }
-            let _ = tx.send(rf_win::ctxmenu::show_simple(owner, (pt.x, pt.y), &items));
+            let _ = tx.send(leaf_sys::ctxmenu::show_simple(owner, (pt.x, pt.y), &items));
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Some(id)) = rx.await {
@@ -1080,7 +1080,7 @@ impl FolderView {
         std::thread::spawn(move || {
             let mut failed = None;
             for f in &files {
-                if let Err(e) = rf_win::openrules::open_in(&started, f) {
+                if let Err(e) = leaf_sys::openrules::open_in(&started, f) {
                     log::warn!("open with {started:?}: {e:#}");
                     failed = Some(format!("{e:#}"));
                     break;
@@ -1107,8 +1107,8 @@ impl FolderView {
 
     pub fn open_with(&self) {
         if let Some(p) = self.selection_paths().into_iter().next() {
-            rf_win::sta::run(move |_| {
-                let _ = rf_win::shell::open_with(&p);
+            leaf_sys::sta::run(move |_| {
+                let _ = leaf_sys::shell::open_with(&p);
             });
         }
     }
@@ -1181,14 +1181,14 @@ mod tests {
     }
 }
 
-/// Copy or move for files dropped from another program (or another of our processes): [`rf_win::dnd::default_transfer`], but a
+/// Copy or move for files dropped from another program (or another of our processes): [`leaf_sys::dnd::default_transfer`], but a
 /// copy when the drag's source does not allow moving (an archive's files extracted for the drag, a phone, a mail's attachment).
 /// Moving them anyway took the source's own files away, and Windows refused the drop outright before the GPUI fork chose an effect
 /// the source allows: a file dragged from an archive onto the desktop did nothing (2026-11-18).
-pub(crate) fn drop_transfer(sources: &[std::path::PathBuf], dest: &std::path::Path, ctrl: bool, shift: bool) -> rf_win::fileops::Transfer {
+pub(crate) fn drop_transfer(sources: &[std::path::PathBuf], dest: &std::path::Path, ctrl: bool, shift: bool) -> leaf_sys::fileops::Transfer {
     use gpui_windows::dnd_hint;
-    let kind = rf_win::dnd::default_transfer(sources, dest, ctrl, shift);
-    if kind == rf_win::fileops::Transfer::Move && dnd_hint::allowed() & dnd_hint::MOVE == 0 { rf_win::fileops::Transfer::Copy } else { kind }
+    let kind = leaf_sys::dnd::default_transfer(sources, dest, ctrl, shift);
+    if kind == leaf_sys::fileops::Transfer::Move && dnd_hint::allowed() & dnd_hint::MOVE == 0 { leaf_sys::fileops::Transfer::Copy } else { kind }
 }
 
 pub(crate) fn drop_on_program(program: PathBuf, files: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
@@ -1206,8 +1206,8 @@ pub(crate) fn drop_on_program(program: PathBuf, files: Vec<PathBuf>, window: &mu
     cx.spawn(async move |cx| {
         let Ok((files, result)) = rx.await else { return };
         match result {
-            Ok(Some(dest)) if !rf_win::dnd::is_invalid_drop(&files, &dest) => {
-                let kind = rf_win::dnd::default_transfer(&files, &dest, ctrl, shift);
+            Ok(Some(dest)) if !leaf_sys::dnd::is_invalid_drop(&files, &dest) => {
+                let kind = leaf_sys::dnd::default_transfer(&files, &dest, ctrl, shift);
                 cx.update(|cx| crate::status_center::transfer(cx, kind, files, dest));
             }
             Err(err) => {

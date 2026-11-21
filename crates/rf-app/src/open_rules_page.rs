@@ -91,8 +91,8 @@ fn add_program(ix: usize, path: String, cx: &mut App) {
 fn pick_program(ix: usize, cx: &mut App) {
     let (tx, rx) = futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
     let (title, programs, all) = (t!("Choose a program"), t!("Programs"), t!("All files"));
-    rf_win::sta::run(move |owner| {
-        let _ = tx.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::File { filters: &[(programs, "*.exe;*.bat;*.cmd;*.com;*.lnk"), (all, "*.*")] }));
+    leaf_sys::sta::run(move |owner| {
+        let _ = tx.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::File { filters: &[(programs, "*.exe;*.bat;*.cmd;*.com;*.lnk"), (all, "*.*")] }));
     });
     cx.spawn(async move |cx| {
         if let Ok(Some(path)) = rx.await {
@@ -146,7 +146,7 @@ fn delete_dialog(ix: usize, window: &mut Window, cx: &mut App) {
 /// the lists from the settings file as it is now, just before a file is opened. A small file read, on the thread that opens.
 pub(crate) fn follow_file() {
     if let Some(s) = Settings::load_readonly() {
-        rf_win::openrules::set(s.open_rules);
+        leaf_sys::openrules::set(s.open_rules);
     }
 }
 

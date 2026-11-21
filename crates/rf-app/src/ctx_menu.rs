@@ -9,8 +9,8 @@ use futures::channel::oneshot;
 use gpui_kit::assets::IconName as L;
 use gpui_kit::*;
 use rf_core::{Location, SortDir, SortKey};
-use rf_win::ctxmenu::{MenuOutcome, ShellItem, ShellTarget};
-use rf_win::fileops::Transfer;
+use leaf_sys::ctxmenu::{MenuOutcome, ShellItem, ShellTarget};
+use leaf_sys::fileops::Transfer;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
@@ -98,7 +98,7 @@ impl FolderView {
         let target = if background { ShellTarget::Background(dir.clone()) } else { ShellTarget::Items(items.clone()) };
         // The user's own programs for the first selected file's type (Settings > File types): the first rows of "Open with". Their
         // icons are read on the worker, with the shell's items: never on the UI thread.
-        let own: Vec<String> = if background { Vec::new() } else { items.first().map(|f| rf_win::openrules::programs_for(f)).unwrap_or_default() };
+        let own: Vec<String> = if background { Vec::new() } else { items.first().map(|f| leaf_sys::openrules::programs_for(f)).unwrap_or_default() };
         // "Send to" (issue 117): its entries and their icons are read on the worker too, only when the menu has the row
         let send_to = !background && send_to_fits(&items, cx);
         let drives = if send_to { self.send_to_drives(cx) } else { Vec::new() };
@@ -106,27 +106,27 @@ impl FolderView {
         // the packaged apps' commands of Windows 11's new menu (issue 107), read on the worker with their icons
         let pkg_items = if background { vec![dir.clone()] } else { items.clone() };
         let (tx, rx) = oneshot::channel();
-        rf_win::sta::run(move |owner| {
-            let packaged = packaged_commands(rf_win::pkgverbs::for_items(&pkg_items, background));
+        leaf_sys::sta::run(move |owner| {
+            let packaged = packaged_commands(leaf_sys::pkgverbs::for_items(&pkg_items, background));
             let own: Vec<OwnProgram> = own
                 .into_iter()
                 .map(|program| {
-                    let icon = rf_win::thumbs::get_image(std::path::Path::new(&program), 32, rf_win::thumbs::Kind::Icon).ok();
+                    let icon = leaf_sys::thumbs::get_image(std::path::Path::new(&program), 32, leaf_sys::thumbs::Kind::Icon).ok();
                     (program, icon)
                 })
                 .collect();
             let targets: Vec<SendTarget> = if send_to {
-                rf_win::sendto::targets()
+                leaf_sys::sendto::targets()
                     .into_iter()
                     .map(|t| {
-                        let icon = rf_win::thumbs::get_image(&t.path, 32, rf_win::thumbs::Kind::Icon).ok();
+                        let icon = leaf_sys::thumbs::get_image(&t.path, 32, leaf_sys::thumbs::Kind::Icon).ok();
                         (t, icon)
                     })
                     .collect()
             } else {
                 Vec::new()
             };
-            let _ = tx.send((rf_win::ctxmenu::build(owner, &target, false).map_err(|e| format!("{e:#}")), own, targets, packaged));
+            let _ = tx.send((leaf_sys::ctxmenu::build(owner, &target, false).map_err(|e| format!("{e:#}")), own, targets, packaged));
         });
         let menu_weak = menu_view.downgrade();
         cx.spawn(async move |_, cx| {
@@ -162,7 +162,7 @@ impl FolderView {
     }
 
     fn quick_clipboard(&self, me: &Me, with_items: bool) -> Vec<Quick> {
-        let paste_ok = rf_win::clipboard::can_paste();
+        let paste_ok = leaf_sys::clipboard::can_paste();
         if !with_items {
             return vec![
                 Quick::new(L::ClipboardPaste, t!("Paste  (Ctrl+V)"), paste_ok, act(me, |v, w, cx| v.paste(w, cx))),
@@ -255,7 +255,7 @@ impl FolderView {
             let sel = items.to_vec();
             v.push(Item::action(t!("New folder with selection"), icon(L::FolderInput), act(me, move |v, _, cx| v.folder_with_selection(sel.clone(), cx))));
         }
-        if single_dir && crate::archive_view::split(&target_dir).is_none() && !rf_win::ftp::is_ftp(&target_dir) {
+        if single_dir && crate::archive_view::split(&target_dir).is_none() && !leaf_sys::ftp::is_ftp(&target_dir) {
             let d = target_dir.clone();
             v.push(Item::action(t!("Show disk usage"), icon(L::ChartPie), act(me, move |_, _, cx| {
                 cx.emit(FolderEvent::OpenInNewTab(Location::DiskUsage(d.clone())))
@@ -296,13 +296,13 @@ impl FolderView {
             v.push(Item::action(t!("Flatten folder"), icon(L::FolderTree), act(me, move |v, w, cx| v.flatten_folder(d.clone(), w, cx))));
         }
         // type-specific actions (Files: rotate, set as background, install font, run as administrator)
-        if !items.is_empty() && items.iter().all(|p| rf_win::rotate::can_rotate(p) && crate::archive_view::split(p).is_none()) {
+        if !items.is_empty() && items.iter().all(|p| leaf_sys::rotate::can_rotate(p) && crate::archive_view::split(p).is_none()) {
             v.push(Item::action(t!("Rotate right"), icon(L::RotateCw), act(me, |v, w, cx| v.rotate_selection(true, w, cx))));
             v.push(Item::action(t!("Rotate left"), icon(L::RotateCcw), act(me, |v, w, cx| v.rotate_selection(false, w, cx))));
         }
         if items.len() == 1 {
             let p = items[0].clone();
-            if rf_win::fileactions::is_image(&p) {
+            if leaf_sys::fileactions::is_image(&p) {
                 v.push(Item::action(t!("Set as desktop background"), icon(L::Monitor), move |_, _| {
                     let p = p.clone();
                     std::thread::spawn(move || {
@@ -314,23 +314,23 @@ impl FolderView {
                             log::warn!("wallpaper: the picture could not be extracted from its archive");
                             return;
                         };
-                        if let Err(e) = rf_win::fileactions::set_wallpaper(&real) {
+                        if let Err(e) = leaf_sys::fileactions::set_wallpaper(&real) {
                             log::warn!("wallpaper: {e:#}");
                         }
                     });
                 }));
-            } else if rf_win::fileactions::is_runnable(&p) && !in_archive {
+            } else if leaf_sys::fileactions::is_runnable(&p) && !in_archive {
                 v.push(Item::action(t!("Run as administrator"), icon(L::ShieldCheck), move |_, _| {
                     let p = p.clone();
-                    rf_win::sta::run(move |owner| {
-                        if let Err(e) = rf_win::ctxmenu::invoke_verb(owner, &ShellTarget::One(p), "runas", cursor()) {
+                    leaf_sys::sta::run(move |owner| {
+                        if let Err(e) = leaf_sys::ctxmenu::invoke_verb(owner, &ShellTarget::One(p), "runas", cursor()) {
                             log::warn!("runas: {e:#}");
                         }
                     });
                 }));
             }
         }
-        if !items.is_empty() && items.iter().all(|p| rf_win::fileactions::is_font(p)) {
+        if !items.is_empty() && items.iter().all(|p| leaf_sys::fileactions::is_font(p)) {
             let fonts = items.to_vec();
             v.push(Item::action(t!("Install font"), icon(L::Type), move |w, cx| {
                 let fonts = fonts.clone();
@@ -340,7 +340,7 @@ impl FolderView {
                         // (a font inside an archive is installed from a copy extracted first)
                         let real = if f.exists() { Some(f.clone()) } else { crate::archive_view::real_copy(f) };
                         let real = real.ok_or_else(|| anyhow::anyhow!("{}", t!("Could not extract it from the archive")))?;
-                        rf_win::fileactions::install_font_for_user(&real)?;
+                        leaf_sys::fileactions::install_font_for_user(&real)?;
                     }
                     Ok(true)
                 }, None);
@@ -367,7 +367,7 @@ impl FolderView {
                     let rar_items = items.to_vec();
                     Item::action(t!("Compress to RAR"), icon(L::FileArchive), move |_, cx| {
                         if let Some((dir, stem)) = archive_stem(&rar_items) {
-                            let dest = rf_win::fileops::unique_name(&dir, &stem, ".rar");
+                            let dest = leaf_sys::fileops::unique_name(&dir, &stem, ".rar");
                             crate::status_center::compress_rar(cx, rar_items.clone(), dest, 5, None);
                         }
                     })
@@ -461,12 +461,12 @@ impl FolderView {
         v.push(Item::Sub { label: t!("New").into(), icon: icon(L::CirclePlus), items: Sub::Pending { key: "new", fallback: Some(fallback) }, click: None });
         let in_archive = crate::archive_view::split(dir).is_some() && !dir.exists();
         if !in_archive {
-            v.push(Item::action(t!("Paste shortcut"), icon(L::ClipboardPaste), act(me, |v, w, cx| v.paste_shortcuts(w, cx))).enabled(rf_win::clipboard::has_files()));
+            v.push(Item::action(t!("Paste shortcut"), icon(L::ClipboardPaste), act(me, |v, w, cx| v.paste_shortcuts(w, cx))).enabled(leaf_sys::clipboard::has_files()));
         }
         let d = dir.to_path_buf();
         v.push(Item::action(t!("Pin to sidebar"), icon(L::Pin), act(me, move |v, _, cx| v.pin(d.clone(), cx))));
         v.push(Item::action(t!("Copy path"), icon(L::ClipboardCopy), act(me, |v, _, cx| v.copy_path(cx))));
-        if !self.is_search() && !crate::archive_view::is_browsable_path(dir) && !rf_win::ftp::is_ftp(dir) {
+        if !self.is_search() && !crate::archive_view::is_browsable_path(dir) && !leaf_sys::ftp::is_ftp(dir) {
             let d = dir.to_path_buf();
             v.push(Item::action(t!("Show disk usage"), icon(L::ChartPie), act(me, move |_, _, cx| {
                 cx.emit(FolderEvent::OpenInNewTab(Location::DiskUsage(d.clone())))
@@ -509,7 +509,7 @@ impl FolderView {
         }
     }
 
-    /// Windows' share sheet for the selection, over this window (`rf_win::share`: the context menu's verb failed, issue 48).
+    /// Windows' share sheet for the selection, over this window (`leaf_sys::share`: the context menu's verb failed, issue 48).
     pub(crate) fn share(&self, window: &Window, cx: &mut App) {
         crate::share::open(crate::look::window::hwnd_of(window), self.selection_paths(), cx);
     }
@@ -646,8 +646,8 @@ impl FolderView {
                 let view = fluent_menu::show(Menu { quick: Vec::new(), items: own_new_items(&me) }, pos, window, cx);
                 // the shell's templates (Word, Excel…) join as soon as the shell answers
                 let (tx, rx) = oneshot::channel();
-                rf_win::sta::run(move |owner| {
-                    let _ = tx.send(rf_win::ctxmenu::build(owner, &ShellTarget::Background(dir), false).ok());
+                leaf_sys::sta::run(move |owner| {
+                    let _ = tx.send(leaf_sys::ctxmenu::build(owner, &ShellTarget::Background(dir), false).ok());
                 });
                 let weak = view.downgrade();
                 cx.spawn(async move |_, cx| {
@@ -788,7 +788,7 @@ fn quick_compress(cx: &mut App, items: Vec<PathBuf>, format: Option<rf_archive::
         Some(f) => compress(cx, items, f),
         None => {
             if let Some((dir, stem)) = archive_stem(&items) {
-                let dest = rf_win::fileops::unique_name(&dir, &stem, ".rar");
+                let dest = leaf_sys::fileops::unique_name(&dir, &stem, ".rar");
                 crate::status_center::compress_rar(cx, items, dest, 5, None);
             }
         }
@@ -943,14 +943,14 @@ fn archive_password(dest: PathBuf, finish: Finish, first: Option<String>, window
 
 fn open_terminal(d: PathBuf) {
     std::thread::spawn(move || {
-        let _ = rf_win::shell::open_terminal(&d);
+        let _ = leaf_sys::shell::open_terminal(&d);
     });
 }
 
 /// "<name> - Kısayol.lnk" next to each item (unique name), like Explorer's "Create shortcut".
 fn create_shortcuts(items: Vec<PathBuf>) {
     std::thread::spawn(move || {
-        rf_win::shell::ensure_com();
+        leaf_sys::shell::ensure_com();
         for target in items {
             let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else { continue };
             let base = format!("{} - {}", name.to_string_lossy(), t!("Shortcut"));
@@ -960,7 +960,7 @@ fn create_shortcuts(items: Vec<PathBuf>) {
                 link = parent.join(format!("{base} ({n}).lnk"));
                 n += 1;
             }
-            if let Err(e) = rf_win::shortcut::create(&link, &target) {
+            if let Err(e) = leaf_sys::shortcut::create(&link, &target) {
                 log::warn!("shortcut: {e:#}");
             }
         }
@@ -968,26 +968,26 @@ fn create_shortcuts(items: Vec<PathBuf>) {
 }
 
 /// One of the user's own programs for a kind of file, and its icon when the shell gave one.
-type OwnProgram = (String, Option<rf_win::thumbs::Bgra>);
+type OwnProgram = (String, Option<leaf_sys::thumbs::Bgra>);
 
 /// A packaged app's command for the menu, with its icon read on the worker.
 struct Packaged {
     id: usize,
     title: String,
-    icon: Option<rf_win::thumbs::Bgra>,
+    icon: Option<leaf_sys::thumbs::Bgra>,
     enabled: bool,
     sub: Vec<Packaged>,
 }
 
 /// The packaged commands with their icons (on the shell STA: the icons are files' own icons).
-fn packaged_commands(shown: Vec<rf_win::pkgverbs::Shown>) -> Vec<Packaged> {
+fn packaged_commands(shown: Vec<leaf_sys::pkgverbs::Shown>) -> Vec<Packaged> {
     shown
         .into_iter()
         .map(|s| Packaged {
             id: s.id,
             // (the menu marks no access keys: "&Open in Terminal" is "Open in Terminal")
             title: s.title.replace("&&", "\u{1}").replace('&', "").replace('\u{1}', "&"),
-            icon: s.icon.and_then(|p| rf_win::thumbs::get_image(&p, 32, rf_win::thumbs::Kind::Icon).ok()),
+            icon: s.icon.and_then(|p| leaf_sys::thumbs::get_image(&p, 32, leaf_sys::thumbs::Kind::Icon).ok()),
             enabled: s.enabled,
             sub: packaged_commands(s.sub),
         })
@@ -1001,8 +1001,8 @@ fn packaged_items(cmds: Vec<Packaged>) -> Vec<Item> {
             if c.sub.is_empty() {
                 let id = c.id;
                 Item::action(c.title, picture, move |_, _| {
-                    rf_win::sta::run(move |_| {
-                        if let Err(e) = rf_win::pkgverbs::invoke(id) {
+                    leaf_sys::sta::run(move |_| {
+                        if let Err(e) = leaf_sys::pkgverbs::invoke(id) {
                             log::warn!("packaged menu command: {e:#}");
                         }
                     })
@@ -1032,14 +1032,14 @@ fn with_packaged(packaged: Vec<Packaged>, rest: Pending) -> Pending {
 }
 
 /// An entry of the SendTo folder with its icon (read on the shell's worker thread).
-type SendTarget = (rf_win::sendto::Target, Option<rf_win::thumbs::Bgra>);
+type SendTarget = (leaf_sys::sendto::Target, Option<leaf_sys::thumbs::Bgra>);
 
 /// The menu has "Send to" for these items: the setting is on and they are files of one folder on disk (not members of an archive, not
 /// on an FTP server: a drop needs the shell's own items of real files).
 fn send_to_fits(items: &[PathBuf], cx: &App) -> bool {
     let Some(parent) = items.first().and_then(|p| p.parent()) else { return false };
     cx.global::<crate::settings::Settings>().menu.send_to
-        && !rf_win::ftp::is_ftp(parent)
+        && !leaf_sys::ftp::is_ftp(parent)
         && items.iter().all(|p| p.parent() == Some(parent) && !(crate::archive_view::split(p).is_some() && !p.exists()))
 }
 
@@ -1049,8 +1049,8 @@ fn send_to_items(targets: Vec<SendTarget>, drives: Vec<(PathBuf, String, L)>, it
     let send = |target: PathBuf, items: Vec<PathBuf>| {
         move |_: &mut Window, _: &mut App| {
             let (target, items) = (target.clone(), items.clone());
-            rf_win::sta::run(move |owner| {
-                if let Err(e) = rf_win::sendto::send(owner, &target, &items) {
+            leaf_sys::sta::run(move |owner| {
+                if let Err(e) = leaf_sys::sendto::send(owner, &target, &items) {
                     log::warn!("send to {}: {e:#}", target.display());
                 }
             });
@@ -1170,8 +1170,8 @@ fn tidy(items: Vec<ShellItem>) -> Vec<ShellItem> {
 /// drives…); `me` receives "Rename" if the shell asks for it.
 pub fn load_shell_more(menu: WeakEntity<fluent_menu::MenuView>, target: ShellTarget, me: Me, cx: &mut App) {
     let (tx, rx) = oneshot::channel();
-    rf_win::sta::run(move |owner| {
-        let _ = tx.send(rf_win::ctxmenu::build(owner, &target, false).map_err(|e| format!("{e:#}")));
+    leaf_sys::sta::run(move |owner| {
+        let _ = tx.send(leaf_sys::ctxmenu::build(owner, &target, false).map_err(|e| format!("{e:#}")));
     });
     cx.spawn(async move |cx| {
         let r = rx.await.unwrap_or_else(|_| Err("cancelled".into()));
@@ -1218,8 +1218,8 @@ fn to_items(me: &Me, session: u64, items: &[ShellItem], cx: &mut App) -> Vec<Ite
 
 fn invoke_shell(me: &Me, session: u64, id: u32, cx: &mut App) {
     let (tx, rx) = oneshot::channel();
-    rf_win::sta::run(move |owner| {
-        let r = rf_win::ctxmenu::invoke(owner, session, id, cursor());
+    leaf_sys::sta::run(move |owner| {
+        let r = leaf_sys::ctxmenu::invoke(owner, session, id, cursor());
         if let Err(e) = &r {
             log::warn!("shell command: {e:#}");
         }
@@ -1277,8 +1277,8 @@ impl FolderView {
             _ => ShellTarget::Items(items),
         };
         let (tx, rx) = oneshot::channel();
-        rf_win::sta::run(move |owner| {
-            let _ = tx.send(rf_win::ctxmenu::build(owner, &target, false).map_err(|e| format!("{e:#}")));
+        leaf_sys::sta::run(move |owner| {
+            let _ = tx.send(leaf_sys::ctxmenu::build(owner, &target, false).map_err(|e| format!("{e:#}")));
         });
         let menu_weak = menu_view.downgrade();
         cx.spawn(async move |_, cx| {

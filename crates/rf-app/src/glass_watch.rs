@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Task};
-use rf_win::glass::GlassState;
+use leaf_sys::glass::GlassState;
 
 /// How long to wait before trying again after the 1st, 2nd and 3rd failure. After the third retry fails the surface keeps its own fill
 /// for good (the dock's island until the dock is restarted, a popup until it closes): a glass that cannot be kept should not be
@@ -65,7 +65,7 @@ impl Machine {
         self.phase = Phase::Failed { at_ms: now_ms };
     }
 
-    /// One look at the engine's report (`state` is what `rf_win::glass::state` says) at `now_ms`.
+    /// One look at the engine's report (`state` is what `leaf_sys::glass::state` says) at `now_ms`.
     pub fn observe(&mut self, engine: &GlassState, now_ms: u64) -> Act {
         match self.phase {
             Phase::Failed { at_ms } => match RETRY_AFTER_MS.get(self.retries) {
@@ -144,7 +144,7 @@ impl PopupGlass {
         Self::start_with_options(hwnd, dark, round, None)
     }
 
-    fn start_with_options(hwnd: isize, dark: bool, round: bool, shaped: Option<rf_win::glass::GlassOptions>) -> PopupGlass {
+    fn start_with_options(hwnd: isize, dark: bool, round: bool, shaped: Option<leaf_sys::glass::GlassOptions>) -> PopupGlass {
         let mut g = PopupGlass { hwnd, machine: Machine::default(), started: Instant::now(), attached: false, gave_up: false };
         // (no glass at all on a Windows without materials: the popup is its plain fill, see `dock/backdrop.rs`)
         if hwnd == 0 || !crate::settings::materials_available() {
@@ -156,23 +156,23 @@ impl PopupGlass {
         if shaped.is_some() {
             // (the window cuts its own corners)
         } else if round {
-            rf_win::window::set_round_corners(hwnd);
+            leaf_sys::window::set_round_corners(hwnd);
         } else {
-            rf_win::window::set_small_corners(hwnd);
+            leaf_sys::window::set_small_corners(hwnd);
         }
         let attached = match shaped {
-            Some(opts) => rf_win::glass::attach_with(hwnd, opts),
-            None => rf_win::glass::attach(hwnd, dark),
+            Some(opts) => leaf_sys::glass::attach_with(hwnd, opts),
+            None => leaf_sys::glass::attach(hwnd, dark),
         };
         if attached {
             g.attached = true;
         } else {
-            let why = match rf_win::glass::state(hwnd) {
+            let why = match leaf_sys::glass::state(hwnd) {
                 GlassState::Failed(why) => why,
                 _ => "the glass engine did not accept the window".into(),
             };
             log::warn!("popup glass: {why}");
-            rf_win::glass::detach(hwnd); // clears the failed entry
+            leaf_sys::glass::detach(hwnd); // clears the failed entry
             g.machine.attach_failed(0);
             g.gave_up = true;
         }
@@ -201,7 +201,7 @@ impl PopupGlass {
         }
         let before = self.machine.fallback();
         let now_ms = self.started.elapsed().as_millis() as u64;
-        match self.machine.observe(&rf_win::glass::state(self.hwnd), now_ms) {
+        match self.machine.observe(&leaf_sys::glass::state(self.hwnd), now_ms) {
             Act::GiveUp(why) => {
                 log::warn!("popup glass: giving up, the popup keeps its own fill: {why}");
                 self.release_glass();
@@ -215,7 +215,7 @@ impl PopupGlass {
 
     fn release_glass(&mut self) {
         if self.attached {
-            rf_win::glass::detach(self.hwnd);
+            leaf_sys::glass::detach(self.hwnd);
             self.attached = false;
         }
     }

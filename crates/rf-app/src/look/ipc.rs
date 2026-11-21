@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use super::ShowOpts;
 
 /// leaf-look'un tek örnek adı (boru ve kilit).
-pub const APP: &str = rf_win::LOOK_EXE_STEM;
+pub const APP: &str = leaf_sys::LOOK_EXE_STEM;
 
 /// The single-instance name. `LEAF_LOOK_INSTANCE=<x>` gives a test copy its own
 /// ("leaf-look-<x>"), so it never talks to the user's running leaf-look.
@@ -113,7 +113,7 @@ impl ToApp {
 /// leaf-look.exe: bu programın yanında.
 pub fn exe() -> Option<PathBuf> {
     let me = std::env::current_exe().ok()?;
-    let p = me.with_file_name(rf_win::exe_name(rf_win::LOOK_EXE_STEM));
+    let p = me.with_file_name(leaf_sys::exe_name(leaf_sys::LOOK_EXE_STEM));
     p.exists().then_some(p)
 }
 
@@ -122,14 +122,14 @@ pub fn exe() -> Option<PathBuf> {
 pub fn send(msg: Msg, start: bool) {
     std::thread::spawn(move || {
         let text = msg.encode();
-        if rf_win::single_instance::send_to(&app_name(), &text) {
+        if leaf_sys::single_instance::send_to(&app_name(), &text) {
             return;
         }
         if !start {
             return;
         }
         let Some(exe) = exe() else {
-            log::warn!("{} not found", rf_win::exe_name(rf_win::LOOK_EXE_STEM));
+            log::warn!("{} not found", leaf_sys::exe_name(leaf_sys::LOOK_EXE_STEM));
             return;
         };
         let mut cmd = std::process::Command::new(exe);
@@ -139,7 +139,7 @@ pub fn send(msg: Msg, start: bool) {
             cmd.args(["--msg", &text]);
         }
         if let Err(e) = cmd.spawn() {
-            log::warn!("couldn't start {}: {e}", rf_win::LOOK_EXE_STEM);
+            log::warn!("couldn't start {}: {e}", leaf_sys::LOOK_EXE_STEM);
         }
     });
 }

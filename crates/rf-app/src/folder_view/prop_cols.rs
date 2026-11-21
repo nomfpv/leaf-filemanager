@@ -1,5 +1,5 @@
 //! Columns for any Windows property in the Details view (duration, artist, date taken ...): the part
-//! that lives inside the folder view. The data side is `rf_win::propcols` (reading) and
+//! that lives inside the folder view. The data side is `leaf_sys::propcols` (reading) and
 //! `rf_core::propcols` (the chosen list, typed values, the cache); the chooser window is
 //! `crate::prop_chooser`. See docs/design/property-columns.md.
 //!
@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use parking_lot::Mutex;
 use rf_core::propcols::{self as pc, ChosenColumn, ChosenColumns, PropCache, PropCell, PropKind, PropValue};
-use rf_win::propcols as wp;
+use leaf_sys::propcols as wp;
 
 use super::*;
 use crate::fluent_menu::{self, Item, Menu, MenuIcon};
@@ -1066,7 +1066,7 @@ fn follows_property_sort(spec: SortSpec, current: SortSpec) -> bool {
 
 /// The open folder is one whose files the property system can read without a network round trip.
 fn plain_local_path(p: &Path) -> bool {
-    !crate::archive_view::is_browsable_path(p) && !rf_win::ftp::is_ftp(p) && !rf_win::localized::is_network(p)
+    !crate::archive_view::is_browsable_path(p) && !leaf_sys::ftp::is_ftp(p) && !leaf_sys::localized::is_network(p)
 }
 
 #[cfg(test)]
@@ -1079,7 +1079,7 @@ mod tests {
     use parking_lot::Mutex;
     use rf_core::propcols::{PropCache, PropCell, PropValue};
     use rf_core::{Entry, EntryKind, SortDir, SortKey, SortSpec};
-    use rf_win::propcols::{FakeSource, ReadFail};
+    use leaf_sys::propcols::{FakeSource, ReadFail};
 
     // (not `use super::*`: that brings gpui's `test` attribute macro into scope and #[test] then loops)
     use super::{

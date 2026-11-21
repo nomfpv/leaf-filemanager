@@ -228,7 +228,7 @@ fn stop(cx: &mut App) {
     f.problem = None;
     f.questions.clear();
     for key in f.in_toast.drain() {
-        rf_win::toast_post::remove(crate::installer::APP_ID, &key);
+        leaf_sys::toast_post::remove(crate::installer::APP_ID, &key);
     }
     f.incoming.clear();
     f.viewing = None;
@@ -437,7 +437,7 @@ fn forget_question(key: &str, cx: &mut App) {
     let f = cx.global_mut::<NearbyService>();
     f.questions.retain(|x| x.key() != key);
     if f.in_toast.remove(key) {
-        rf_win::toast_post::remove(crate::installer::APP_ID, key);
+        leaf_sys::toast_post::remove(crate::installer::APP_ID, key);
     }
     sync_window(cx);
 }
@@ -486,11 +486,11 @@ fn toast_question(q: &Question, cx: &App) -> bool {
     all.extend(lines);
     let refs: Vec<&str> = all.iter().map(String::as_str).collect();
     let buttons = [
-        rf_win::toast_post::Button { label: no.to_string(), argument: format!("nearby:no:{key}") },
-        rf_win::toast_post::Button { label: yes.to_string(), argument: format!("nearby:yes:{key}") },
+        leaf_sys::toast_post::Button { label: no.to_string(), argument: format!("nearby:no:{key}") },
+        leaf_sys::toast_post::Button { label: yes.to_string(), argument: format!("nearby:yes:{key}") },
     ];
-    let toast = rf_win::toast_post::Toast { tag: &key, title: &title, lines: &refs, launch: &format!("nearby:show:{key}"), buttons: &buttons, stays: true };
-    match rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
+    let toast = leaf_sys::toast_post::Toast { tag: &key, title: &title, lines: &refs, launch: &format!("nearby:show:{key}"), buttons: &buttons, stays: true };
+    match leaf_sys::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
         let _ = tx.unbounded_send(Ev::Toast(arg));
     }) {
         Ok(()) => true,
@@ -536,14 +536,14 @@ fn incoming_started(offer: &Offer, cx: &mut App) {
         && cx.global::<NearbyService>().events.clone().is_some_and(|tx| {
             let title = format!("{} {}", offer.from_name, t!("is sending you files"));
             let lines = [line.as_str()];
-            let toast = rf_win::toast_post::Toast { tag: &format!("in-{}", offer.transfer), title: &title, lines: &lines, launch: "nearby:none:", buttons: &[], stays: false };
-            rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
+            let toast = leaf_sys::toast_post::Toast { tag: &format!("in-{}", offer.transfer), title: &title, lines: &lines, launch: "nearby:none:", buttons: &[], stays: false };
+            leaf_sys::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
                 let _ = tx.unbounded_send(Ev::Toast(arg));
             })
             .is_ok()
         });
     if !shown {
-        rf_win::sound::notify();
+        leaf_sys::sound::notify();
     }
 }
 
@@ -566,8 +566,8 @@ fn arrived(transfer: u64, from: String, paths: Vec<String>, cx: &mut App) {
     let what = if paths.len() == 1 { name } else { format!("{name} {} {}", t!("and"), crate::i18n::items(paths.len() - 1)) };
     let title = format!("{from} {}", t!("sent you files"));
     let lines = [what.as_str(), t!("Click to see them")];
-    let toast = rf_win::toast_post::Toast { tag: &format!("got-{transfer}"), title: &title, lines: &lines, launch: &format!("nearby:open:{first}"), buttons: &[], stays: false };
-    if let Err(e) = rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
+    let toast = leaf_sys::toast_post::Toast { tag: &format!("got-{transfer}"), title: &title, lines: &lines, launch: &format!("nearby:open:{first}"), buttons: &[], stays: false };
+    if let Err(e) = leaf_sys::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
         let _ = tx.unbounded_send(Ev::Toast(arg));
     }) {
         log::info!("nearby: no toast for an arrival: {e}");
@@ -584,7 +584,7 @@ fn mark_tree(path: &std::path::Path, from: &str) {
             }
         }
     } else if meta.is_file()
-        && let Err(e) = rf_win::fileinfo::mark_downloaded(path, from)
+        && let Err(e) = leaf_sys::fileinfo::mark_downloaded(path, from)
     {
         log::info!("nearby: cannot mark {}: {e}", path.display());
     }
@@ -633,7 +633,7 @@ fn open_window(cx: &mut App) {
     let glass = glassy(cx);
     match cx.open_window(opts, move |window, cx| {
         let hwnd = crate::look::window::hwnd_of(window);
-        rf_win::window::set_dark_mode(hwnd, Palette::for_window(window).dark);
+        leaf_sys::window::set_dark_mode(hwnd, Palette::for_window(window).dark);
         cx.new(|cx| QuestionView::new(glass, window, cx))
     }) {
         Ok(w) => cx.global_mut::<NearbyService>().window = Some(w),
@@ -711,8 +711,8 @@ impl Render for QuestionView {
                                 window.on_next_frame(move |w, _| {
                                     let hwnd = crate::look::window::hwnd_of(w);
                                     let new_h = (f32::from(h) * w.scale_factor()).round() as i32;
-                                    if let Some((r, _)) = rf_win::window::rect(hwnd) {
-                                        rf_win::window::place_quietly(hwnd, [r[0], r[3] - new_h, r[2], r[3]]);
+                                    if let Some((r, _)) = leaf_sys::window::rect(hwnd) {
+                                        leaf_sys::window::place_quietly(hwnd, [r[0], r[3] - new_h, r[2], r[3]]);
                                     }
                                 });
                             }
@@ -857,8 +857,8 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             .child(button("nearby-inbox", p, t!("Change…"), |_, cx| {
                 let (tx, rx) = futures::channel::oneshot::channel::<Option<PathBuf>>();
                 let title = t!("Choose the folder for received files");
-                rf_win::sta::run(move |owner| {
-                    let _ = tx.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::Folder));
+                leaf_sys::sta::run(move |owner| {
+                    let _ = tx.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::Folder));
                 });
                 cx.spawn(async move |cx| {
                     if let Ok(Some(path)) = rx.await {
@@ -982,7 +982,7 @@ pub(crate) fn page_seen(window: AnyWindowHandle, cx: &mut App) {
                 let Some(view) = cx.has_global::<NearbyService>().then(|| cx.global::<NearbyService>().viewing.as_ref().map(|v| (v.window, v.seen))).flatten() else {
                     return true;
                 };
-                let minimized = view.0.update(cx, |_, w, _| rf_win::window::is_minimized(crate::look::window::hwnd_of(w))).unwrap_or(true);
+                let minimized = view.0.update(cx, |_, w, _| leaf_sys::window::is_minimized(crate::look::window::hwnd_of(w))).unwrap_or(true);
                 if minimized || view.1.elapsed() > PAGE_GONE {
                     page_gone(cx);
                     return true;
@@ -1065,13 +1065,13 @@ fn measure(peer_id: String, cx: &mut App) {
 fn watch_link(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
-            let link = cx.background_executor().spawn(async { rf_win::network::lan_link() }).await;
+            let link = cx.background_executor().spawn(async { leaf_sys::network::lan_link() }).await;
             let running = cx.update(|cx| {
                 let Some(n) = cx.has_global::<NearbyService>().then(|| cx.global::<NearbyService>().nearby.clone()).flatten() else { return false };
                 let (kind, mbps) = match link {
-                    Some((rf_win::network::LinkType::Wifi, m)) => (LinkKind::Wifi, m),
-                    Some((rf_win::network::LinkType::Ethernet, m)) => (LinkKind::Ethernet, m),
-                    Some((rf_win::network::LinkType::Other, m)) => (LinkKind::Other, m),
+                    Some((leaf_sys::network::LinkType::Wifi, m)) => (LinkKind::Wifi, m),
+                    Some((leaf_sys::network::LinkType::Ethernet, m)) => (LinkKind::Ethernet, m),
+                    Some((leaf_sys::network::LinkType::Other, m)) => (LinkKind::Other, m),
                     None => (LinkKind::Unknown, 0),
                 };
                 n.set_link(kind, mbps);

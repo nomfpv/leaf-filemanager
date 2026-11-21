@@ -12,7 +12,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use parking_lot::Mutex;
-use rf_win::bench::{App as BenchApp, AppKind, Machine, OpenResult};
+use leaf_sys::bench::{App as BenchApp, AppKind, Machine, OpenResult};
 
 use crate::bench::{OpenTest, Progress, Results};
 use crate::t;
@@ -43,7 +43,7 @@ impl Global for State {}
 
 fn state(cx: &mut App) -> &mut State {
     if !cx.has_global::<State>() {
-        let detected = rf_win::bench::detect();
+        let detected = leaf_sys::bench::detect();
         cx.set_global(State {
             detected,
             machine: None,
@@ -57,7 +57,7 @@ fn state(cx: &mut App) -> &mut State {
         });
         // the machine line reads the registry and asks the disk: not on the UI thread
         cx.spawn(async move |cx| {
-            let m = cx.background_spawn(async { rf_win::bench::machine(&crate::bench::bench_dir()) }).await;
+            let m = cx.background_spawn(async { leaf_sys::bench::machine(&crate::bench::bench_dir()) }).await;
             cx.update(|cx| {
                 cx.global_mut::<State>().machine = Some(m);
                 cx.refresh_windows();

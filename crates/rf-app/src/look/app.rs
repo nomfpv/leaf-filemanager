@@ -23,8 +23,8 @@ pub fn parse_args(args: &[&str]) -> Msg {
     }
 }
 
-fn tray_labels() -> rf_win::tray::Labels {
-    rf_win::tray::Labels {
+fn tray_labels() -> leaf_sys::tray::Labels {
+    leaf_sys::tray::Labels {
         tooltip: "leaf Preview".into(),
         open: crate::t!("Preview settings").into(),
         new_window: String::new(),
@@ -37,18 +37,18 @@ fn tray_labels() -> rf_win::tray::Labels {
 /// or the preview was not opened from it: it then has no list to step through.
 pub(crate) fn step(forward: bool) {
     std::thread::spawn(move || {
-        let _ = rf_win::single_instance::send_to(&rf_win::single_instance::instance_name(), &ToApp::Step(forward).encode());
+        let _ = leaf_sys::single_instance::send_to(&leaf_sys::single_instance::instance_name(), &ToApp::Step(forward).encode());
     });
 }
 
 /// Ayarlar sayfasını leaf'ta açar (çalışmıyorsa başlatır).
 fn open_settings() {
     std::thread::spawn(|| {
-        if rf_win::single_instance::send_to(&rf_win::single_instance::instance_name(), &ToApp::OpenSettings.encode()) {
+        if leaf_sys::single_instance::send_to(&leaf_sys::single_instance::instance_name(), &ToApp::OpenSettings.encode()) {
             return;
         }
         if let Ok(me) = std::env::current_exe() {
-            let _ = std::process::Command::new(me.with_file_name(rf_win::exe_name(rf_win::APP_EXE_STEM))).arg("--settings=look").spawn();
+            let _ = std::process::Command::new(me.with_file_name(leaf_sys::exe_name(leaf_sys::APP_EXE_STEM))).arg("--settings=look").spawn();
         }
     });
 }
@@ -61,9 +61,9 @@ fn tray_wanted(cx: &App) -> bool {
 
 fn sync_tray(cx: &App) {
     if tray_wanted(cx) {
-        rf_win::tray::show(tray_labels());
+        leaf_sys::tray::show(tray_labels());
     } else {
-        rf_win::tray::hide();
+        leaf_sys::tray::hide();
     }
 }
 
@@ -91,7 +91,7 @@ fn handle(msg: Msg, cx: &mut App) {
             sync_tray(cx);
         }
         Msg::Quit => {
-            rf_win::tray::hide();
+            leaf_sys::tray::hide();
             cx.quit();
         }
         Msg::Wake => {}
@@ -100,31 +100,31 @@ fn handle(msg: Msg, cx: &mut App) {
 
 /// leaf-look.exe
 pub fn main() {
-    // (not in the installation folder: see `rf_win::ownfolder`)
-    rf_win::ownfolder::leave();
+    // (not in the installation folder: see `leaf_sys::ownfolder`)
+    leaf_sys::ownfolder::leave();
     crate::install_panic_log();
-    rf_win::shell::suppress_critical_error_dialogs();
-    rf_win::thumbs::keep_gdiplus_alive();
+    leaf_sys::shell::suppress_critical_error_dialogs();
+    leaf_sys::thumbs::keep_gdiplus_alive();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).target(env_logger::Target::Stderr).init();
     crate::background::LOOK_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let first = parse_args(&raw.iter().map(String::as_str).collect::<Vec<_>>());
-    let _instance = match rf_win::single_instance::acquire_app(&app_name(), &first.encode()) {
-        rf_win::single_instance::Role::Forwarded => return,
-        rf_win::single_instance::Role::Primary(g) => g,
+    let _instance = match leaf_sys::single_instance::acquire_app(&app_name(), &first.encode()) {
+        leaf_sys::single_instance::Role::Forwarded => return,
+        leaf_sys::single_instance::Role::Primary(g) => g,
     };
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<Msg>();
     {
         let tx = tx.clone();
-        rf_win::single_instance::serve_app(&app_name(), move |m| {
+        leaf_sys::single_instance::serve_app(&app_name(), move |m| {
             if let Some(msg) = Msg::decode(&m) {
                 let _ = tx.unbounded_send(msg);
             }
         });
     }
-    let (tray_tx, mut tray_rx) = futures::channel::mpsc::unbounded::<rf_win::tray::TrayEvent>();
-    rf_win::tray::set_handler(move |e| {
+    let (tray_tx, mut tray_rx) = futures::channel::mpsc::unbounded::<leaf_sys::tray::TrayEvent>();
+    leaf_sys::tray::set_handler(move |e| {
         let _ = tray_tx.unbounded_send(e);
     });
 
@@ -134,7 +134,7 @@ pub fn main() {
         gpui_kit::init(cx);
         // leaf'ın ayarları: yalnız dil, tema, tarih biçimi için okunur, asla yazılmaz
         cx.set_global(crate::settings::Settings::load());
-        if !rf_win::encoding::user_locale_is_turkish() {
+        if !leaf_sys::encoding::user_locale_is_turkish() {
             rf_core::textload::set_locale_hint(None);
         }
         crate::settings::apply_component_theme(cx);
@@ -145,7 +145,7 @@ pub fn main() {
         cx.on_window_closed(|cx, _| {
             if !LookManager::is_visible(cx) {
                 std::thread::spawn(|| {
-                    let _ = rf_win::single_instance::send_to(&rf_win::single_instance::instance_name(), &ToApp::LookClosed.encode());
+                    let _ = leaf_sys::single_instance::send_to(&leaf_sys::single_instance::instance_name(), &ToApp::LookClosed.encode());
                 });
             }
         })
@@ -168,7 +168,7 @@ pub fn main() {
             use futures::StreamExt;
             while let Some(e) = tray_rx.next().await {
                 match e {
-                    rf_win::tray::TrayEvent::Quit => cx.update(|cx| handle(Msg::Quit, cx)),
+                    leaf_sys::tray::TrayEvent::Quit => cx.update(|cx| handle(Msg::Quit, cx)),
                     _ => open_settings(),
                 }
             }

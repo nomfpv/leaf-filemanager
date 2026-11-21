@@ -38,7 +38,7 @@ pub(crate) fn accepts_program(path: &Path) -> bool {
 /// Run off the UI thread. Paths are passed as individual arguments.
 pub(crate) fn launch(program: PathBuf, arguments: Vec<OsString>, uses_paths: bool, folder: Option<PathBuf>) -> anyhow::Result<Option<PathBuf>> {
     let (exe, existing, working_dir) = if program.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
-        let shortcut = rf_win::shortcut::resolve(&program)?;
+        let shortcut = leaf_sys::shortcut::resolve(&program)?;
         if shortcut.target.is_dir() {
             return Ok(Some(shortcut.target));
         }
@@ -46,7 +46,7 @@ pub(crate) fn launch(program: PathBuf, arguments: Vec<OsString>, uses_paths: boo
     } else {
         (program, Vec::new(), None)
     };
-    anyhow::ensure!(exe.is_absolute() && accepts_program(&exe) && rf_win::runfind::is_program_file(&exe),
+    anyhow::ensure!(exe.is_absolute() && accepts_program(&exe) && leaf_sys::runfind::is_program_file(&exe),
         "{}", tx("Program not found."));
     // Command can quote paths for an executable or a batch file. Explicit shell command
     // evaluation has its own syntax and must not interpret characters from filenames.
@@ -87,7 +87,7 @@ mod tests {
         let shortcut = dir.join("receive.lnk");
         std::fs::write(&input, "test data").unwrap();
         std::fs::write(&batch, b"@copy /Y \"%~1\" \"%~dp0copied.txt\" >nul\r\n").unwrap();
-        rf_win::shortcut::create(&shortcut, &batch).unwrap();
+        leaf_sys::shortcut::create(&shortcut, &batch).unwrap();
         assert_eq!(launch(shortcut, vec![input.into_os_string()], true, None).unwrap(), None);
         let until = std::time::Instant::now() + std::time::Duration::from_secs(4);
         let copied = loop {

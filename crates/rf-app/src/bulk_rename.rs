@@ -531,7 +531,7 @@ impl BulkRename {
         self.taken_read = true;
         let facts = self.facts.clone();
         cx.spawn(async move |this, cx| {
-            let taken: Vec<i64> = cx.background_spawn(async move { facts.iter().map(|f| rf_win::look::decode::exif_taken_ms(&f.path).unwrap_or(0)).collect() }).await;
+            let taken: Vec<i64> = cx.background_spawn(async move { facts.iter().map(|f| leaf_sys::look::decode::exif_taken_ms(&f.path).unwrap_or(0)).collect() }).await;
             let _ = this.update(cx, |b, cx| {
                 let mut facts = (*b.facts).clone();
                 for (f, t) in facts.iter_mut().zip(taken) {

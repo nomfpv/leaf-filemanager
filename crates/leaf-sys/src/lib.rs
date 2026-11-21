@@ -23,6 +23,10 @@ pub use os::{
     sound, sta, syncroots, sysparams, taskbar_progress, thumbs, toast_post, tray, vfiles, volume, window, wsearch,
 };
 
+// (only until the settings lock moves into the backends: its one user, rf-app settings_merge.rs)
+#[cfg(windows)]
+pub use os::wide;
+
 // the crate-root items rf-win always had
 pub use os::{
     APP_EXE_STEM, Drive, DriveKind, KnownFolder, ListError, LOOK_EXE_STEM, Owner, exe_name, known_folders, list_dir, list_drives,

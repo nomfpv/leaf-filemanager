@@ -14,6 +14,7 @@ rf-core = { path = "crates/rf-core" }
 rf-win = { path = "crates/rf-win" }
 leaf-common = { path = "crates/leaf-common" }
 leaf-unix = { path = "crates/leaf-unix" }
+leaf-sys = { path = "crates/leaf-sys" }
 rf-player = { path = "crates/rf-player" }
 rf-nearby = { path = "crates/rf-nearby" }
 rustdecoder = { path = "crates/rustdecoder" }

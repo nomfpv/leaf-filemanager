@@ -22,7 +22,7 @@ const START_WAIT: Duration = Duration::from_secs(6);
 
 fn pipe() -> Option<&'static str> {
     static PIPE: OnceLock<Option<String>> = OnceLock::new();
-    PIPE.get_or_init(|| rf_win::kit::current_sid().map(|sid| format!(r"\\.\pipe\QuickLook.App.Pipe.{sid}"))).as_deref()
+    PIPE.get_or_init(|| leaf_sys::kit::current_sid().map(|sid| format!(r"\\.\pipe\QuickLook.App.Pipe.{sid}"))).as_deref()
 }
 
 /// The line QuickLook reads: the message, the path, no options.
@@ -60,7 +60,7 @@ fn desktop_exe() -> Option<PathBuf> {
 }
 
 /// Starts QuickLook; false when it is not installed (or would not start). The Store package is started the way the Start menu
-/// does it, through Explorer: started by the activation manager (`rf_win::activate`) it ran but never opened its pipe (tried
+/// does it, through Explorer: started by the activation manager (`leaf_sys::activate`) it ran but never opened its pipe (tried
 /// 2026-11-19 with 4.5.0; through Explorer the pipe was there within a second).
 fn start() -> bool {
     if let Some(exe) = desktop_exe() {

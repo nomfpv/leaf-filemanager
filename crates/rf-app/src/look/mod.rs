@@ -97,7 +97,7 @@ impl LookManager {
         if m.active.is_some_and(|h| !alive.contains(&h)) {
             m.active = None;
         }
-        rf_win::look::hook::set_own_windows(hwnds);
+        leaf_sys::look::hook::set_own_windows(hwnds);
     }
 
     pub fn show(path: PathBuf, opts: ShowOpts, cx: &mut App) {
@@ -120,9 +120,9 @@ impl LookManager {
 
     fn open(path: PathBuf, opts: ShowOpts, cx: &mut App) {
         let s = cx.global::<LookSettings>().clone();
-        let work = rect(rf_win::look::win::work_area_at_cursor());
+        let work = rect(leaf_sys::look::win::work_area_at_cursor());
         // a file in a slow place (a network drive) opens off the UI thread, in the window
-        let slow = rf_win::drives::slow_to_read(&path);
+        let slow = leaf_sys::drives::slow_to_read(&path);
         let (viewer, prepared): (Box<dyn viewer::Viewer>, _) =
             if slow { (Box::new(window::Opening), window::Opening::prepared(&path)) } else { window::prepare_viewer(&path, cx) };
         let size = geometry::fit(prepared.preferred, work, prepared.fit_ratio);
@@ -142,20 +142,20 @@ impl LookManager {
             window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(r.x), px(r.y)), size: gpui_kit::size(px(r.w), px(r.h)) })),
             window_min_size: Some(gpui_kit::size(px(320.), px(180.))),
             window_background: backdrop(&s),
-            focus: s.look_focus_on_open && !rf_win::window::offscreen(),
+            focus: s.look_focus_on_open && !leaf_sys::window::offscreen(),
             ..TitleBar::window_options()
         };
         let show_in_taskbar = s.look_show_in_taskbar;
         match cx.open_window(options, move |window, cx| {
             let hwnd = window::hwnd_of(window);
-            rf_win::look::win::set_show_in_taskbar(hwnd, show_in_taskbar);
+            leaf_sys::look::win::set_show_in_taskbar(hwnd, show_in_taskbar);
             if topmost {
-                rf_win::look::win::set_topmost(hwnd, true);
+                leaf_sys::look::win::set_topmost(hwnd, true);
             }
             cx.new(|cx| LookWindow::new(path, topmost, viewer, prepared, window, cx))
         }) {
             Ok(h) => {
-                rf_win::window::park_offscreen();
+                leaf_sys::window::park_offscreen();
                 Self::global(cx).active = Some(h);
                 Self::report_windows(cx);
                 if slow {
@@ -191,9 +191,9 @@ impl LookManager {
 
     pub fn run_and_close(cx: &mut App) {
         if let Some(p) = Self::current_path(cx) {
-            rf_win::sta::run(move |_| {
+            leaf_sys::sta::run(move |_| {
                 crate::open_rules_page::follow_file();
-                if let Err(e) = rf_win::openrules::open(&p) {
+                if let Err(e) = leaf_sys::openrules::open(&p) {
                     log::warn!("look run: {e:#}");
                 }
             });

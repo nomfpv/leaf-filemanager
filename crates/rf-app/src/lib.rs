@@ -133,7 +133,7 @@ mod placement_tests {
 pub(crate) fn install_panic_log() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        rf_win::handover::trace("panic (see crash.log)");
+        leaf_sys::handover::trace("panic (see crash.log)");
         if let Some(dir) = crate::settings::app_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let bt = std::backtrace::Backtrace::force_capture();
@@ -162,7 +162,7 @@ pub fn open_main_window(
     open_main_window_made(start, ipc, bounds, cx);
 }
 
-/// [`open_main_window`], saying whether the window was made (a second launch waits for that answer: see `rf_win::handover`).
+/// [`open_main_window`], saying whether the window was made (a second launch waits for that answer: see `leaf_sys::handover`).
 pub fn open_main_window_made(
     start: Option<Location>,
     ipc: Option<futures::channel::mpsc::UnboundedReceiver<String>>,
@@ -172,7 +172,7 @@ pub fn open_main_window_made(
     let (bounds, display_id) = match bounds {
         Some(bounds) => (bounds, None),
         None => {
-            let restored = if workspace::any_main_window(cx) || rf_win::window::offscreen() { None } else { restored_bounds(cx) };
+            let restored = if workspace::any_main_window(cx) || leaf_sys::window::offscreen() { None } else { restored_bounds(cx) };
             restored.unwrap_or_else(|| (WindowBounds::centered(size(px(1280.), px(800.)), cx), None))
         }
     };
@@ -180,15 +180,15 @@ pub fn open_main_window_made(
         window_bounds: Some(bounds),
         display_id,
         window_min_size: Some(size(px(720.), px(420.))),
-        focus: !rf_win::window::offscreen(),
+        focus: !leaf_sys::window::offscreen(),
         window_background: crate::theme::window_material(WindowBackgroundAppearance::MicaBackdrop),
         ..TitleBar::window_options()
     };
     let opened = gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| Workspace::new(start, ipc, window, cx)));
-    rf_win::window::park_offscreen();
+    leaf_sys::window::park_offscreen();
     if let Err(e) = opened {
         log::error!("open window: {e:#}");
-        rf_win::handover::trace("open window: failed");
+        leaf_sys::handover::trace("open window: failed");
         return false;
     }
     true
@@ -230,23 +230,23 @@ fn save_and_quit(cx: &mut App) {
     // quit (it opens a window, and that keeps the process); once the quit goes ahead, requests are refused with `leaving` and the
     // second launch shows its folder itself. Without this a folder opened while the app was quitting was forwarded to a process
     // that closed the window it opened, or that never looked at it.
-    if !rf_win::handover::GATE.try_leave() {
-        rf_win::handover::trace("quit: held back, a request is in flight");
+    if !leaf_sys::handover::GATE.try_leave() {
+        leaf_sys::handover::trace("quit: held back, a request is in flight");
         return;
     }
-    rf_win::handover::trace("quit: leaving, requests are refused from now on");
+    leaf_sys::handover::trace("quit: leaving, requests are refused from now on");
     cx.global::<settings::Settings>().clone().save();
     // the search index keeps its place in the change journal (or its changes): the next start
     // then catches up instead of walking the drives; bounded, quitting must not hang on it
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        rf_win::indexer::stop();
+        leaf_sys::indexer::stop();
         let _ = tx.send(());
     });
     // (kept on the UI thread and before the process ends on purpose: the index must be at rest when the next process opens it, and
     // a launch meanwhile is told `leaving` and waits for the mutex; the trace gives the real time of this wait)
     let stopped = rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok();
-    rf_win::handover::trace(&format!("quit: index stopped {}, ending", if stopped { "in time" } else { "late (2 s limit)" }));
+    leaf_sys::handover::trace(&format!("quit: index stopped {}, ending", if stopped { "in time" } else { "late (2 s limit)" }));
     cx.quit();
 }
 
@@ -262,7 +262,7 @@ pub(crate) fn restart(cx: &mut App) {
     let Ok(me) = std::env::current_exe() else { return };
     let pid = std::process::id().to_string();
     std::thread::spawn(move || {
-        rf_win::single_instance::send_to(&look::ipc::app_name(), &look::ipc::Msg::Quit.encode());
+        leaf_sys::single_instance::send_to(&look::ipc::app_name(), &look::ipc::Msg::Quit.encode());
         // (no folder: the new process opens the last session; its working directory is never the installation folder)
         let dir = std::env::temp_dir();
         if let Err(e) = std::process::Command::new(&me).env(AFTER_EXIT_ENV, &pid).current_dir(dir).spawn() {
@@ -273,7 +273,7 @@ pub(crate) fn restart(cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.background_executor().timer(std::time::Duration::from_millis(600)).await;
         cx.update(|cx| {
-            rf_win::handover::GATE.leave_now();
+            leaf_sys::handover::GATE.leave_now();
             workspace::save_all_sessions(cx);
             save_and_quit(cx)
         });
@@ -307,12 +307,12 @@ pub(crate) fn is_dir_bounded(p: PathBuf, limit: std::time::Duration) -> Option<b
 }
 
 /// A shell namespace argument resolved to a folder we list ourselves that is not on the file
-/// system (see `rf_win::shellfolder::browsable`), within `limit`.
-fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<rf_win::shellfolder::Place> {
+/// system (see `leaf_sys::shellfolder::browsable`), within `limit`.
+fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<leaf_sys::shellfolder::Place> {
     let (tx, rx) = std::sync::mpsc::channel();
     let arg = arg.to_string();
     std::thread::spawn(move || {
-        let _ = tx.send(rf_win::shellfolder::browsable(&arg));
+        let _ = tx.send(leaf_sys::shellfolder::browsable(&arg));
     });
     rx.recv_timeout(limit).ok().flatten().filter(|p| p.fs_path.is_none())
 }
@@ -323,7 +323,7 @@ fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<rf_win::
 pub(crate) fn start_mark(step: &str) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ON.get_or_init(|| std::env::var_os("LEAF_TRACE_START").is_some()) {
-        eprintln!("start: {step} at {} ms", rf_win::process_age_ms());
+        eprintln!("start: {step} at {} ms", leaf_sys::process_age_ms());
     }
 }
 
@@ -331,8 +331,8 @@ pub fn main() {
     start_mark("main");
     wait_for_the_old_one();
     // Not in the installation folder: the updater renames it, and Windows refuses while it is a working directory of this process
-    // or of anything this process starts (`rf_win::ownfolder`). Before everything else, so that every child inherits the way out.
-    rf_win::ownfolder::leave();
+    // or of anything this process starts (`leaf_sys::ownfolder`). Before everything else, so that every child inherits the way out.
+    leaf_sys::ownfolder::leave();
     // the side processes and previews of the cut taskbar/desktop/snip/download features: started by an old shortcut, autostart entry
     // or browser host, they end here without doing anything
     if std::env::args().nth(1).as_deref().is_some_and(retired_arg) {
@@ -341,11 +341,11 @@ pub fn main() {
     // Velopack (installer / updater): first, it may run an install hook and exit
     installer::startup();
     // the id Velopack gives the Start menu / taskbar shortcuts: a pin survives updates
-    rf_win::window::set_app_id(installer::APP_ID);
+    leaf_sys::window::set_app_id(installer::APP_ID);
     install_panic_log();
-    rf_win::shell::suppress_critical_error_dialogs();
+    leaf_sys::shell::suppress_critical_error_dialogs();
     // before any shell icon/thumbnail work: see keep_gdiplus_alive (loader-lock deadlock)
-    rf_win::thumbs::keep_gdiplus_alive();
+    leaf_sys::thumbs::keep_gdiplus_alive();
     // Logs go to stderr and to leaf.log in the settings folder; override the level with
     // RUST_LOG. The hybrid renderer (gpui_windows) logs its GPU/CPU switches at info level.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,gpui_windows=info"))
@@ -372,7 +372,7 @@ pub fn main() {
     let arg = std::env::args().nth(1).map(|a| a.trim().trim_matches('"').to_string()).filter(|a| !a.is_empty());
     let arg = arg.filter(|_| !open_look_settings && !quick_search);
     // jump list task "New window"
-    let new_window = arg.as_deref() == Some(rf_win::jumplist::NEW_WINDOW_ARG);
+    let new_window = arg.as_deref() == Some(leaf_sys::jumplist::NEW_WINDOW_ARG);
     let arg = arg.filter(|_| !new_window);
     // several folders on the command line (issue 125): a first one that is gone (moved, renamed) is passed over, not handed to Explorer
     // with its error, and the first one that is there opens instead; `first_taken` is how many arguments that used up
@@ -428,7 +428,7 @@ pub fn main() {
             start = Some(Location::Shell { parsing: place.parsing, name: place.name });
         } else {
             // a network server root (\\nas) isn't a "directory" to Rust, but we browse its shares
-            let server = rf_win::network::server_root(std::path::Path::new(&arg)).is_some();
+            let server = leaf_sys::network::server_root(std::path::Path::new(&arg)).is_some();
             let is_dir = if shell_namespace {
                 Some(false)
             } else if server {
@@ -441,10 +441,10 @@ pub fn main() {
             if is_dir == Some(false) && !archive {
                 // Explorer opens folders through the verb we took over: what we just handed it may
                 // come straight back. Never ping-pong; a path is then shown here (with its error).
-                rf_win::handover::trace("main: not a folder for us (or a namespace we do not list): to Explorer unless it just came from there");
-                if !rf_win::default_fm::forwarded_recently(&arg) {
-                    rf_win::default_fm::note_forward(&arg);
-                    rf_win::handover::trace("main: handed to Explorer, this process ends");
+                leaf_sys::handover::trace("main: not a folder for us (or a namespace we do not list): to Explorer unless it just came from there");
+                if !leaf_sys::default_fm::forwarded_recently(&arg) {
+                    leaf_sys::default_fm::note_forward(&arg);
+                    leaf_sys::handover::trace("main: handed to Explorer, this process ends");
                     let _ = std::process::Command::new("explorer.exe").arg(&arg).spawn();
                     return;
                 }
@@ -474,16 +474,16 @@ pub fn main() {
         // re-point it here, or Windows can't open any folder. Not from test instances.
         if registers {
             if let Ok(me) = std::env::current_exe() {
-                if rf_win::default_fm::heal(&me.display().to_string(), rf_win::default_fm::CLASSES) {
+                if leaf_sys::default_fm::heal(&me.display().to_string(), leaf_sys::default_fm::CLASSES) {
                     log::warn!("default file manager re-registered to {}", me.display());
                 }
-                if rf_win::default_fm::add_archives(&me.display().to_string(), rf_win::default_fm::CLASSES) {
+                if leaf_sys::default_fm::add_archives(&me.display().to_string(), leaf_sys::default_fm::CLASSES) {
                     log::warn!("default file manager: archive registration updated");
                 }
             }
         }
         DEFAULT_FM.store(
-            rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES),
+            leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES),
             std::sync::atomic::Ordering::Relaxed,
         )
     });
@@ -502,15 +502,15 @@ pub fn main() {
     };
     // "Show in folder" from other apps (SHOpenFolderAndSelectItems: Telegram, browsers) while we
     // are the default file manager: Windows opens the folder through our verb and names the
-    // file afterwards, to a window it finds in its window list (see rf_win::shell_window). The
+    // file afterwards, to a window it finds in its window list (see leaf_sys::shell_window). The
     // folder opens at once; the file, if one comes, is selected in it.
     const SHELL_SELECT_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
     let shell_select = match &start {
-        Some(Location::Path(dir)) if select.is_none() && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() && std::env::var_os("LEAF_INSTANCE").is_none() && rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES) => {
+        Some(Location::Path(dir)) if select.is_none() && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() && std::env::var_os("LEAF_INSTANCE").is_none() && leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES) => {
             let (tx, rx) = std::sync::mpsc::channel();
             let dir = dir.clone();
             std::thread::spawn(move || {
-                let _ = tx.send(rf_win::shell_window::wait_for_select(&dir, SHELL_SELECT_WAIT));
+                let _ = tx.send(leaf_sys::shell_window::wait_for_select(&dir, SHELL_SELECT_WAIT));
             });
             Some(rx)
         }
@@ -523,7 +523,7 @@ pub fn main() {
     // Single instance: a second launch opens its folder as a tab in the running window.
     let message = match &start {
         _ if open_look_settings => look::ipc::ToApp::OpenSettings.encode(),
-        _ if new_window => rf_win::jumplist::NEW_WINDOW_ARG.to_string(),
+        _ if new_window => leaf_sys::jumplist::NEW_WINDOW_ARG.to_string(),
         _ if quick_search => quick_search::LAUNCH_ARG.to_string(),
         _ if select.is_some() => format!("{}{}", workspace::SELECT_PREFIX, select.as_deref().unwrap_or_default()),
         Some(Location::Path(p)) => p.to_string_lossy().into_owned(),
@@ -538,29 +538,29 @@ pub fn main() {
     };
     // LEAF_MULTI_INSTANCE=1 skips forwarding (automated tests run several copies).
     let multi = std::env::var_os("LEAF_MULTI_INSTANCE").is_some();
-    rf_win::handover::trace(&format!("main: launch, request of {} bytes, multi {multi}", message.len()));
+    leaf_sys::handover::trace(&format!("main: launch, request of {} bytes, multi {multi}", message.len()));
     let _instance = if multi {
         None
     } else {
-        // (the hand-over waits for the running instance's answer, and shows the folder here when that one is leaving: see rf_win::handover)
-        match rf_win::handover::acquire(&message) {
-            rf_win::single_instance::Role::Forwarded => {
+        // (the hand-over waits for the running instance's answer, and shows the folder here when that one is leaving: see leaf_sys::handover)
+        match leaf_sys::handover::acquire(&message) {
+            leaf_sys::single_instance::Role::Forwarded => {
                 // the folder is on its way to the running window; the file to select follows
                 if let Some(msg) = shell_select.and_then(shell_selected) {
-                    rf_win::handover::send_followup(&msg);
+                    leaf_sys::handover::send_followup(&msg);
                 }
                 for folder in &more_folders {
-                    rf_win::handover::send_followup(folder);
+                    leaf_sys::handover::send_followup(folder);
                 }
                 return;
             }
-            rf_win::single_instance::Role::Primary(guard) => Some(guard),
+            leaf_sys::single_instance::Role::Primary(guard) => Some(guard),
         }
     };
     let primary_instance = _instance.is_some() && !quick_search;
     let (ipc_tx, ipc_rx) = futures::channel::mpsc::unbounded::<String>();
     // second launches: each comes with the acknowledgement it waits for (the other senders of ipc_tx need none)
-    let (launch_tx, launch_rx) = futures::channel::mpsc::unbounded::<(String, rf_win::handover::Ack)>();
+    let (launch_tx, launch_rx) = futures::channel::mpsc::unbounded::<(String, leaf_sys::handover::Ack)>();
     // (this process is the first: its own extra folders open as tabs once the window is there, like second launches do)
     for folder in more_folders {
         let _ = ipc_tx.unbounded_send(folder);
@@ -574,13 +574,13 @@ pub fn main() {
         });
     }
     if !multi {
-        rf_win::handover::serve(move |m, ack| {
+        leaf_sys::handover::serve(move |m, ack| {
             let _ = launch_tx.unbounded_send((m, ack));
         });
     }
 
-    // a drag of files that live inside the source (a mail's attachment, a browser's image) is dropped as files (see rf_win::vfiles)
-    gpui_windows::dnd_hint::set_virtual_reader(rf_win::vfiles::drag_paths);
+    // a drag of files that live inside the source (a mail's attachment, a browser's image) is dropped as files (see leaf_sys::vfiles)
+    gpui_windows::dnd_hint::set_virtual_reader(leaf_sys::vfiles::drag_paths);
     // (the first window on the CPU renderer or on the card: what this machine was like the last time, see `fast_start`)
     fast_start::before_app(!quick_search && !open_look_settings);
     start_mark("before the app");
@@ -590,9 +590,9 @@ pub fn main() {
         ui_stall::start(cx);
         cx.set_global(settings::Settings::load());
         start_mark("settings loaded");
-        rf_core::sort::set_turkish_collation(rf_win::encoding::user_locale_is_turkish());
+        rf_core::sort::set_turkish_collation(leaf_sys::encoding::user_locale_is_turkish());
         // eski kod sayfalı metinlerin tahmini: Türkçe olmayan sistemde Türkçe ipucu verilmez
-        if !rf_win::encoding::user_locale_is_turkish() {
+        if !leaf_sys::encoding::user_locale_is_turkish() {
             rf_core::textload::set_locale_hint(None);
         }
         settings::apply_component_theme(cx);
@@ -622,13 +622,13 @@ pub fn main() {
                 cx,
             );
         }
-        // copies and moves keep a crash-safe journal there (see rf_win::fastcopy)
+        // copies and moves keep a crash-safe journal there (see leaf_sys::fastcopy)
         if let Some(d) = settings::app_dir() {
-            rf_win::fastcopy::set_journal_dir(d.join("jobs"));
+            leaf_sys::fastcopy::set_journal_dir(d.join("jobs"));
         }
         // folder sizes survive a restart (shown at once, measured again when asked for)
         if let Some(d) = settings::local_data_dir() {
-            rf_win::foldersize::shared_cache().persist(d.join("foldersizes.bin"));
+            leaf_sys::foldersize::shared_cache().persist(d.join("foldersizes.bin"));
         }
         if quick_search {
             // started for the quick search only: no main window (it quits when that closes,
@@ -646,10 +646,10 @@ pub fn main() {
         if cx.global::<settings::Settings>().look_enabled && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
             look::ipc::send(look::ipc::Msg::Wake, true);
         }
-        // "Safely remove" / eject: let go of a drive when Windows asks (see rf_win::removal)
+        // "Safely remove" / eject: let go of a drive when Windows asks (see leaf_sys::removal)
         {
             let (tx, mut rx) = futures::channel::mpsc::unbounded::<(char, std::sync::mpsc::Sender<()>)>();
-            rf_win::removal::start(move |letter, ack| {
+            leaf_sys::removal::start(move |letter, ack| {
                 let _ = tx.unbounded_send((letter, ack));
             });
             cx.spawn(async move |cx| {
@@ -677,7 +677,7 @@ pub fn main() {
         cx.spawn(async move |cx| {
             use futures::StreamExt;
             while let Some((msg, ack)) = launch_rx.next().await {
-                rf_win::handover::trace("first: acting on a request");
+                leaf_sys::handover::trace("first: acting on a request");
                 let shown = cx.update(|cx| workspace::route_ipc_shown(msg, cx));
                 // (no window could be made: the second launch is told, and shows the folder itself)
                 let quit_held_back = if shown { ack.done() } else { ack.refuse() };
@@ -708,7 +708,7 @@ pub fn main() {
         .detach();
         cx.activate(true);
     });
-    rf_win::handover::trace("main: event loop ended");
+    leaf_sys::handover::trace("main: event loop ended");
 }
 
 /// The first arguments of the cut side processes and previews (dock / shell host, snip, taskbar / desktop / switcher previews, the

@@ -30,7 +30,7 @@ impl Viewer for ArchiveViewer {
     }
     fn can_handle(&self, f: &Probe) -> bool {
         // app packages (APK, MSIX, IPA, NuGet) are zips too, but what they are says more: the info card
-        f.is_file() && rf_archive::is_supported(&f.path) && rf_win::apppkg::kind_of(&f.path).is_none()
+        f.is_file() && rf_archive::is_supported(&f.path) && leaf_sys::apppkg::kind_of(&f.path).is_none()
     }
     fn prepare(&mut self, f: &Probe, cx: &mut App) -> Prepared {
         self.path = f.path.clone();
@@ -73,18 +73,18 @@ pub fn leaf_launch(path: &Path) -> (String, String) {
 fn open_in_leaf(path: PathBuf) {
     std::thread::spawn(move || {
         let (msg, arg) = leaf_launch(&path);
-        rf_win::look::win::allow_any_foreground();
-        if rf_win::single_instance::send_to(&rf_win::single_instance::instance_name(), &msg) {
+        leaf_sys::look::win::allow_any_foreground();
+        if leaf_sys::single_instance::send_to(&leaf_sys::single_instance::instance_name(), &msg) {
             return;
         }
-        let exe = std::env::current_exe().map(|e| e.with_file_name(rf_win::exe_name(rf_win::APP_EXE_STEM)));
+        let exe = std::env::current_exe().map(|e| e.with_file_name(leaf_sys::exe_name(leaf_sys::APP_EXE_STEM)));
         match exe {
             Ok(exe) if exe.exists() => {
                 if let Err(e) = std::process::Command::new(exe).arg(arg).spawn() {
                     log::warn!("couldn't start leaf: {e}");
                 }
             }
-            _ => log::warn!("{} not found", rf_win::exe_name(rf_win::APP_EXE_STEM)),
+            _ => log::warn!("{} not found", leaf_sys::exe_name(leaf_sys::APP_EXE_STEM)),
         }
     });
 }

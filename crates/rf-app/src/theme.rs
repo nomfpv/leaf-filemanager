@@ -130,17 +130,17 @@ impl Default for Selection {
 }
 
 /// The user's Windows accent palette, read once.
-fn windows_accent() -> Option<rf_win::accent::AccentPalette> {
-    static WINDOWS: std::sync::OnceLock<Option<rf_win::accent::AccentPalette>> = std::sync::OnceLock::new();
-    *WINDOWS.get_or_init(rf_win::accent::system_palette)
+fn windows_accent() -> Option<leaf_sys::accent::AccentPalette> {
+    static WINDOWS: std::sync::OnceLock<Option<leaf_sys::accent::AccentPalette>> = std::sync::OnceLock::new();
+    *WINDOWS.get_or_init(leaf_sys::accent::system_palette)
 }
 
 /// The accent and the text on it for one mode.
 fn accent_for(r: &data::Resolved, dark: bool, choice: &AccentChoice) -> (Hsla, Hsla) {
     // Windows' or the user's colour: the Fluent shade for the mode, dark text on a light accent, white on a dark one
-    let fluent = |a: rf_win::accent::AccentPalette| if dark { (hex(a.light2()), hexa(0x000000, 0.90)) } else { (hex(a.dark1()), hex(0xFFFFFF)) };
+    let fluent = |a: leaf_sys::accent::AccentPalette| if dark { (hex(a.light2()), hexa(0x000000, 0.90)) } else { (hex(a.dark1()), hex(0xFFFFFF)) };
     match choice {
-        AccentChoice::Custom(c) => return fluent(rf_win::accent::from_color(*c)),
+        AccentChoice::Custom(c) => return fluent(leaf_sys::accent::from_color(*c)),
         AccentChoice::Windows => {
             if let Some(a) = windows_accent() {
                 return fluent(a);
@@ -415,7 +415,7 @@ pub fn default_row_h() -> f32 {
     if bits == 0 { current().dark.row_height } else { f32::from_bits(bits) }
 }
 
-/// The material a window asks Windows for: the wanted one where Windows has materials, none where it has not (`rf_win::osver`,
+/// The material a window asks Windows for: the wanted one where Windows has materials, none where it has not (`leaf_sys::osver`,
 /// issue 24). There the palette paints the window itself (`settings::solid_backdrop`), and asking for "none" also switches off a
 /// blur-behind that an earlier choice may have left on the window. A see-through window (glass, an overlay) stays what it is.
 pub fn window_material(wanted: WindowBackgroundAppearance) -> WindowBackgroundAppearance {
@@ -593,7 +593,7 @@ mod tests {
         let all = super::data::builtins();
         let r = super::data::resolve(&super::data::chain(&all[1], all), false, true);
         let (a, t) = super::accent_for(&r, false, &super::AccentChoice::Custom(0xF7630C));
-        assert_eq!(a, super::hex(rf_win::accent::from_color(0xF7630C).dark1()));
+        assert_eq!(a, super::hex(leaf_sys::accent::from_color(0xF7630C).dark1()));
         assert_eq!(t, super::hex(0xFFFFFF));
         let (a, _) = super::accent_for(&r, false, &super::AccentChoice::Theme("lake".into()));
         assert_eq!(a, super::hex(0x2b64a8), "by name, any case");

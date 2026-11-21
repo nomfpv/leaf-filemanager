@@ -358,8 +358,8 @@ impl EditorView {
     fn pick_folder(&mut self, for_dest: bool, cx: &mut Context<Self>) {
         let (tx, rx) = futures::channel::oneshot::channel::<Option<PathBuf>>();
         let title = if for_dest { t!("Choose the destination folder") } else { t!("Choose the folder to watch") };
-        rf_win::sta::run(move |owner| {
-            let _ = tx.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::Folder));
+        leaf_sys::sta::run(move |owner| {
+            let _ = tx.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::Folder));
         });
         let t = cx.spawn(async move |this, cx| {
             let Ok(Some(path)) = rx.await else { return };
@@ -462,7 +462,7 @@ fn first_files(dir: &std::path::Path) -> Vec<FileFact> {
         if rf_core::organize::is_partial_download(&name) || !e.file_type().is_ok_and(|t| t.is_file()) {
             continue;
         }
-        out.extend(rf_win::organize::facts_for_names(dir, std::slice::from_ref(&name), super::classify).into_iter().filter(|f| !f.hidden));
+        out.extend(leaf_sys::organize::facts_for_names(dir, std::slice::from_ref(&name), super::classify).into_iter().filter(|f| !f.hidden));
         if out.len() >= 60 {
             break;
         }

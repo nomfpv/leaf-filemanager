@@ -99,7 +99,7 @@ pub(crate) fn run(command: QuickCommand, folder: Option<PathBuf>, selection: Vec
                 path
             } else {
                 let line = rf_core::addrcmd::CommandLine { program, args: String::new() };
-                rf_win::runfind::find(&[line], Path::new(""))
+                leaf_sys::runfind::find(&[line], Path::new(""))
                     .ok_or_else(|| anyhow::anyhow!("{}", tx("Program not found.")))?.exe
             };
             launch(exe, arguments, uses_paths, folder)
@@ -221,8 +221,8 @@ fn pick_icon(input: Entity<InputState>, window: &Window, cx: &mut App) {
     let (send, receive) = futures::channel::oneshot::channel();
     let title = tx("Choose an icon");
     let files = tx("Icon files");
-    rf_win::sta::run(move |owner| {
-        let _ = send.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::File { filters: &[(files, "*.ico;*.png;*.exe;*.lnk")] }));
+    leaf_sys::sta::run(move |owner| {
+        let _ = send.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::File { filters: &[(files, "*.ico;*.png;*.exe;*.lnk")] }));
     });
     cx.spawn(async move |cx| {
         if let Ok(Some(path)) = receive.await {

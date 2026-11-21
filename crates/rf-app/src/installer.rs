@@ -42,25 +42,25 @@ pub fn startup() {
 /// with Windows.
 fn after_install_or_update() {
     let Ok(me) = std::env::current_exe() else { return };
-    if rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES) {
-        let _ = rf_win::default_fm::enable(&me.display().to_string(), rf_win::default_fm::CLASSES);
+    if leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES) {
+        let _ = leaf_sys::default_fm::enable(&me.display().to_string(), leaf_sys::default_fm::CLASSES);
     }
-    if rf_win::dialogs::starts_with_windows_as("leaf-look") {
-        let _ = rf_win::dialogs::set_start_with_windows_as("leaf-look", &me.with_file_name(rf_win::exe_name(rf_win::LOOK_EXE_STEM)), &["--background"], true);
+    if leaf_sys::dialogs::starts_with_windows_as("leaf-look") {
+        let _ = leaf_sys::dialogs::set_start_with_windows_as("leaf-look", &me.with_file_name(leaf_sys::exe_name(leaf_sys::LOOK_EXE_STEM)), &["--background"], true);
     }
 }
 
 /// Everything leaf changed in Windows goes back (settings in %APPDATA% stay).
 fn before_uninstall() {
-    let classes = rf_win::default_fm::CLASSES;
-    if rf_win::default_fm::is_enabled(classes) {
-        let _ = rf_win::default_fm::disable(classes);
+    let classes = leaf_sys::default_fm::CLASSES;
+    if leaf_sys::default_fm::is_enabled(classes) {
+        let _ = leaf_sys::default_fm::disable(classes);
     }
     let none = Path::new("");
-    let _ = rf_win::dialogs::set_start_with_windows_as("leaf-look", none, &[], false);
-    let _ = rf_win::dialogs::set_start_with_windows(none, false);
+    let _ = leaf_sys::dialogs::set_start_with_windows_as("leaf-look", none, &[], false);
+    let _ = leaf_sys::dialogs::set_start_with_windows(none, false);
     // leaf-look holds its exe open
-    rf_win::single_instance::send_to(&crate::look::ipc::app_name(), &crate::look::ipc::Msg::Quit.encode());
+    leaf_sys::single_instance::send_to(&crate::look::ipc::app_name(), &crate::look::ipc::Msg::Quit.encode());
     std::thread::sleep(Duration::from_millis(500));
 }
 

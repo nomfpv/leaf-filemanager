@@ -54,11 +54,11 @@ pub enum CopyVerify {
 }
 
 impl CopyVerify {
-    pub fn engine(self) -> rf_win::fastcopy::Verify {
+    pub fn engine(self) -> leaf_sys::fastcopy::Verify {
         match self {
-            CopyVerify::Off => rf_win::fastcopy::Verify::Off,
-            CopyVerify::Quick => rf_win::fastcopy::Verify::Quick,
-            CopyVerify::Full => rf_win::fastcopy::Verify::Full,
+            CopyVerify::Off => leaf_sys::fastcopy::Verify::Off,
+            CopyVerify::Quick => leaf_sys::fastcopy::Verify::Quick,
+            CopyVerify::Full => leaf_sys::fastcopy::Verify::Full,
         }
     }
 }
@@ -146,7 +146,7 @@ pub enum BackdropPref {
     MicaAlt,
     Acrylic,
     Solid,
-    /// Experimental: the screen behind the window, bent and frosted like glass (rf_win::glass).
+    /// Experimental: the screen behind the window, bent and frosted like glass (leaf_sys::glass).
     /// An older version does not know this value and reads the field as the default (Mica);
     /// the other settings are kept (see `parse_lenient`).
     Glass,
@@ -435,7 +435,7 @@ pub struct Settings {
     /// Folder aliases: `@name` in the address box (Files' folder aliases).
     pub folder_aliases: std::collections::BTreeMap<String, PathBuf>,
     /// The drives that are not listed (the sidebar, the Home page, the address bar's list of drives), as letters ("V"). A drive
-    /// Explorer hides by its own policy is hidden too, without being named here (`rf_win::drives::visible_drives`).
+    /// Explorer hides by its own policy is hidden too, without being named here (`leaf_sys::drives::visible_drives`).
     pub hidden_drives: Vec<String>,
     /// Cloud and WSL places taken off the sidebar one by one (their paths). Issue 141: "a way to hide a single entry in that section
     /// (right click > Hide), like "Hidden drives"".
@@ -497,14 +497,14 @@ pub struct Settings {
     /// 0.05 … 0.6
     pub background_opacity: f32,
     /// HyperGlass look (Settings > Appearance, shown while the backdrop is Glass), each 0..=100; a value outside is cut to that when it is
-    /// used. See `rf_win::glass::LookParams` for what the first four do; the surface value is the app's own two washes over the glass.
+    /// used. See `leaf_sys::glass::LookParams` for what the first four do; the surface value is the app's own two washes over the glass.
     pub hg_frost: u8,
     pub hg_tint: u8,
     pub hg_refraction: u8,
     pub hg_saturation: u8,
     pub hg_surface: u8,
     /// Freeze the glass of this app's windows while they are not in front: the last picture stays and nothing is captured or drawn for
-    /// the window until it is in front again or the pointer is over it (`rf_win::glass::set_freeze_when_behind`). Off by default.
+    /// the window until it is in front again or the pointer is over it (`leaf_sys::glass::set_freeze_when_behind`). Off by default.
     pub hg_freeze_behind: bool,
     /// UI font family; `None` = Segoe UI Variable / system.
     pub font: Option<String>,
@@ -819,7 +819,7 @@ pub fn animations() -> bool {
     match ANIM.load(Ordering::Relaxed) {
         x if x == AnimPref::On as u8 => true,
         x if x == AnimPref::Off as u8 => false,
-        _ => rf_win::sysparams::client_area_animation(),
+        _ => leaf_sys::sysparams::client_area_animation(),
     }
 }
 
@@ -837,12 +837,12 @@ pub fn main_window_only(b: BackdropPref) -> bool {
     matches!(b, BackdropPref::Acrylic | BackdropPref::Glass)
 }
 
-/// Whether Windows gives windows a material (Mica, Mica Alt, Acrylic): from Windows 11 22H2 on (`rf_win::osver`, issue 24). Where it
+/// Whether Windows gives windows a material (Mica, Mica Alt, Acrylic): from Windows 11 22H2 on (`leaf_sys::osver`, issue 24). Where it
 /// does not, every window is the "Solid" look and every popup paints itself: see `theme::window_material` and `theme::popup_fill`.
 /// `LEAF_NO_BACKDROP=1` answers "no" on any Windows, to look at that state on a developer's PC. Read once.
 pub fn materials_available() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("LEAF_NO_BACKDROP").is_none() && rf_win::osver::system_backdrops())
+    *V.get_or_init(|| std::env::var_os("LEAF_NO_BACKDROP").is_none() && leaf_sys::osver::system_backdrops())
 }
 
 /// How strongly the app's own washes lie over the glass, 0..=100 (Settings > HyperGlass > Surface wash).
@@ -989,8 +989,8 @@ impl Settings {
     }
 
     /// The four values the engine takes, cut to 0..=100.
-    pub fn hyperglass_look(&self) -> rf_win::glass::LookParams {
-        rf_win::glass::LookParams {
+    pub fn hyperglass_look(&self) -> leaf_sys::glass::LookParams {
+        leaf_sys::glass::LookParams {
             frost: f32::from(self.hg_frost.min(100)),
             tint: f32::from(self.hg_tint.min(100)),
             refraction: f32::from(self.hg_refraction.min(100)),
@@ -1006,7 +1006,7 @@ impl Settings {
     /// The theme, visibility and accent these settings choose.
     pub fn theme_selection(&self) -> crate::theme::Selection {
         use crate::theme::AccentChoice;
-        let accent = match rf_win::accent::parse_hex(&self.accent_color) {
+        let accent = match leaf_sys::accent::parse_hex(&self.accent_color) {
             Some(c) => AccentChoice::Custom(c),
             None if self.accent.eq_ignore_ascii_case("windows") => AccentChoice::Windows,
             None => AccentChoice::Theme(self.accent.clone()),
@@ -1022,15 +1022,15 @@ impl Settings {
     pub(crate) fn apply_side_effects(&self) {
         sync_name_index(self.name_index, &self.index_excluded);
         crate::aliases::set(self.folder_aliases.clone());
-        rf_win::openrules::set(self.open_rules.clone());
-        rf_win::drives::set_hidden(rf_win::drives::mask_of_letters(&self.hidden_drives));
+        leaf_sys::openrules::set(self.open_rules.clone());
+        leaf_sys::drives::set_hidden(leaf_sys::drives::mask_of_letters(&self.hidden_drives));
         // (a text that is no colour is no colour: Windows' accent)
-        rf_win::accent::set_override(rf_win::accent::parse_hex(&self.accent_color));
+        leaf_sys::accent::set_override(leaf_sys::accent::parse_hex(&self.accent_color));
         crate::theme::select(&self.theme_selection());
         crate::background::sync_tray(self.run_in_background);
         crate::quick_search::sync(self);
         // (the system's own short date and time for the "System" style and older dates, issue 59; set once)
-        rf_core::format::set_system_format(rf_win::datefmt::short_date_time);
+        rf_core::format::set_system_format(leaf_sys::datefmt::short_date_time);
         rf_core::format::set_date_style(match self.date_format {
             DatePref::Application => rf_core::format::DateStyle::Relative,
             DatePref::System => rf_core::format::DateStyle::Local,
@@ -1042,8 +1042,8 @@ impl Settings {
         ANIM.store(self.animations as u8, Ordering::Relaxed);
         // HyperGlass: the engine redraws every glass window once when the look changes, and does nothing for the same look again
         HG_SURFACE.store(self.hg_surface.min(100), Ordering::Relaxed);
-        rf_win::glass::set_look(self.hyperglass_look());
-        rf_win::glass::set_freeze_when_behind(self.hg_freeze_behind);
+        leaf_sys::glass::set_look(self.hyperglass_look());
+        leaf_sys::glass::set_freeze_when_behind(self.hg_freeze_behind);
         gpui_windows::SMOOTH_SCROLL.store(self.smooth_scroll, Ordering::Relaxed);
         THEME.store(
             match self.theme {
@@ -1255,7 +1255,7 @@ pub fn local_data_dir() -> Option<std::path::PathBuf> {
         return Some(std::path::PathBuf::from(d));
     }
     // the portable copy keeps everything in its own folder (issue 71)
-    if let Some(d) = rf_win::portable::data_dir() {
+    if let Some(d) = leaf_sys::portable::data_dir() {
         return Some(d);
     }
     dirs::data_local_dir().map(|d| d.join("leaf"))
@@ -1266,8 +1266,8 @@ pub fn app_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = std::env::var_os("LEAF_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(std::path::PathBuf::from(d));
     }
-    // the portable copy: its own `data` folder (`rf_win::portable`, issue 71)
-    if let Some(d) = rf_win::portable::data_dir() {
+    // the portable copy: its own `data` folder (`leaf_sys::portable`, issue 71)
+    if let Some(d) = leaf_sys::portable::data_dir() {
         return Some(d);
     }
     dirs::config_dir().map(|d| d.join("leaf"))
@@ -1321,7 +1321,7 @@ yeni_alan = 3").unwrap();
     #[test]
     fn hyperglass_defaults_match_the_engine_and_the_shipped_look() {
         let d = Settings::default();
-        let engine = rf_win::glass::LookParams::DEFAULT;
+        let engine = leaf_sys::glass::LookParams::DEFAULT;
         assert_eq!(d.hyperglass_look(), engine, "the settings default is the engine's default");
         assert_eq!(super::HG_DEFAULT.map(f32::from)[..4], [engine.frost, engine.tint, engine.refraction, engine.saturation]);
         assert_eq!(d.hg_surface, 50);
@@ -1412,7 +1412,7 @@ fn sync_name_index(on: bool, excluded: &[String]) {
         let changed = e.as_deref() != Some(excluded);
         if changed {
             *e = Some(excluded.to_vec());
-            rf_win::nameindex::set_excluded(&excluded.iter().map(std::path::PathBuf::from).collect::<Vec<_>>());
+            leaf_sys::nameindex::set_excluded(&excluded.iter().map(std::path::PathBuf::from).collect::<Vec<_>>());
         }
         changed
     };
@@ -1423,7 +1423,7 @@ fn sync_name_index(on: bool, excluded: &[String]) {
         return;
     }
     if !on {
-        std::thread::spawn(rf_win::indexer::stop);
+        std::thread::spawn(leaf_sys::indexer::stop);
         return;
     }
     let delay = if was == 0 { 5 } else { 0 };
@@ -1436,15 +1436,15 @@ fn sync_name_index(on: bool, excluded: &[String]) {
             return;
         }
         // a copy with its own settings folder (tests, portable) keeps its index there too
-        let dir = match std::env::var_os("LEAF_CONFIG_DIR").map(std::path::PathBuf::from).or_else(rf_win::portable::data_dir) {
+        let dir = match std::env::var_os("LEAF_CONFIG_DIR").map(std::path::PathBuf::from).or_else(leaf_sys::portable::data_dir) {
             Some(cfg) => cfg.join("index"),
             None => std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, std::path::PathBuf::from).join("leaf").join("index"),
         };
         // LEAF_INDEX_ROOTS="E:\;F:\" picks the roots (testing)
         let roots = match std::env::var("LEAF_INDEX_ROOTS") {
             Ok(v) => v.split(';').filter(|s| !s.is_empty()).map(std::path::PathBuf::from).collect(),
-            Err(_) => rf_win::indexer::local_roots(),
+            Err(_) => leaf_sys::indexer::local_roots(),
         };
-        rf_win::indexer::start(roots, dir);
+        leaf_sys::indexer::start(roots, dir);
     });
 }

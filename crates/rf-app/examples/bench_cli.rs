@@ -7,9 +7,9 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
     let quick = std::env::args().any(|a| a == "quick");
     let mut me = rf_app::bench::leaf_app();
-    me.exe = std::env::current_exe()?.parent().unwrap().parent().unwrap().join(rf_win::exe_name(rf_win::APP_EXE_STEM));
+    me.exe = std::env::current_exe()?.parent().unwrap().parent().unwrap().join(leaf_sys::exe_name(leaf_sys::APP_EXE_STEM));
     let mut apps = vec![me];
-    apps.extend(rf_win::bench::detect());
+    apps.extend(leaf_sys::bench::detect());
     let plan = rf_app::bench::Plan {
         apps,
         open: if quick { vec![rf_app::bench::OpenTest::Files10k] } else { rf_app::bench::OpenTest::ALL.to_vec() },

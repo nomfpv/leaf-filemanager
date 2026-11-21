@@ -4,7 +4,7 @@
 //! previews it with leaf-look, Esc closes. What is opened often comes first, and what was chosen
 //! for the same typed letters before comes first of all ("En iyi eşleşme": see `Picks`).
 //!
-//! The hotkey is registered by the running leaf (`rf_win::hotkey`); with "keep running in
+//! The hotkey is registered by the running leaf (`leaf_sys::hotkey`); with "keep running in
 //! the background" on it works while no window is open.
 
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ const APPS_STALE: Duration = Duration::from_secs(300);
 // The hotkey
 
 /// The shortcut held now (None: none) and whether registering it failed.
-static HELD: Mutex<Option<(Option<String>, Option<rf_win::hotkey::HotkeyError>)>> = Mutex::new(None);
+static HELD: Mutex<Option<(Option<String>, Option<leaf_sys::hotkey::HotkeyError>)>> = Mutex::new(None);
 
 static NO_HOTKEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -89,7 +89,7 @@ pub fn sync(s: &Settings) {
     if held.as_ref().is_some_and(|(k, e)| *k == want && e.is_none()) {
         return;
     }
-    let r = rf_win::hotkey::set(want.as_deref());
+    let r = leaf_sys::hotkey::set(want.as_deref());
     if let Err(e) = &r {
         log::warn!("quick search hotkey {want:?}: {e:?}");
     }
@@ -107,12 +107,12 @@ pub fn release_for_capture() {
     if !hotkey_owner() {
         return;
     }
-    let _ = rf_win::hotkey::set(None);
+    let _ = leaf_sys::hotkey::set(None);
     *HELD.lock().unwrap() = Some((None, None));
 }
 
 /// Why the configured hotkey does not work, if it doesn't.
-pub fn problem() -> Option<rf_win::hotkey::HotkeyError> {
+pub fn problem() -> Option<leaf_sys::hotkey::HotkeyError> {
     HELD.lock().unwrap().as_ref().and_then(|(_, e)| e.clone())
 }
 
@@ -122,7 +122,7 @@ pub fn init(cx: &mut App) {
         return;
     }
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
-    rf_win::hotkey::set_handler(move || {
+    leaf_sys::hotkey::set_handler(move || {
         let _ = tx.unbounded_send(());
     });
     cx.spawn(async move |cx| {
@@ -150,24 +150,24 @@ pub fn init(cx: &mut App) {
 // ---------------------------------------------------------------------------------------------
 // Sources
 
-static APPS: Mutex<Option<(Instant, Arc<Vec<rf_win::apps::App>>)>> = Mutex::new(None);
+static APPS: Mutex<Option<(Instant, Arc<Vec<leaf_sys::apps::App>>)>> = Mutex::new(None);
 /// One enumeration at a time (each keystroke's search would start its own).
 static LISTING: Mutex<()> = Mutex::new(());
 
 /// Reads "All apps" from the shell. In the dock process this runs on the one shell thread that pumps messages: a worker thread that
-/// asks the shell becomes an apartment that never pumps, and several of those asking at once hang the shell (see `rf_win::sta::call`).
+/// asks the shell becomes an apartment that never pumps, and several of those asking at once hang the shell (see `leaf_sys::sta::call`).
 /// The main app has always asked from its own worker threads and keeps doing so.
-fn read_apps() -> anyhow::Result<Vec<rf_win::apps::App>> {
+fn read_apps() -> anyhow::Result<Vec<leaf_sys::apps::App>> {
     if crate::background::DOCK_PROCESS.load(std::sync::atomic::Ordering::Relaxed) {
         let limit = Duration::from_secs(20);
-        return rf_win::sta::call(limit, rf_win::apps::list).unwrap_or_else(|| anyhow::bail!("the shell did not list the apps in {limit:?}"));
+        return leaf_sys::sta::call(limit, leaf_sys::apps::list).unwrap_or_else(|| anyhow::bail!("the shell did not list the apps in {limit:?}"));
     }
-    rf_win::apps::list()
+    leaf_sys::apps::list()
 }
 
 /// "All apps": cached; a stale list is served while a fresh one is read. Blocks while the very first list is read (a second to
 /// start with): not on the UI thread.
-pub(crate) fn apps() -> Arc<Vec<rf_win::apps::App>> {
+pub(crate) fn apps() -> Arc<Vec<leaf_sys::apps::App>> {
     let cached = APPS.lock().unwrap().clone();
     match cached {
         Some((at, list)) => {
@@ -615,7 +615,7 @@ pub enum Target {
     Url { url: String },
     Web { query: String },
     /// A page of Windows' Settings, a setting on one, or a Control Panel task or tool (`settings_rows.rs`): how it is opened, as
-    /// `rf_win::settingscat::Launch` writes it, and its name.
+    /// `leaf_sys::settingscat::Launch` writes it, and its name.
     Setting { launch: String, name: String },
 }
 
@@ -706,7 +706,7 @@ fn search(query: &str, engine: WebSearch, with_bookmarks: bool, index_on: bool, 
 
 /// Whether the app `id` is among the installed apps. An empty list (not read yet, or the read failed) keeps everything: nothing is
 /// taken away on a guess.
-fn still_installed(id: &str, installed: &[rf_win::apps::App]) -> bool {
+fn still_installed(id: &str, installed: &[leaf_sys::apps::App]) -> bool {
     installed.is_empty() || installed.iter().any(|a| a.id.eq_ignore_ascii_case(id))
 }
 
@@ -803,7 +803,7 @@ pub(crate) fn search_files(query: &str, index_on: bool) -> FilesFound {
     let q = fold(query.trim());
     let (used, lift) = lifts(query);
     let mut index_building = false;
-    let status = rf_win::indexer::status();
+    let status = leaf_sys::indexer::status();
     // on in Settings but not started yet (it starts a few seconds after leaf): coming
     let index_off = !index_on;
     if index_on && status.is_empty() {
@@ -826,8 +826,8 @@ pub(crate) fn search_files(query: &str, index_on: bool) -> FilesFound {
     };
     for (root, state, _, _) in status {
         match state {
-            rf_win::indexer::State::Ready => {}
-            rf_win::indexer::State::Building => {
+            leaf_sys::indexer::State::Ready => {}
+            leaf_sys::indexer::State::Building => {
                 index_building = true;
                 continue;
             }
@@ -836,7 +836,7 @@ pub(crate) fn search_files(query: &str, index_on: bool) -> FilesFound {
         // the best names first, whatever their place in the index (a common fragment matches
         // tens of thousands of files)
         let rank = |name: &str| if glob { Some(500) } else { score(name, &q) };
-        if let Some(found) = rf_win::indexer::search_ranked(query.trim(), &root, false, 60, &rank) {
+        if let Some(found) = leaf_sys::indexer::search_ranked(query.trim(), &root, false, 60, &rank) {
             for (_, p) in found {
                 add(p, &mut hits);
             }
@@ -948,7 +948,7 @@ pub fn toggle(cx: &mut App) {
         }
     };
     // centered on the screen under the pointer, in its upper part (where the eyes are)
-    let work = rf_win::look::win::work_area_at_cursor();
+    let work = leaf_sys::look::win::work_area_at_cursor();
     let origin = point(px(work[0] + (work[2] - WIDTH) / 2.), px(work[1] + work[3] * 0.22));
     let max_h = (work[3] * 0.78 - 24.).max(200.);
     let display_id = cx
@@ -980,11 +980,11 @@ pub fn toggle(cx: &mut App) {
     };
     match cx.open_window(opts, move |window, cx| {
         let hwnd = crate::look::window::hwnd_of(window);
-        rf_win::window::set_dark_mode(hwnd, Palette::for_window(window).dark);
+        leaf_sys::window::set_dark_mode(hwnd, Palette::for_window(window).dark);
         crate::glass::keep_out_of_capture(hwnd);
         // summoned from another app: take the keyboard (the hotkey press allows it)
         if !test {
-            rf_win::window::bring_to_front(hwnd);
+            leaf_sys::window::bring_to_front(hwnd);
         }
         cx.new(|cx| QuickSearch::new(images, max_h, glassy, window, cx))
     }) {
@@ -1094,9 +1094,9 @@ impl QuickSearch {
         let engine = cx.global::<Settings>().web_search;
         match (&item.target, how) {
             (Target::App { id, name }, _) => {
-                let app = rf_win::apps::App { id: id.clone(), name: name.clone() };
+                let app = leaf_sys::apps::App { id: id.clone(), name: name.clone() };
                 launch(move || {
-                    if let Err(e) = rf_win::apps::launch(&app) {
+                    if let Err(e) = leaf_sys::apps::launch(&app) {
                         log::warn!("quick search: start {}: {e:#}", app.name);
                     }
                 });
@@ -1106,7 +1106,7 @@ impl QuickSearch {
                 cx.defer(move |cx| crate::workspace::route_ipc(msg, cx));
             }
             (Target::Path { path, .. }, How::Preview) => {
-                rf_win::look::win::allow_any_foreground();
+                leaf_sys::look::win::allow_any_foreground();
                 crate::look::ipc::send(crate::look::ipc::Msg::Show(path.clone(), crate::look::ShowOpts::default()), true);
             }
             (Target::Path { path, dir: true }, How::Open) => {
@@ -1117,7 +1117,7 @@ impl QuickSearch {
             (Target::Path { path, dir: false }, How::Open) => {
                 let p = path.clone();
                 launch(move || {
-                    if let Err(e) = rf_win::openrules::open(&p) {
+                    if let Err(e) = leaf_sys::openrules::open(&p) {
                         log::warn!("quick search: open {}: {e:#}", p.display());
                     }
                 });
@@ -1150,7 +1150,7 @@ enum How {
 
 fn open_url(url: String) {
     launch(move || {
-        if let Err(e) = rf_win::shell::open(Path::new(&url)) {
+        if let Err(e) = leaf_sys::shell::open(Path::new(&url)) {
             log::warn!("quick search: open url: {e:#}");
         }
     });
@@ -1176,7 +1176,7 @@ impl QuickSearch {
     fn icon(&self, item: &Item, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let img = match &item.target {
             Target::App { id, name } => {
-                let parsing = rf_win::apps::App { id: id.clone(), name: name.clone() }.parsing();
+                let parsing = leaf_sys::apps::App { id: id.clone(), name: name.clone() }.parsing();
                 self.images.update(cx, |c, cx| c.shell_icon(&parsing, crate::image_cache::ICON_PX, cx))
             }
             Target::Path { path, dir } => {
@@ -1556,7 +1556,7 @@ mod installed_tests {
 
     #[test]
     fn an_app_that_is_gone_is_not_offered_again() {
-        let app = |id: &str| rf_win::apps::App { id: id.into(), name: String::new() };
+        let app = |id: &str| leaf_sys::apps::App { id: id.into(), name: String::new() };
         let list = vec![app(r"{6D809377-6AF0-444B-8957-A3773F02200E}\Image-Line\FL Studio 2026\FL64.exe")];
         assert!(!still_installed(r"{6D809377-6AF0-444B-8957-A3773F02200E}\Image-Line\FL Studio 2025\FL64.exe", &list));
         assert!(still_installed(r"{6d809377-6af0-444b-8957-a3773f02200e}\Image-Line\FL Studio 2026\FL64.exe", &list), "letters' case does not matter");

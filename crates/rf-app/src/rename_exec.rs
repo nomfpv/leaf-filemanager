@@ -54,7 +54,7 @@ pub struct Outcome {
 
 /// The rename every move uses: fails when the target exists (the existing safe rename of leaf).
 pub fn native_rename(from: &Path, to: &Path) -> std::io::Result<()> {
-    rf_win::fileops::rename_no_replace(from, to)
+    leaf_sys::fileops::rename_no_replace(from, to)
 }
 
 /// Every name in each folder now (what the plan checks collisions against). A folder that

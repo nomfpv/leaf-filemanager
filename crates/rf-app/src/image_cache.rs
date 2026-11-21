@@ -10,7 +10,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::*;
 use rf_core::Entry;
-use rf_win::thumbs::{Bgra, Kind, Request, Response, ThumbPool, folder_has_own_icon, has_unique_icon};
+use leaf_sys::thumbs::{Bgra, Kind, Request, Response, ThumbPool, folder_has_own_icon, has_unique_icon};
 
 enum Slot {
     Pending,
@@ -301,7 +301,7 @@ impl ImageCache {
         r
     }
 
-    /// Another program's overlay picture `index` (`rf_win::overlays`) at `px`. Few and small (one per kind of mark): kept for good.
+    /// Another program's overlay picture `index` (`leaf_sys::overlays`) at `px`. Few and small (one per kind of mark): kept for good.
     pub fn overlay(&mut self, index: i32, px: u32, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         let key = key_of(&[&"overlay", &index, &px]);
         match self.map.get(&key) {
@@ -310,7 +310,7 @@ impl ImageCache {
             None => {}
         }
         self.map.insert(key, Slot::Pending);
-        let work = cx.background_spawn(async move { rf_win::overlays::picture(index, px) });
+        let work = cx.background_spawn(async move { leaf_sys::overlays::picture(index, px) });
         cx.spawn(async move |this, cx| {
             let b = work.await;
             let _ = this.update(cx, |c, cx| {
@@ -359,12 +359,12 @@ impl ImageCache {
 
     fn thumbnail_as(&mut self, dir: &Path, e: &Entry, size: u32, urgent: bool, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         // a folder at a large size shows what is in it, as Explorer's do (issue 158): the shell draws that picture (the folder with its
-        // first pictures in it); a folder it has none for gets the folder icon back (`rf_win::thumbs`)
+        // first pictures in it); a folder it has none for gets the folder icon back (`leaf_sys::thumbs`)
         // (not a folder with an icon of its own, nor one inside an archive or on FTP, which the shell cannot open)
         let folder_preview = e.is_dir()
             && size >= FOLDER_PREVIEW_MIN
             && !own_picture(e)
-            && !rf_win::ftp::is_ftp(dir)
+            && !leaf_sys::ftp::is_ftp(dir)
             && !crate::nav_touch::may_hold_archive(dir);
         let wants_thumb = crate::icons::has_thumbnail(e) || folder_preview;
         let per_file = wants_thumb || own_picture(e);

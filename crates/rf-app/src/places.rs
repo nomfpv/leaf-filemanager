@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::*;
-use rf_win::{Drive, DriveKind, KnownFolder};
+use leaf_sys::{Drive, DriveKind, KnownFolder};
 
 /// Drive display name with the generic fallback labels translated ("Yerel Disk (C:)").
 pub fn drive_name(d: &Drive) -> String {
@@ -53,7 +53,7 @@ fn load_recent(limit: usize) -> Vec<Recent> {
     links.sort_by(|a, b| b.0.cmp(&a.0));
     let mut out: Vec<Recent> = Vec::new();
     for (t, link) in links.into_iter().take(limit * 3) {
-        let Ok(info) = rf_win::shortcut::resolve(&link) else { continue };
+        let Ok(info) = leaf_sys::shortcut::resolve(&link) else { continue };
         if info.target.as_os_str().is_empty() || out.iter().any(|r| r.target == info.target) {
             continue;
         }
@@ -105,7 +105,7 @@ fn load_cloud_and_wsl() -> Vec<Pinned> {
     }
     // every other sync root Windows knows (issue 141: Proton Drive, pCloud, Nextcloud, Box, MEGA ...), as Explorer lists them; one
     // that is already in the list above (OneDrive) stays as it is
-    for r in rf_win::syncroots::list() {
+    for r in leaf_sys::syncroots::list() {
         add(r.name, r.path, L::Cloud);
     }
     // WSL distributions registered for this user
@@ -129,12 +129,12 @@ pub struct Places {
     pub cloud: Vec<Pinned>,
     pub pinned: Vec<Pinned>,
     pub recent: Vec<Recent>,
-    pub libraries: Vec<rf_win::libraries::Library>,
+    pub libraries: Vec<leaf_sys::libraries::Library>,
     /// Network locations ("Add a network location" shortcuts): (name, target).
     pub network: Vec<(String, std::path::PathBuf)>,
     /// Devices under This PC that are not drives (MTP phones, cameras): browsed as shell
     /// folders.
-    pub devices: Vec<rf_win::shellfolder::ShellChild>,
+    pub devices: Vec<leaf_sys::shellfolder::ShellChild>,
     pub loaded: bool,
     /// The recent items and the cloud / WSL entries are in too (they come a little after `loaded`: see `refresh`).
     pub extras_loaded: bool,
@@ -147,11 +147,11 @@ impl Places {
             Self { drives: Vec::new(), cloud: Vec::new(), pinned: Vec::new(), recent: Vec::new(), libraries: Vec::new(), network: Vec::new(), devices: Vec::new(), loaded: false, extras_loaded: false, _task: None };
         this.refresh(cx);
         // the drives the user hides (Settings > Files and folders, a drive's own menu) leave and come back at once
-        let mut hidden = rf_win::drives::hidden();
+        let mut hidden = leaf_sys::drives::hidden();
         // and the pins, when they change anywhere (a pinned folder deleted or renamed: `pins_follow`)
         let mut pins = cx.global::<crate::settings::Settings>().pinned.clone();
         cx.observe_global::<crate::settings::Settings>(move |p, cx| {
-            let now = rf_win::drives::hidden();
+            let now = leaf_sys::drives::hidden();
             let now_pins = cx.global::<crate::settings::Settings>().pinned.clone();
             if now != hidden || now_pins != pins {
                 hidden = now;
@@ -162,10 +162,10 @@ impl Places {
         .detach();
         // Notice drives appearing/disappearing (USB, network mappings) without any shell hooks.
         cx.spawn(async move |this, cx| {
-            let mut mask = rf_win::drives::drive_mask();
+            let mut mask = leaf_sys::drives::drive_mask();
             loop {
                 cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
-                let now = rf_win::drives::drive_mask();
+                let now = leaf_sys::drives::drive_mask();
                 if now != mask {
                     mask = now;
                     if this.update(cx, |p, cx| p.refresh(cx)).is_err() {
@@ -180,14 +180,14 @@ impl Places {
         // of the user (minimised, or another app active): enumerating This PC loads shell
         // extensions and can touch the drives; the look happens again when one comes back.
         cx.spawn(async move |this, cx| loop {
-            if !rf_win::window::app_in_front() {
+            if !leaf_sys::window::app_in_front() {
                 cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
                 if this.upgrade().is_none() {
                     break;
                 }
                 continue;
             }
-            let found = cx.background_spawn(async move { rf_win::shellfolder::devices() }).await;
+            let found = cx.background_spawn(async move { leaf_sys::shellfolder::devices() }).await;
             let alive = this
                 .update(cx, |p, cx| {
                     if p.devices != found {
@@ -214,7 +214,7 @@ impl Places {
         // The lists are not complete until the second piece is in, so the jump list waits for it again after a refresh.
         self.extras_loaded = false;
         let work = cx.background_spawn(async move {
-            let known = rf_win::known_folders();
+            let known = leaf_sys::known_folders();
             let pinned = match user_pins {
                 None => known
                     .into_iter()
@@ -233,16 +233,16 @@ impl Places {
                     .collect(),
             };
             // (less the drives the user hides and the ones Explorer hides)
-            let drives = rf_win::drives::visible_drives();
-            let libraries = rf_win::libraries::list();
-            let network = rf_win::network::network_shortcuts();
+            let drives = leaf_sys::drives::visible_drives();
+            let libraries = leaf_sys::libraries::list();
+            let network = leaf_sys::network::network_shortcuts();
             (pinned, drives, libraries, network)
         });
         let extras = cx.background_spawn(async move {
             let recent = load_recent(14);
             // the localized names the jump list and the Home view show for these folders are read here, on this thread: the
-            // drawing only looks in the cache (see rf_win::localized::label_if_known)
-            rf_win::localized::warm(recent.iter().filter(|r| r.is_dir).flat_map(|r| crate::nav_touch::label_paths(&r.target)));
+            // drawing only looks in the cache (see leaf_sys::localized::label_if_known)
+            leaf_sys::localized::warm(recent.iter().filter(|r| r.is_dir).flat_map(|r| crate::nav_touch::label_paths(&r.target)));
             (recent, load_cloud_and_wsl())
         });
         self._task = Some(cx.spawn(async move |this, cx| {
@@ -250,7 +250,7 @@ impl Places {
             // the names of the pinned folders and of the folders above them (the breadcrumb of a click on a pin), read off the UI
             // thread and not in the piece the sidebar waits for
             let pin_paths: Vec<PathBuf> = pinned.iter().flat_map(|p| crate::nav_touch::label_paths(&p.path)).collect();
-            let pin_names = cx.background_spawn(async move { rf_win::localized::warm(pin_paths) });
+            let pin_names = cx.background_spawn(async move { leaf_sys::localized::warm(pin_paths) });
             let _ = this.update(cx, |p, cx| {
                 p.pinned = pinned;
                 p.drives = drives;

@@ -186,7 +186,7 @@ fn show_inner(
     });
     // Windows' "Snap To" (Mouse settings: "Automatically move pointer to the default button in a dialog box", issue 148): its own
     // dialogs put the pointer on their default button, so ours do too, once the dialog has come in (its animation is 160 ms)
-    if rf_win::sysparams::snap_to_default_button() {
+    if leaf_sys::sysparams::snap_to_default_button() {
         let at = view.read(cx).snap_at.clone();
         window
             .spawn(cx, async move |cx| {
@@ -195,7 +195,7 @@ fn show_inner(
                     let (Some(b), Some(hwnd)) = (at.get(), window_hwnd(window)) else { return };
                     let k = window.scale_factor();
                     let c = b.center();
-                    rf_win::sysparams::put_pointer_in(hwnd, (f32::from(c.x) * k).round() as i32, (f32::from(c.y) * k).round() as i32);
+                    leaf_sys::sysparams::put_pointer_in(hwnd, (f32::from(c.x) * k).round() as i32, (f32::from(c.y) * k).round() as i32);
                 });
             })
             .detach();

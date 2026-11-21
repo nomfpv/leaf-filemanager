@@ -246,7 +246,7 @@ pub enum FolderEvent {
     BulkRename(Vec<PathBuf>),
     AddToShelf(Vec<PathBuf>),
     /// Dual pane: copy/move the items into the other pane's folder.
-    ToOtherPane(rf_win::fileops::Transfer, Vec<PathBuf>),
+    ToOtherPane(leaf_sys::fileops::Transfer, Vec<PathBuf>),
     /// Dual pane: show a folder in the other pane.
     OpenInOtherPane(Location),
     OpenInNewWindow(Location),
@@ -365,7 +365,7 @@ enum Msg {
     /// Search hits: entries plus their parent folders.
     Hits(Vec<Entry>, Vec<Arc<std::path::Path>>),
     /// Shell folder items (a phone, Network…): entries plus what the shell knows about each.
-    Shell(Vec<Entry>, Vec<rf_win::shellfolder::ShellChild>),
+    Shell(Vec<Entry>, Vec<leaf_sys::shellfolder::ShellChild>),
     /// The shell's own name for the folder being listed.
     ShellName(String),
     /// What a search is doing now, shown while it runs (the owner, issue 67: "bu adımları ui'da gösterelim de kullanıcıya. sonra
@@ -403,16 +403,16 @@ impl SearchStage {
 pub(crate) enum DirSize {
     /// Being measured: bytes counted so far.
     Partial(u64),
-    Done(rf_win::foldersize::FolderSize),
+    Done(leaf_sys::foldersize::FolderSize),
 }
 
-impl From<rf_win::foldersize::SizeState> for DirSize {
-    fn from(s: rf_win::foldersize::SizeState) -> Self {
+impl From<leaf_sys::foldersize::SizeState> for DirSize {
+    fn from(s: leaf_sys::foldersize::SizeState) -> Self {
         match s {
-            rf_win::foldersize::SizeState::Partial(b) => DirSize::Partial(b),
+            leaf_sys::foldersize::SizeState::Partial(b) => DirSize::Partial(b),
             // a size remembered from the last run stands in until the new measurement ends; the
             // fresh value then replaces it without any marking
-            rf_win::foldersize::SizeState::Provisional(s) | rf_win::foldersize::SizeState::Done(s) => DirSize::Done(s),
+            leaf_sys::foldersize::SizeState::Provisional(s) | leaf_sys::foldersize::SizeState::Done(s) => DirSize::Done(s),
         }
     }
 }
@@ -428,7 +428,7 @@ impl DirSize {
     }
 
     /// The size to show and sort by; without a known cluster size the logical size stands in.
-    fn bytes(s: rf_win::foldersize::FolderSize, on_disk: bool) -> u64 {
+    fn bytes(s: leaf_sys::foldersize::FolderSize, on_disk: bool) -> u64 {
         if on_disk { s.allocated.unwrap_or(s.bytes) } else { s.bytes }
     }
 }
@@ -473,7 +473,7 @@ pub struct FolderView {
     /// Search mode only: parent folder of each entry (aligned with `entries`).
     parents: Vec<Arc<std::path::Path>>,
     /// Shell folders only: what the shell knows about each entry (aligned with `entries`).
-    pub(crate) shell_items: Vec<rf_win::shellfolder::ShellChild>,
+    pub(crate) shell_items: Vec<leaf_sys::shellfolder::ShellChild>,
     /// Shell folders only: the shell's name for the folder (when the location carries none).
     shell_title: Option<String>,
     /// The step of the search under way (`Msg::Stage`), cleared when it is done.
@@ -560,16 +560,16 @@ pub struct FolderView {
     space_hold: Option<Instant>,
     /// When the current soft reload (watcher) started (for the live trace).
     soft_started: Instant,
-    _watch: Option<rf_win::watch::DirWatch>,
+    _watch: Option<leaf_sys::watch::DirWatch>,
     _watch_task: Option<Task<()>>,
     pub renaming: Option<(u32, Entity<gpui_kit::component::input::InputState>)>,
     recycle: Option<Entity<crate::recycle_view::RecycleView>>,
     /// The disk usage page of this tab (kept while the tab stays on that folder).
     disk_usage: Option<Entity<crate::disk_usage::DiskUsageView>>,
     /// Git status of the repository containing this folder (if any).
-    pub git: Option<Arc<rf_win::git::GitStatus>>,
+    pub git: Option<Arc<leaf_sys::git::GitStatus>>,
     /// Last commit per child of the current folder (commit columns), keyed by name.
-    git_commits: Option<Arc<std::collections::HashMap<String, rf_win::git::Commit>>>,
+    git_commits: Option<Arc<std::collections::HashMap<String, leaf_sys::git::Commit>>>,
     /// Columns view: listings of ancestor / next folders (sorted, filtered).
     column_cache: std::collections::HashMap<PathBuf, Arc<Vec<Entry>>>,
     column_pending: HashSet<PathBuf>,
@@ -582,7 +582,7 @@ pub struct FolderView {
     layout_seeded: bool,
     /// Requested this frame; started together as one batch.
     size_queue: Vec<PathBuf>,
-    size_batches: Vec<(Arc<rf_win::foldersize::SizeBatch>, Vec<PathBuf>)>,
+    size_batches: Vec<(Arc<leaf_sys::foldersize::SizeBatch>, Vec<PathBuf>)>,
     size_polling: bool,
     col_scroll: ScrollHandle,
     col_key: Option<(PathBuf, Option<PathBuf>)>,
@@ -590,7 +590,7 @@ pub struct FolderView {
     col_scrolls: std::collections::HashMap<PathBuf, UniformListScrollHandle>,
     col_scrolled: HashSet<(PathBuf, String)>,
     _git_task: Option<Task<()>>,
-    /// The overlays other programs put on the current folder's icons (Google Drive, TortoiseGit, ...; `rf_win::overlays`): item name →
+    /// The overlays other programs put on the current folder's icons (Google Drive, TortoiseGit, ...; `leaf_sys::overlays`): item name →
     /// picture index. Settings > "show_overlays".
     overlays: Option<Arc<std::collections::HashMap<Arc<str>, i32>>>,
     /// Set to stop the questions of a folder left (a slow handler's folder must not hold up the next one).
@@ -799,7 +799,7 @@ impl FolderView {
         if let Location::Path(p) = self.location() {
             // (the cache only: reading the folder's attributes here would hold the window on a place that has to wake up first;
             // `warm_labels` fills the cache from a worker)
-            if let Some(l) = rf_win::localized::label_if_known(p) {
+            if let Some(l) = leaf_sys::localized::label_if_known(p) {
                 return l.to_string();
             }
         }
@@ -820,7 +820,7 @@ impl FolderView {
             Location::Shell { .. } => L::Usb,
             Location::DiskUsage(_) => L::ChartPie,
             Location::Downloads => L::ArrowDownToLine,
-            Location::Path(p) if rf_win::network::server_root(p).is_some() => L::Server,
+            Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
             Location::Path(p) if crate::archive_view::is_browsable_path_by_name(p) => L::FileArchive,
             Location::Path(p) => {
@@ -911,7 +911,7 @@ impl FolderView {
         let d2 = dir.clone();
         let work = cx.background_spawn(async move {
             let mut v = Vec::new();
-            let _ = rf_win::list_dir(&d2, 4096, &|| false, &mut |b| v.extend(b));
+            let _ = leaf_sys::list_dir(&d2, 4096, &|| false, &mut |b| v.extend(b));
             v.retain(|e| shown.accepts(e));
             let spec = SortSpec::default();
             v.sort_by(|a, b| spec.compare(a, b));
@@ -1063,7 +1063,7 @@ impl FolderView {
         self.column_cache.clear();
         // F5 measures folder sizes afresh (deep changes don't move a folder's own date)
         if let Some(p) = self.location().path() {
-            rf_win::foldersize::shared_cache().invalidate(p);
+            leaf_sys::foldersize::shared_cache().invalidate(p);
         }
         if matches!(self.location(), Location::Home) {
             self.places.update(cx, |p, cx| p.refresh(cx));
@@ -1113,8 +1113,8 @@ impl FolderView {
         let commits = Self::commit_cols_on(cx);
         let d = dir.clone();
         let work = cx.background_spawn(async move {
-            let root = rf_win::git::repo_root(&d)?;
-            Some((rf_win::git::status(&root).ok().map(Arc::new)?, root))
+            let root = leaf_sys::git::repo_root(&d)?;
+            Some((leaf_sys::git::status(&root).ok().map(Arc::new)?, root))
         });
         self._git_task = Some(cx.spawn(async move |this, cx| {
             let got = work.await;
@@ -1134,14 +1134,14 @@ impl FolderView {
                                     .filter(|n| n != ".git")
                                     .filter(|n| {
                                         !matches!(
-                                            rf_win::git::state_for_child(&st, &dir, n),
-                                            Some(rf_win::git::FileState::Untracked | rf_win::git::FileState::Ignored)
+                                            leaf_sys::git::state_for_child(&st, &dir, n),
+                                            Some(leaf_sys::git::FileState::Untracked | leaf_sys::git::FileState::Ignored)
                                         )
                                     })
                                     .collect()
                             })
                             .unwrap_or_default();
-                        Arc::new(rf_win::git::last_commits_of_children(&root, &dir, &names, 5_000))
+                        Arc::new(leaf_sys::git::last_commits_of_children(&root, &dir, &names, 5_000))
                     })
                 })
             }) else {
@@ -1155,7 +1155,7 @@ impl FolderView {
         }));
     }
 
-    /// Asks for the overlays of the current folder's items in the background (`rf_win::overlays`), after a listing. Only plain folders
+    /// Asks for the overlays of the current folder's items in the background (`leaf_sys::overlays`), after a listing. Only plain folders
     /// on a disk or a share; links are left out (leaf draws their arrow itself), and a huge folder's first items only.
     fn refresh_overlays(&mut self, cx: &mut Context<Self>) {
         const MOST: usize = 5_000;
@@ -1172,7 +1172,7 @@ impl FolderView {
         };
         let names: Vec<String> = self.entries.iter().filter(|e| !e.link).take(MOST).map(|e| e.name.to_string()).collect();
         let cancel = self.overlay_cancel.clone();
-        let work = cx.background_spawn(async move { rf_win::overlays::indexes(&dir, names, cancel) });
+        let work = cx.background_spawn(async move { leaf_sys::overlays::indexes(&dir, names, cancel) });
         self._overlay_task = Some(cx.spawn(async move |this, cx| {
             let got = work.await;
             let _ = this.update(cx, |v, cx| {
@@ -1250,11 +1250,11 @@ impl FolderView {
     fn warm_labels(&self, cx: &mut Context<Self>) {
         let (Location::Path(path) | Location::Search { root: path, .. }) = self.location() else { return };
         let paths = crate::nav_touch::label_paths(path);
-        if paths.iter().all(|p| rf_win::localized::is_known(p)) {
+        if paths.iter().all(|p| leaf_sys::localized::is_known(p)) {
             return;
         }
         cx.spawn(async move |this, cx| {
-            let found = cx.background_spawn(async move { rf_win::localized::warm(paths) }).await;
+            let found = cx.background_spawn(async move { leaf_sys::localized::warm(paths) }).await;
             if found > 0 {
                 let _ = this.update(cx, |_, cx| cx.notify());
             }
@@ -1281,7 +1281,7 @@ impl FolderView {
             return;
         }
         let Some(path) = self.location().path().map(|p| p.to_path_buf()) else { return };
-        if rf_win::ftp::is_ftp(&path) {
+        if leaf_sys::ftp::is_ftp(&path) {
             return; // no change notifications over FTP; F5 refreshes
         }
         let (tx, mut rx) = mpsc::unbounded::<Option<Vec<(String, Option<Entry>)>>>();
@@ -1292,11 +1292,11 @@ impl FolderView {
         // Opening the directory handle can block (offline network share): do it off the UI thread.
         let setup = cx.background_spawn(async move {
             let dir = path.clone();
-            rf_win::watch::watch_dir_changes(&path, std::time::Duration::from_millis(150), move |ch| {
+            leaf_sys::watch::watch_dir_changes(&path, std::time::Duration::from_millis(150), move |ch| {
                 // the changed names read from the disk here, on the watcher's own thread (in
                 // order, off the UI thread); None: list the whole folder again
                 let patch = (patchable && !ch.rescan && !ch.names.is_empty())
-                    .then(|| ch.names.into_iter().map(|n| rf_win::stat_entry(&dir, &n).map(|e| (n, e))).collect::<Result<Vec<_>, _>>().ok())
+                    .then(|| ch.names.into_iter().map(|n| leaf_sys::stat_entry(&dir, &n).map(|e| (n, e))).collect::<Result<Vec<_>, _>>().ok())
                     .flatten();
                 let _ = tx.unbounded_send(patch);
             })
@@ -1398,7 +1398,7 @@ impl FolderView {
             std::thread::Builder::new()
                 .name("rf-library".into())
                 .spawn(move || {
-                    let Some(lib) = rf_win::libraries::load(&file) else {
+                    let Some(lib) = leaf_sys::libraries::load(&file) else {
                         let _ = tx.unbounded_send(Msg::Done(Err("Couldn't open the library".into())));
                         return;
                     };
@@ -1406,7 +1406,7 @@ impl FolderView {
                     let mut last_err = None;
                     for dir in &lib.folders {
                         let parent: Arc<std::path::Path> = dir.as_path().into();
-                        let r = rf_win::list_dir(dir, 512, &|| cancel.load(Ordering::Relaxed), &mut |b| {
+                        let r = leaf_sys::list_dir(dir, 512, &|| cancel.load(Ordering::Relaxed), &mut |b| {
                             let ps = vec![parent.clone(); b.len()];
                             let _ = tx.unbounded_send(Msg::Hits(b, ps));
                         });
@@ -1438,7 +1438,7 @@ impl FolderView {
             std::thread::Builder::new()
                 .name("rf-shell-list".into())
                 .spawn(move || {
-                    use rf_win::shellfolder as sf;
+                    use leaf_sys::shellfolder as sf;
                     if let Some(n) = sf::display_name(&parsing) {
                         let _ = tx.unbounded_send(Msg::ShellName(n));
                     }
@@ -1519,12 +1519,12 @@ impl FolderView {
         let generation = self.generation;
         let cancel = self.cancel.clone();
         let (tx, mut rx) = mpsc::unbounded::<Msg>();
-        if rf_win::ftp::is_ftp(&path) {
+        if leaf_sys::ftp::is_ftp(&path) {
             let url = path.to_string_lossy().into_owned();
             std::thread::Builder::new()
                 .name("rf-ftp".into())
                 .spawn(move || {
-                    let r = rf_win::ftp::list(&url).map(|es| {
+                    let r = leaf_sys::ftp::list(&url).map(|es| {
                         let n = es.len();
                         let _ = tx.unbounded_send(Msg::Batch(es));
                         n
@@ -1532,11 +1532,11 @@ impl FolderView {
                     let _ = tx.unbounded_send(Msg::Done(r.map_err(|e| e.to_string())));
                 })
                 .ok();
-        } else if let Some(server) = rf_win::network::server_root(&path) {
+        } else if let Some(server) = leaf_sys::network::server_root(&path) {
             std::thread::Builder::new()
                 .name("rf-shares".into())
                 .spawn(move || {
-                    let r = rf_win::network::shares(&server).map(|list| {
+                    let r = leaf_sys::network::shares(&server).map(|list| {
                         let es: Vec<Entry> = list
                             .iter()
                             .map(|s| Entry::new(&s.name, rf_core::EntryKind::Dir, 0, 0, 0, 0x10))
@@ -1600,7 +1600,7 @@ impl FolderView {
                     let _ = tx.unbounded_send(Msg::Stage(SearchStage::Index));
                     // (Windows Search gave up on: the walk keeps saying so)
                     let mut windows_silent = false;
-                    if let Some(paths) = rf_win::indexer::search(&query, &root, include_hidden, 50_000) {
+                    if let Some(paths) = leaf_sys::indexer::search(&query, &root, include_hidden, 50_000) {
                         let looked_up = t_index.elapsed();
                         found = send_index_hits(&paths, &tx, &cancel);
                         log::info!("search: the index answered \"{query}\" in {} with {} hits ({looked_up:?} to find, {:?} with details)", root.display(), found, t_index.elapsed());
@@ -1612,7 +1612,7 @@ impl FolderView {
                     // says loading": each answer is waited for only so long, then the disk is walked as where nothing is indexed)
                     let indexed = use_index && !glob && {
                         let r = root.clone();
-                        within(Duration::from_secs(3), move || rf_win::wsearch::is_indexed(&r)).unwrap_or_else(|| {
+                        within(Duration::from_secs(3), move || leaf_sys::wsearch::is_indexed(&r)).unwrap_or_else(|| {
                             log::warn!("search: Windows Search did not say in 3 s whether {} is indexed; walking instead", root.display());
                             false
                         })
@@ -1630,7 +1630,7 @@ impl FolderView {
                         let (done_tx, done_rx) = std::sync::mpsc::channel();
                         let _ = std::thread::Builder::new().name("rf-wsearch".into()).spawn(move || {
                             let stop = || cancel2.load(Ordering::Relaxed) || given_up2.load(Ordering::Relaxed);
-                            let r = rf_win::wsearch::search(&root2, &query2, 50_000, &stop, &mut |hits| {
+                            let r = leaf_sys::wsearch::search(&root2, &query2, 50_000, &stop, &mut |hits| {
                                 delivered2.fetch_add(hits.len().max(1), Ordering::Relaxed);
                                 let mut es = Vec::with_capacity(hits.len());
                                 let mut ps = Vec::with_capacity(hits.len());
@@ -1685,9 +1685,9 @@ impl FolderView {
                     if !windows_silent {
                         let _ = tx.unbounded_send(Msg::Stage(SearchStage::Walk));
                     }
-                    let q = rf_win::search::SearchQuery { root, pattern: query, include_hidden, max_results: 50_000 };
+                    let q = leaf_sys::search::SearchQuery { root, pattern: query, include_hidden, max_results: 50_000 };
                     let tx2 = tx.clone();
-                    let r = rf_win::search::search(&q, &|| cancel.load(Ordering::Relaxed), &mut |hits| {
+                    let r = leaf_sys::search::search(&q, &|| cancel.load(Ordering::Relaxed), &mut |hits| {
                         let mut es = Vec::with_capacity(hits.len());
                         let mut ps = Vec::with_capacity(hits.len());
                         for h in hits {
@@ -1725,7 +1725,7 @@ impl FolderView {
                                 None => format!("{e:#}"),
                             }),
                     },
-                    None => rf_win::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |b| {
+                    None => leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |b| {
                         all.extend(b.iter().cloned());
                         let _ = tx2.unbounded_send(Msg::Batch(b));
                     })
@@ -2300,7 +2300,7 @@ enum KnownKind {
 
 /// Pictures and Videos (and folders inside them), or Downloads itself.
 fn known_kind(p: &std::path::Path) -> Option<KnownKind> {
-    use rf_win::known::KnownFolder;
+    use leaf_sys::known::KnownFolder;
     static PATHS: std::sync::OnceLock<Vec<(std::path::PathBuf, KnownKind)>> = std::sync::OnceLock::new();
     let paths = PATHS.get_or_init(|| {
         [(KnownFolder::Pictures, KnownKind::Pictures), (KnownFolder::Videos, KnownKind::Pictures), (KnownFolder::Downloads, KnownKind::Downloads)]
@@ -3338,7 +3338,7 @@ impl FolderView {
         if dirs.is_empty() {
             return;
         }
-        self.size_batches.push((rf_win::foldersize::SizeBatch::start(dirs.clone()), dirs));
+        self.size_batches.push((leaf_sys::foldersize::SizeBatch::start(dirs.clone()), dirs));
         if self.size_polling {
             return;
         }
@@ -3426,7 +3426,7 @@ impl FolderView {
     /// The drives "Send to" lists after the SendTo folder's entries, as Explorer's does: the removable and the network ones (root,
     /// name, icon).
     pub(crate) fn send_to_drives(&self, cx: &App) -> Vec<(PathBuf, String, gpui_kit::assets::IconName)> {
-        use rf_win::drives::DriveKind;
+        use leaf_sys::drives::DriveKind;
         self.places
             .read(cx)
             .drives
@@ -3557,7 +3557,7 @@ impl FolderView {
             // an item on a phone: the shell fetches it and opens it with its default app
             let parsing = child.parsing;
             std::thread::spawn(move || {
-                if let Err(e) = rf_win::shellfolder::open(&parsing) {
+                if let Err(e) = leaf_sys::shellfolder::open(&parsing) {
                     log::warn!("open {parsing}: {e:#}");
                 }
             });
@@ -3572,7 +3572,7 @@ impl FolderView {
     }
 
     /// The selected items of a shell folder, in list order.
-    pub(crate) fn selection_shell(&self) -> Vec<rf_win::shellfolder::ShellChild> {
+    pub(crate) fn selection_shell(&self) -> Vec<leaf_sys::shellfolder::ShellChild> {
         let mut v: Vec<u32> = self.selected.iter().copied().collect();
         v.sort_unstable();
         v.into_iter().filter_map(|i| self.shell_items.get(i as usize).cloned()).collect()
@@ -3613,7 +3613,7 @@ impl FolderView {
             let link = path.clone();
             let folder = cx
                 .background_executor()
-                .spawn(async move { rf_win::shortcut::resolve(&link).ok().map(|i| i.target).filter(|t| !t.as_os_str().is_empty() && t.is_dir()) })
+                .spawn(async move { leaf_sys::shortcut::resolve(&link).ok().map(|i| i.target).filter(|t| !t.as_os_str().is_empty() && t.is_dir()) })
                 .await;
             let _ = this.update(cx, |this, cx| match folder {
                 Some(dir) if cx.global::<crate::settings::Settings>().open_folders_in_new_tab => cx.emit(FolderEvent::OpenInNewTab(Location::Path(dir))),
@@ -4067,7 +4067,7 @@ impl FolderView {
                 .and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx)));
             let overlay = self.overlay_of(ei, px(16.), cx);
             let e = &self.entries[ei as usize];
-            let git_state = self.git.as_ref().and_then(|g| rf_win::git::state_for_child(g, self.parent_of(ei)?, &e.name));
+            let git_state = self.git.as_ref().and_then(|g| leaf_sys::git::state_for_child(g, self.parent_of(ei)?, &e.name));
             let git_cell = col_git.then(|| {
                 let (label, color) = match git_state {
                     Some(st) => (git_label(st), git_style(st).1),
@@ -4077,7 +4077,7 @@ impl FolderView {
             });
             let git_badge = (!col_git).then_some(()).and(self.git.as_ref()).and_then(|g| {
                 let dir = self.parent_of(ei)?;
-                let st = rf_win::git::state_for_child(g, dir, &e.name)?;
+                let st = leaf_sys::git::state_for_child(g, dir, &e.name)?;
                 let (letter, color) = git_style(st);
                 Some(
                     div()
@@ -4762,7 +4762,7 @@ impl FolderView {
             let target = r.target.clone();
             let is_dir = r.is_dir;
             // folders under their Explorer name (Downloads → İndirilenler)
-            let shown: String = if is_dir { rf_win::localized::label_if_known(&target).map_or_else(|| r.name.clone(), |l| l.to_string()) } else { r.name.clone() };
+            let shown: String = if is_dir { leaf_sys::localized::label_if_known(&target).map_or_else(|| r.name.clone(), |l| l.to_string()) } else { r.name.clone() };
             recent_list = recent_list.child(
                 h_flex()
                     .id(("recent", i))
@@ -4986,8 +4986,8 @@ mod tile_tests {
 }
 
 /// Files' "Git status" column text.
-fn git_label(s: rf_win::git::FileState) -> &'static str {
-    use rf_win::git::FileState::*;
+fn git_label(s: leaf_sys::git::FileState) -> &'static str {
+    use leaf_sys::git::FileState::*;
     match s {
         Modified => t!("Modified"),
         Added => t!("Added"),
@@ -4999,8 +4999,8 @@ fn git_label(s: rf_win::git::FileState) -> &'static str {
     }
 }
 
-fn git_style(s: rf_win::git::FileState) -> (&'static str, Hsla) {
-    use rf_win::git::FileState::*;
+fn git_style(s: leaf_sys::git::FileState) -> (&'static str, Hsla) {
+    use leaf_sys::git::FileState::*;
     let c = |x: u32| -> Hsla { rgb(x).into() };
     match s {
         Modified => ("M", c(0xFF9F0A)),
@@ -5212,19 +5212,19 @@ fn is_lnk(path: &std::path::Path) -> bool {
 
 pub(crate) fn open_in_background(path: PathBuf, cx: &mut App) {
     // (the name test first: it costs nothing, and `exists` on a place that has to wake up holds the UI thread)
-    if !rf_win::ftp::is_ftp(&path) && crate::nav_touch::may_hold_archive(&path) && !path.exists() && crate::archive_view::split(&path).is_some() {
+    if !leaf_sys::ftp::is_ftp(&path) && crate::nav_touch::may_hold_archive(&path) && !path.exists() && crate::archive_view::split(&path).is_some() {
         // an item inside an archive: extract just it (Status Center), open the real file
         crate::archive_view::open_items(cx, vec![path]);
         return;
     }
     std::thread::spawn(move || {
         // FTP: download to a temp copy, then open that
-        let path = if rf_win::ftp::is_ftp(&path) {
+        let path = if leaf_sys::ftp::is_ftp(&path) {
             let name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
             let dir = std::env::temp_dir().join("leaf-ftp");
             let _ = std::fs::create_dir_all(&dir);
             let local = dir.join(name);
-            if let Err(e) = rf_win::ftp::download(&path.to_string_lossy(), &local) {
+            if let Err(e) = leaf_sys::ftp::download(&path.to_string_lossy(), &local) {
                 log::warn!("ftp download {path:?}: {e}");
                 return;
             }
@@ -5233,7 +5233,7 @@ pub(crate) fn open_in_background(path: PathBuf, cx: &mut App) {
             path
         };
         // (with the user's own program for the file's type when there is one: Settings > File types)
-        if let Err(e) = rf_win::openrules::open(&path) {
+        if let Err(e) = leaf_sys::openrules::open(&path) {
             log::warn!("open {path:?}: {e}");
         }
     });
@@ -5372,8 +5372,8 @@ impl Render for FolderView {
             }))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.properties(cx)))
             .on_action(cx.listener(|this, _: &OpenWith, _, _| this.open_with()))
-            .on_action(cx.listener(|this, _: &CopyItems, window, cx| this.copy_to_clipboard(rf_win::fileops::Transfer::Copy, window, cx)))
-            .on_action(cx.listener(|this, _: &CutItems, window, cx| this.copy_to_clipboard(rf_win::fileops::Transfer::Move, window, cx)))
+            .on_action(cx.listener(|this, _: &CopyItems, window, cx| this.copy_to_clipboard(leaf_sys::fileops::Transfer::Copy, window, cx)))
+            .on_action(cx.listener(|this, _: &CutItems, window, cx| this.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, window, cx)))
             .on_action(cx.listener(|this, _: &PasteItems, window, cx| this.paste(window, cx)))
             .on_action(cx.listener(|this, _: &PasteIntoSelected, window, cx| this.paste_into_selected(window, cx)))
             .on_action(cx.listener(|this, _: &PasteShortcut, window, cx| this.paste_shortcuts(window, cx)))
@@ -5385,8 +5385,8 @@ impl Render for FolderView {
                     this.duplicate_selected(cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &CopyToOtherPane, _, cx| this.to_other_pane(rf_win::fileops::Transfer::Copy, cx)))
-            .on_action(cx.listener(|this, _: &MoveToOtherPane, _, cx| this.to_other_pane(rf_win::fileops::Transfer::Move, cx)))
+            .on_action(cx.listener(|this, _: &CopyToOtherPane, _, cx| this.to_other_pane(leaf_sys::fileops::Transfer::Copy, cx)))
+            .on_action(cx.listener(|this, _: &MoveToOtherPane, _, cx| this.to_other_pane(leaf_sys::fileops::Transfer::Move, cx)))
             .on_action(cx.listener(|this, _: &DeleteItems, w, cx| {
                 if !this.bin_delete(w, cx) {
                     this.delete_selected(false, w, cx)
@@ -5480,7 +5480,7 @@ struct RowPress {
 /// The list's and the Settings page's scrollbars: shown while scrolling, or all the time when Windows is set to always show
 /// scrollbars (Windows 10's "Automatically hide scroll bars" off).
 pub(crate) fn scrollbar_mode() -> ScrollbarMode {
-    if rf_win::scrollbars::always_shown() { ScrollbarMode::Always } else { ScrollbarMode::Scrolling }
+    if leaf_sys::scrollbars::always_shown() { ScrollbarMode::Always } else { ScrollbarMode::Scrolling }
 }
 
 /// The grid's name of a right-to-left name in at most two lines (issue 115): GPUI wraps such a run after every letter, so the name is
@@ -5575,7 +5575,7 @@ mod double_click_tests {
 #[cfg(test)]
 mod known_kind_tests {
     use super::{KnownKind, known_kind};
-    use rf_win::known::KnownFolder;
+    use leaf_sys::known::KnownFolder;
 
     #[test]
     fn pictures_and_downloads_are_recognised() {
@@ -5741,7 +5741,7 @@ fn file_drop_target(row: Stateful<Div>, target: PathBuf, is_dir: bool, p: &Palet
 
 fn valid_item_drop(sources: &[PathBuf], target: &std::path::Path, is_dir: bool) -> bool {
     !sources.is_empty() && if is_dir {
-        !rf_win::dnd::is_invalid_drop(sources, target)
+        !leaf_sys::dnd::is_invalid_drop(sources, target)
     } else {
         !sources.iter().any(|p| p.as_os_str().eq_ignore_ascii_case(target.as_os_str()))
     }
@@ -5765,15 +5765,15 @@ mod file_drop_tests {
 }
 
 /// Tells Windows which effect to show under the pointer ("Move to", "Copy to") for files dragged over a drop target whose folder is
-/// `dir`: what the drop will do there (`rf_win::dnd::default_transfer`: the same drive moves, another drive copies). Every drop target
+/// `dir`: what the drop will do there (`leaf_sys::dnd::default_transfer`: the same drive moves, another drive copies). Every drop target
 /// says it for its own folder (issue 54: dragging from W: onto the tree's D: row said "Move" and copied: the tree said nothing, and
 /// the list's last word, W: onto W:, stayed).
 pub(crate) fn show_drop_effect(paths: &[PathBuf], dir: &std::path::Path) {
-    let t = rf_win::dnd::default_transfer(paths, dir, false, false);
+    let t = leaf_sys::dnd::default_transfer(paths, dir, false, false);
     log::debug!("drag over {}: {t:?} ({} item(s), the first {:?})", dir.display(), paths.len(), paths.first());
     gpui_windows::dnd_hint::set(match t {
-        rf_win::fileops::Transfer::Move => gpui_windows::dnd_hint::MOVE,
-        rf_win::fileops::Transfer::Copy => gpui_windows::dnd_hint::COPY,
+        leaf_sys::fileops::Transfer::Move => gpui_windows::dnd_hint::MOVE,
+        leaf_sys::fileops::Transfer::Copy => gpui_windows::dnd_hint::COPY,
     });
 }
 

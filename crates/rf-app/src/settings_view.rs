@@ -639,8 +639,8 @@ fn quick_search_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement
     let waiting = crate::keymap_editor::capturing(cx).as_deref() == Some(capture);
     let shown: SharedString = if waiting { t!("Press keys…").into() } else { crate::keymap_editor::pretty(&s.quick_search_keys).into() };
     let keys_desc = match crate::quick_search::problem() {
-        Some(rf_win::hotkey::HotkeyError::Taken) if s.quick_search => t!("Another app uses this shortcut (ChatGPT, Gemini, PowerToys…): choose another one"),
-        Some(rf_win::hotkey::HotkeyError::Invalid) if s.quick_search => t!("This shortcut can't be used: choose a key with Ctrl, Alt, Shift or Win"),
+        Some(leaf_sys::hotkey::HotkeyError::Taken) if s.quick_search => t!("Another app uses this shortcut (ChatGPT, Gemini, PowerToys…): choose another one"),
+        Some(leaf_sys::hotkey::HotkeyError::Invalid) if s.quick_search => t!("This shortcut can't be used: choose a key with Ctrl, Alt, Shift or Win"),
         _ => t!("Click and press the new keys to change it"),
     };
     let warn = s.quick_search && crate::quick_search::problem().is_some();
@@ -906,22 +906,22 @@ pub(crate) fn drive_letter(path: &std::path::Path) -> Option<char> {
 
 /// Hides a drive from the lists of places, or shows it again: the setting's letters, each once, in order.
 pub(crate) fn set_drive_hidden(s: &mut Settings, letter: char, hide: bool) {
-    let mut mask = rf_win::drives::mask_of_letters(&s.hidden_drives);
-    if let Some(bit) = rf_win::drives::letter_bit(letter) {
+    let mut mask = leaf_sys::drives::mask_of_letters(&s.hidden_drives);
+    if let Some(bit) = leaf_sys::drives::letter_bit(letter) {
         if hide { mask |= bit } else { mask &= !bit }
     }
-    s.hidden_drives = rf_win::drives::letters_of_mask(mask).into_iter().map(String::from).collect();
+    s.hidden_drives = leaf_sys::drives::letters_of_mask(mask).into_iter().map(String::from).collect();
 }
 
 /// Which drives are listed: a button per drive letter that is there now (and per letter the setting names, there or not), pressed
 /// in while the drive is hidden.
 fn hidden_drives_card(p: &Palette, s: &Settings) -> AnyElement {
-    let hidden = rf_win::drives::mask_of_letters(&s.hidden_drives);
-    let by_explorer = rf_win::drives::policy_hidden();
-    let present = rf_win::drives::drive_mask();
+    let hidden = leaf_sys::drives::mask_of_letters(&s.hidden_drives);
+    let by_explorer = leaf_sys::drives::policy_hidden();
+    let present = leaf_sys::drives::drive_mask();
     let mut row = h_flex().flex_wrap().gap_2().items_center().justify_end();
-    for (i, letter) in rf_win::drives::letters_of_mask(present | hidden).into_iter().enumerate() {
-        let bit = rf_win::drives::letter_bit(letter).unwrap_or(0);
+    for (i, letter) in leaf_sys::drives::letters_of_mask(present | hidden).into_iter().enumerate() {
+        let bit = leaf_sys::drives::letter_bit(letter).unwrap_or(0);
         let (off, forced) = (hidden & bit != 0, by_explorer & bit != 0);
         row = row.child(
             h_flex()
@@ -993,7 +993,7 @@ fn hidden_places_card(p: &Palette, s: &Settings) -> AnyElement {
 
 /// What the accent setting holds after the user wrote a colour of their own: the colour as it is kept, or what to tell them.
 pub(crate) fn accent_answer(text: &str) -> Result<String, String> {
-    rf_win::accent::parse_hex(text).map(rf_win::accent::to_hex).ok_or_else(|| t!("Write the color as #RRGGBB, for example #F7630C.").to_string())
+    leaf_sys::accent::parse_hex(text).map(leaf_sys::accent::to_hex).ok_or_else(|| t!("Write the color as #RRGGBB, for example #F7630C.").to_string())
 }
 
 /// The theme: the three built-in looks and the user's own (`<config>/themes/*.toml`), with where those go and a way there.
@@ -1039,7 +1039,7 @@ fn themes_folder_card(p: &Palette) -> AnyElement {
                         log::warn!("themes folder: {e}");
                         return;
                     }
-                    if let Err(e) = rf_win::shell::open(&d) {
+                    if let Err(e) = leaf_sys::shell::open(&d) {
                         log::warn!("themes folder: {e:#}");
                     }
                     // (a theme added there shows in the list the next time it is drawn)
@@ -1052,7 +1052,7 @@ fn themes_folder_card(p: &Palette) -> AnyElement {
 
 /// The accent colour: one of the theme's set, Windows' own, or any colour written as #RRGGBB.
 fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
-    let current = rf_win::accent::parse_hex(&s.accent_color);
+    let current = leaf_sys::accent::parse_hex(&s.accent_color);
     let chip = |id: &'static str, label: &'static str, on: bool, p: &Palette| {
         div()
             .id(id)
@@ -1169,7 +1169,7 @@ fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
         // Only where the windows really are hidden from screenshots: with a capture session (Windows 11 24H2 and the border-free capture
         // permission) they are not, and the line would be untrue. Before the engine has chosen (no window has glass yet) the mode is
         // Off and the line is left out; the page is drawn again once the glass is on the window.
-        if rf_win::glass::capture_mode() == rf_win::glass::CaptureMode::Affinity {
+        if leaf_sys::glass::capture_mode() == leaf_sys::glass::CaptureMode::Affinity {
             notes.push(t!("On this version of Windows, or while the screenshot border permission is off, leaf windows do not appear in screenshots, recordings or screen sharing.").to_string());
         }
         if let Some(why) = crate::glass::failure() {
@@ -2488,14 +2488,14 @@ fn tag_name_dialog(existing: Option<(u32, String)>, window: &mut Window, cx: &mu
 }
 
 fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
-    // The editors that are installed (`rf_win::editors`): each is a button that chooses it, and "automatic" is the first of them.
+    // The editors that are installed (`leaf_sys::editors`): each is a button that chooses it, and "automatic" is the first of them.
     // The look for them asks the disk and the registry, so it runs on another thread and the page is drawn again when the list
     // is another one; while the page is open it is repeated now and then (an editor installed meanwhile shows up).
     static LOOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let (editors, fresh) = rf_win::editors::peek();
+    let (editors, fresh) = leaf_sys::editors::peek();
     if !fresh && !LOOKING.swap(true, std::sync::atomic::Ordering::Relaxed) {
         cx.spawn(async move |cx| {
-            let changed = cx.background_executor().spawn(async { rf_win::editors::refresh() }).await;
+            let changed = cx.background_executor().spawn(async { leaf_sys::editors::refresh() }).await;
             LOOKING.store(false, std::sync::atomic::Ordering::Relaxed);
             if changed {
                 let _ = cx.update(|cx| cx.refresh_windows());
@@ -2509,7 +2509,7 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             None => t!("VS Code (automatic)").to_string(),
         }
     } else {
-        match rf_win::editors::name_of(&editors, std::path::Path::new(&s.ide_path)) {
+        match leaf_sys::editors::name_of(&editors, std::path::Path::new(&s.ide_path)) {
             // (one of the installed editors: its name says it; its path beside it broke over three lines)
             Some(name) => name.to_string(),
             None => s.ide_path.clone(),
@@ -2623,7 +2623,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             move |_, cx| {
                 look_update(cx, |s| s.look_system_wide = !on);
                 if let Some(exe) = crate::look::ipc::exe() {
-                    if let Err(e) = rf_win::dialogs::set_start_with_windows_as("leaf-look", &exe, &["--background"], !on) {
+                    if let Err(e) = leaf_sys::dialogs::set_start_with_windows_as("leaf-look", &exe, &["--background"], !on) {
                         log::warn!("Preview start with Windows: {e}");
                     }
                 }
@@ -2799,7 +2799,7 @@ mod ext_tests {
 }
 
 fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
-    let start_on = rf_win::dialogs::starts_with_windows();
+    let start_on = leaf_sys::dialogs::starts_with_windows();
     let load = hybrid::load_snapshot();
     let pct = |v: Option<f32>| v.map(crate::i18n::pct).unwrap_or_else(|| "—".into());
     let live = format!(
@@ -2825,8 +2825,8 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             t!("Open archives with leaf"),
             Some(t!("The default app for zip, 7z, rar and tar is chosen in Windows. Make leaf the default on the page that opens.")),
             button("dfm-arch", p, t!("Default apps"), |_, _| {
-                let page = format!("ms-settings:defaultapps?registeredAppUser={}", rf_win::default_fm::APP_NAME);
-                if let Err(e) = rf_win::shell::open(std::path::Path::new(&page)) {
+                let page = format!("ms-settings:defaultapps?registeredAppUser={}", leaf_sys::default_fm::APP_NAME);
+                if let Err(e) = leaf_sys::shell::open(std::path::Path::new(&page)) {
                     log::warn!("default apps page: {e:#}");
                 }
             }),
@@ -2849,7 +2849,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             None,
             switch("start-win", p, start_on, move |window, _| {
                 if let Ok(exe) = std::env::current_exe() {
-                    if let Err(e) = rf_win::dialogs::set_start_with_windows(&exe, !start_on) {
+                    if let Err(e) = leaf_sys::dialogs::set_start_with_windows(&exe, !start_on) {
                         log::warn!("start with Windows: {e}");
                     }
                 }
@@ -2964,12 +2964,12 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             switch("dfm", p, dfm_on, move |window, _| {
                 let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
                 std::thread::spawn(move || {
-                    let classes = rf_win::default_fm::CLASSES;
-                    let r = if dfm_on { rf_win::default_fm::disable(classes) } else { rf_win::default_fm::enable(&exe, classes) };
+                    let classes = leaf_sys::default_fm::CLASSES;
+                    let r = if dfm_on { leaf_sys::default_fm::disable(classes) } else { leaf_sys::default_fm::enable(&exe, classes) };
                     if let Err(e) = r {
                         log::warn!("default file manager: {e:#}");
                     }
-                    crate::DEFAULT_FM.store(rf_win::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
+                    crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
                 });
                 window.refresh();
             }),
@@ -3004,7 +3004,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
 
 fn open_url(url: &'static str) {
     std::thread::spawn(move || {
-        let _ = rf_win::shell::open(std::path::Path::new(url));
+        let _ = leaf_sys::shell::open(std::path::Path::new(url));
     });
 }
 
@@ -3211,8 +3211,8 @@ fn pick_into(_window: &mut Window, cx: &mut App, title: &str, target: PickTarget
         PickTarget::Export => 2,
         PickTarget::Import => 3,
     };
-    rf_win::sta::run(move |owner| {
-        use rf_win::dialogs::{Pick, pick};
+    leaf_sys::sta::run(move |owner| {
+        use leaf_sys::dialogs::{Pick, pick};
         fn f(v: &[(String, String)]) -> Vec<(&str, &str)> {
             v.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect()
         }
@@ -3259,14 +3259,14 @@ fn pick_into(_window: &mut Window, cx: &mut App, title: &str, target: PickTarget
 /// "Local drives' file names are kept in an index … · C:\ 2.1 million entries, 84 MB · E:\ indexing…"
 fn name_index_status() -> String {
     let mut s = t!("File names on the local drives are kept in an index, so searching subfolders takes milliseconds. The index is built in the background and kept up to date.").to_string();
-    let parts: Vec<String> = rf_win::indexer::status()
+    let parts: Vec<String> = leaf_sys::indexer::status()
         .into_iter()
         .map(|(root, state, live, mem)| {
             let r = root.to_string_lossy().trim_end_matches('\\').to_string();
             match state {
-                rf_win::indexer::State::Building => format!("{r} {}", t!("indexing…")),
-                rf_win::indexer::State::Failed => format!("{r} {}", t!("couldn't be indexed")),
-                rf_win::indexer::State::Ready => {
+                leaf_sys::indexer::State::Building => format!("{r} {}", t!("indexing…")),
+                leaf_sys::indexer::State::Failed => format!("{r} {}", t!("couldn't be indexed")),
+                leaf_sys::indexer::State::Ready => {
                     t!("{root} {n} items, {mb} MB").replace("{root}", &r).replace("{n}", &crate::bench_view::count(live as u64)).replace("{mb}", &(mem >> 20).to_string())
                 }
             }
@@ -3307,7 +3307,7 @@ fn index_exclusions(p: &Palette, s: &Settings) -> AnyElement {
                 ),
         );
     }
-    let defaults = rf_win::nameindex::default_excluded_names().join(", ");
+    let defaults = leaf_sys::nameindex::default_excluded_names().join(", ");
     shell(p)
         .child(
             h_flex()
@@ -3334,7 +3334,7 @@ fn index_exclusions(p: &Palette, s: &Settings) -> AnyElement {
                         Ok(RawWindowHandle::Win32(h)) => windows::Win32::Foundation::HWND(h.hwnd.get() as *mut _),
                         _ => windows::Win32::Foundation::HWND::default(),
                     };
-                    if let Some(dir) = rf_win::dialogs::pick(owner, t!("Folder to leave out of the index"), rf_win::dialogs::Pick::Folder) {
+                    if let Some(dir) = leaf_sys::dialogs::pick(owner, t!("Folder to leave out of the index"), leaf_sys::dialogs::Pick::Folder) {
                         let d = dir.to_string_lossy().trim_end_matches('\\').to_string();
                         settings::update(cx, |s| {
                             if !s.index_excluded.iter().any(|e| e.eq_ignore_ascii_case(&d)) {
