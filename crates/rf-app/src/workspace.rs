@@ -3181,7 +3181,7 @@ impl Workspace {
             Input::new(&self.address).appearance(false).into_any_element()
         } else if let Some(text) = full_text {
             // the full path as plain text; the omnibar's click edits it
-            div().id("address-text").flex_1().min_w_0().px_1p5().py_0p5().text_sm().whitespace_nowrap().truncate().child(crate::rtl::display_text(&text)).into_any_element()
+            div().id("address-text").flex_1().min_w_0().px_1p5().py_0p5().text_size(px(p.fs)).whitespace_nowrap().truncate().child(crate::rtl::display_text(&text)).into_any_element()
         } else {
             self.render_breadcrumb(&loc, p, cx).into_any_element()
         };
@@ -3299,7 +3299,6 @@ impl Workspace {
             .h(px(if typebar { 42. } else { 48. }))
             .when(typebar, |d| d.pt(px(8.)).pb(px(2.)))
             .px(px(12.))
-            // (the theme's text size: the path was in the window's default 14 px, the mockups' is 13)
             .text_size(px(p.fs))
             .gap_1()
             .items_center()
@@ -3864,13 +3863,14 @@ impl Workspace {
         let drop_bg = p.selection;
         // (the row fills the box; its own width, measured as it is laid out, is the room the segments have)
         let room = self.crumb_room.clone();
-        // (the mockups' path: crumbs padded 6 px, the arrows 12 px with 1 px either side, nothing between)
+        // (the mockups' path: the theme's text size (13 px; it was 14), crumbs padded 6 px, the arrows 12 px with 1 px either side,
+        // nothing between)
         let mut row = h_flex()
             .flex_1()
             .min_w_0()
             .relative()
             .items_center()
-            .text_sm()
+            .text_size(px(p.fs))
             // Index: the path in the monospace face, 12 px (about the width the estimate below counts with)
             .when(p.mono_chrome && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono).text_size(px(12.)))
             .overflow_hidden()
