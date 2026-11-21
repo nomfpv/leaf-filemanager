@@ -21,6 +21,9 @@ const IDLE_MAX: Duration = Duration::from_secs(20);
 const HEAD_MAX: usize = 64 << 10;
 /// An unread rest of an answer this small is read and dropped so the connection can be used again.
 const DRAIN_MAX: u64 = 32 << 10;
+/// Interim (1xx) answers and trailer lines a server may send before the answer is taken as broken.
+const INTERIM_MAX: usize = 10;
+const TRAILERS_MAX: usize = 100;
 
 pub(crate) trait Duplex: Read + Write + Send {}
 impl<T: Read + Write + Send> Duplex for T {}
@@ -178,7 +181,15 @@ impl Read for Body {
                     let size = u64::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16).map_err(|_| std::io::Error::other("the server's chunked answer is broken"))?;
                     if size == 0 {
                         // (trailers, up to the empty line)
-                        while !self.line()?.is_empty() {}
+                        let mut n = 0;
+                        while !self.line()?.is_empty() {
+                            n += 1;
+                            if n > TRAILERS_MAX {
+                                self.link = None;
+                                self.mode = Mode::Done;
+                                return Err(std::io::Error::other("the server's answer has too many trailer lines"));
+                            }
+                        }
                         self.finish();
                         return Ok(0);
                     }
@@ -385,6 +396,7 @@ fn exchange(mut link: Link, pool: &Arc<Pool>, ep: &Endpoint, method: &str, targe
         Err(e) => return Err(Fail::Io(e)),
         Ok(_) => {}
     }
+    let mut interim = 0;
     let (status, headers, http11) = loop {
         let line = read_line(&mut link.io)?;
         let mut parts = line.splitn(3, ' ');
@@ -411,16 +423,37 @@ fn exchange(mut link: Link, pool: &Arc<Pool>, ep: &Endpoint, method: &str, targe
         if status >= 200 {
             break (status, hs, version == "HTTP/1.1");
         }
+        interim += 1;
+        if interim > INTERIM_MAX {
+            return Err(Fail::Fs(FsError::Other("The server sent too many interim answers".into())));
+        }
     };
     if long != ep.io_timeout {
         let _ = link.sock.set_read_timeout(Some(ep.io_timeout));
     }
     let has = |name: &str, token: &str| headers.iter().filter(|(k, _)| k == name).any(|(_, v)| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)));
+    // (several lengths that differ, or one that is not plain digits (`+5`), is an answer that cannot be framed: an error)
+    let mut lengths: Vec<Option<u64>> = Vec::new();
+    for (_, v) in headers.iter().filter(|(k, _)| k == "content-length") {
+        for part in v.split(',') {
+            let p = part.trim();
+            if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Fail::Fs(FsError::Other("The server sent a length that cannot be used".into())));
+            }
+            lengths.push(Some(p.parse::<u64>().map_err(|_| Fail::Fs(FsError::Other("The server sent a length that cannot be used".into())))?));
+        }
+    }
+    if lengths.windows(2).any(|w| w[0] != w[1]) {
+        return Err(Fail::Fs(FsError::Other("The server sent two different lengths".into())));
+    }
+    if lengths.is_empty() {
+        lengths.push(None);
+    }
     let mode = if method == "HEAD" || status == 204 || status == 304 {
         Mode::Length(0)
     } else if has("transfer-encoding", "chunked") {
         Mode::Chunked(0)
-    } else if let Some(n) = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.trim().parse::<u64>().ok()) {
+    } else if let Some(n) = lengths[0] {
         Mode::Length(n)
     } else {
         Mode::Close
