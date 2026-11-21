@@ -1154,14 +1154,18 @@ impl PropsView {
         out.push(card(p, card1));
 
         if let Some(Ok(i)) = &self.info {
-            out.push(card(
-                p,
-                vec![
-                    row(p, t!("Created"), format::datetime_full(i.created_ms)),
-                    row(p, t!("Modified"), format::datetime_full(i.modified_ms)),
-                    row(p, t!("Accessed"), format::datetime_full(i.accessed_ms)),
-                ],
-            ));
+            let mut rows = vec![
+                row(p, t!("Created"), format::datetime_full(i.created_ms)),
+                row(p, t!("Modified"), format::datetime_full(i.modified_ms)),
+                row(p, t!("Accessed"), format::datetime_full(i.accessed_ms)),
+            ];
+            if i.links > 1 {
+                rows.push(row(p, t!("Links"), format!("{} {}", i.links, t!("names for this file (hard links); its size counts once in a folder's total"))));
+            }
+            if let Some(t) = &i.link_target {
+                rows.push(row(p, t!("Link target"), breakable(&t.to_string_lossy())));
+            }
+            out.push(card(p, rows));
         }
 
         out.push(self.render_attrs(p, cx));

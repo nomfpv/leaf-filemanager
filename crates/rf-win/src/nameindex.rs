@@ -293,7 +293,7 @@ struct Listing {
 /// available (some network or FAT volumes), `FindFirstFileEx` without ids.
 fn list(dir: &Path) -> Listing {
     let mut out = Listing { names: Vec::new(), lens: Vec::new(), flags: Vec::new(), ids: Vec::new() };
-    let mut push = |name: &[u16], attrs: u32, id: u64| {
+    let mut push = |name: &[u16], attrs: u32, id: u64, _size: u64| {
         if name == [b'.' as u16] || name == [b'.' as u16, b'.' as u16] {
             return;
         }
@@ -307,7 +307,7 @@ fn list(dir: &Path) -> Listing {
         let _ = for_each_raw(dir, |d| {
             let n = &d.cFileName;
             let end = n.iter().position(|&c| c == 0).unwrap_or(n.len());
-            push(&n[..end], d.dwFileAttributes, 0);
+            push(&n[..end], d.dwFileAttributes, 0, 0);
         });
     }
     out
@@ -438,7 +438,7 @@ pub fn catch_up_locked(lock: &parking_lot::RwLock<Option<Index>>, cancel: &Atomi
 }
 
 /// `None` when the folder can't be read this way (the caller falls back).
-fn list_with_ids(dir: &Path, push: &mut impl FnMut(&[u16], u32, u64)) -> Option<()> {
+pub(crate) fn list_with_ids(dir: &Path, push: &mut impl FnMut(&[u16], u32, u64, u64)) -> Option<()> {
     use windows::Win32::Foundation::{CloseHandle, GENERIC_READ};
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_BOTH_DIR_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
@@ -464,7 +464,7 @@ fn list_with_ids(dir: &Path, push: &mut impl FnMut(&[u16], u32, u64)) -> Option<
         loop {
             let info = unsafe { &*(base.add(off) as *const FILE_ID_BOTH_DIR_INFO) };
             let name = unsafe { std::slice::from_raw_parts(info.FileName.as_ptr(), info.FileNameLength as usize / 2) };
-            push(name, info.FileAttributes, info.FileId as u64);
+            push(name, info.FileAttributes, info.FileId as u64, info.EndOfFile as u64);
             if info.NextEntryOffset == 0 {
                 break;
             }

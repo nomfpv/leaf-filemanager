@@ -49,6 +49,10 @@ pub struct Info {
     pub accessed_ms: i64,
     pub attrs: u32,
     pub opens_with: Option<String>,
+    /// Names the file has (hard links, itself included); 1 for a folder or when not known.
+    pub links: u32,
+    /// Where a symbolic link points (as written); `None` for anything else.
+    pub link_target: Option<std::path::PathBuf>,
 }
 
 fn ms(t: std::io::Result<std::time::SystemTime>) -> i64 {
@@ -88,6 +92,8 @@ pub fn info(path: &Path) -> std::io::Result<Info> {
         accessed_ms: ms(m.accessed()),
         attrs: attr_bits(path, &m),
         opens_with: None,
+        links: if is_dir { 1 } else { m.nlink().min(u32::MAX as u64) as u32 },
+        link_target: link_target(path),
     })
 }
 

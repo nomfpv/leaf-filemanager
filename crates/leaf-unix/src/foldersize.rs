@@ -84,6 +84,8 @@ fn walk(root: &Path, c: &Counters, stop: &dyn Fn() -> bool) -> bool {
     let Ok(rm) = std::fs::symlink_metadata(root) else { return true };
     let dev = rm.dev();
     let mut todo = vec![root.to_path_buf()];
+    // a file with more than one link counts once, by (device, inode)
+    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut n = 0u32;
     while let Some(dir) = todo.pop() {
         if stop() {
@@ -107,8 +109,11 @@ fn walk(root: &Path, c: &Counters, stop: &dyn Fn() -> bool) -> bool {
                     todo.push(e.path());
                 }
             } else {
-                bytes += m.len();
                 files += 1;
+                if m.nlink() > 1 && !seen.insert((m.dev(), m.ino())) {
+                    continue;
+                }
+                bytes += m.len();
                 alloc += m.blocks() * 512;
             }
         }

@@ -26,6 +26,10 @@ pub struct Info {
     pub attrs: u32,
     /// Friendly name of the app that opens this type ("Fotoğraflar"). Files only.
     pub opens_with: Option<String>,
+    /// Names the file has (hard links, itself included); 1 for a folder or when not known.
+    pub links: u32,
+    /// Where a symbolic link or junction points (as written); `None` for anything else.
+    pub link_target: Option<std::path::PathBuf>,
 }
 
 fn ms(t: std::io::Result<std::time::SystemTime>) -> i64 {
@@ -47,7 +51,21 @@ pub fn info(path: &Path) -> std::io::Result<Info> {
         accessed_ms: ms(m.accessed()),
         attrs: m.file_attributes(),
         opens_with: if is_dir { None } else { opens_with(path) },
+        links: if is_dir { 1 } else { link_count(path).unwrap_or(1) },
+        link_target: std::fs::symlink_metadata(path).ok().filter(|m| m.file_type().is_symlink() || m.file_attributes() & 0x400 != 0).and_then(|_| std::fs::read_link(path).ok()),
     })
+}
+
+/// How many names (hard links) the file has: `nNumberOfLinks` of its handle information.
+pub fn link_count(path: &Path) -> Option<u32> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+    let f = std::fs::OpenOptions::new().access_mode(0).share_mode(7).custom_flags(0x0200_0000).open(path).ok()?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }.ok()?;
+    Some(info.nNumberOfLinks)
 }
 
 /// Bytes the file occupies: compressed size rounded up to whole clusters.

@@ -10,7 +10,7 @@
 //! theirs, and one backwards pass over the ids adds every entry to its parent: folder totals
 //! need no recursion. A directory's children are a plain id range.
 //!
-//! Hard links are counted once per link (like the folder sizes); both the logical size and the
+//! A hard link is counted once: a file id met a second time in the walk adds nothing (the first link keeps the size); both the logical size and the
 //! size on disk (rounded up to the volume's clusters) are kept.
 
 use std::path::{Path, PathBuf};
@@ -21,7 +21,6 @@ use parking_lot::Mutex;
 use rf_core::attrs;
 
 use crate::search::for_each_raw;
-use crate::wide::from_wide;
 
 const DIR: u8 = 1;
 /// No parent: the root.
@@ -76,6 +75,8 @@ struct Chunk {
     lens: Vec<u16>,
     sizes: Vec<u64>,
     flags: Vec<u8>,
+    /// The file ids (0: a folder, or not known on this volume).
+    ids: Vec<u64>,
 }
 
 struct Build<'a> {
@@ -90,20 +91,18 @@ fn walk<'s>(sc: &rayon::Scope<'s>, b: &'s Build<'s>, dir: PathBuf, id: u32) {
     if b.cancel.load(Ordering::Relaxed) {
         return;
     }
-    let (mut names, mut lens, mut sizes, mut flags, mut subs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut names, mut lens, mut sizes, mut flags, mut subs, mut ids) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let (mut bytes, mut entries) = (0u64, 0u64);
-    let r = for_each_raw(&dir, |d| {
-        let n = &d.cFileName;
-        if n[0] == b'.' as u16 && (n[1] == 0 || (n[1] == b'.' as u16 && n[2] == 0)) {
+    let mut push = |n: &[u16], a: u32, size: u64, fid: u64| {
+        if n == [b'.' as u16] || n == [b'.' as u16, b'.' as u16] {
             return;
         }
-        let a = d.dwFileAttributes;
         if a & attrs::REPARSE_POINT != 0 {
             return;
         }
-        let name = from_wide(n);
+        let name = String::from_utf16_lossy(n);
         let is_dir = a & attrs::DIRECTORY != 0;
-        let size = if is_dir { 0 } else { ((d.nFileSizeHigh as u64) << 32) | d.nFileSizeLow as u64 };
+        let size = if is_dir { 0 } else { size };
         if is_dir {
             subs.push((flags.len() as u32, name.clone()));
         }
@@ -111,9 +110,20 @@ fn walk<'s>(sc: &rayon::Scope<'s>, b: &'s Build<'s>, dir: PathBuf, id: u32) {
         names.extend_from_slice(&name.as_bytes()[..name.len().min(u16::MAX as usize)]);
         sizes.push(size);
         flags.push(if is_dir { DIR } else { 0 });
+        ids.push(if is_dir { 0 } else { fid });
         bytes += size;
         entries += 1;
-    });
+    };
+    // with the file ids (so that a hard link is counted once); where the volume does not give them, the plain listing
+    let r = if crate::nameindex::list_with_ids(&dir, &mut |n, a, fid, size| push(n, a, size, fid)).is_some() {
+        Ok(())
+    } else {
+        for_each_raw(&dir, |d| {
+            let n = &d.cFileName;
+            let end = n.iter().position(|&c| c == 0).unwrap_or(n.len());
+            push(&n[..end], d.dwFileAttributes, ((d.nFileSizeHigh as u64) << 32) | d.nFileSizeLow as u64, 0);
+        })
+    };
     if r.is_err() {
         b.skipped.fetch_add(1, Ordering::Relaxed);
     }
@@ -128,7 +138,7 @@ fn walk<'s>(sc: &rayon::Scope<'s>, b: &'s Build<'s>, dir: PathBuf, id: u32) {
         let child = base + k;
         sc.spawn(move |sc| walk(sc, b, sub, child));
     }
-    b.chunks.lock().push(Chunk { base, parent: id, names, lens, sizes, flags });
+    b.chunks.lock().push(Chunk { base, parent: id, names, lens, sizes, flags, ids });
 }
 
 fn pool() -> rayon::ThreadPool {
@@ -176,6 +186,7 @@ impl DiskTree {
         };
         t.flags[0] = DIR;
         t.new_slot(0);
+        let mut file_ids: Vec<(u64, u32)> = Vec::new();
         // chunks in id order: a folder's own entry (in its parent's listing) is laid out, and
         // gets its slot, before its listing comes
         for c in chunks {
@@ -193,11 +204,22 @@ impl DiskTree {
                 off += len as usize;
                 if f & DIR == 0 {
                     t.size[i] = c.sizes[k];
+                    if c.ids[k] != 0 {
+                        file_ids.push((c.ids[k], i as u32));
+                    }
                 } else {
                     t.new_slot(i as u32);
                 }
             }
         }
+        // a file id met twice is a hard link: the first one (lowest entry) keeps the size
+        file_ids.sort_unstable();
+        for w in file_ids.windows(2) {
+            if w[0].0 == w[1].0 {
+                t.size[w[1].1 as usize] = 0;
+            }
+        }
+        drop(file_ids);
         // ids reserved by a cancelled walk but never filled keep parent NONE and size 0; a
         // child's id is always greater than its parent's, so one pass backwards totals everything
         for i in (1..total).rev() {
