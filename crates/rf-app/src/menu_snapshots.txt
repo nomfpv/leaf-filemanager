@@ -103,6 +103,7 @@ New folder with selection | FolderInput
 Compress > | Archive
 Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 -
 Show more options > | Ellipsis
 
@@ -124,6 +125,7 @@ Set as desktop background | Monitor
 Compress > | Archive
 Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 Copy to other pane | CopyPlus | Shift+F5
 Move to other pane | MoveRight | Shift+F6
 -
@@ -163,6 +165,7 @@ Flatten folder | FolderTree
 Compress > | Archive
 Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 -
 Open in terminal | SquareTerminal | Ctrl+Shift+`
 -
@@ -192,6 +195,7 @@ Leave out of the search index | SearchSlash
 Compress > | Archive
 Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 Copy to other pane | CopyPlus | Shift+F5
 Move to other pane | MoveRight | Shift+F6
 -
@@ -230,6 +234,7 @@ New folder with selection | FolderInput
 Compress > | Archive
 Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 Bulk rename… | PencilLine | F2
 -
 Show more options > | Ellipsis
@@ -247,6 +252,7 @@ New folder with selection | FolderInput
 Compress > | Archive
 Extract > | FolderOutput
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 Bulk rename… | PencilLine | F2
 Copy to other pane | CopyPlus | Shift+F5
 Move to other pane | MoveRight | Shift+F6
@@ -268,6 +274,7 @@ Install font | Type
 Compress > | Archive
 Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
+Context basket | ShoppingBasket
 -
 Show more options > | Ellipsis
 
@@ -275,7 +282,7 @@ Show more options > | Ellipsis
 Restore | Undo2
 Delete permanently | TrashOff | Shift+Del
 -
-Recycle Bin settings… | Settings
+Trash settings… | Settings
 
 ## sidebar folder, pinned, tags defined
 Open | SquareArrowOutUpRight
