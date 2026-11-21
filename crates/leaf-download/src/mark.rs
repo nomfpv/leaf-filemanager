@@ -2,6 +2,7 @@
 //! SmartScreen and Office's Protected View still warn about a `setup.exe` or a document from a web page. Windows only; a disk that
 //! has no streams (FAT, exFAT, a network share that refuses them) leaves the file unmarked, as it would for a browser.
 
+#[cfg(any(windows, test))]
 /// The address as it goes into the mark: without a login (`user@`, `user:secret@`) and without the `#fragment`.
 fn clean(url: &str) -> String {
     let url = url.trim();
@@ -17,6 +18,7 @@ fn clean(url: &str) -> String {
     }
 }
 
+#[cfg(any(windows, test))]
 /// The text of the stream: zone 3, the page the download came from (when the browser said) and the file's address.
 pub(crate) fn zone_text(url: &str, referer: Option<&str>) -> String {
     let mut s = String::from("[ZoneTransfer]\r\nZoneId=3\r\n");
