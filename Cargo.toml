@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common"]
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix"]
 exclude = ["vendor/velopack"]
 
 [workspace.package]
