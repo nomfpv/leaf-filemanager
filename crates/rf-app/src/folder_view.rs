@@ -4618,7 +4618,7 @@ impl FolderView {
             .h(px(p.header_h))
             .pl(px(if filled { 4. } else { 10. }))
             // (the filled strip runs the pane's full width, the mockups'; its columns keep clear of the scrollbar's gutter like the rows')
-            .pr(px(if filled { self.gutter() } else { 10. + self.gutter() }))
+            .pr(px(if filled { 2. + self.gutter() } else { 10. + self.gutter() }))
             // (the mockups' strip: 10 px in from the pane's sides; its columns stay over the rows')
             .when(filled, |d| d.mx(px(10.)).mb(px(2.)).rounded(px(p.control_radius)).bg(p.header_fill))
             .overflow_hidden()
@@ -5113,7 +5113,9 @@ impl FolderView {
                 .group("rowgrp")
                 .h(row_h)
                 .w_full()
-                .px(px(4.))
+                // (the icon 9 px in from the row's left end, the mockups')
+                .pl(px(1.))
+                .pr(px(4.))
                 .rounded(px(p.row_radius))
                 .items_center()
                 .text_size(px(p.fs))
@@ -5829,7 +5831,7 @@ fn static_column(
 /// The air between two cards, across and down (the mockups' 8 px).
 const GRID_GAP: Pixels = px(8.);
 /// The Name heading's left padding: it stands over the names (the row's icon, 16 px, and its 10 px of air in), not over the icons.
-const NAME_HEAD_PAD: f32 = 34.;
+const NAME_HEAD_PAD: f32 = 32.;
 /// Grid sizes (Ctrl+= / Ctrl+-): tile width, row height, thumbnail pixels.
 /// (Tiles are the mockups' cards: an 8 px frame round a 4:3 picture, the name and a size line under it: the row is the picture's height
 /// and 56 px.)
