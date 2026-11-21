@@ -392,12 +392,27 @@ pub fn main() {
     // Logs go to stderr and to leaf.log in the settings folder; override the level with
     // RUST_LOG. The default filter: `platform::LOG_FILTER`.
     let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(platform::LOG_FILTER));
-    // crates that write a password at their most detailed level (the FTP client's PASS line, at trace) stay at warn whatever
-    // RUST_LOG says (the default level: a filter set here may only lower it)
-    for target in leaf_remote::QUIET_LOG_TARGETS {
-        logger.filter_module(target, log::LevelFilter::Warn);
+    let logger = logger.target(env_logger::Target::Pipe(Box::new(logfile::Tee::new()))).format_timestamp_millis().build();
+    // crates that write a password at their most detailed level (the FTP client's PASS line, at trace): their records above
+    // warn are dropped before the filter, so no RUST_LOG (not even one naming their modules) brings them back
+    struct Quiet(env_logger::Logger);
+    impl log::Log for Quiet {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            !leaf_remote::is_quiet(m.target(), m.level()) && self.0.enabled(m)
+        }
+        fn log(&self, r: &log::Record) {
+            if !leaf_remote::is_quiet(r.target(), r.level()) {
+                self.0.log(r);
+            }
+        }
+        fn flush(&self) {
+            self.0.flush();
+        }
     }
-    logger.target(env_logger::Target::Pipe(Box::new(logfile::Tee::new()))).format_timestamp_millis().init();
+    let max = logger.filter();
+    if log::set_logger(Box::leak(Box::new(Quiet(logger)))).is_ok() {
+        log::set_max_level(max);
+    }
     start_mark("logging");
     // sftp://, ftp://, ftps:// (cheap: nothing connects until a server is opened; before the command line, which may name one)
     remote::register();

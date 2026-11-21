@@ -44,9 +44,17 @@ use zeroize::Zeroizing;
 use crate::conn::Config;
 use crate::prompt::{CertQuestion, HostKeyAnswer, Prompter, SecretQuestion};
 
-/// Log targets that write secrets at their most detailed level (suppaftp logs the `PASS` line at trace). The app caps these
-/// at `warn`, whatever `RUST_LOG` says (nothing up to `debug` carries a secret: the test checks that).
+/// Log targets that write secrets at their most detailed level (suppaftp logs the `PASS` line at trace). The app drops every
+/// record of these (and of their modules) above `warn`, whatever `RUST_LOG` says: see [`is_quiet`]. (Nothing up to `debug`
+/// carries a secret either: the test checks that.)
 pub const QUIET_LOG_TARGETS: &[&str] = &["suppaftp"];
+
+/// Whether a log record must be dropped, whatever the filter says: above `warn` from a target in [`QUIET_LOG_TARGETS`] or a
+/// module of one (`suppaftp::sync_ftp::control`). A filter like `RUST_LOG=suppaftp::sync_ftp::control=trace` cannot turn it
+/// back on: the app's logger asks this before its filter.
+pub fn is_quiet(target: &str, level: log::Level) -> bool {
+    level > log::Level::Warn && QUIET_LOG_TARGETS.iter().any(|t| target == *t || target.strip_prefix(t).is_some_and(|rest| rest.starts_with("::")))
+}
 
 /// Connections per server at most (one for browsing, the rest for transfers running at the same time).
 const MAX_CONNS: usize = 3;

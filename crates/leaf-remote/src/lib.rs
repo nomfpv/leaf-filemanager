@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub use conn::{Config, ExecOut};
 pub use leaf_vfs::{FsError, VPath};
-pub use ftp::{FtpFs, QUIET_LOG_TARGETS, TRUSTED_CERTS_FILE};
+pub use ftp::{FtpFs, QUIET_LOG_TARGETS, TRUSTED_CERTS_FILE, is_quiet};
 pub use prompt::{CertQuestion, HostKeyAnswer, HostKeyQuestion, NoPrompter, Prompter, Secret, SecretQuestion};
 pub use sftp::SftpFs;
 

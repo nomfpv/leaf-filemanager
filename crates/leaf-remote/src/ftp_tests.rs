@@ -469,6 +469,12 @@ fn ftp_password_never_in_address_or_log() {
     for text in [v.to_string(), v.join("a.txt").to_string(), err.to_string(), format!("{:?}", fs.home(&v).unwrap())] {
         assert!(!text.contains(PASSWORD), "{text}");
     }
+    // the app drops these whatever RUST_LOG names (a module filter is no way around it)
+    for target in ["suppaftp", "suppaftp::sync_ftp::control", "suppaftp::sync_ftp"] {
+        assert!(crate::is_quiet(target, log::Level::Trace) && crate::is_quiet(target, log::Level::Debug), "{target}");
+        assert!(!crate::is_quiet(target, log::Level::Warn), "{target}");
+    }
+    assert!(!crate::is_quiet("suppaftpx", log::Level::Trace) && !crate::is_quiet("leaf_remote::ftp", log::Level::Trace));
     let log = lock(&LOG).clone();
     assert!(log.iter().any(|l| l.starts_with("leaf_remote")), "the log was captured: {log:?}");
     assert!(!log.iter().any(|l| l.contains(PASSWORD)), "the password is in the log");
