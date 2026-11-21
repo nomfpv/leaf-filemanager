@@ -127,7 +127,7 @@ pub fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Download,
         t!("Downloads through the VPN"),
-        Some(t!("New downloads go through the VPN; each one can still say otherwise in Download here…. Addresses on your own network never do.")),
+        Some(t!("New downloads go through the VPN; each one can still say otherwise in Download here…. Addresses on your own network never do. A download through the VPN does not use the download proxy.")),
         sw("vpn-downloads", p, s.vpn_downloads, |s, v| s.vpn_downloads = v),
     ));
     v.push(card(

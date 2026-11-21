@@ -510,3 +510,26 @@ fn kill_switch_refusal_never_goes_out_directly() {
     assert!(l.accept().is_err(), "nothing connected to the server directly");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Through leaf's VPN (a dialer is set) the proxy is not used: the VPN wins, and the proxy never sees a connection.
+#[test]
+fn a_download_through_the_vpn_does_not_use_the_proxy() {
+    struct Direct;
+    impl dial::Dialer for Direct {
+        fn takes(&self, _: &str) -> bool {
+            false
+        }
+        fn dial(&self, _: &str, _: u16, _: Duration) -> std::io::Result<Option<Box<dyn dial::Conn>>> {
+            Ok(None)
+        }
+    }
+    let srv = serve(data(1 << 20));
+    let (pport, heads) = proxy();
+    let dir = tmp("vpn-no-proxy");
+    let server = ProxyServer { kind: ProxyKind::Http, host: "127.0.0.1".into(), port: pport, user: None, password: None };
+    let o = Options { proxy: ProxyMode::Manual(server), dialer: Some(Arc::new(Direct)), ..opts(0) };
+    let out = download(&url(&srv, "/v.bin"), &dir, &o, &Control::default(), &host(Resolve::KeepBoth)).expect("the download goes through the dialer");
+    assert!(matches!(out, Outcome::Saved(_)));
+    assert!(heads.lock().unwrap().is_empty(), "the proxy was used");
+    let _ = std::fs::remove_dir_all(&dir);
+}

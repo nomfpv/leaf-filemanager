@@ -4105,7 +4105,7 @@ fn download_proxy_card(p: &Palette, s: &Settings) -> AnyElement {
         p,
         L::Globe,
         t!("Proxy for downloads").into(),
-        Some(t!("The system's proxy is the one Windows or the environment names. Your own proxy can be HTTP or SOCKS5. The proxy's password is sent to the proxy unencrypted (that is how these proxies work).").into()),
+        Some(t!("The system's proxy is the one Windows or the environment names. Your own proxy can be HTTP or SOCKS5. The proxy's password is sent to the proxy unencrypted (that is how these proxies work). Downloads through leaf's VPN do not use the proxy: the VPN wins.").into()),
         Some(dropdown(
             "download-proxy",
             p,

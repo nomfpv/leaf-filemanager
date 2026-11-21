@@ -43,7 +43,9 @@ pub fn agent(o: &Options) -> Result<ureq::Agent, Error> {
         .timeout_per_read(Some(o.read_timeout))
         .http_status_as_error(false)
         .max_idle_connections_per_host(32)
-        .proxy(proxy_of(&o.proxy)?);
+        // through leaf's VPN no proxy is used: the VPN wins (the dialer opens every connection, a proxy would be skipped
+        // silently or reached around the tunnel)
+        .proxy(if o.dialer.is_some() { None } else { proxy_of(&o.proxy)? });
     // headers of the caller's own: redirects are followed in `probe`, which drops Cookie and Authorization when one leaves the origin (scheme, host, port)
     if !o.headers.is_empty() {
         b = b.max_redirects(0);
