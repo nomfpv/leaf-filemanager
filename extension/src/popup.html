@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>leaf</title>
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --text: #1c1c1c; --muted: #5f6368; --line: #d9d9d9; --ok: #1e7a3c; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1f1f1f; --text: #ececec; --muted: #a8a8a8; --line: #3a3a3a; --ok: #6cc98a; --bad: #f2928b; } }
+  body { margin: 0; padding: 12px 14px; width: 300px; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+  label.row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); }
+  label.row small { display: block; color: var(--muted); }
+  #state { margin: 6px 0 0; }
+  #state.ok { color: var(--ok); }
+  #state.bad { color: var(--bad); }
+  #note { margin: 6px 0 0; color: var(--muted); }
+  a { color: inherit; }
+  p.foot { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); }
+</style>
+</head>
+<body>
+<h1><img src="icons/leaf-32.png" width="18" height="18" alt="">leaf</h1>
+<label class="row"><input type="checkbox" id="mullvad"><span>Browse through Mullvad<small>This browser's pages go through leaf's VPN (leaf's proxy, names looked up through the VPN). While the VPN is down, pages fail instead of loading directly.</small></span></label>
+<div id="state">Asking leaf…</div>
+<div id="note"></div>
+<p class="foot"><a href="#" id="options">Download capture options</a></p>
+<script src="popup.js"></script>
+</body>
+</html>

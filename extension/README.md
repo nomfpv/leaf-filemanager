@@ -53,6 +53,30 @@ downloads started by an extension; the browser's own retries; excluded sites; fi
 A download that needed the browser's sign-in is not resumed by leaf after leaf restarts (the sign-in is not kept): it fails with a
 message, and starting it again from the browser carries on from the part already downloaded.
 
+## Browse through Mullvad
+
+The toolbar button's popup has **Browse through Mullvad**: the browser's proxy is set to leaf's SOCKS5 proxy on 127.0.0.1 (in leaf:
+Settings > VPN > Let other programs use the VPN), so pages go through leaf's Mullvad VPN and names are looked up through it (Chromium:
+`chrome.proxy` fixed_servers socks5; Firefox: `proxy.settings` with `proxyDNS: true`, or per request through `proxy.onRequest` when the
+add-on is not allowed in private windows or leaf's proxy asks for a password). Addresses of this PC and the local network stay direct.
+While it is on, WebRTC is kept to the proxy (`webRTCIPHandlingPolicy` = `disable_non_proxied_udp`) so it does not show the real
+address; turning it off puts the browser's own settings back.
+
+The extension asks leaf (through the native host, message `{"v":1,"type":"vpn"}`, leaf is not started for it) for the VPN's state and
+the proxy's address every half minute. While leaf's VPN reconnects, leaf's proxy refuses every connection: pages fail rather than load
+directly. When leaf says the VPN is off, or leaf is gone, the switch turns itself off with a notice: from then on pages load directly.
+Chromium browsers cannot give a SOCKS proxy a password: with leaf's "Ask for a password" on, the switch works in Firefox only.
+
+New permissions for it:
+
+| Permission | Why |
+|---|---|
+| `proxy` | set the browser's proxy to leaf's (and back) |
+| `privacy` | keep WebRTC to the proxy while it is on |
+| `alarms` | ask leaf for the VPN's state every half minute |
+| `notifications` | the notice when the switch turned itself off |
+| `ws://*/*`, `wss://*/*` (Firefox) | WebSocket connections get the per-request proxy too |
+
 ## Licence
 
 `src/background.js` adapts code from AB Download Manager browser integration (Apache-2.0); see `NOTICE` and `LICENSE-APACHE-2.0`.
