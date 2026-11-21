@@ -512,6 +512,8 @@ pub struct Settings {
     pub adaptive_offered: bool,
     /// The one-time move from Mica (the old default, written into every settings file) to the theme's own material has been made.
     pub backdrop_theme_offered: bool,
+    /// The one-time move from the old download defaults (6 and 8) to the new ones (16 and 32) has been made.
+    pub download_defaults_raised: bool,
     pub show_extensions: bool,
     /// File icons from Windows (the colourful system icons, a program's own picture). Off (the default, the mockups' look): quiet line
     /// icons in the theme's kind colours.
@@ -811,6 +813,7 @@ impl Default for Settings {
             notify_long_ops: true,
             adaptive_offered: false,
             backdrop_theme_offered: false,
+            download_defaults_raised: false,
             show_extensions: true,
             system_icons: false,
             icon_pack: String::new(),
@@ -1111,6 +1114,16 @@ impl Settings {
                 self.backdrop = BackdropPref::Theme;
             }
             self.backdrop_theme_offered = true;
+        }
+        // 6 per download and 8 per server were the defaults: they say nothing about a choice, so they move once to 16 and 32
+        if !self.download_defaults_raised {
+            if self.download_segments == 6 {
+                self.download_segments = 16;
+            }
+            if self.download_per_host == 8 {
+                self.download_per_host = 32;
+            }
+            self.download_defaults_raised = true;
         }
         // the Home page's old hide list becomes its widget layout
         crate::home::migrate(self);
