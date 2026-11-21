@@ -273,6 +273,13 @@ mod tests {
         l.log_in(&mut |u, s| if u == "alice" && s.as_str() == "s3cret" { Tried::Worked } else { Tried::Wrong }).unwrap();
         assert!(user.asked.lock().unwrap().is_empty());
 
+        // 2b. the saved try fails for another reason (the share renamed, the server gone mid-mount): it stays in the keyring
+        let mut l = Login::with("nas", "photos", None, vault.clone(), user.clone());
+        let r = l.log_in(&mut |_, _| Tried::Failed(FsError::Offline("timed out".into())));
+        assert!(matches!(r, Err(FsError::Offline(_))), "{r:?}");
+        assert!(user.asked.lock().unwrap().is_empty(), "no dialog after a failure that is no refusal");
+        assert_eq!(store.saved.lock().unwrap().get(&id).map(String::as_str), Some("s3cret"), "a failure that is no refusal never deletes it");
+
         // 3. the server refuses the saved one now: deleted from the keyring, then the dialog asks; Cancel ends it (no loop)
         *user.answers.lock().unwrap() = vec![None];
         let mut l = Login::with("nas", "photos", None, vault.clone(), user.clone());

@@ -135,15 +135,29 @@ pub fn mount_path_login(uri: &str, user: &str, domain: &str, password: &str) -> 
     let m = gio_answering(&["mount", &uri], Duration::from_secs(90), user, domain, password)?;
     let t = m.text.trim().to_string();
     if !m.ok && !t.contains("already mounted") {
-        let low = t.to_lowercase();
-        let kind = if m.asked_twice || low.contains("password") || low.contains("authenticat") || low.contains("permission denied") || low.contains("access denied") || low.contains("aborted") {
-            std::io::ErrorKind::PermissionDenied
-        } else {
-            std::io::ErrorKind::Other
-        };
+        // (a refusal deletes a saved password: only a question asked again, or gio's own error naming the login; a renamed
+        // share, a timeout or a server gone mid-mount stay other errors)
+        let kind = if login_refused(&t, m.asked_twice) { std::io::ErrorKind::PermissionDenied } else { std::io::ErrorKind::Other };
         return Err(std::io::Error::new(kind, t));
     }
     gio(&["info", "-a", "standard::name", &uri], Duration::from_secs(15))?.ok_then_path().ok_or_else(|| std::io::Error::other("the place is mounted but gio gives no folder for it"))
+}
+
+/// Whether a failed `gio mount` that was answered refused the login: the question came again, or gio's last error line (its
+/// `gio: <address>: <message>`, never gvfs's "Password required for share ..." header) names a logon or password failure.
+fn login_refused(errors: &str, asked_twice: bool) -> bool {
+    if asked_twice {
+        return true;
+    }
+    let Some(last) = errors.lines().rev().map(str::trim).find(|l| !l.is_empty()) else { return false };
+    let low = last.to_ascii_lowercase();
+    ["permission denied", "access denied", "logon failure", "login failed", "authentication failed", "invalid password", "wrong password"].iter().any(|w| low.contains(w))
+}
+
+/// gio's error lines out of all it printed: each line's part from its last `gio: ` on (the questions, printed without a newline,
+/// sit before it on the same line); lines without one are left out, gvfs's headers among them.
+fn error_lines(all: &str) -> String {
+    all.lines().filter_map(|l| l.rfind("gio: ").map(|i| l[i..].trim())).collect::<Vec<_>>().join("\n")
 }
 
 struct Answered {
@@ -243,9 +257,8 @@ fn gio_answering(args: &[&str], limit: Duration, user: &str, domain: &str, passw
     while let Ok(bytes) = rx.try_recv() {
         all.push_str(&String::from_utf8_lossy(&bytes));
     }
-    // (the questions themselves are left out of the text an error shows)
-    let text: String = all.lines().filter(|l| answer_for(l, "", "", "").is_none()).collect::<Vec<_>>().join("\n");
-    Ok(Answered { ok: status.success(), text, asked_twice })
+    // (the questions and gvfs's headers are left out of the text an error shows)
+    Ok(Answered { ok: status.success(), text: error_lines(&all), asked_twice })
 }
 
 /// Windows' share login (`WNetAddConnection2W`): `Unsupported` here (Linux logs in with [`mount_path_login`]).
