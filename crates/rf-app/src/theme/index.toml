@@ -26,7 +26,39 @@ cursor = "accent_text"
 focus = "accent"
 titlebar = "#00000000"
 
+# Pass 2: structure (sheets, sizes, markers).
+material = "mica"
+gap = 0
+sheet_edge = "#00000000"
+sheet_shadow = "#00000000"
+sheet_shadow_blur = 0
+focus_ring = "#00000000"
+pane_marker = "band"
+tab_shape = "card"
+numbered_tabs = true
+key_caps = true
+titlebar_height = 36
+tab_width = 188
+tab_height = 31
+toolbar_height = 40
+typebar_height = 28
+pane_header_height = 32
+header_height = 26
+status_height = 28
+sidebar_row = 26
+font_size = 13
+font_size_small = 12
+font_size_xs = 11
+header_fill = "#00000000"
+place_border = "#00000000"
+selection_inactive_border = "#00000000"
+
 [light]
+sheet_border = "#c5cbc1"
+selection_inactive = "#dde2d9"
+seg_on = "#111511"
+place = "#111511"
+place_text = "#fbfcfa"
 window = "#e7eae4"
 sidebar = "#e7eae4"
 toolbar = "#f1f3ef"
@@ -66,6 +98,11 @@ solid_sheet = "#fbfcfa"
 solid_raised = "#ffffff"
 
 [dark]
+sheet_border = "#353b37"
+selection_inactive = "#2f3431"
+seg_on = "#e6e9e4"
+place = "#e6e9e4"
+place_text = "#1d201f"
 window = "#151817"
 sidebar = "#151817"
 toolbar = "#1a1d1c"
@@ -106,6 +143,9 @@ solid_raised = "#252928"
 
 # High: darker rules, tighter text, a thicker focus band.
 [light_high]
+sheet_border = "#98a194"
+selection_inactive = "#cbd3c6"
+place = "#050705"
 window = "#e3e7e0"
 sidebar = "#e3e7e0"
 hover = "#dfe4db"
@@ -134,6 +174,9 @@ kind_app = "#195a3a"
 solid_window = "#e3e7e0"
 
 [dark_high]
+sheet_border = "#4d5550"
+selection_inactive = "#333936"
+place = "#f5f7f3"
 hover = "#2d322f"
 pressed = "#343a36"
 tile_hover = "#2d322f"

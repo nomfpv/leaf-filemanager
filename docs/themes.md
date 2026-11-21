@@ -111,3 +111,33 @@ followed by `/alpha` (`"accent/0.3"`, `"#ffffff/0.1"`). Numbers are pixels unles
 | `font_ui` | The interface font; empty means the system font. A font that is not installed is ignored. |
 | `font_mono` | The font of number columns when mono_numbers is on. |
 | `mono_numbers` | true/false: sizes and dates in the details list use font_mono. |
+| `material` | The window backdrop the theme asks for while Settings > Background material is Automatic: acrylic, mica, mica_alt, solid or glass. |
+| `gap` | Space between the sheets of the window (address row, sidebar, tool bar, each pane, status line) and to the window edge; 0 joins them, split by lines. |
+| `sheet_border` | The soft outline of a sheet; with gap 0 the line between two regions. |
+| `sheet_edge` | The lit top edge of a sheet; fully transparent means none. |
+| `sheet_shadow` | The shadow under a sheet; fully transparent means none. |
+| `sheet_shadow_blur` | How soft the sheet shadow is, in pixels (it falls 3/8 of that downwards). |
+| `focus_ring` | The glow around the focused pane, outside its outline; fully transparent means none. |
+| `pane_marker` | How the focused pane is marked: rim (an outline round the pane), stem (a short line under its header) or band (a band on top of its header). |
+| `selection_inactive` | The fill of a selected item in the pane without the focus. |
+| `selection_inactive_border` | The outline of a selected item in the pane without the focus; fully transparent means none. |
+| `header_fill` | The column header's fill; fully transparent means a plain row with a line under it. |
+| `seg_on` | The chosen button of a switch (details or grid). |
+| `place` | The fill of the current place in the sidebar. |
+| `place_border` | The outline of the current place in the sidebar; fully transparent means none. |
+| `place_text` | The text of the current place in the sidebar; a colour other than the body text colours its icon too (else the icon wears the accent). |
+| `tab_shape` | The tabs: pill (rounded, floating on the backdrop), lifted (rounded on top, joined to the address row) or card (an outlined index card). |
+| `numbered_tabs` | true/false: each tab shows its number (Ctrl+1 to Ctrl+9). |
+| `key_caps` | true/false: the tool bar shows each command's shortcut as a key cap. |
+| `titlebar_height` | Height of the tab strip, in pixels. |
+| `tab_width` | Width of a tab while there is room, in pixels. |
+| `tab_height` | Height of a tab, in pixels. |
+| `toolbar_height` | Height of the tool bar (the commands over the panes), in pixels. |
+| `typebar_height` | Height of the type bar under the address row, in pixels; 0 hides it. |
+| `pane_header_height` | Height of a pane's header (folder name, item count), in pixels; 0 hides it. |
+| `header_height` | Height of the column header of the details list, in pixels. |
+| `status_height` | Height of the status line, in pixels. |
+| `sidebar_row` | Height of a sidebar row, in pixels. |
+| `font_size` | Size of body text and file names, in pixels. |
+| `font_size_small` | Size of secondary text (sizes, dates, the status line), in pixels. |
+| `font_size_xs` | Size of the smallest text (section labels, column header, chips), in pixels. |

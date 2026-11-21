@@ -504,6 +504,8 @@ pub struct FolderView {
     sortx: sort_ext::SortxState,
     cursor: Option<usize>,
     anchor: Option<usize>,
+    /// The other pane of a split tab has the focus: the selection here is drawn in the neutral colour (set by the workspace).
+    pub pane_inactive: bool,
     pub loading: bool,
     pub error: Option<String>,
     pub load_ms: Option<u128>,
@@ -714,6 +716,7 @@ impl FolderView {
             sortx: Default::default(),
             cursor: None,
             anchor: None,
+            pane_inactive: false,
             loading: false,
             error: None,
             load_ms: None,
@@ -2680,7 +2683,8 @@ impl FolderView {
                 let e = &self.entries[ei as usize];
                 let selected = self.selected.contains(&ei);
                 // (a selected tile's text wears the selection's colour: Index's solid accent)
-                let p = if selected { p.on_row_selection() } else { p };
+                let inactive = self.pane_inactive;
+                let p = if selected && !inactive { p.on_row_selection() } else { p };
                 let cat = icons::category(e);
                 let dim = e.is_hidden() || e.is_cloud_placeholder();
                 // Settings → "Show thumbnails" off: the file type's icon instead of a preview
@@ -2805,7 +2809,8 @@ impl FolderView {
                     .h(row_h - px(4.))
                     .rounded(theme::RADIUS)
                     // tiles: quiet fill + a thin accent outline (a pill would read as a crop)
-                    .when(selected, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
+                    .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
+                    .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { p.selection_inactive }))
                     .when(!selected, |d| d.border_1().border_color(transparent_black()))
                     .when(!selected && part.is_none(), |d| d.hover(|s| s.bg(p.hover)))
                     .when(!selected && part.is_some() && self.grid_hover.is_some_and(|(h, _)| h == vi), |d| d.bg(p.hover))
@@ -4054,7 +4059,9 @@ impl FolderView {
             let is_cursor = self.cursor == Some(vi);
             // (a selected row's text wears the selection's colour: Index's solid accent; the stripe is every second row's)
             let striped = !selected && p.stripe.a > 0. && vi % 2 == 1;
-            let p = if selected { p.on_row_selection() } else { p };
+            // (in the pane without the focus the selection is neutral and keeps the body text)
+            let inactive = self.pane_inactive;
+            let p = if selected && !inactive { p.on_row_selection() } else { p };
             let cat = icons::category(e);
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
@@ -4227,10 +4234,12 @@ impl FolderView {
                 .text_sm()
                 .relative()
                 .when(striped, |d| d.bg(p.stripe))
-                .when(selected, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
+                .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
+                .when(selected && inactive, |d| d.bg(p.selection_inactive))
                 .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
                 // the focused item of a multiple selection, else the theme's outline of a selected row (Canopy's), else none
                 .map(|d| match (selected, is_cursor && self.selected.len() > 1) {
+                    (true, _) if inactive => if p.selection_inactive_border.a > 0. { d.border_1().border_color(p.selection_inactive_border) } else { d },
                     (true, true) => d.border_1().border_color(p.cursor),
                     (true, false) if p.selection_border.a > 0. => d.border_1().border_color(p.selection_border),
                     _ => d,

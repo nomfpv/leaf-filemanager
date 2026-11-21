@@ -23,12 +23,44 @@ selection_border = "accent/0.38"
 cursor = "accent/0.85"
 focus = "accent/0.55"
 titlebar = "#00000000"
-toolbar = "#00000000"
-sidebar = "#00000000"
-status = "#00000000"
 stripe = "#00000000"
 
+# Pass 2: structure (sheets, sizes, markers).
+material = "acrylic"
+gap = 8
+sheet_shadow_blur = 32
+pane_marker = "rim"
+tab_shape = "pill"
+numbered_tabs = false
+key_caps = false
+titlebar_height = 52
+tab_width = 200
+tab_height = 36
+toolbar_height = 48
+typebar_height = 32
+pane_header_height = 40
+header_height = 28
+status_height = 36
+sidebar_row = 32
+font_size = 13
+font_size_small = 12
+font_size_xs = 11
+place = "accent/0.24"
+place_border = "accent/0.30"
+selection_inactive_border = "#00000000"
+
 [dark]
+toolbar = "#101916"
+sidebar = "#101916"
+status = "#101916"
+sheet_border = "#ffffff17"
+sheet_edge = "#ffffff12"
+sheet_shadow = "#00000047"
+focus_ring = "accent/0.12"
+selection_inactive = "#ffffff1a"
+header_fill = "#ffffff0f"
+seg_on = "#ffffff1f"
+place_text = "#eef5f0"
 window = "#060c0a61"
 content = "#101916"
 tab_active = "#101916"
@@ -66,6 +98,17 @@ solid_sheet = "#16201c"
 solid_raised = "#1e2a25"
 
 [light]
+toolbar = "#fafcfb"
+sidebar = "#fafcfb"
+status = "#fafcfb"
+sheet_border = "#ffffffbf"
+sheet_edge = "#ffffffcc"
+sheet_shadow = "#28463724"
+focus_ring = "accent/0.12"
+selection_inactive = "#142d201a"
+header_fill = "#142d200f"
+seg_on = "#fffffff2"
+place_text = "#0f1a14"
 window = "#ffffff38"
 content = "#fafcfb"
 tab_active = "#fafcfb"
@@ -104,6 +147,17 @@ solid_raised = "#ffffff"
 
 # High: sheets nearly opaque, the backdrop can no longer cost contrast; lines doubled, text tighter.
 [dark_high]
+toolbar = "#0e1613"
+sidebar = "#0e1613"
+status = "#0e1613"
+sheet_border = "#ffffff33"
+sheet_edge = "#ffffff1f"
+focus_ring = "#00000000"
+selection_inactive = "#ffffff26"
+selection_inactive_border = "#ffffff4d"
+header_fill = "#ffffff26"
+place = "accent/0.30"
+place_text = "#f7fbf8"
 window = "#060c0a8c"
 content = "#0e1613"
 tab_active = "#0e1613"
@@ -145,6 +199,17 @@ solid_sheet = "#121b17"
 solid_raised = "#1b2621"
 
 [light_high]
+toolbar = "#fcfdfc"
+sidebar = "#fcfdfc"
+status = "#fcfdfc"
+sheet_border = "#142d203d"
+sheet_edge = "#ffffff"
+focus_ring = "#00000000"
+selection_inactive = "#142d201f"
+selection_inactive_border = "#142d2057"
+header_fill = "#142d201f"
+place = "accent/0.30"
+place_text = "#08110c"
 window = "#ffffff73"
 content = "#fcfdfc"
 tab_active = "#fcfdfc"

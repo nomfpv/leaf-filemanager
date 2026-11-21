@@ -26,7 +26,39 @@ focus = "accent"
 titlebar = "#00000000"
 stripe = "#00000000"
 
+# Pass 2: structure (sheets, sizes, markers).
+material = "mica"
+gap = 0
+sheet_edge = "#00000000"
+sheet_shadow = "#00000000"
+sheet_shadow_blur = 0
+focus_ring = "#00000000"
+pane_marker = "stem"
+tab_shape = "lifted"
+numbered_tabs = false
+key_caps = false
+titlebar_height = 40
+tab_width = 200
+tab_height = 34
+toolbar_height = 44
+typebar_height = 28
+pane_header_height = 36
+header_height = 28
+status_height = 32
+sidebar_row = 30
+font_size = 13
+font_size_small = 12
+font_size_xs = 11
+header_fill = "#00000000"
+place_border = "#00000000"
+selection_inactive_border = "#00000000"
+
 [dark]
+sheet_border = "#1b221d"
+selection_inactive = "#96aa961a"
+seg_on = "#222b24"
+place = "#d6ecd60d"
+place_text = "#e3e9e2"
 window = "#090c0a"
 sidebar = "#0e120f"
 toolbar = "#131915"
@@ -66,6 +98,11 @@ solid_sheet = "#131915"
 solid_raised = "#1b221d"
 
 [light]
+sheet_border = "#e9ece6"
+selection_inactive = "#96aa961a"
+seg_on = "#ffffff"
+place = "#182c180d"
+place_text = "#161c17"
 window = "#e3e7e0"
 sidebar = "#ecefe9"
 toolbar = "#f8f9f6"
@@ -106,6 +143,10 @@ solid_raised = "#ffffff"
 
 # High: tighter text, visible hairlines, a fuller selection tint and a thicker stem.
 [dark_high]
+sheet_border = "#405044"
+selection_inactive = "#96aa9633"
+place = "#d6ecd617"
+place_text = "#f5f8f4"
 window = "#070908"
 sidebar = "#0b0e0c"
 toolbar = "#111612"
@@ -149,6 +190,10 @@ solid_sheet = "#111612"
 solid_raised = "#1c241e"
 
 [light_high]
+sheet_border = "#a9b3a5"
+selection_inactive = "#3c503c21"
+place = "#182c1814"
+place_text = "#0b0f0c"
 window = "#dde2d9"
 sidebar = "#e6eae3"
 toolbar = "#fbfcfa"

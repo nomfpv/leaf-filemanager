@@ -2147,6 +2147,8 @@ impl Workspace {
 
     fn render_titlebar(&mut self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let popups_open = self.popups_open(cx);
+        // (pill tabs float in the middle of the strip, the others stand on its bottom edge)
+        let pill = p.tab_shape == "pill";
         // the saved session this window holds, at the far left of the tabs
         let session_label = self.session_name.clone().filter(|n| cx.global::<crate::settings::Settings>().saved_sessions.iter().any(|s| &s.name == n)).map(|name| {
             h_flex()
@@ -2176,8 +2178,9 @@ impl Workspace {
             .flex_shrink(1.)
             .min_w_0()
             .h_full()
-            .items_end()
-            .gap_1()
+            .when(pill, |d| d.items_center())
+            .when(!pill, |d| d.items_end())
+            .when(p.tab_shape != "card", |d| d.gap_1())
             .pl_1()
             .overflow_x_scroll()
             .track_scroll(&self.tab_scroll);
@@ -2190,7 +2193,8 @@ impl Workspace {
         // while there are few, shrinking as more open, scrolling only below the minimum.
         let strip = (self.viewport_w - 150. - TITLEBAR_LEAD - 40.).max(120.);
         let n = self.tabs.len().max(1) as f32;
-        let tab_w = ((strip - 4.) / n - 4.).clamp(TAB_MIN_W, TAB_MAX_W);
+        let tab_max = p.tab_w.max(TAB_MIN_W);
+        let tab_w = ((strip - 4.) / n - 4.).clamp(TAB_MIN_W, tab_max);
         // Settings > Appearance > "Tabs as wide as their names" (issue 119): each tab its measured name plus its icon and buttons, within
         // the same limits; the buttons are in that width, so they always show
         let fit_names = cx.global::<crate::settings::Settings>().tabs_fit_names;
@@ -2204,7 +2208,7 @@ impl Workspace {
             let name = v.title(cx);
             let tab_full = cx.global::<crate::settings::Settings>().tab_full_path;
             // (the room in characters for a full path, about 7 px each; the tab's own width is only known further down)
-            let room_w = if fit_names { TAB_MAX_W } else { tab_w };
+            let room_w = if fit_names { tab_max } else { tab_w };
             let title = crate::full_path::tab_text(v.location(), &name, tab_full, ((room_w - TAB_CHROME_W - if tab_terminal { TAB_TERMINAL_W } else { 0. }) / 7.6).max(8.) as usize);
             let tab_tip = crate::full_path::path_text(v.location()).unwrap_or_else(|| name.clone());
             let icon = v.tab_icon();
@@ -2212,7 +2216,7 @@ impl Workspace {
             let term_dir = tab_terminal.then(|| tab_terminal_dir(v.location())).flatten();
             let tab_w = if fit_names {
                 let name = window.text_system().layout_line(&title, name_px, &[name_style.to_run(title.len())], None).width;
-                (f32::from(name) + TAB_CHROME_W + if term_dir.is_some() { TAB_TERMINAL_W } else { 0. }).clamp(TAB_MIN_W, TAB_MAX_W)
+                (f32::from(name) + TAB_CHROME_W + if term_dir.is_some() { TAB_TERMINAL_W } else { 0. }).clamp(TAB_MIN_W, tab_max)
             } else {
                 tab_w
             };
@@ -2231,14 +2235,19 @@ impl Workspace {
                     .when(!popups_open, |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tab_tip.clone()).build(w, cx)))
                     .group("tab")
                     .flex_shrink_0()
-                    .h(px(32.))
+                    .h(px(p.tab_h))
                     .w(px(tab_w))
                     .pl_3()
                     .pr_1()
                     .gap_2()
                     .items_center()
-                    .rounded_t(px(p.control_radius + 2.))
-                    .text_sm()
+                    // the theme's tab: a pill floating on the backdrop (Canopy), lifted into the address row (Stem), an index card (Index)
+                    .map(|d| match p.tab_shape {
+                        "pill" => d.rounded(px(p.control_radius)).when(active, |d| d.shadow(p.lifted_shadows())),
+                        "card" => d.when(active, |d| d.border_1().border_b_0().border_color(p.sheet_border)),
+                        _ => d.rounded_t(px(p.control_radius + 2.)),
+                    })
+                    .text_size(px(p.fs))
                     // Stem: the accent line on top of the tab in front
                     .when(active && p.tab_marker > 0., |d| {
                         d.relative().child(div().absolute().top_0().left(px(12.)).right(px(12.)).h(px(p.tab_marker)).rounded_b(px(2.)).bg(p.accent))
@@ -2354,12 +2363,13 @@ impl Workspace {
                 .flex_shrink_0()
                 .ml_1()
                 .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("New tab  (Ctrl+T)")).build(w, cx))
-                .size(px(28.))
-                .mb(px(2.))
+                .size(px(if pill { 32. } else { 28. }))
+                .when(!pill, |d| d.mb(px(2.)))
                 .flex()
                 .items_center()
                 .justify_center()
-                .when(!plus_lens, |d| d.rounded(theme::RADIUS_SM))
+                .text_color(p.text_secondary)
+                .when(!plus_lens, |d| d.rounded(px(p.control_radius)))
                 .when(plus_lens, |d| d.relative().rounded_full().child(crate::glass::lens_probe_shaped(crate::glass::SLOT_NEW_TAB, crate::glass::key_of("new-tab"), crate::glass::LensShape::Circle)))
                 // the button moves when a tab opens or closes: a plain round fill stands in for the lens meanwhile
                 .when(plus_lens && crate::glass::lens_phase(self.glass_hwnd, crate::glass::SLOT_NEW_TAB) != crate::glass::LensPhase::Rest, |d| d.bg(p.tab_active))
@@ -2387,9 +2397,11 @@ impl Workspace {
         };
 
         TitleBar::new()
-            .h(theme::TITLEBAR_H)
+            .h(px(p.titlebar_h))
             .bg(p.titlebar_bg)
             .border_color(gpui_kit::transparent_black())
+            // (Index: the strip is ruled off from the address row; the tab in front stands over the line)
+            .when(p.tab_shape == "card", |d| d.border_b_1().border_color(p.sheet_border))
             .child(
                 h_flex()
                     .h_full()
@@ -2398,16 +2410,18 @@ impl Workspace {
                     .w(px((self.viewport_w - 150.).max(200.)))
                     .min_w_0()
                     .overflow_hidden()
-                    .items_end()
+                    // (pill tabs sit in the middle of the strip below the window's own gap)
+                    .when(pill, |d| d.items_center().pt(px(p.gap)))
+                    .when(!pill, |d| d.items_end())
                     .child(
                         // sidebar toggle in the corner (Files has the pane button here, no app name)
                         // same size and baseline as the "+" button; centered over the Back
                         // button below (title bar pads 12 px, the nav row 8 px)
-                        h_flex().flex_shrink_0().w(px(TITLEBAR_LEAD)).h_full().items_end().child(
+                        h_flex().flex_shrink_0().w(px(TITLEBAR_LEAD)).h_full().when(pill, |d| d.items_center()).when(!pill, |d| d.items_end()).child(
                             div()
                                 .id("tab-actions")
                                 .ml(px(-2.))
-                                .mb(px(2.))
+                                .when(!pill, |d| d.mb(px(2.)))
                                 .size(px(28.))
                                 .flex()
                                 .items_center()
@@ -3085,12 +3099,10 @@ impl Workspace {
         let menu_name = crate::i18n::tx("Custom commands");
 
         h_flex()
-            .h(px(44.))
-            .px_2()
+            .h(px(p.toolbar_h))
+            .px(px(10.))
             .gap_0p5()
             .items_center()
-            .border_b_1()
-            .border_color(p.divider)
             .children(on("new").then(|| drop("cb-new", L::CirclePlus, Some("New"), "New item", in_folder, cx, |_, _| crate::ctx_menu::BarMenu::New)))
             .children(extra("newfolder").then(|| {
                 cmd("cb-newfolder", L::FolderPlus, "New folder  (Ctrl+Shift+N)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(NewFolder), cx))
@@ -3763,16 +3775,17 @@ impl Workspace {
             crate::transfer_view::strip(&self.ops, p, rf_core::transfer::strip_room(bar_w, held), cx)
         });
         let perf = cx.global::<crate::settings::Settings>().show_perf_info;
-        h_flex()
-            .h(px(32.))
+        theme::sheet(p, p.status_bg)
+            .flex()
+            .flex_row()
+            .h(px(p.status_h))
             .flex_shrink_0()
-            .px_3()
+            .pl(px(16.))
+            .pr(px(12.))
             .items_center()
             .justify_between()
-            .border_t_1()
-            .border_color(p.divider)
-            .bg(p.status_bg)
-            .text_xs()
+            .when(p.gap <= 0., |d| d.border_t_1().border_color(p.sheet_border))
+            .text_size(px(p.fs_small))
             .text_color(p.text_secondary)
             .child(left)
             // a running operation's progress (Settings → Aktarım ilerlemesi → Durum çubuğu)
@@ -3856,7 +3869,6 @@ const PLUS_ANIM_MS: u64 = 160;
 /// Dragged files held over a tab this long open it (Explorer uses about the same).
 const DRAG_HOVER_MS: u64 = 500;
 const TAB_MIN_W: f32 = 72.;
-const TAB_MAX_W: f32 = 220.;
 /// A tab's width besides its name: the padding, the icon and its gap, the close button and its gap.
 const TAB_CHROME_W: f32 = 12. + 14. + 8. + 8. + 22. + 4. + 2.;
 /// The terminal button and its gap, on a tab that has one.
@@ -4053,6 +4065,63 @@ mod archiver_drop_tests {
         assert_eq!(hold_archiver_drop(vec![own.clone(), temp.join("7zEother").join("a")], &temp).len(), 2);
         let _ = std::fs::remove_dir_all(&temp);
     }
+}
+
+/// The header of a pane: its folder's name, how many items it has and what kind of place it is; the focused one of two panes carries
+/// the theme's marker (Stem: the stem under it, Index: a band on top; Canopy marks the whole pane instead). None for pages that are
+/// no folder (Home, Settings) and where the theme has no header.
+fn pane_header(view: &Entity<FolderView>, marked: bool, dual: bool, p: &Palette, cx: &App) -> Option<AnyElement> {
+    if p.pane_header_h <= 0. {
+        return None;
+    }
+    let v = view.read(cx);
+    let loc = v.location();
+    let place = match loc {
+        Location::Path(path) if leaf_sys::ftp::is_ftp(path) => t!("FTP"),
+        Location::Path(path) if crate::archive_view::is_browsable_path(path) => t!("Archive"),
+        Location::Path(path) if leaf_sys::network::server_root(path).is_some() => t!("Network"),
+        Location::Path(_) => t!("Local"),
+        Location::Search { .. } => t!("Search"),
+        Location::Library { .. } => t!("Library"),
+        Location::Tag(_) => t!("Tag"),
+        Location::Shell { .. } => t!("Device"),
+        _ => return None,
+    };
+    let name = v.title(cx);
+    let count = crate::i18n::items(v.item_count());
+    // (Stem and Index dim the name of the pane without the focus; Canopy's rim says it already)
+    let dim = dual && !marked && p.pane_marker != "rim";
+    Some(
+        h_flex()
+            .h(px(p.pane_header_h))
+            .flex_shrink_0()
+            .pl(px(16.))
+            .pr(px(14.))
+            .gap_2()
+            .items_center()
+            .relative()
+            .text_size(px(p.fs_small))
+            .text_color(p.text_secondary)
+            .when(p.pane_marker == "band", |d| d.border_b_1().border_color(p.divider))
+            .child(Icon::new(L::Folder).size(px(16.)).flex_shrink_0().text_color(p.text_tertiary))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(p.fs + 1.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(if dim { p.text_secondary } else { p.text })
+                    .child(name),
+            )
+            .child(div().flex_shrink_0().whitespace_nowrap().when(p.mono_numbers && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono)).child(count))
+            .child(div().flex_1())
+            .child(div().flex_shrink_0().text_size(px(p.fs_xs)).child(place))
+            .when(marked && p.pane_marker == "stem", |d| {
+                d.child(div().absolute().left(px(14.)).bottom_0().h(px(p.focus_width)).w(px(if p.focus_width >= 3. { 56. } else { 40. })).rounded(px(1.)).bg(p.accent))
+            })
+            .when(marked && p.pane_marker == "band", |d| d.child(div().absolute().top_0().left_0().right_0().h(px(p.focus_width)).bg(p.accent)))
+            .into_any_element(),
+    )
 }
 
 /// Shows which device draws the window (hybrid renderer) and cycles Auto → GPU → CPU on click.
@@ -4509,7 +4578,7 @@ impl Render for Workspace {
                 .into_any_element()
         });
         // (the status bar is the content panel's: the window less the sidebar when it is shown, and the panel's margin)
-        let strip_bar_w = (surface == crate::transfer_view::Surface::Strip).then(|| (f32::from(window.viewport_size().width) - side_used - 10.0).max(0.0));
+        let strip_bar_w = (surface == crate::transfer_view::Surface::Strip).then(|| (f32::from(window.viewport_size().width) - 2.0 * p.gap - 28.0).max(0.0));
         let cards = (surface == crate::transfer_view::Surface::Card)
             .then(|| crate::transfer_view::cards(&self.ops, &p, if show_statusbar { 44.0 } else { 12.0 }, cx))
             .flatten();
@@ -4541,42 +4610,64 @@ impl Render for Workspace {
             });
         }
         let tab_state = self.tabs[self.active].clone();
+        // Each pane is a sheet of its own (Canopy: with a gap between them; Stem and Index: touching, split by a line), with a header
+        // that names its folder; the focused one of two is marked the theme's way (`pane_marker`).
+        let dual = tab_state.right.is_some();
+        let side_by_side = cx.global::<crate::settings::Settings>().dual_pane_vertical;
+        // (the pane without the focus shows its selection in the neutral colour)
+        for (view, inactive) in [(Some(&tab_state.left), dual && tab_state.right_active), (tab_state.right.as_ref(), dual && !tab_state.right_active)] {
+            if let Some(view) = view
+                && view.read(cx).pane_inactive != inactive
+            {
+                view.update(cx, |v, cx| {
+                    v.pane_inactive = inactive;
+                    cx.notify();
+                });
+            }
+        }
+        let pane = |view: Entity<FolderView>, is_right: bool, active: bool, cx: &mut Context<Self>| {
+            let marked = dual && active;
+            let header = pane_header(&view, marked, dual, &p, cx);
+            theme::sheet(&p, p.content_bg)
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .when(side_by_side || !dual, |d| d.h_full())
+                .when(!side_by_side && dual, |d| d.w_full())
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .relative()
+                .when(marked && p.pane_marker == "rim", |d| d.shadow(p.focus_rim()))
+                .capture_any_mouse_down(cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    if dual {
+                        this.set_active_pane(is_right, cx)
+                    }
+                }))
+                .children(header)
+                .child(div().flex_1().min_h_0().child(view))
+        };
         let content: AnyElement = match &tab_state.right {
-            None => div().size_full().child(tab_state.left.clone()).into_any_element(),
+            None => pane(tab_state.left.clone(), false, true, cx).into_any_element(),
             Some(right) => {
-                let side_by_side = cx.global::<crate::settings::Settings>().dual_pane_vertical;
-                let pane = |view: Entity<FolderView>, is_right: bool, active: bool, cx: &mut Context<Self>| {
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .when(side_by_side, |d| d.h_full())
-                        .when(!side_by_side, |d| d.w_full())
-                        .relative()
-                        .capture_any_mouse_down(cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.set_active_pane(is_right, cx)
-                        }))
-                        .child(view)
-                        .when(active && p.focus_width > 0., |d| {
-                            d.child(div().absolute().top_0().left_0().right_0().h(px(p.focus_width)).bg(p.focus))
-                        })
-                };
                 let left = pane(tab_state.left.clone(), false, !tab_state.right_active, cx);
                 let right = pane(right.clone(), true, tab_state.right_active, cx);
+                // (touching panes: a line between them)
+                let line = (p.gap <= 0.).then(|| div().flex_shrink_0().bg(p.sheet_border).when(side_by_side, |d| d.w(px(1.)).h_full()).when(!side_by_side, |d| d.h(px(1.)).w_full()));
                 if side_by_side {
-                    h_flex().size_full().child(left).child(div().w(px(1.)).h_full().bg(p.divider)).child(right).into_any_element()
+                    h_flex().size_full().gap(px(p.gap)).child(left).children(line).child(right).into_any_element()
                 } else {
-                    v_flex().size_full().child(left).child(div().h(px(1.)).w_full().bg(p.divider)).child(right).into_any_element()
+                    v_flex().size_full().gap(px(p.gap)).child(left).children(line).child(right).into_any_element()
                 }
             }
         };
         let shelf = self.shelf_open.then(|| {
-            div()
+            theme::sheet(&p, p.content_bg)
                 .w(px(260.))
                 .flex_shrink_0()
                 .h_full()
-                .border_l_1()
-                .border_color(p.divider)
+                .overflow_hidden()
+                .when(p.gap <= 0., |d| d.border_l_1().border_color(p.sheet_border))
                 .child(self.shelf.clone())
         });
         let pane_shown = self.preview_open && self.compact.is_none() && room_for_preview && self.active_tab().read(cx).location().path().is_some();
@@ -4644,13 +4735,12 @@ impl Render for Workspace {
             let target = self.active_tab().read(cx).preview_target();
             self.preview.update(cx, |pv, cx| pv.set_target(target, cx));
             Some(
-                div()
+                theme::sheet(&p, p.content_bg)
                     .w(px(self.preview_w))
                     .flex_shrink_0()
                     .h_full()
                     .relative()
-                    .border_l_1()
-                    .border_color(p.divider)
+                    .when(p.gap <= 0., |d| d.border_l_1().border_color(p.sheet_border))
                     .child(self.preview.clone())
                     .child(resize_handle("preview-resize", ResizePreview, true)),
             )
@@ -4671,7 +4761,7 @@ impl Render for Workspace {
         let main_row: AnyElement = if preview_bottom {
             self.preview_bottom_row(list_slot, shelf, bottom_pane, cx)
         } else {
-            h_flex().flex_1().min_h_0().child(list_slot).children(shelf).children(preview).into_any_element()
+            h_flex().flex_1().min_h_0().gap(px(p.gap)).child(list_slot).children(shelf).children(preview).into_any_element()
         };
 
         v_flex()
@@ -4822,15 +4912,24 @@ impl Render for Workspace {
             .relative()
             .children(backdrop_layers)
             .child(titlebar)
-            .child(div().w_full().bg(p.toolbar_bg).child(toolbar))
+            // Under the tab strip the window is a column of sheets: the address row, then the sidebar beside the tool bar and the panes,
+            // then the status line across the whole width (the mockups' layout). The theme's gap lies between them and round them.
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .px(px(p.gap))
+                    .pb(px(p.gap))
+                    .gap(px(p.gap))
+                    .child(theme::sheet(&p, p.toolbar_bg).w_full().flex_shrink_0().when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border)).child(toolbar))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
+                    .gap(px(p.gap))
                     .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ResizePreview>, _, cx| {
-                        // the content card ends 8 px (mr_2) before the row's right edge
-                        // mr_2 (8 px) + the card's 1 px border
-                        let w = f32::from(e.bounds.right() - e.event.position.x) - 9.;
+                        // (the preview sheet ends at the row's right edge)
+                        let w = f32::from(e.bounds.right() - e.event.position.x);
                         this.set_pane_width(false, w, cx);
                     }))
                     .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ResizeSidebar>, _, cx| {
@@ -4838,12 +4937,12 @@ impl Render for Workspace {
                         this.set_pane_width(true, w, cx);
                     }))
                     .children(sidebar.map(|s| {
-                        div()
+                        theme::sheet(&p, p.sidebar_bg)
                             .id("sidebar-slot")
                             .h_full()
                             .relative()
                             .flex_shrink_0()
-                            .bg(p.sidebar_bg)
+                            .when(p.gap <= 0., |d| d.border_r_1().border_color(p.sheet_border))
                             .child(s)
                             .child(resize_handle("sidebar-resize", ResizeSidebar, false))
                             // on the rail, hovering opens the full sidebar over the content
@@ -4868,27 +4967,27 @@ impl Render for Workspace {
                             .children(peek.map(|d| deferred(d).with_priority(1)))
                     }))
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .mr_2()
-                            .rounded(px(p.radius))
-                            .bg(p.content_bg)
-                            .border_1()
-                            .border_color(p.border)
-                            .overflow_hidden()
-                            .flex()
-                            .flex_col()
-                            .when(show_commandbar && show_toolbar, |d| d.child(commandbar))
+                            .gap(px(p.gap))
+                            .when(show_commandbar && show_toolbar, |d| {
+                                d.child(
+                                    theme::sheet(&p, p.toolbar_bg)
+                                        .flex_shrink_0()
+                                        .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border))
+                                        .child(commandbar),
+                                )
+                            })
                             .children(filter_strip)
                             .child(main_row)
                             // the floating card of a running operation (Settings → Aktarım ilerlemesi → Yüzen kart)
-                            .children(cards)
-                            .when(show_statusbar, |d| d.child(status)),
+                            .children(cards),
                     ),
             )
-            .child(div().h(px(8.)))
+            .when(show_statusbar, |d| d.child(status)),
+            )
             // Last children = painted on top.
             .children(crate::status_center::render_flyout(&self.ops, &p, theme::TITLEBAR_H + px(44.), cx))
             .children(crate::status_center::update_toast(&p, false))

@@ -79,6 +79,40 @@ pub struct Palette {
     pub font_ui: &'static str,
     pub font_mono: &'static str,
     pub mono_numbers: bool,
+    /// The backdrop the theme asks for while the material setting is Automatic ("acrylic", "mica", "mica_alt", "solid", "glass").
+    pub material: &'static str,
+    /// Space between the sheets and to the window edge; 0: the regions touch, split by `sheet_border` lines.
+    pub gap: f32,
+    pub sheet_border: Hsla,
+    pub sheet_edge: Hsla,
+    pub sheet_shadow: Hsla,
+    pub sheet_shadow_blur: f32,
+    pub focus_ring: Hsla,
+    /// "rim", "stem" or "band".
+    pub pane_marker: &'static str,
+    pub selection_inactive: Hsla,
+    pub selection_inactive_border: Hsla,
+    pub header_fill: Hsla,
+    pub seg_on: Hsla,
+    pub place: Hsla,
+    pub place_border: Hsla,
+    pub place_text: Hsla,
+    /// "pill", "lifted" or "card".
+    pub tab_shape: &'static str,
+    pub numbered_tabs: bool,
+    pub key_caps: bool,
+    pub titlebar_h: f32,
+    pub tab_w: f32,
+    pub tab_h: f32,
+    pub toolbar_h: f32,
+    pub typebar_h: f32,
+    pub pane_header_h: f32,
+    pub header_h: f32,
+    pub status_h: f32,
+    pub sidebar_row: f32,
+    pub fs: f32,
+    pub fs_small: f32,
+    pub fs_xs: f32,
     /// The controls of this window are drawn the liquid way (the window shows glass, or it is a popup opened from one): see `liquid`.
     /// Set by `for_window`.
     pub liquid: bool,
@@ -248,6 +282,36 @@ impl Palette {
             font_ui: text("font_ui"),
             font_mono: text("font_mono"),
             mono_numbers: flag("mono_numbers"),
+            material: text("material"),
+            gap: num("gap", 0.0).clamp(0.0, 32.0),
+            sheet_border: col("sheet_border"),
+            sheet_edge: col("sheet_edge"),
+            sheet_shadow: col("sheet_shadow"),
+            sheet_shadow_blur: num("sheet_shadow_blur", 0.0).clamp(0.0, 64.0),
+            focus_ring: col("focus_ring"),
+            pane_marker: text("pane_marker"),
+            selection_inactive: col("selection_inactive"),
+            selection_inactive_border: col("selection_inactive_border"),
+            header_fill: col("header_fill"),
+            seg_on: col("seg_on"),
+            place: col("place"),
+            place_border: col("place_border"),
+            place_text: col("place_text"),
+            tab_shape: text("tab_shape"),
+            numbered_tabs: flag("numbered_tabs"),
+            key_caps: flag("key_caps"),
+            titlebar_h: num("titlebar_height", 40.0).clamp(28.0, 72.0),
+            tab_w: num("tab_width", 200.0).clamp(100.0, 400.0),
+            tab_h: num("tab_height", 32.0).clamp(20.0, 64.0),
+            toolbar_h: num("toolbar_height", 44.0).clamp(28.0, 72.0),
+            typebar_h: num("typebar_height", 28.0).clamp(0.0, 48.0),
+            pane_header_h: num("pane_header_height", 36.0).clamp(0.0, 64.0),
+            header_h: num("header_height", 28.0).clamp(20.0, 48.0),
+            status_h: num("status_height", 32.0).clamp(20.0, 56.0),
+            sidebar_row: num("sidebar_row", 30.0).clamp(20.0, 48.0),
+            fs: num("font_size", 13.0).clamp(9.0, 20.0),
+            fs_small: num("font_size_small", 12.0).clamp(8.0, 20.0),
+            fs_xs: num("font_size_xs", 11.0).clamp(8.0, 20.0),
             liquid: false,
         }
     }
@@ -269,7 +333,63 @@ impl Palette {
         }
         self.card_bg = self.solid_raised;
         self.backdrop = false;
+        // (the mockup's no-blur fallback: the gaps and edges stay, the sheets only cast a faint contact shadow)
+        if self.sheet_shadow.a > 0.0 {
+            self.sheet_shadow.a = self.sheet_shadow.a.min(0.12);
+            self.sheet_shadow_blur = self.sheet_shadow_blur.min(2.0);
+        }
     }
+
+    /// The shadows of a sheet, as the mockup's box-shadow: the drop shadow under it, the soft 1 px outline and the lit top edge
+    /// (the last two inside it, the edge over the outline). With no gap a sheet has none of them: its neighbours touch it.
+    pub fn sheet_shadows(&self) -> Vec<BoxShadow> {
+        let mut v = Vec::with_capacity(3);
+        if self.gap <= 0.0 {
+            return v;
+        }
+        if self.sheet_shadow.a > 0.0 && self.sheet_shadow_blur > 0.0 {
+            v.push(BoxShadow::new(px(0.), px(self.sheet_shadow_blur * 0.375), self.sheet_shadow).blur_radius(px(self.sheet_shadow_blur)));
+        }
+        if self.sheet_border.a > 0.0 {
+            v.push(BoxShadow::new(px(0.), px(0.), self.sheet_border).spread_radius(px(1.)).inset());
+        }
+        if self.sheet_edge.a > 0.0 {
+            v.push(BoxShadow::new(px(0.), px(1.), self.sheet_edge).inset());
+        }
+        v
+    }
+
+    /// The same for a small lifted piece (the tab in front, a chosen tile): outline, edge and a short shadow.
+    pub fn lifted_shadows(&self) -> Vec<BoxShadow> {
+        let mut v = self.sheet_shadows();
+        if let Some(s) = v.first_mut().filter(|s| !s.inset) {
+            s.offset = point(px(0.), px(4.));
+            s.blur_radius = px(16.);
+            s.color.a *= 0.6;
+        }
+        v
+    }
+
+    /// The focused pane's outline (and the glow outside it) when the theme marks it with a rim.
+    pub fn focus_rim(&self) -> Vec<BoxShadow> {
+        let mut v = self.sheet_shadows();
+        v.retain(|s| !(s.inset && s.offset.y == px(0.)));
+        v.push(BoxShadow::new(px(0.), px(0.), self.focus).spread_radius(px(self.focus_width.max(1.))).inset());
+        if self.focus_ring.a > 0.0 {
+            v.push(BoxShadow::new(px(0.), px(0.), self.focus_ring).spread_radius(px(3.)));
+        }
+        v
+    }
+}
+
+/// A region of the main window: a sheet of its own over the backdrop (Canopy: rounded, with gaps, outline, lit edge and shadow), or,
+/// with no gap, a plain surface that its neighbours touch (Stem, Index: they draw the lines between regions).
+pub fn sheet(p: &Palette, bg: Hsla) -> Div {
+    let d = div().bg(bg);
+    if p.gap > 0.0 { d.rounded(px(p.radius)).shadow(p.sheet_shadows()) } else { d }
+}
+
+impl Palette {
 
     /// Pure black for OLED screens (issue 45): the theme's dark variant with every surface black and opaque, the text white, and the
     /// lines and fills just bright enough to be seen on black.
