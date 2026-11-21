@@ -27,18 +27,29 @@ pub enum Decision {
     Restart,
 }
 
+/// How far a finished copy's time may lie from its source's: FAT keeps 2 s, exFAT 10 ms, SMB and ntfs-3g 100 ns, so a copy there
+/// never has its source's time to the nanosecond.
+pub const TIME_SLACK_NS: i128 = 2_000_000_000;
+
+/// Whether `dst` is the finished copy of `src`, for a destination name the journal knows as its own (it recorded the file finished
+/// there, or began its part file): the source's size, and a time within [`TIME_SLACK_NS`] of the source's (the engine sets the copy's
+/// time from the source after the last byte; the destination's file system may keep it coarser). A name the journal does not know
+/// is never taken for the copy, whatever its size and time.
+pub fn is_finished(src: Meta, dst: Meta) -> bool {
+    let ns = |m: Meta| m.mtime.0 as i128 * 1_000_000_000 + m.mtime.1 as i128;
+    src.size == dst.size && (ns(src) - ns(dst)).abs() <= TIME_SLACK_NS
+}
+
 /// One file of a resumed job.
 /// * `started`: the journal's record of it, if the copy had begun;
 /// * `src`: the source now; `part_len`: the length of its part file now, if there is one;
-/// * `dst`: the finished name now, if something is there.
+/// * `dst_finished`: the destination name already holds the finished copy ([`is_finished`], for a name the journal knows).
 ///
-/// The destination counts as finished only when it has the source's size and time (the engine
-/// sets the time from the source after the last byte). A part file is carried on only while the
-/// source is unchanged since the journal saw it and the part still holds every recorded byte;
-/// anything else starts the file over. A finished destination is never a target for writing:
-/// resuming only ever writes into the part file.
-pub fn decide(started: Option<Started>, src: Meta, part_len: Option<u64>, dst: Option<Meta>) -> Decision {
-    if dst == Some(src) {
+/// A part file is carried on only while the source is unchanged since the journal saw it and the part still holds every recorded
+/// byte; anything else starts the file over. A finished destination is never a target for writing: resuming only ever writes into
+/// the part file.
+pub fn decide(started: Option<Started>, src: Meta, part_len: Option<u64>, dst_finished: bool) -> Decision {
+    if dst_finished {
         return Decision::Skip;
     }
     let (Some(j), Some(have)) = (started, part_len) else { return Decision::Restart };
@@ -56,13 +67,17 @@ mod tests {
     fn resume_decisions() {
         let src = Meta { size: 100, mtime: (5, 7) };
         let j = Some(Started { src, offset: 40 });
-        assert_eq!(decide(j, src, Some(60), Some(src)), Decision::Skip, "a finished copy is kept");
-        assert_eq!(decide(j, src, Some(60), None), Decision::ResumeAt(40));
-        assert_eq!(decide(j, src, Some(40), Some(Meta { size: 3, mtime: (1, 1) })), Decision::ResumeAt(40), "an old file there (a replace) is not the copy");
-        assert_eq!(decide(j, Meta { size: 100, mtime: (6, 0) }, Some(60), None), Decision::Restart, "the source changed");
-        assert_eq!(decide(j, Meta { size: 120, mtime: (5, 7) }, Some(60), None), Decision::Restart, "the source grew");
-        assert_eq!(decide(j, src, Some(39), None), Decision::Restart, "the part lost recorded bytes");
-        assert_eq!(decide(j, src, None, None), Decision::Restart, "no part file");
-        assert_eq!(decide(None, src, Some(60), None), Decision::Restart, "never recorded");
+        assert_eq!(decide(j, src, Some(60), true), Decision::Skip, "a finished copy is kept");
+        assert_eq!(decide(j, src, Some(60), false), Decision::ResumeAt(40));
+        assert_eq!(decide(j, Meta { size: 100, mtime: (6, 0) }, Some(60), false), Decision::Restart, "the source changed");
+        assert_eq!(decide(j, Meta { size: 120, mtime: (5, 7) }, Some(60), false), Decision::Restart, "the source grew");
+        assert_eq!(decide(j, src, Some(39), false), Decision::Restart, "the part lost recorded bytes");
+        assert_eq!(decide(j, src, None, false), Decision::Restart, "no part file");
+        assert_eq!(decide(None, src, Some(60), false), Decision::Restart, "never recorded");
+        // a copy on FAT (2 s), exFAT or SMB keeps a coarser time
+        assert!(is_finished(src, Meta { size: 100, mtime: (6, 0) }));
+        assert!(is_finished(src, Meta { size: 100, mtime: (4, 0) }));
+        assert!(!is_finished(src, Meta { size: 100, mtime: (8, 0) }), "more than 2 s off");
+        assert!(!is_finished(src, Meta { size: 99, mtime: (5, 7) }), "another size");
     }
 }

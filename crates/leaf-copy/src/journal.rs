@@ -75,6 +75,11 @@ impl Writer {
         self.out.write_all(line(fields).as_bytes())
     }
 
+    /// Everything written so far is handed to the system (it survives the process being killed, not a power cut).
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
+
     /// Everything written so far is on the disk when this returns.
     pub fn sync(&mut self) -> std::io::Result<()> {
         self.out.flush()?;

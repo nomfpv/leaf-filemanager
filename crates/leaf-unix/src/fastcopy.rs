@@ -47,7 +47,8 @@ pub static DROP_WSL_ZONE: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 const CHUNK: usize = 4 << 20;
 /// A part file's progress is synced and recorded after this many bytes (what a crash can cost of one file).
 const RECORD_EVERY: u64 = if cfg!(test) { 1 << 20 } else { 64 << 20 };
-/// Finished-file records are flushed to disk at most this often (a lost one only means that file is checked again on resume).
+/// Records are synced to disk at most this often. (A finished-file record lost in a power cut within this time: the resume does not
+/// know that name as its copy and keeps both.)
 const JOURNAL_SYNC: Duration = Duration::from_millis(250);
 
 // ---------------------------------------------------------------- the job journal
@@ -59,7 +60,7 @@ const JOURNAL_SYNC: Duration = Duration::from_millis(250);
 //   K src dst                                   "keep both" chose this name for src (synced at once: a resume must use it again)
 //   Y part size mtime_s mtime_ns                a part file was started for a source of this size and time
 //   O part offset                               the part holds `offset` synced bytes
-//   G dst                                       a file was finished at dst
+//   G dst                                       a file was finished at dst (handed to the system at once: a kill loses none)
 // Closing a journal deletes it, so what's left in the folder is exactly the jobs that were cut off.
 
 static JOURNAL_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -88,6 +89,15 @@ struct ResumeState {
     started: HashMap<PathBuf, Started>,
     /// "Keep both" names chosen before the cut, by source.
     kept: HashMap<PathBuf, PathBuf>,
+    /// Destinations the journal recorded as finished.
+    finished: HashSet<PathBuf>,
+}
+
+impl ResumeState {
+    /// Whether the journal knows `dst` as its own: finished there, or its part file `part` begun.
+    fn ours(&self, dst: &Path, part: &Path) -> bool {
+        self.finished.contains(dst) || self.started.contains_key(part)
+    }
 }
 
 fn meta_of(m: &std::fs::Metadata) -> Meta {
@@ -216,6 +226,14 @@ impl<'a> Job<'a> {
     fn record(&mut self, fields: &[&str], sync_now: bool) {
         if let Some(j) = &mut self.jr {
             j.record(fields, sync_now);
+        }
+    }
+
+    /// A file was finished at `dst`: recorded and handed to the system at once (a resume knows the name as its copy).
+    fn note_done(&mut self, dst: &Path) {
+        if let Some(j) = &mut self.jr {
+            j.record(&["G", &path_field(dst)], false);
+            let _ = j.w.flush();
         }
     }
 
@@ -622,8 +640,9 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
     let decision = match &job.resume {
         Some(rs) => {
             let dm = std::fs::symlink_metadata(dst).ok().filter(|m| m.file_type().is_file()).map(|m| meta_of(&m));
+            let done = rs.ours(dst, &part) && dm.is_some_and(|d| leaf_copy::resume::is_finished(meta_of(&sm), d));
             let have = std::fs::symlink_metadata(&part).ok().filter(|m| m.file_type().is_file()).map(|m| m.len());
-            leaf_copy::resume::decide(rs.started.get(&part).copied(), meta_of(&sm), have, dm)
+            leaf_copy::resume::decide(rs.started.get(&part).copied(), meta_of(&sm), have, done)
         }
         None => Decision::Restart,
     };
@@ -634,7 +653,7 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
                 return Err(io::Error::other("a file of the same size and time is there but differs from the original: it was kept"));
             }
             job.progress(sm.len(), Some(src));
-            job.record(&["G", &path_field(dst)], false);
+            job.note_done(dst);
             return Ok(Ident::of(&sm));
         }
         Decision::ResumeAt(at) => {
@@ -731,7 +750,7 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
     drop(to);
     match r {
         Ok(()) => {
-            job.record(&["G", &path_field(dst)], false);
+            job.note_done(dst);
             Ok(Ident::of(&sm))
         }
         Err(e) => {
@@ -881,7 +900,7 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
         // (a decision exists for every conflict that was asked, and for a copy into the item's own folder: keep both, never a merge
         // of a folder with itself)
         let decision = if kept.is_some() { None } else { job.decide.get(src).copied() };
-        if decision.is_none() && job.resume.is_some() && sk == dk && sk != Kind::Dir && finished_copy(src, &sm, &dst, &dm) {
+        if decision.is_none() && sk == dk && sk != Kind::Dir && job.resume.as_ref().is_some_and(|r| finished_copy(r, &job.tag, src, &sm, &dst, &dm)) {
             // a resumed job: this item was finished before the cut
             return already_copied(job, kind_of_job, src, &sm, &dst);
         }
@@ -915,11 +934,12 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
     copy_new(job, kind_of_job, src, &sm, dst, replace)
 }
 
-/// Whether `dst` is the finished copy of `src` (a resumed job): a file of the same size and time (the copy's time is set from the
-/// original after its last byte, and its name only appears then), or a link to the same target.
-fn finished_copy(src: &Path, sm: &std::fs::Metadata, dst: &Path, dm: &std::fs::Metadata) -> bool {
+/// Whether `dst` is the finished copy of `src` (a resumed job): a file the journal knows as its own (finished there, or its part
+/// begun) with the source's size and time (`leaf_copy::resume::is_finished`: the copy's time is set from the original after its last
+/// byte, and its name only appears then), or a link to the same target.
+fn finished_copy(rs: &ResumeState, tag: &str, src: &Path, sm: &std::fs::Metadata, dst: &Path, dm: &std::fs::Metadata) -> bool {
     match kind(sm) {
-        Kind::File => meta_of(sm) == meta_of(dm),
+        Kind::File => rs.ours(dst, &part_name(dst, tag)) && leaf_copy::resume::is_finished(meta_of(sm), meta_of(dm)),
         Kind::Link => std::fs::read_link(src).ok().is_some_and(|t| std::fs::read_link(dst).ok() == Some(t)),
         _ => false,
     }
@@ -1318,6 +1338,11 @@ pub fn resume(journal: &Path, tracker: Arc<Tracker>) -> anyhow::Result<bool> {
                     decide.insert(p, a);
                 }
             }
+            ("G", n) if n >= 2 => {
+                if let Some(d) = field_path(&r[1]) {
+                    rs.finished.insert(d);
+                }
+            }
             ("K", 3) => {
                 if let (Some(s), Some(d)) = (field_path(&r[1]), field_path(&r[2])) {
                     rs.kept.insert(s, d);
@@ -1607,6 +1632,24 @@ mod tests {
         assert_eq!(std::fs::read(root.join("dest/b.txt")).unwrap(), b"old");
         assert_eq!(std::fs::read(root.join("p")).unwrap(), b"part");
         NO_RENAME2.with(|f| f.set(false));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_resume_onto_a_coarse_clock_keeps_the_finished_copies() {
+        let (root, jobs) = fresh("coarse");
+        let (a, b) = (pattern(2 << 20, 9), pattern(9 << 20, 10));
+        std::fs::write(root.join("src/a.bin"), &a).unwrap();
+        std::fs::write(root.join("src/b.bin"), &b).unwrap();
+        let journal = copy_and_die(&[root.join("src/a.bin"), root.join("src/b.bin")], &root.join("dest"), &jobs, "b.bin");
+        // a FAT stick keeps times in 2 s steps: the finished copy's time is not its source's to the nanosecond
+        let done = root.join("dest/a.bin");
+        let t = std::fs::metadata(root.join("src/a.bin")).unwrap().modified().unwrap();
+        std::fs::File::options().write(true).open(&done).unwrap().set_modified(t + Duration::from_millis(1500)).unwrap();
+        let ino = std::fs::metadata(&done).unwrap().ino();
+        assert!(resume(&journal, quiet()).unwrap());
+        assert_eq!(std::fs::metadata(&done).unwrap().ino(), ino, "the finished copy is kept, not copied again");
+        assert!(std::fs::symlink_metadata(root.join("dest/a (2).bin")).is_err(), "no second copy");
+        assert_eq!(std::fs::read(root.join("dest/b.bin")).unwrap(), b);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
