@@ -10,4 +10,4 @@
 - `leaf reveal <file>` opens the file's folder with the file selected (the same as Explorer's `/select,<file>`, which also works).
 - `--new-tab` always opens the folder as a tab of the running window, whatever that setting says. With no window running, the
   folder opens in a new one.
-- Also understood: `sftp://`, `ftp://` addresses, `shell:` names and `::{...}` namespaces, `--settings=<page>`.
+- Also understood: `rclone://remote/path` (needs rclone installed; WebDAV and other storage come through an rclone remote), `docker://local/` (containers and their mounts), `sftp://`, `ftp://` addresses, `shell:` names and `::{...}` namespaces, `--settings=<page>`.
