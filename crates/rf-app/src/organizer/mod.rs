@@ -641,8 +641,11 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
             log::warn!("organizer undo: {}: {}", f.path.display(), f.message);
         }
         if !rec.recycled.is_empty() {
-            let wanted: Vec<String> = rec.recycled.iter().map(|(_, bin)| bin.to_string_lossy().to_lowercase()).collect();
-            let items: Vec<_> = leaf_sys::recycle::list()?.into_iter().filter(|it| wanted.contains(&it.parsing_path.to_lowercase())).collect();
+            let wanted: Vec<String> = rec.recycled.iter().map(|(_, bin)| bin.to_string_lossy().into_owned()).collect();
+            let items: Vec<_> = leaf_sys::recycle::list()?
+                .into_iter()
+                .filter(|it| wanted.iter().any(|w| leaf_sys::recycle::same_key(w, &it.parsing_path)))
+                .collect();
             if items.is_empty() {
                 problems += rec.recycled.len();
             } else {

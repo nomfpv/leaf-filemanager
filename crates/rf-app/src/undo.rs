@@ -157,10 +157,10 @@ fn undo_op(op: UndoOp, cx: &mut App) {
         UndoOp::Recycled { pairs } => {
             let n = pairs.len();
             crate::status_center::start(cx, format!("{} {}", t!("Restoring from Recycle Bin:"), crate::i18n::items(n)), move |_| {
-                let wanted: Vec<String> = pairs.iter().map(|(_, bin)| bin.to_string_lossy().to_lowercase()).collect();
+                let wanted: Vec<String> = pairs.iter().map(|(_, bin)| bin.to_string_lossy().into_owned()).collect();
                 let items: Vec<_> = leaf_sys::recycle::list()?
                     .into_iter()
-                    .filter(|it| wanted.contains(&it.parsing_path.to_lowercase()))
+                    .filter(|it| wanted.iter().any(|w| leaf_sys::recycle::same_key(w, &it.parsing_path)))
                     .collect();
                 anyhow::ensure!(!items.is_empty(), t!("items were not found in the Recycle Bin"));
                 leaf_sys::recycle::restore(&items)?;

@@ -169,6 +169,11 @@ pub fn list() -> anyhow::Result<Vec<RecycleItem>> {
     Ok(out)
 }
 
+/// Whether two keys (`parsing_path`) name the same item in the bin: case is not told apart here (as the file system does not).
+pub fn same_key(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
 /// Restores `items` to their original locations by invoking the shell's "undelete" verb
 /// (name-collision prompts come from the shell). Items no longer in the bin are ignored;
 /// errors if none matched.
