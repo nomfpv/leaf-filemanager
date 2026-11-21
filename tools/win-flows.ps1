@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Force $Shots | Out-Null
 $work = Join-Path $env:TEMP ("leaf-flow-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $cfg = Join-Path $work "cfg"
 New-Item -ItemType Directory -Force $cfg | Out-Null
-function Fill($src, $dst) { (Get-Content -Raw $src).Replace('$BASE', $Base) | Set-Content -Encoding utf8 $dst }
+function Fill($src, $dst) { [IO.File]::WriteAllText($dst, (Get-Content -Raw $src).Replace('$BASE', $Base), (New-Object Text.UTF8Encoding($false))) }
 Fill $Script (Join-Path $work "script.txt")
 if ($Settings -ne "") { Fill $Settings (Join-Path $cfg "settings.toml") }
 if ($Actions -ne "") { Fill $Actions (Join-Path $cfg "actions.toml") }
@@ -33,7 +33,8 @@ $env:LEAF_MULTI_INSTANCE = "1"
 $env:LEAF_OFFSCREEN = "1"
 $env:LEAF_MUTE = "1"
 $env:LEAF_CHECK_SCRIPT = Join-Path $work "script.txt"
-$env:LEAF_CHECK_SHOTDIR = $Shots
+$live = Join-Path $work "shots"; New-Item -ItemType Directory -Force $live | Out-Null
+$env:LEAF_CHECK_SHOTDIR = $live
 $env:RUST_LOG = "info"
 $out = Join-Path $work "out.txt"; $err = Join-Path $work "err.txt"
 $p = Start-Process $Exe -ArgumentList ('"' + $Open.Replace('$BASE', $Base) + '"') -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
@@ -47,7 +48,7 @@ while (-not $p.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
                 $n = $Matches[1]; $seen[$n] = 1
                 $tmp = Join-Path $work "$n.png"
                 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "capture-window.ps1") -ProcessId $p.Id -Out $tmp | Out-Null
-                if (Test-Path $tmp) { Move-Item -Force $tmp (Join-Path $Shots "$n.png") }
+                if (Test-Path $tmp) { Move-Item -Force $tmp (Join-Path $live "$n.png"); Copy-Item -Force (Join-Path $live "$n.png") (Join-Path $Shots "$n.png") }
             }
         }
     }
