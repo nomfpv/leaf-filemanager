@@ -672,8 +672,8 @@ fn loop_sign_in(tr: &Tracker, req: &Request, opts: &mut dl::Options, ctl: &dl::C
         let (scheme, host, port) = ch.origin.clone();
         let id = leaf_remote::SecretId::web(&scheme, &host, port, &ch.realm);
         let plain_basic = scheme == "http" && ch.scheme == dl::AuthScheme::Basic;
-        // the saved one was just refused: forgotten, so the dialog is next
-        if let Some((saved_id, secret)) = used_saved.take() {
+        // the saved one was just refused: forgotten, so the dialog is next (a 401 for another realm or server says nothing about it)
+        if let Some((saved_id, secret)) = used_saved.take().filter(|(sid, _)| *sid == id) {
             leaf_remote::vault().refused(&saved_id, &secret);
         }
         let saved = (round == 0 && !plain_basic).then(|| leaf_remote::vault().get(&id)).flatten().filter(|s| s.as_str().contains(':'));

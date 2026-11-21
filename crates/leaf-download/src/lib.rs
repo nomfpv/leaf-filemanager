@@ -442,7 +442,8 @@ fn category_dir(dir: &Path, name: &str, categories: &[(String, Vec<String>)]) ->
 
 fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn Host) -> Result<Outcome, Error> {
     let probe = with_retries(opts, ctl, || http::probe(agent, url, &opts.headers))?;
-    if opts.headers.web_auth().is_some() {
+    // (only when the server that asked for the sign-in is the one that answered: after a redirect elsewhere nobody checked it)
+    if opts.headers.web_auth().is_some_and(|a| *a.origin() == http::origin_of(&probe.uri)) {
         host.signed_in();
     }
     let mut name = name::file_name(probe.disposition.as_deref(), url);
