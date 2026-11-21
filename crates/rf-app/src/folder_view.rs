@@ -985,6 +985,7 @@ impl FolderView {
         let hover_select = cx.global::<crate::settings::Settings>().select_on_hover;
         let p = Palette::for_window(window);
         let mut out = Vec::with_capacity(range.len());
+        let secret_marks = cx.global::<crate::settings::Settings>().secret_marks;
         let pack = chosen_pack(cx.global::<crate::settings::Settings>());
         for vi in range {
             let Some(&ei) = self.visible.get(vi) else { break };
@@ -996,6 +997,10 @@ impl FolderView {
             let overlay = self.overlay_of(ei, px(16.), cx);
             let e = &self.entries[ei as usize];
             let is_dir = e.is_dir();
+            let lock = secret_marks.then(|| secret_lock(e, &p)).flatten();
+            let cmp = self.compare_look(ei);
+            let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
+            let cmp_word = cmp.and_then(|l| l.glyph()).zip(cmp_color);
             out.push(
                 h_flex()
                     .id(("crow", vi))
@@ -1008,6 +1013,8 @@ impl FolderView {
                     .text_sm()
                     .relative()
                     .when(selected, |d| d.bg(p.selection).child(theme::selection_pill(&p)))
+                    .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
+                    .when(cmp == Some(crate::compare_mode::Look::Same), |d| d.opacity(0.55))
                     .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
                     .child(link_marked(
                         match &shell_icon {
@@ -1019,6 +1026,8 @@ impl FolderView {
                         overlay,
                     ))
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(crate::rtl::display_text(&e.name)))
+                    .children(lock)
+                    .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g)))
                     .when(is_dir, |d| d.child(Icon::new(L::ChevronRight).size(px(12.)).text_color(p.text_tertiary)))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2935,6 +2944,11 @@ impl FolderView {
                         .into_any_element(),
                 };
                 let overlay = self.overlay_of(ei, visual_px, cx);
+                // the secret-file lock and the compare mode's word and tint (what the details list shows after the name)
+                let lock = secret_marks.then(|| secret_lock(&self.entries[ei as usize], &p)).flatten();
+                let cmp = self.compare_look(ei);
+                let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
+                let cmp_word = cmp.and_then(|l| l.glyph()).zip(cmp_color);
                 // the badge with the video's length, at the picture's lower right
                 let length = (tiles && is_video).then(|| self.path_of(ei)).flatten().and_then(|p| self.video_length(p, cx));
                 // the line under a card's name: the file's size, or how many items a folder holds
@@ -3027,6 +3041,23 @@ impl FolderView {
                                 })
                                 .when(is_cut, |d| d.opacity(0.5))
                                 .child(visual)
+                                .children(cmp_word.map(|(g, c)| {
+                                    div()
+                                        .absolute()
+                                        .left(px(4.))
+                                        .top(px(4.))
+                                        .px(px(4.))
+                                        .rounded(px(3.))
+                                        .bg(gpui_kit::hsla(0., 0., 0., 0.62))
+                                        .text_size(px(10.))
+                                        .line_height(px(16.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c)
+                                        .child(g)
+                                }))
+                                .children(lock.map(|l| {
+                                    div().absolute().right(px(4.)).top(px(4.)).p(px(2.)).rounded(px(3.)).bg(gpui_kit::hsla(0., 0., 0., 0.62)).child(l)
+                                }))
                                 .children(length.map(|len| {
                                     div()
                                         .absolute()
@@ -3053,7 +3084,14 @@ impl FolderView {
                                 .flex_1()
                                 .min_w_0()
                                 .gap_0p5()
-                                .child(div().text_sm().font_weight(FontWeight::MEDIUM).whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .items_center()
+                                        .child(div().min_w_0().flex_shrink(1.).text_sm().font_weight(FontWeight::MEDIUM).whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
+                                        .children(lock)
+                                        .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g))),
+                                )
                                 .children(facts.unwrap_or_default().into_iter().map(|t| div().text_xs().text_color(p.text_secondary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(t))),
                         ),
                     GridStyle::List => h_flex()
@@ -3062,7 +3100,8 @@ impl FolderView {
                         .items_center()
                         .child(div().size(visual_px).flex_shrink_0().flex().items_center().justify_center().child(visual))
                         .child(div().flex_1().min_w_0().text_sm().whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
-                        .children(secret_marks.then(|| secret_lock(e, &p)).flatten()),
+                        .children(lock)
+                        .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g))),
                 };
                 let renaming_here = self.renaming.as_ref().is_some_and(|(i, _)| *i == ei);
                 let base = if style != GridStyle::Tiles && renaming_here {
@@ -3094,6 +3133,8 @@ impl FolderView {
                     .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
                     .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { p.selection_inactive }))
                     .when(!selected, |d| d.border_1().border_color(transparent_black()))
+                    .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
+                    .when(cmp == Some(crate::compare_mode::Look::Same), |d| d.opacity(0.55))
                     .when(!selected && part.is_none(), |d| d.hover(|s| s.bg(p.hover)))
                     .when(!selected && part.is_some() && self.grid_hover.is_some_and(|(h, _)| h == vi), |d| d.bg(p.hover))
                     .on_mouse_down(
