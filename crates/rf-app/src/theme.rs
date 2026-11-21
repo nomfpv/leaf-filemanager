@@ -159,7 +159,7 @@ pub struct Selection {
 
 impl Default for Selection {
     fn default() -> Self {
-        Self { theme: data::DEFAULT_THEME.into(), high: true, accent: AccentChoice::Theme(String::new()) }
+        Self { theme: data::DEFAULT_THEME.into(), high: false, accent: AccentChoice::Theme(String::new()) }
     }
 }
 

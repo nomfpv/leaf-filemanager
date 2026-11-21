@@ -249,10 +249,17 @@ kind_archive = "#65550c"
 kind_app = "#1d5f3e"
 
 [[accents]]
-name = "Mint"
+name = "Leaf"
 dark = "#86e3b8"
 dark_text = "#05231a"
 light = "#1b7550"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Purple"
+dark = "#c9adff"
+dark_text = "#1d0d3b"
+light = "#6844b0"
 light_text = "#ffffff"
 
 [[accents]]
@@ -267,13 +274,6 @@ name = "Sunset"
 dark = "#ffb877"
 dark_text = "#2b1503"
 light = "#a14f0d"
-light_text = "#ffffff"
-
-[[accents]]
-name = "Lilac"
-dark = "#c9adff"
-dark_text = "#1d0d3b"
-light = "#6844b0"
 light_text = "#ffffff"
 
 [[accents]]

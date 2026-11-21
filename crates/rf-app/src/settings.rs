@@ -19,13 +19,13 @@ pub enum ThemePref {
     Black,
 }
 
-/// Settings > Appearance > Visibility: the same theme with tighter text, stronger lines and a fuller selection (High, the default), or
-/// the calmer Standard.
+/// Settings > Appearance > Visibility: the calmer Standard (the default; the owner, 2026-11-21: it looks better), or the same theme with
+/// tighter text, stronger lines and a fuller selection (High).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
-    #[default]
     High,
+    #[default]
     Standard,
 }
 
@@ -320,7 +320,8 @@ impl Default for ColumnPrefs {
             kind: true,
             size: true,
             widths: [150, 150, 150, 100],
-            tags: true,
+            // (tags show as dots after the names, the mockups'; the column is one click in the header's menu)
+            tags: false,
             git: true,
             sync: true,
             extra_widths: [130, 120, 150],
@@ -456,6 +457,9 @@ pub struct Settings {
     /// The one-time move from "details" to "adaptive" (0.3.3) has been made.
     pub adaptive_offered: bool,
     pub show_extensions: bool,
+    /// File icons from Windows (the colourful system icons, a program's own picture). Off (the default, the mockups' look): quiet line
+    /// icons in the theme's kind colours.
+    pub system_icons: bool,
     /// Custom shortcuts: keystroke → action, e.g. `"ctrl-k" = "NewFolder"` (names as in the
     /// command palette's actions; `leaf::` prefix optional). Applied at startup.
     pub keybindings: std::collections::BTreeMap<String, String>,
@@ -670,7 +674,7 @@ impl Default for Settings {
         Self {
             theme: ThemePref::System,
             theme_name: crate::theme::data::DEFAULT_THEME.into(),
-            visibility: Visibility::High,
+            visibility: Visibility::Standard,
             accent: String::new(),
             default_view: DefaultView::Adaptive,
             show_hidden: false,
@@ -706,6 +710,7 @@ impl Default for Settings {
             notify_long_ops: true,
             adaptive_offered: false,
             show_extensions: true,
+            system_icons: false,
             keybindings: Default::default(),
             window: None,
             window_display: None,
@@ -1039,7 +1044,7 @@ impl Settings {
         // (the system's own short date and time for the "System" style and older dates, issue 59; set once)
         rf_core::format::set_system_format(leaf_sys::datefmt::short_date_time);
         rf_core::format::set_date_style(match self.date_format {
-            DatePref::Application => rf_core::format::DateStyle::Relative,
+            DatePref::Application => rf_core::format::DateStyle::Calendar,
             DatePref::System => rf_core::format::DateStyle::Local,
             DatePref::Universal => rf_core::format::DateStyle::Universal,
         });
@@ -1197,26 +1202,26 @@ mod tests {
         assert_eq!(old.theme, ThemePref::Dark);
     }
 
-    /// The look's defaults are Canopy at High with the theme's own accent; a file from before themes keeps its mode and loads.
+    /// The look's defaults are Canopy at Standard with the theme's own accent; a file from before themes keeps its mode and loads.
     #[test]
-    fn the_theme_defaults_to_canopy_high_and_old_files_still_load() {
+    fn the_theme_defaults_to_canopy_standard_and_old_files_still_load() {
         use super::Visibility;
         use crate::theme::AccentChoice;
         let d = Settings::default();
-        assert_eq!((d.theme_name.as_str(), d.visibility, d.accent.as_str()), ("canopy", Visibility::High, ""));
+        assert_eq!((d.theme_name.as_str(), d.visibility, d.accent.as_str()), ("canopy", Visibility::Standard, ""));
         let sel = d.theme_selection();
-        assert_eq!((sel.theme.as_str(), sel.high, sel.accent), ("canopy", true, AccentChoice::Theme(String::new())));
+        assert_eq!((sel.theme.as_str(), sel.high, sel.accent), ("canopy", false, AccentChoice::Theme(String::new())));
         let old = Settings::parse_lenient("theme = \"black\"\naccent_color = \"\"\nshow_hidden = true").unwrap();
-        assert_eq!((old.theme, old.theme_name.as_str(), old.visibility), (ThemePref::Black, "canopy", Visibility::High));
+        assert_eq!((old.theme, old.theme_name.as_str(), old.visibility), (ThemePref::Black, "canopy", Visibility::Standard));
         let chosen = Settings::parse_lenient("theme_name = \"Index\"\nvisibility = \"standard\"\naccent = \"windows\"").unwrap();
         let sel = chosen.theme_selection();
         assert_eq!((sel.theme.as_str(), sel.high, sel.accent), ("index", false, AccentChoice::Windows));
         // a colour the user wrote wins over a named accent
         let own = Settings::parse_lenient("accent = \"Mint\"\naccent_color = \"#F7630C\"").unwrap();
         assert_eq!(own.theme_selection().accent, AccentChoice::Custom(0xF7630C));
-        // a visibility this build does not know falls back to High alone
+        // a visibility this build does not know falls back to the default alone
         let odd = Settings::parse_lenient("visibility = \"max\"\nshow_hidden = true").unwrap();
-        assert!(odd.show_hidden && odd.visibility == Visibility::High);
+        assert!(odd.show_hidden && odd.visibility == Visibility::Standard);
     }
 
     /// The second panes of the session survive the settings file, and a file from before them has none.

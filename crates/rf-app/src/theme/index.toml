@@ -210,6 +210,13 @@ light = "#2c6e35"
 light_text = "#ffffff"
 
 [[accents]]
+name = "Purple"
+dark = "#b79cf5"
+dark_text = "#1a0b33"
+light = "#6a3fb5"
+light_text = "#ffffff"
+
+[[accents]]
 name = "Signal"
 dark = "#f08a4b"
 dark_text = "#2a1003"

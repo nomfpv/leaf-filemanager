@@ -240,6 +240,13 @@ light = "#3d7a2c"
 light_text = "#ffffff"
 
 [[accents]]
+name = "Purple"
+dark = "#bea0f2"
+dark_text = "#1b0c33"
+light = "#6d46aa"
+light_text = "#ffffff"
+
+[[accents]]
 name = "Amber"
 dark = "#e3aa55"
 dark_text = "#1f1304"
@@ -258,13 +265,6 @@ name = "Fern"
 dark = "#55c4b1"
 dark_text = "#04201b"
 light = "#16756a"
-light_text = "#ffffff"
-
-[[accents]]
-name = "Orchid"
-dark = "#bea0f2"
-dark_text = "#1b0c33"
-light = "#6d46aa"
 light_text = "#ffffff"
 
 [[accents]]

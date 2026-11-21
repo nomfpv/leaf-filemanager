@@ -716,7 +716,7 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::CalendarClock,
             t!("Date format"),
-            Some(t!("Application: recent times as \"5 min ago\", older ones in Windows' format; System: always Windows' date and time format; Universal: 2026-11-05 13:45")),
+            Some(t!("Application: \"Today, 10:05\", \"Yesterday, 18:02\", older ones \"18 Nov 2026\"; System: always Windows' date and time format; Universal: 2026-11-05 13:45")),
             dropdown(
                 "datefmt",
                 p,
@@ -1541,6 +1541,13 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             dropdown("visibility", p, s.visibility, vec![(Visibility::High, t!("High").into()), (Visibility::Standard, t!("Standard").into())], |s, v| s.visibility = v),
         ),
         accent_card(p, s),
+        card(
+            p,
+            L::Shapes,
+            t!("Icons from Windows"),
+            Some(t!("Off: quiet line icons in the theme's colours. On: Windows' own file icons and the pictures of programs and shortcuts.")),
+            sw("system-icons", p, s.system_icons, |s, v| s.system_icons = v),
+        ),
         backdrop_card(p, s),
         themes_folder_card(p),
         card(
@@ -1582,9 +1589,9 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             sw("scrollbar", p, s.show_scrollbar, |s, v| s.show_scrollbar = v),
         ),
     ];
-    // HyperGlass look, right under the backdrop card (index 4) while Glass is the material
+    // HyperGlass look, right under the backdrop card (index 5) while Glass is the material
     if s.backdrop_in_use() == BackdropPref::Glass || crate::glass::forced() {
-        v.insert(5, hyperglass_card(p, s, cx));
+        v.insert(6, hyperglass_card(p, s, cx));
     }
     // tint swatches
     let tint = s.tint;
