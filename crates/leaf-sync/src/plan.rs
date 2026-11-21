@@ -106,6 +106,9 @@ pub struct Plan {
     pub left_missing: bool,
     pub right_missing: bool,
     pub made_ms: i64,
+    /// Made by [`plan_anyway`]: the missing or empty side check was off. Before it runs, the app looks again that the side is still
+    /// missing or empty (the drive may have come back since the preview).
+    pub anyway: bool,
     pub(crate) state: State,
     /// Every path either side has inside the filter (the state keeps only these).
     pub(crate) seen: BTreeSet<String>,
@@ -601,6 +604,7 @@ fn plan_with(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, c
         left_missing: l.missing,
         right_missing: r.missing,
         made_ms: crate::now_ms(),
+        anyway,
         state,
         seen: seen_keys,
     })

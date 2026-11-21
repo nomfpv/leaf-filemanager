@@ -164,6 +164,34 @@ fn in_window(cx: &mut App, f: impl FnOnce(&mut Window, &mut App)) {
 /// Asks, then runs: a plan with nothing to do runs at once (it only records the state), a plan that removes a large share of a
 /// side's files asks with a warning.
 fn confirm_and_run(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut App) {
+    if !plan.anyway {
+        return confirm_checked(plan, from_preview, window, cx);
+    }
+    // a plan made with "Run anyway" may have waited in the preview: the drive can be back since, and then the plan would send
+    // everything on the other side to the Trash. It runs only while the normal plan still refuses for that reason.
+    let job = plan.job.clone();
+    let work = cx.background_spawn(async move {
+        let (l, r) = job.sides()?;
+        let (lf, rf) = (side_fs(&l)?, side_fs(&r)?);
+        leaf_sync::plan(&job, &*lf, &*rf, &state_dir(), &|| false)
+    });
+    window
+        .spawn(cx, async move |cx| {
+            let got = work.await;
+            let _ = cx.update(|window, cx| match got {
+                Err(e) if e.side_gone => confirm_checked(plan, from_preview, window, cx),
+                _ => crate::prompt::notice(
+                    t!("The sync job did not run"),
+                    t!("The side that was missing or empty has changed since the preview. Preview the job again.").to_string(),
+                    window,
+                    cx,
+                ),
+            });
+        })
+        .detach();
+}
+
+fn confirm_checked(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut App) {
     use crate::prompt::{Button, Kind};
     if plan.is_empty() {
         start_run(plan, cx);
