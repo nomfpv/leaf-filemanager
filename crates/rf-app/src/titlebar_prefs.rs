@@ -45,6 +45,7 @@ pub fn render(p: &Palette, ops: &Entity<crate::status_center::Ops>, popups_open:
         .px_1()
         .child(appearance_button(p, popups_open))
         .child(icon_button("tb-menu", p, L::Menu, t!("Menu").into(), popups_open).on_click(|_, window, cx| main_menu(window, cx)))
+        .child(visibility_button(p, popups_open, cx))
         .into_any_element()
 }
 
@@ -118,4 +119,32 @@ fn main_menu(window: &mut Window, cx: &mut App) {
         Item::action(t!("Restart leaf"), MenuIcon::Lucide(L::RotateCw), run::<RestartApp>()),
     ];
     crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+}
+
+/// Settings > Appearance > Visibility as a pill: its icon and the level, a click switches Standard / High.
+fn visibility_button(p: &Palette, popups_open: bool, cx: &App) -> AnyElement {
+    let high = cx.global::<crate::settings::Settings>().visibility == Visibility::High;
+    let label: SharedString = if high { t!("High").into() } else { t!("Standard").into() };
+    let tip: SharedString = format!("{}: {}", t!("Visibility"), label).into();
+    div()
+        .id("tb-visibility")
+        .flex_shrink_0()
+        .h(px(28.))
+        .pl(px(6.))
+        .pr(px(8.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded(theme::RADIUS_SM)
+        .border_1()
+        .border_color(if high { p.border_strong } else { p.border })
+        .text_size(px(11.))
+        .text_color(if high { p.text } else { p.text_secondary })
+        .hover(|s| s.bg(p.hover).text_color(p.text))
+        .when(!popups_open, move |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)))
+        .child(Icon::new(L::Contrast).size(px(16.)))
+        .child(label)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| crate::settings::update(cx, move |s| s.visibility = if high { Visibility::Standard } else { Visibility::High }))
+        .into_any_element()
 }
