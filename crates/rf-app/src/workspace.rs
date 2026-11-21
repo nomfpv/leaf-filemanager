@@ -4709,7 +4709,7 @@ impl Workspace {
                 ide: ide_button.is_some(),
                 update: matches!(crate::installer::state(), crate::installer::State::Ready(_)),
             };
-            crate::transfer_view::strip(&self.ops, p, rf_core::transfer::strip_room(bar_w, held), cx)
+            crate::transfer_view::strip(&self.ops, p, rf_core::transfer::strip_room(bar_w, held), self.viewport_w > 1280., cx)
         });
         let perf = cx.global::<crate::settings::Settings>().show_perf_info;
         let demo_lane = crate::mockup_demo::on() && self.viewport_w > 1280.;

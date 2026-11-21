@@ -29,7 +29,8 @@ pub(crate) fn speed_text(bytes_per_sec: f64) -> String {
     format!("{}/{}", format::size(bytes_per_sec as u64), t!("s"))
 }
 
-/// The strip's words are cut past this width (the mockups': "Copying 214 files to nas.exampl…").
+/// The strip's words are cut past this width in a window of 1280 px or less (the mockups': "Copying 214 files to nas.exampl…";
+/// wider, they are whole).
 const STRIP_WORDS_W: f32 = 180.;
 
 /// The strip's time left: "1 min 7 s left" under ten minutes (the mockups'), else as the Status Center says it ("~25 min left").
@@ -356,7 +357,7 @@ pub(crate) fn strip_due(ops: &Entity<Ops>, cx: &App) -> bool {
 
 /// The strip for the newest running operation (or a question, or an unseen failure), `avail`
 /// pixels wide: the middle of the status bar.
-pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Option<AnyElement> {
+pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, wide: bool, cx: &App) -> Option<AnyElement> {
     let views = ops.read(cx).views();
     let briefs: Vec<xfer::Brief> = views.iter().map(|v| v.brief).collect();
     let (v, others) = match xfer::strip_pick(&briefs) {
@@ -503,7 +504,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
             .child(
                 main()
                     .child(Icon::new(mark).size(px(16.)).flex_shrink_0().text_color(p.text_tertiary))
-                    .when(fit.text, |d| d.child(div().max_w(px(STRIP_WORDS_W)).min_w_0().flex_shrink(1.).overflow_hidden().text_ellipsis().whitespace_nowrap().child(text)))
+                    .when(fit.text, |d| d.child(div().when(!wide, |d| d.max_w(px(STRIP_WORDS_W))).min_w_0().flex_shrink(1.).overflow_hidden().text_ellipsis().whitespace_nowrap().child(text)))
                     .child(bar(p, v.frac, accent, Some(120.)))
                     .child(div().flex_shrink_0().whitespace_nowrap().child(pct))
                     .children(pace.map(|s| div().flex_shrink_0().whitespace_nowrap().child(s))),
