@@ -315,6 +315,10 @@ impl Runner<'_, '_> {
             let rel = src.name().to_string();
             self.tick(&rel);
         }
+        // a source that shrank while it was read, or a server read that ended early: the part is short, it never takes the name
+        if done != info.size {
+            return Err("the original changed while it was copied; preview again".into());
+        }
         out.finish().map_err(|e| err_text("the copy could not be written", &e))
     }
 

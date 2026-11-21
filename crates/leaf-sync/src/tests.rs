@@ -206,3 +206,57 @@ fn the_plan_equals_what_the_run_does() {
     let again = plan(&job, &fs, &fs, &state, &no).unwrap();
     assert_eq!(again.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), vec!["skip-me.txt"]);
 }
+
+/// A place whose reads end early (a server read that stops with Ok(0), or a file that shrank while it was read).
+struct ShortReads<'a>(&'a MemFs);
+
+impl Fs for ShortReads<'_> {
+    fn caps(&self) -> leaf_vfs::Caps {
+        self.0.caps()
+    }
+    fn list(&self, dir: &VPath, batch: usize, cancelled: &dyn Fn() -> bool, on_batch: &mut dyn FnMut(Vec<leaf_vfs::Entry>)) -> Result<usize, leaf_vfs::FsError> {
+        self.0.list(dir, batch, cancelled, on_batch)
+    }
+    fn stat(&self, p: &VPath) -> Result<leaf_vfs::Meta, leaf_vfs::FsError> {
+        self.0.stat(p)
+    }
+    fn open_read(&self, p: &VPath, offset: u64) -> Result<Box<dyn Read + Send>, leaf_vfs::FsError> {
+        Ok(Box::new(self.0.open_read(p, offset)?.take(3)))
+    }
+    fn open_write(&self, p: &VPath, o: leaf_vfs::WriteOpts) -> Result<Box<dyn leaf_vfs::WriteSink>, leaf_vfs::FsError> {
+        self.0.open_write(p, o)
+    }
+    fn mkdir(&self, p: &VPath) -> Result<(), leaf_vfs::FsError> {
+        self.0.mkdir(p)
+    }
+    fn rename(&self, from: &VPath, to: &VPath, replace: bool) -> Result<(), leaf_vfs::FsError> {
+        self.0.rename(from, to, replace)
+    }
+    fn remove(&self, p: &VPath, recursive: bool) -> Result<(), leaf_vfs::FsError> {
+        self.0.remove(p, recursive)
+    }
+    fn set_meta(&self, p: &VPath, m: &leaf_vfs::MetaChange) -> Result<(), leaf_vfs::FsError> {
+        self.0.set_meta(p, m)
+    }
+}
+
+#[test]
+fn a_read_that_stops_early_never_replaces_the_target() {
+    let state = temp("short");
+    let no = || false;
+    let fs = MemFs::new();
+    fs.put_file(&v("mem://t/l/doc.txt"), b"the whole new text".to_vec(), T0 + 10_000);
+    fs.put_file(&v("mem://t/r/doc.txt"), b"old".to_vec(), T0);
+    let job = Job::new("s", "mem://t/l", "mem://t/r");
+    let p = plan(&job, &fs, &fs, &state, &no).unwrap();
+    assert_eq!(p.rows.len(), 1);
+    let rep = go(&p, &ShortReads(&fs), &fs, &state, &no_trash);
+    assert_eq!(rep.copied, 0, "{rep:?}");
+    assert_eq!(rep.failed.len(), 1, "{rep:?}");
+    assert!(rep.failed[0].1.contains("changed while it was copied"), "{rep:?}");
+    assert_eq!(read(&fs, "mem://t/r/doc.txt").as_deref(), Some(&b"old"[..]));
+    // the old file was not moved away and no part file is left
+    let mut names = Vec::new();
+    fs.list(&v("mem://t/r"), 100, &no, &mut |b| names.extend(b.into_iter().map(|e| e.name.to_string()))).unwrap();
+    assert_eq!(names, vec!["doc.txt".to_string()]);
+}
