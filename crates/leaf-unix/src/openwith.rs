@@ -13,7 +13,7 @@ pub struct DesktopApp {
     pub exec: String,
 }
 
-fn data_dirs() -> Vec<PathBuf> {
+pub(crate) fn data_dirs() -> Vec<PathBuf> {
     let mut v = Vec::new();
     match std::env::var_os("XDG_DATA_HOME").filter(|s| !s.is_empty()) {
         Some(h) => v.push(PathBuf::from(h)),
@@ -109,7 +109,7 @@ fn read_entry(id: &str) -> Option<DesktopApp> {
     parse_entry(id, &text)
 }
 
-fn parse_entry(id: &str, text: &str) -> Option<DesktopApp> {
+pub(crate) fn parse_entry(id: &str, text: &str) -> Option<DesktopApp> {
     let (mut name, mut exec, mut hidden, mut kind_ok) = (None, None, false, true);
     let mut in_main = false;
     for line in text.lines() {
@@ -173,7 +173,7 @@ pub fn apps_for(mime: &str) -> Vec<DesktopApp> {
 
 /// The words of an `Exec` line (double quotes group; a backslash escapes inside them), with the field codes filled in: `%f %F %u %U` the
 /// file, `%%` a percent sign, the other codes dropped. Without a file code the file is appended.
-fn exec_words(exec: &str, file: &Path) -> Vec<std::ffi::OsString> {
+pub(crate) fn exec_words(exec: &str, file: &Path) -> Vec<std::ffi::OsString> {
     let mut words: Vec<String> = Vec::new();
     let (mut cur, mut have, mut quoted) = (String::new(), false, false);
     let mut chars = exec.chars().peekable();
