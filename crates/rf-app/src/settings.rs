@@ -682,7 +682,8 @@ impl Default for Settings {
             home_hidden: Vec::new(),
             recent_cleared_ms: 0,
             search_history: Vec::new(),
-            toolbar_hidden: Vec::new(),
+            // (the mockups' bar: Share, Properties and the filter are in the menus and the search field; Settings brings them back)
+            toolbar_hidden: vec!["share".into(), "props".into(), "filter".into()],
             toolbar_extra: Vec::new(),
             toolbar_commands: Vec::new(),
             preview_width: 300.,

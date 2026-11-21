@@ -146,6 +146,11 @@ impl TagStore {
         self.items.range(prefix.clone()..).take_while(move |(k, _)| k.starts_with(&prefix)).filter(move |(k, _)| !k[n..].contains('\\')).map(|(_, v)| v)
     }
 
+    /// How many items wear the tag (the sidebar's number).
+    pub fn count_with(&self, id: u32) -> usize {
+        self.items.values().filter(|v| v.tags.contains(&id)).count()
+    }
+
     pub fn paths_with(&self, id: u32) -> Vec<PathBuf> {
         self.items.values().filter(|v| v.tags.contains(&id)).map(|v| v.path.clone()).collect()
     }

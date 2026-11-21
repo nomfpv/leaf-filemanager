@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{Icon, Sizable as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rf_core::{Location, format};
@@ -2276,7 +2276,8 @@ impl Workspace {
                                 .justify_center()
                                 .rounded(theme::RADIUS_SM)
                                 .text_color(if active { p.text_secondary } else { p.text_tertiary })
-                                .when(!active, |d| d.invisible())
+                                // (shown on hover only: the mockups' tab is its name and its close button)
+                                .invisible()
                                 .when(!roomy, |d| d.hidden())
                                 .group_hover("tab", |s| s.visible())
                                 .hover(|s| s.bg(p.pressed).text_color(p.text))
@@ -2430,7 +2431,7 @@ impl Workspace {
                                 .text_color(p.text_secondary)
                                 .hover(|s| s.bg(p.hover))
                                 .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Tab actions")).build(w, cx)))
-                                .child(Icon::new(if self.compact.is_some() { L::PictureInPicture2 } else { L::PanelLeft }).size(px(16.)))
+                                .child(Icon::new(if self.compact.is_some() { L::PictureInPicture2 } else { L::AppWindow }).size(px(16.)))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(|this, _, window, cx| this.tab_actions_menu(window, cx))),
                         ),
@@ -2842,7 +2843,12 @@ impl Workspace {
             _ => (!live_query.is_empty()).then_some(live_query),
         };
 
-        let suggestions = if self.search_mode { self.render_search_history(p, cx) } else { self.render_suggestions(p, cx) };
+        // (the search field is the tool bar's where it is shown; elsewhere the box takes the search, as before)
+        let bar_search = cx.global::<crate::settings::Settings>().show_toolbar
+            && matches!(loc, Location::Path(_) | Location::Search { .. } | Location::Library { .. } | Location::Tag(_) | Location::Shell { .. });
+        let searching = searching && !bar_search;
+        let active_query = active_query.filter(|_| !bar_search);
+        let suggestions = if searching { self.render_search_history(p, cx) } else if self.search_mode { None } else { self.render_suggestions(p, cx) };
         let full_text = if cx.global::<crate::settings::Settings>().address_full_path { crate::full_path::path_text(&loc) } else { None };
         let field: AnyElement = if searching {
             Input::new(&self.search).appearance(false).cleanable(true).into_any_element()
@@ -2908,7 +2914,7 @@ impl Workspace {
             .id("omnibar")
             .flex_1()
             .min_w(px(160.))
-            .h(px(36.))
+            .h(px(32.))
             .mx_1()
             .pl_2()
             .pr_1()
@@ -2947,27 +2953,30 @@ impl Workspace {
             .child(div().flex_1().min_w_0().overflow_hidden().child(field))
             .children(suggestions)
             .children(chip)
-            .child(div().w(px(1.)).h(px(18.)).mx_1().bg(p.divider))
-            .children(crate::terminal::offered(&loc).then(|| {
-                mode_btn("omni-term", L::SquareTerminal, false, "Open in terminal  (Ctrl+Shift+`)", cx, |_, window, cx| {
-                    window.dispatch_action(Box::new(OpenTerminal), cx)
-                })
+            // (the search field is the tool bar's; the box keeps the path and a pencil that edits it, as the mockups)
+            .child(mode_btn("omni-edit", L::Pencil, self.editing_address, "Edit path  (Ctrl+L)", cx, |this, window, cx| {
+                if !this.editing_address {
+                    this.begin_address_edit(window, cx)
+                }
             }))
-            .child(mode_btn("omni-cmd", L::SquareChevronRight, self.palette.is_some(), "Command palette  (Ctrl+Shift+P)", cx, |this, window, cx| {
-                this.toggle_command_palette(window, cx)
-            }))
-            .child(mode_btn("omni-search", L::Search, searching, "Search  (Ctrl+F)", cx, |this, window, cx| this.enter_search(window, cx)))
             .on_click(cx.listener(|this, _, window, cx| {
                 if !this.editing_address && !this.search_mode {
                     this.begin_address_edit(window, cx);
                 }
             }));
+        let in_folder = loc.path().is_some();
+        // (the terminal button where a terminal can open there: main's `terminal::offered`)
+        let term_offered = crate::terminal::offered(&loc);
+        // (with the type bar under it the row sits a little higher, as one sheet with it)
+        let typebar = in_folder && p.typebar_h > 0.;
 
         h_flex()
-            .h(px(48.))
-            .px_2()
+            .h(px(if typebar { 42. } else { 48. }))
+            .when(typebar, |d| d.pt(px(8.)).pb(px(2.)))
+            .px(px(12.))
             .gap_1()
             .items_center()
+            .child(self.nav_button("sidebar", L::PanelLeft, true, p, cx, |_, window, cx| window.dispatch_action(Box::new(ToggleSidebar), cx)))
             .child(
                 div()
                     .flex_shrink_0()
@@ -2981,9 +2990,90 @@ impl Workspace {
                     .child(self.nav_button("fwd", L::ArrowRight, can_fwd, p, cx, |this, _, cx| this.with_tab(cx, |v, cx| v.forward(cx)))),
             )
             .child(self.nav_button("up", L::ArrowUp, can_up, p, cx, |this, _, cx| this.with_tab(cx, |v, cx| v.up(cx))))
-            .child(self.nav_button("refresh", L::RotateCw, true, p, cx, |this, _, cx| this.with_tab(cx, |v, cx| v.refresh(cx))))
             .child(omnibar)
+            .child(self.nav_button("terminal", L::SquareTerminal, term_offered, p, cx, |_, window, cx| window.dispatch_action(Box::new(OpenTerminal), cx)))
+            .child(self.nav_button("refresh", L::RotateCw, true, p, cx, |this, _, cx| this.with_tab(cx, |v, cx| v.refresh(cx))))
             .child(crate::status_center::render_button(&self.ops, p, cx))
+    }
+
+    /// The type bar under the address row (the mockups'): a thin bar of the folder's types by count, a chip per type with its count
+    /// (a click lists only that type, again lists all), and the item count and total size at the right. None where the theme has no
+    /// type bar or the page is no folder.
+    fn render_typebar(&mut self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if p.typebar_h <= 0. {
+            return None;
+        }
+        let view = self.active_tab().clone();
+        let v = view.read(cx);
+        v.location().path()?;
+        let sums = v.type_summary();
+        let on = v.type_filter();
+        let total: u32 = sums.iter().map(|s| s.0).sum();
+        let bytes: u64 = sums.iter().map(|s| s.1).sum();
+        const LABELS: [&str; FolderView::TYPE_BUCKETS] = ["Folders", "Images", "Video", "Audio", "Documents", "Code", "Text", "Archives", "Apps"];
+        use crate::icons::Category as C;
+        const CATS: [C; FolderView::TYPE_BUCKETS] = [C::Folder, C::Image, C::Video, C::Audio, C::Document, C::Code, C::Text, C::Archive, C::Executable];
+        let dot = if p.tag_dot >= 8. { 8. } else { 6. };
+        let mut bar = h_flex().w(px(144.)).h(px(4.)).flex_shrink_0().gap(px(1.)).rounded(px(3.)).overflow_hidden();
+        let mut chips = h_flex().gap(px(2.)).min_w_0().overflow_hidden().flex_shrink(1.);
+        for (b, &(n, _)) in sums.iter().enumerate().filter(|(_, s)| s.0 > 0) {
+            let c = theme::kind_color(CATS[b], p.dark);
+            bar = bar.child(div().h_full().flex_grow(n as f32).flex_basis(px(0.)).bg(c));
+            let chosen = on == Some(b);
+            let view = view.clone();
+            chips = chips.child(
+                h_flex()
+                    .id(("type-chip", b))
+                    .h(px(20.))
+                    .px(px(8.))
+                    .gap(px(6.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .rounded(px(10.))
+                    .whitespace_nowrap()
+                    .text_color(if chosen { p.text } else { p.text_secondary })
+                    .when(chosen, |d| d.bg(p.selection).border_1().border_color(p.accent.opacity(0.45)))
+                    .when(!chosen, |d| d.hover(|s| s.bg(p.hover).text_color(p.text)))
+                    .child(div().size(px(dot)).rounded_full().flex_shrink_0().bg(c))
+                    .child(crate::i18n::t(LABELS[b]))
+                    .child(div().text_color(if chosen { p.text_secondary } else { p.text_tertiary }).child(n.to_string()))
+                    .on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_type_filter(Some(b), cx))),
+            );
+        }
+        let clear = on.map(|_| {
+            let view = view.clone();
+            div()
+                .id("type-clear")
+                .h(px(20.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .rounded(px(6.))
+                .text_color(p.accent)
+                .hover(|s| s.bg(p.hover))
+                .child(t!("Clear filter"))
+                .on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_type_filter(None, cx)))
+        });
+        Some(
+            h_flex()
+                .h(px(p.typebar_h))
+                .flex_shrink_0()
+                // (the chips start under the address box, past the navigation buttons)
+                .pl(px(168.))
+                .pr(px(16.))
+                .gap(px(12.))
+                .items_center()
+                .text_size(px(p.fs_xs))
+                .text_color(p.text_secondary)
+                .when(total > 0, |d| d.child(bar).child(chips).children(clear))
+                .when(total == 0, |d| d.child(div().text_color(p.text_tertiary).child(t!("No files to summarise"))))
+                .child(div().flex_1())
+                .when(total > 0, |d| {
+                    d.child(div().flex_shrink_0().whitespace_nowrap().text_color(p.text_tertiary).child(format!("{} · {}", crate::i18n::items(total as usize), format::size(bytes))))
+                })
+                .into_any_element(),
+        )
     }
 
     fn enter_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3021,50 +3111,63 @@ impl Workspace {
         let has_sel = sel > 0;
         // a phone's folder is read-only here: changing commands are greyed out, not refused later
         let writable_sel = has_sel && !matches!(tab.location(), Location::Shell { .. });
+        let mode = tab.view_mode;
+        let sort_asc = tab.sort.dir == rf_core::SortDir::Asc;
+        let sort_label: &'static str = match tab.sort.key {
+            rf_core::SortKey::Name => t!("Name"),
+            rf_core::SortKey::Size => t!("Size"),
+            rf_core::SortKey::Modified => t!("Modified"),
+            rf_core::SortKey::Created => t!("Created"),
+            rf_core::SortKey::Type => t!("Type"),
+            _ => t!("Sort"),
+        };
+        let folder_name = tab.title(cx);
         let preview_open = self.preview_open;
         let filter_on = self.filter_bar;
         let paste_ok = in_folder && leaf_sys::clipboard::can_paste();
 
-        let cmd = |id: &'static str, icon: L, tip: &'static str, enabled: bool, cx: &mut Context<Self>, run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
-            div()
+        // a command: its icon and, as in the mockups, its name (Share, Properties and the like stay icons)
+        let cmd = |id: &'static str, icon: L, label: Option<&'static str>, tip: &'static str, enabled: bool, cx: &mut Context<Self>, run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
+            h_flex()
                 .id(id)
-                .h(px(32.))
-                .w(px(36.))
+                .h(px(28.))
+                .px(px(if label.is_some() { 8. } else { 6. }))
+                .gap(px(6.))
                 .flex_shrink_0()
-                .flex()
                 .items_center()
-                .justify_center()
-                .rounded(theme::RADIUS_SM)
-                .text_color(if enabled { p.text } else { p.text_tertiary })
+                .rounded(px(p.control_radius))
+                .whitespace_nowrap()
+                .text_color(if enabled { p.text_secondary } else { p.text_disabled })
                 .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::t(tip)).build(w, cx))
                 .when(enabled, |d| {
-                    d.hover(|s| s.bg(p.hover))
+                    d.hover(|s| s.bg(p.hover).text_color(p.text))
                         .active(|s| s.bg(p.pressed))
                         .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
                 })
-                .child(Icon::new(icon).size(px(16.)))
+                .child(Icon::new(icon).size(px(16.)).when(!enabled, |d| d.opacity(0.55)))
+                .children(label.map(|l| div().child(crate::i18n::t(l))))
         };
         let popups_open = self.popups_open(cx);
         let drop = |id: &'static str, icon: L, label: Option<&'static str>, tip: &'static str, enabled: bool, cx: &mut Context<Self>, which: fn(&Self, &App) -> crate::ctx_menu::BarMenu| {
             h_flex()
                 .id(id)
-                .h(px(32.))
-                .px_2()
-                .gap_1()
+                .h(px(28.))
+                .px(px(6.))
+                .gap(px(4.))
                 .flex_shrink_0()
                 .items_center()
-                .rounded(theme::RADIUS_SM)
-                .text_sm()
-                .text_color(if enabled { p.text } else { p.text_tertiary })
+                .rounded(px(p.control_radius))
+                .whitespace_nowrap()
+                .text_color(if enabled { p.text_secondary } else { p.text_disabled })
                 .when(!popups_open, |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::t(tip)).build(w, cx)))
                 .child(Icon::new(icon).size(px(16.)))
                 .children(label.map(|l| div().child(crate::i18n::t(l))))
-                .child(Icon::new(L::ChevronDown).size(px(12.)).text_color(p.text_secondary))
+                .child(Icon::new(L::ChevronDown).size(px(12.)).text_color(p.text_tertiary))
                 .when(enabled, |d| {
-                    d.hover(|s| s.bg(p.hover)).active(|s| s.bg(p.pressed)).on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
+                    d.hover(|s| s.bg(p.hover).text_color(p.text)).active(|s| s.bg(p.pressed)).on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
                         let menu = which(this, cx);
-                        // drop down from under the button (the bar's bottom edge)
-                        let pos = point(ev.position().x - px(14.), theme::TITLEBAR_H + px(48. + 46.));
+                        // drop down from under the button (the pointer is on it; the button is 28 px high)
+                        let pos = point(ev.position().x - px(14.), ev.position().y + px(18.));
                         this.active_tab().clone().update(cx, |v, cx| v.show_bar_menu(menu, pos, window, cx));
                     }))
                 })
@@ -3098,42 +3201,128 @@ impl Workspace {
         }
         let menu_name = crate::i18n::tx("Custom commands");
 
+        // The search field at the bar's right end (the mockups'): typing in it filters this folder, Enter searches the folders inside;
+        // a search that is on shows its words here with an x, and the history drops down under it.
+        let searching = self.search_mode;
+        let live_query = self.search.read(cx).value().to_string();
+        let active_query: Option<String> = match self.active_tab().read(cx).location() {
+            Location::Search { query, .. } => Some(query.clone()),
+            _ => (!live_query.is_empty()).then_some(live_query),
+        };
+        let history = if searching { self.render_search_history(p, cx) } else { None };
+        let search_field = h_flex()
+            .id("cb-search")
+            .flex_shrink(1.)
+            .min_w(px(140.))
+            .w(px(240.))
+            .h(px(28.))
+            .px(px(8.))
+            .gap(px(8.))
+            .items_center()
+            .relative()
+            .rounded(px(p.control_radius + 2.))
+            .bg(p.field_bg)
+            .border_1()
+            .border_color(if searching { p.accent } else { p.field_border })
+            .text_color(p.text_tertiary)
+            .child(Icon::new(L::Search).size(px(16.)).flex_shrink_0())
+            .map(|d| {
+                if searching {
+                    d.child(div().flex_1().min_w_0().text_color(p.text).child(Input::new(&self.search).appearance(false).small().px_0()))
+                } else if let Some(q) = active_query.clone() {
+                    d.child(div().flex_1().min_w_0().truncate().text_color(p.text).child(q)).child(
+                        div()
+                            .id("cb-search-x")
+                            .size(px(20.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .hover(|s| s.bg(p.hover).text_color(p.text))
+                            .child(Icon::new(L::X).size(px(12.)))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(|this, _, window, cx| this.exit_search(window, cx))),
+                    )
+                } else {
+                    d.child(div().flex_1().min_w_0().truncate().child(format!("{} {}", t!("Search in"), folder_name)))
+                        .child(div().flex_shrink_0().text_size(px(p.fs_xs)).when(!p.font_mono.is_empty(), |d| d.font_family(p.font_mono)).child("Ctrl F"))
+                }
+            })
+            .children(history)
+            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if this.search_mode && ev.keystroke.key == "escape" {
+                    this.exit_search(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.search_mode {
+                    crate::rtl::handle_key_down(&this.search, ev, cx);
+                }
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                if !this.search_mode {
+                    this.enter_search(window, cx)
+                }
+            }));
+
         h_flex()
             .h(px(p.toolbar_h))
             .px(px(10.))
-            .gap_0p5()
+            .gap(px(2.))
             .items_center()
-            .children(on("new").then(|| drop("cb-new", L::CirclePlus, Some("New"), "New item", in_folder, cx, |_, _| crate::ctx_menu::BarMenu::New)))
-            .children(extra("newfolder").then(|| {
-                cmd("cb-newfolder", L::FolderPlus, "New folder  (Ctrl+Shift+N)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(NewFolder), cx))
+            .text_size(px(p.fs))
+            // New folder, with the other new items (file types, shortcut, ...) under the arrow beside it
+            .children(on("new").then(|| {
+                cmd("cb-newfolder", L::FolderPlus, Some("New folder"), "New folder  (Ctrl+Shift+N)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(NewFolder), cx))
             }))
-            .children(on("new").then(sep))
-            .children(on("cut").then(|| {
-                cmd("cb-cut", L::Scissors, "Cut  (Ctrl+X)", writable_sel, cx, |this, w, cx| {
-                    this.with_tab(cx, |v, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))
-                })
+            .children(on("new").then(|| {
+                div()
+                    .id("cb-new")
+                    .h(px(28.))
+                    .w(px(18.))
+                    .ml(px(-2.))
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(p.control_radius))
+                    .text_color(if in_folder { p.text_tertiary } else { p.text_disabled })
+                    .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("New item")).build(w, cx)))
+                    .child(Icon::new(L::ChevronDown).size(px(12.)))
+                    .when(in_folder, |d| {
+                        d.hover(|s| s.bg(p.hover).text_color(p.text)).on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
+                            let pos = point(ev.position().x - px(14.), ev.position().y + px(18.));
+                            this.active_tab().clone().update(cx, |v, cx| v.show_bar_menu(crate::ctx_menu::BarMenu::New, pos, window, cx));
+                        }))
+                    })
             }))
             .children(on("copy").then(|| {
-                cmd("cb-copy", L::Copy, "Copy  (Ctrl+C)", has_sel, cx, |this, w, cx| {
+                cmd("cb-copy", L::Copy, Some("Copy"), "Copy  (Ctrl+C)", has_sel, cx, |this, w, cx| {
                     this.with_tab(cx, |v, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Copy, w, cx))
                 })
             }))
-            .children(on("paste").then(|| cmd("cb-paste", L::ClipboardPaste, "Paste  (Ctrl+V)", paste_ok, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.paste(w, cx)))))
+            .children(on("cut").then(|| {
+                cmd("cb-cut", L::Scissors, Some("Cut"), "Cut  (Ctrl+X)", writable_sel, cx, |this, w, cx| {
+                    this.with_tab(cx, |v, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))
+                })
+            }))
+            .children(on("paste").then(|| cmd("cb-paste", L::ClipboardPaste, Some("Paste"), "Paste  (Ctrl+V)", paste_ok, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.paste(w, cx)))))
             .children(on("rename").then(|| {
-                cmd("cb-rename", L::TextCursorInput, "Rename  (F2)", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.rename_selection(w, cx)))
+                cmd("cb-rename", L::TextCursorInput, Some("Rename"), "Rename  (F2)", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.rename_selection(w, cx)))
             }))
-            .children(on("share").then(|| cmd("cb-share", L::Share2, "Share", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.share(w, cx)))))
             .children(on("delete").then(|| {
-                cmd("cb-delete", L::Trash, "Delete  (Del)", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.delete_selected(false, w, cx)))
+                cmd("cb-delete", L::Trash, Some("Delete"), "Delete  (Del)", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.delete_selected(false, w, cx)))
             }))
+            .children(on("share").then(|| cmd("cb-share", L::Share2, None, "Share", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.share(w, cx)))))
             .children(on("props").then(|| {
-                cmd("cb-props", L::Wrench, "Properties  (Alt+Enter)", in_folder, cx, |this, _, cx| {
+                cmd("cb-props", L::Wrench, None, "Properties  (Alt+Enter)", in_folder, cx, |this, _, cx| {
                     this.with_tab(cx, |v, cx| if v.selection_paths().is_empty() { v.folder_properties(cx) } else { v.properties(cx) })
                 })
             }))
-            .children(extra("terminal").then(|| cmd("cb-terminal", L::SquareTerminal, "Open in Terminal  (Ctrl+Shift+`)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(OpenTerminal), cx))))
-            .children(extra("hidden").then(|| cmd("cb-hidden", L::Eye, "Show/hide hidden items  (Ctrl+H)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(ToggleHidden), cx))))
-            .children(extra("refresh").then(|| cmd("cb-refresh", L::RotateCw, "Refresh  (F5)", true, cx, |_, w, cx| w.dispatch_action(Box::new(Refresh), cx))))
+            .children(extra("terminal").then(|| cmd("cb-terminal", L::SquareTerminal, None, "Open in Terminal  (Ctrl+Shift+`)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(OpenTerminal), cx))))
+            .children(extra("hidden").then(|| cmd("cb-hidden", L::Eye, None, "Show/hide hidden items  (Ctrl+H)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(ToggleHidden), cx))))
+            .children(extra("refresh").then(|| cmd("cb-refresh", L::RotateCw, None, "Refresh  (F5)", true, cx, |_, w, cx| w.dispatch_action(Box::new(Refresh), cx))))
             // undo, the selection commands, properties, Settings (issue 55, Explorer's "See more")
             .children(on("more").then(|| drop("cb-more", L::Ellipsis, None, "More", in_folder, cx, |_, _| crate::ctx_menu::BarMenu::More)))
             .children((!inline_commands.is_empty() || !menu_commands.is_empty()).then(sep))
@@ -3188,50 +3377,107 @@ impl Workspace {
                         .child(Icon::new(L::Layers).size(px(16.)))
                         .child(Icon::new(L::ChevronDown).size(px(12.)).text_color(p.text_secondary))
                         .on_click(move |ev, window, cx| {
-                            let pos = point(ev.position().x - px(14.), theme::TITLEBAR_H + px(48. + 46.));
+                            let pos = point(ev.position().x - px(14.), ev.position().y + px(18.));
                             crate::fluent_menu::show(Menu { quick: Vec::new(), items: menu_commands.clone() }, pos, window, cx);
                         }),
                 )
             })
-            .child(div().flex_1())
-            .children(on("filter").then(|| {
-                div()
-                    .id("cb-filter")
-                    .h(px(32.))
-                    .w(px(36.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(theme::RADIUS_SM)
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Filter")).build(w, cx))
-                    .when(filter_on, |d| d.bg(p.selection).text_color(p.accent))
-                    .when(!filter_on, |d| d.hover(|s| s.bg(p.hover)))
-                    .when(in_folder, |d| d.on_click(cx.listener(|this, _, window, cx| this.toggle_filter_bar(window, cx))))
-                    .when(!in_folder, |d| d.text_color(p.text_tertiary))
-                    .child(Icon::new(L::ListFilter).size(px(16.)))
-            }))
-            .children(on("sort").then(|| drop("cb-sort", L::ArrowUpDown, None, "Sort and group", in_folder, cx, |_, _| crate::ctx_menu::BarMenu::Sort)))
+            .children(on("view").then(sep))
+            // details or grid, as a two-button switch (the other layouts are in the Appearance menu)
             .children(on("view").then(|| {
-                drop("cb-view", L::LayoutGrid, None, "Appearance", true, cx, move |this, _| crate::ctx_menu::BarMenu::View { dual: this.tabs[this.active].right.is_some(), shelf: this.shelf_open })
+                let seg = |id: &'static str, icon: L, chosen: bool, run: fn(&mut Window, &mut App)| {
+                    div()
+                        .id(id)
+                        .w(px(28.))
+                        .h(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px((p.control_radius).max(2.)))
+                        .text_color(if chosen { p.text } else { p.text_tertiary })
+                        .when(chosen, |d| d.bg(p.seg_on))
+                        .when(!chosen, |d| d.hover(|s| s.text_color(p.text)))
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip_text(id)).build(w, cx))
+                        .child(Icon::new(icon).size(px(16.)))
+                        .on_click(move |_, w, cx| run(w, cx))
+                };
+                h_flex()
+                    .flex_shrink_0()
+                    .p(px(2.))
+                    .gap(px(2.))
+                    .rounded(px(p.control_radius + 2.))
+                    .bg(p.field_bg)
+                    .border_1()
+                    .border_color(p.field_border)
+                    .child(seg("v-details", L::List, mode == ViewMode::Details, |w, cx| w.dispatch_action(Box::new(ViewDetails), cx)))
+                    .child(seg("v-grid", L::LayoutGrid, mode == ViewMode::Grid, |w, cx| w.dispatch_action(Box::new(ViewGrid), cx)))
             }))
-            .children(on("preview").then(sep))
-            .children(on("preview").then(|| {
-                div()
-                    .id("cb-preview")
-                    .h(px(32.))
-                    .w(px(36.))
-                    .flex()
+            // the sort key by name, with its direction
+            .children(on("sort").then(|| {
+                h_flex()
+                    .id("cb-sort")
+                    .h(px(28.))
+                    .px(px(8.))
+                    .gap(px(6.))
+                    .flex_shrink_0()
                     .items_center()
-                    .justify_center()
-                    .rounded(theme::RADIUS_SM)
+                    .rounded(px(p.control_radius))
+                    .whitespace_nowrap()
+                    .text_color(if in_folder { p.text_secondary } else { p.text_disabled })
+                    .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Sort and group")).build(w, cx)))
+                    .child(Icon::new(L::ArrowDownUp).size(px(16.)))
+                    .child(sort_label)
+                    .child(Icon::new(if sort_asc { L::ChevronUp } else { L::ChevronDown }).size(px(12.)))
+                    .when(in_folder, |d| {
+                        d.hover(|s| s.bg(p.hover).text_color(p.text)).on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
+                            let pos = point(ev.position().x - px(14.), ev.position().y + px(18.));
+                            this.active_tab().clone().update(cx, |v, cx| v.show_bar_menu(crate::ctx_menu::BarMenu::Sort, pos, window, cx));
+                        }))
+                    })
+            }))
+            .children(on("preview").then(|| {
+                h_flex()
+                    .id("cb-preview")
+                    .h(px(28.))
+                    .px(px(8.))
+                    .gap(px(6.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .rounded(px(p.control_radius))
+                    .whitespace_nowrap()
                     .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Preview pane  (Alt+P)")).build(w, cx))
-                    .when(preview_open, |d| d.bg(p.selection).text_color(p.accent))
-                    .when(!preview_open, |d| d.hover(|s| s.bg(p.hover)))
-                    .child(Icon::new(L::PanelRight).size(px(16.)))
+                    .text_color(if preview_open { p.text } else { p.text_secondary })
+                    .when(preview_open, |d| d.bg(p.selection))
+                    .when(!preview_open, |d| d.hover(|s| s.bg(p.hover).text_color(p.text)))
+                    .child(Icon::new(L::Eye).size(px(16.)))
+                    .child(t!("Preview"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.toggle_preview(cx);
                     }))
             }))
+            .children(on("view").then(|| {
+                drop("cb-view", L::LayoutPanelLeft, None, "Appearance", true, cx, move |this, _| crate::ctx_menu::BarMenu::View { dual: this.tabs[this.active].right.is_some(), shelf: this.shelf_open })
+            }))
+            .child(div().flex_1().min_w(px(8.)))
+            .children(on("filter").then(|| {
+                div()
+                    .id("cb-filter")
+                    .h(px(28.))
+                    .w(px(30.))
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(p.control_radius))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Filter")).build(w, cx))
+                    .text_color(p.text_secondary)
+                    .when(filter_on, |d| d.bg(p.selection).text_color(p.accent))
+                    .when(!filter_on, |d| d.hover(|s| s.bg(p.hover)))
+                    .when(in_folder, |d| d.on_click(cx.listener(|this, _, window, cx| this.toggle_filter_bar(window, cx))))
+                    .when(!in_folder, |d| d.text_color(p.text_disabled))
+                    .child(Icon::new(L::ListFilter).size(px(16.)))
+            }))
+            .child(search_field)
     }
 
     fn render_breadcrumb(&mut self, loc: &Location, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -3362,7 +3608,10 @@ impl Workspace {
         extra: Option<AnyElement>,
         p: &Palette,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    ) -> Stateful<Div> {
+        // (the mockups: quiet icons, the current place's in the accent; a tag keeps its colour, as a dot)
+        let tag = matches!(icon, L::Tag);
+        let icon_color = if active && !tag { p.accent } else if icon_color == p.accent || icon_color == p.text_secondary { p.text_tertiary } else { icon_color };
         let target2 = target.clone();
         let target3 = target.clone();
         let drop_dir = target.path().map(Path::to_path_buf);
@@ -3384,29 +3633,35 @@ impl Workspace {
         let tag_dot = target3.path().filter(|p| p.parent().is_some()).and_then(|p| crate::tags::first_color(p, cx));
         h_flex()
             .id(id)
-            .min_h(px(if rail { 36. } else { 32. }))
+            .min_h(px(if rail { 36. } else { p.sidebar_row }))
             .px_2()
-            .py_1()
-            .gap_2()
+            .py(px(2.))
+            .gap(px(10.))
             .items_center()
             .when(rail, |d| d.justify_center())
             .rounded(px(p.control_radius))
-            .text_sm()
+            .text_size(px(p.fs))
+            .when(p.name_weight != 400., |d| d.font_weight(FontWeight(p.name_weight)))
+            .text_color(if active { p.place_text } else { p.text_secondary })
             .relative()
-            .when(fluent, |d| d.bg(p.selection).child(theme::selection_pill(p)))
-            // Canopy: a soft accent outline round the current place
-            .when(fluent && p.selection_border.a > 0., |d| d.border_1().border_color(Hsla { a: p.selection_border.a * 0.8, ..p.selection_border }))
+            // the current place: the theme's fill and outline (the selection pill where the theme has a marker)
+            .when(fluent, |d| d.bg(p.place).child(theme::selection_pill(p)))
+            .when(fluent && p.place_border.a > 0., |d| d.border_1().border_color(p.place_border))
             // while the row moves (the sidebar scrolls) the scene paints the pill itself: the engine's lens would trail the row
             .when(lens_key.is_some() && crate::glass::lens_phase(self.glass_hwnd, crate::glass::SLOT_SIDEBAR) != crate::glass::LensPhase::Rest, |d| {
                 d.child(crate::glass::lens_stand_in(p.dark, 32.))
             })
             .when_some(lens_key, |d, key| d.child(crate::glass::lens_probe(crate::glass::SLOT_SIDEBAR, key)))
-            .when(!active, |d| d.hover(|s| s.bg(p.hover)))
+            .when(!active, |d| d.hover(|s| s.bg(p.hover).text_color(p.text)))
             .child(
                 div()
                     .relative()
                     .flex_shrink_0()
-                    .child(Icon::new(icon).size(px(if rail { 18. } else { 16. })).text_color(icon_color))
+                    .when(tag, |d| {
+                        // a tag: a dot in its colour with a soft ring (16 px wide like the icons)
+                        d.size(px(16.)).flex().items_center().justify_center().rounded_full().bg(icon_color.opacity(0.22)).child(div().size(px(10.)).rounded_full().bg(icon_color))
+                    })
+                    .when(!tag, |d| d.child(Icon::new(icon).size(px(if rail { 18. } else { 16. })).text_color(icon_color)))
                     .when_some(tag_dot, |d, c| d.child(crate::tags::corner_dot(c, p.card_bg)))
                     .when_some(letter, |d, l| {
                         d.child(
@@ -3480,10 +3735,12 @@ impl Workspace {
                 return div().mx_2().my_2().h(px(1.)).bg(p.divider);
             }
             div()
+                .h(px(28.))
+                .mt(px(10.))
                 .px_2()
-                .pt_3()
-                .pb_1()
-                .text_xs()
+                .flex()
+                .items_center()
+                .text_size(px(p.fs_xs))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(p.text_tertiary)
                 .child(t)
@@ -3499,9 +3756,7 @@ impl Workspace {
             .w_full()
             .flex_1()
             .min_h_0()
-            .px_2()
-            .py_1()
-            .gap_0p5()
+            .p(px(8.))
             .overflow_y_scroll()
             .on_drag_move::<ExternalPaths>(cx.listener(|this, _: &DragMoveEvent<ExternalPaths>, _, cx| {
                 if !this.sidebar_ext_drag {
@@ -3509,6 +3764,15 @@ impl Workspace {
                     cx.notify();
                 }
             }));
+        // Places (the mockups'): Home, the pinned folders and the Recycle Bin under one heading; dropping folders on it pins them
+        col = col.child(
+            div()
+                .id("sb-pin-header")
+                .rounded(theme::RADIUS_SM)
+                .child(header(t!("Places")).mt_0())
+                .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(drop_bg))
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.pin_dropped(paths, cx))),
+        );
         col = col.child(self.sidebar_item(
             "sb-home".into(),
             L::House,
@@ -3520,15 +3784,6 @@ impl Workspace {
             p,
             cx,
         ));
-        // dropping folders on the header pins them
-        col = col.child(
-            div()
-                .id("sb-pin-header")
-                .rounded(theme::RADIUS_SM)
-                .child(header(t!("Pinned")))
-                .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(drop_bg))
-                .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.pin_dropped(paths, cx))),
-        );
         let accent = p.accent;
         // the open folder is already a selected row of the sidebar (a pinned folder or a drive): the tree draws no second selection
         let mut shown_elsewhere = pinned.iter().any(|f| cur == Location::Path(f.path.clone()));
@@ -3572,6 +3827,17 @@ impl Workspace {
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.pin_dropped(paths, cx))),
             );
         }
+        col = col.child(self.sidebar_item(
+            "sb-recycle".into(),
+            L::Trash,
+            p.text_secondary,
+            t!("Recycle Bin").into(),
+            Location::RecycleBin,
+            cur == Location::RecycleBin,
+            None,
+            p,
+            cx,
+        ));
         // the folder tree stands right under the pinned folders, above the drives and the tags (where the user asked for it: the
         // tree is what one works in, the drives and tags are looked at less often)
         let hidden = cx.global::<crate::settings::Settings>().sidebar_hidden.clone();
@@ -3658,7 +3924,9 @@ impl Workspace {
         for d in tag_defs {
             let loc = Location::Tag(d.id);
             let active = cur == loc;
-            col = col.child(self.sidebar_item(
+            // how many items wear the tag, at the right (none: no number)
+            let n = cx.global::<crate::tags::Tags>().0.count_with(d.id);
+            let item = self.sidebar_item(
                 ("sb-tag", d.id as usize).into(),
                 L::Tag,
                 crate::tags::color(d.color),
@@ -3668,20 +3936,9 @@ impl Workspace {
                 None,
                 p,
                 cx,
-            ));
+            );
+            col = col.child(item.when(n > 0 && !rail, |d| d.child(div().flex_shrink_0().text_size(px(p.fs_xs)).text_color(p.text_tertiary).child(n.to_string()))));
         }
-        col = col.child(div().h_2());
-        col = col.child(self.sidebar_item(
-            "sb-recycle".into(),
-            L::Trash,
-            p.text_secondary,
-            t!("Recycle Bin").into(),
-            Location::RecycleBin,
-            cur == Location::RecycleBin,
-            None,
-            p,
-            cx,
-        ));
         let settings = self.sidebar_item(
             "sb-settings".into(),
             L::Settings,
@@ -3738,17 +3995,32 @@ impl Workspace {
                     .on_click(move |_, _, _| open_in_ide(dir.clone(), ide.clone()))
             })
         };
-        let mut left = h_flex().gap_3();
+        let mut left = h_flex().gap_2().items_center();
         let mut busy = false;
+        // the free space of the drive the folder is on ("214 GB free on C:")
+        let free = tab.location().path().and_then(|path| {
+            let drives = &self.places.read(cx).drives;
+            let d = drives.iter().filter(|d| path.starts_with(&d.root)).max_by_key(|d| d.root.as_os_str().len())?;
+            (d.total > 0).then(|| format!("{} {} {}", format::size(d.free), t!("free on"), d.root.to_string_lossy().trim_end_matches('\\')))
+        });
+        let dot = || div().size(px(3.)).rounded_full().bg(p.text_tertiary).flex_shrink_0();
         if in_folder {
-            left = left.child(crate::i18n::items(count));
+            // "3 of 19 selected · 48.5 MB · 214 GB free on C:", or "19 items · 214 GB free on C:" (the mockups' status line)
             if sel > 0 {
-                let s = if has_dir || sel_size == 0 {
-                    crate::i18n::items_selected(sel)
-                } else {
-                    format!("{} · {}", crate::i18n::items_selected(sel), format::size(sel_size))
-                };
-                left = left.child(div().text_color(p.text).child(s));
+                left = left.child(
+                    h_flex()
+                        .gap_1()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(sel.to_string()))
+                        .child(format!("{} {} {}", t!("of"), count, t!("selected"))),
+                );
+                if sel_size > 0 {
+                    left = left.child(dot()).child(if has_dir { format!("{} + {}", format::size(sel_size), t!("folders")) } else { format::size(sel_size) });
+                }
+            } else {
+                left = left.child(crate::i18n::items(count));
+            }
+            if let Some(free) = free {
+                left = left.child(dot()).child(div().text_color(p.text_tertiary).child(free));
             }
             if loading {
                 // a search says which step it is on (issue 67)
@@ -3929,6 +4201,7 @@ fn tooltip_text(id: &str) -> &'static str {
         "fwd" => t!("Forward  (Alt+→)"),
         "up" => t!("Up one level  (Alt+↑)"),
         "refresh" => t!("Refresh  (F5)"),
+        "sidebar" => t!("Show or hide the sidebar  (Ctrl+B)"),
         "hidden" => t!("Show/hide hidden items  (Ctrl+H)"),
         "terminal" => t!("Open in terminal"),
         "sort" => t!("Sort and group"),
@@ -4463,6 +4736,7 @@ impl Render for Workspace {
         self.tab_lens = false;
         let strip_frame = crate::glass::StripFrame { on_screen: true, tab_claimed: self.tab_lens_claimed, plus_claimed: self.plus_lens_claimed };
         let toolbar = self.render_toolbar(&p, cx);
+        let typebar = self.render_typebar(&p, cx);
         let commandbar = self.render_commandbar(&p, cx);
         let filter_strip = self.render_filter_bar(&p, window, cx);
         // the command bar acts on folder contents: not on Home, Settings, the Recycle Bin…
@@ -4921,7 +5195,16 @@ impl Render for Workspace {
                     .px(px(p.gap))
                     .pb(px(p.gap))
                     .gap(px(p.gap))
-                    .child(theme::sheet(&p, p.toolbar_bg).w_full().flex_shrink_0().when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border)).child(toolbar))
+                    .child(
+                        theme::sheet(&p, p.toolbar_bg)
+                            .w_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border))
+                            .child(toolbar)
+                            .children(typebar),
+                    )
             .child(
                 h_flex()
                     .flex_1()

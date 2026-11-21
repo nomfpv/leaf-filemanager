@@ -506,6 +506,12 @@ pub struct FolderView {
     anchor: Option<usize>,
     /// The other pane of a split tab has the focus: the selection here is drawn in the neutral colour (set by the workspace).
     pub pane_inactive: bool,
+    /// The folder the type bar's filter was chosen in (another folder drops it).
+    kind_at: Option<Location>,
+    /// `child_count`'s results for this listing (None while one is read).
+    child_counts: std::collections::HashMap<PathBuf, Option<u32>>,
+    /// `type_summary`'s last result: (listing generation, item count), the filter it was made under, the counts.
+    type_cache: std::cell::RefCell<Option<((u64, usize), Filter, [(u32, u64); FolderView::TYPE_BUCKETS])>>,
     pub loading: bool,
     pub error: Option<String>,
     pub load_ms: Option<u128>,
@@ -717,6 +723,9 @@ impl FolderView {
             cursor: None,
             anchor: None,
             pane_inactive: false,
+            kind_at: None,
+            child_counts: Default::default(),
+            type_cache: Default::default(),
             loading: false,
             error: None,
             load_ms: None,
@@ -1242,9 +1251,83 @@ impl FolderView {
         self.renaming = None;
         self._rename_sub = None;
         self.renamed = None;
+        self.child_counts.clear();
+        // (the type bar's filter is the folder's: another folder starts with every type)
+        if self.filter.kind.is_some() && self.kind_at.as_ref() != Some(self.location()) {
+            self.filter.kind = None;
+            self.kind_at = None;
+        }
         self.load_inner(false, cx);
         self.start_watch(cx);
         self.warm_labels(cx);
+    }
+
+    /// The type bar's buckets, in its order: folders, images, video, audio, documents, code, text, archives, apps.
+    pub const TYPE_BUCKETS: usize = 9;
+
+    pub fn type_bucket(e: &Entry) -> usize {
+        use icons::Category::*;
+        match icons::category(e) {
+            Folder => 0,
+            Image => 1,
+            Video => 2,
+            Audio => 3,
+            Document | Pdf | Spreadsheet => 4,
+            Code => 5,
+            Text | Other => 6,
+            Archive => 7,
+            Executable => 8,
+        }
+    }
+
+    /// Items and bytes per type bucket among the items the other filters let through (cached until the listing or a filter changes).
+    pub fn type_summary(&self) -> [(u32, u64); Self::TYPE_BUCKETS] {
+        let mut f = self.filter.clone();
+        f.kind = None;
+        let key = (self.entries_gen, self.entries.len());
+        if let Some((k, kf, s)) = self.type_cache.borrow().as_ref()
+            && *k == key
+            && *kf == f
+        {
+            return *s;
+        }
+        let mut s = [(0u32, 0u64); Self::TYPE_BUCKETS];
+        for e in self.entries.iter().filter(|e| f.accepts(e)) {
+            let b = &mut s[Self::type_bucket(e)];
+            b.0 += 1;
+            b.1 += if e.is_dir() { 0 } else { e.size };
+        }
+        *self.type_cache.borrow_mut() = Some((key, f, s));
+        s
+    }
+
+    /// The bucket the type bar shows alone, if any.
+    pub fn type_filter(&self) -> Option<usize> {
+        let k = self.filter.kind.as_ref()?;
+        if k.folders {
+            return Some(0);
+        }
+        let ext = k.exts.first()?;
+        self.entries.iter().find(|e| !e.is_dir() && *e.ext == **ext).map(Self::type_bucket)
+    }
+
+    /// A chip of the type bar: only that type of item is listed; the same chip again (or None) lists every type.
+    pub fn set_type_filter(&mut self, bucket: Option<usize>, cx: &mut Context<Self>) {
+        let bucket = bucket.filter(|b| self.type_filter() != Some(*b));
+        self.filter.kind = bucket.map(|b| {
+            let mut exts: Vec<Arc<str>> = Vec::new();
+            if b != 0 {
+                for e in self.entries.iter().filter(|e| !e.is_dir() && Self::type_bucket(e) == b) {
+                    if !exts.iter().any(|x| **x == *e.ext) {
+                        exts.push(e.ext.clone());
+                    }
+                }
+            }
+            rf_core::entry::KindFilter { folders: b == 0, exts }
+        });
+        self.kind_at = bucket.map(|_| self.location().clone());
+        self.rebuild_visible();
+        cx.notify();
     }
 
     /// The localized names of the folders in the path (the breadcrumb and the tab title show them) are read from the disk on a
@@ -3320,6 +3403,35 @@ impl FolderView {
     /// Size of folder `p` as far as known; asks for it when it was never requested. Requests of
     /// one frame start together as one batch (all folders walk in parallel, each shows up as soon
     /// as it is done; running totals in between).
+    /// How many items a sub-folder holds (one level, read on a worker; the list is drawn again when it is known). None for folders
+    /// that are not on a local disk (a network share would be asked once per row); Some(None) while it is being read.
+    fn child_count(&mut self, p: PathBuf, cx: &mut Context<Self>) -> Option<Option<u32>> {
+        if p.to_string_lossy().starts_with(r"\\") {
+            return None;
+        }
+        if let Some(n) = self.child_counts.get(&p) {
+            // (u32::MAX: the folder could not be read)
+            return (*n != Some(u32::MAX)).then_some(*n);
+        }
+        self.child_counts.insert(p.clone(), None);
+        let serial = self.load_serial;
+        let work = cx.background_spawn({
+            let p = p.clone();
+            async move { std::fs::read_dir(&p).map(|r| r.count() as u32).ok() }
+        });
+        cx.spawn(async move |this, cx| {
+            let n = work.await;
+            let _ = this.update(cx, |v, cx| {
+                if v.load_serial == serial {
+                    v.child_counts.insert(p, Some(n.unwrap_or(u32::MAX)));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        Some(None)
+    }
+
     fn folder_size(&mut self, p: PathBuf, cx: &mut Context<Self>) -> DirSize {
         if let Some(v) = self.folder_sizes.get(&p) {
             return *v;
@@ -3762,7 +3874,7 @@ impl FolderView {
                 .flex()
                 .justify_end()
                 .cursor_col_resize()
-                .child(div().w(px(1.)).h_full().bg(p.divider))
+                .child(div().w(px(1.)).h_full().when(p.header_fill.a <= 0., |d| d.bg(p.divider)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
@@ -3817,11 +3929,12 @@ impl FolderView {
                 .rounded(theme::RADIUS_SM)
                 .cursor_pointer()
                 .hover(|s| s.bg(p.hover))
-                .text_color(if active { p.text } else { p.text_secondary })
+                .text_color(if active { p.text_secondary } else { p.text_tertiary })
+                .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
                 .when(right, |d| d.justify_end())
                 .overflow_hidden()
                 .child(div().min_w_0().whitespace_nowrap().overflow_hidden().text_ellipsis().child(label))
-                .when(active, |d| d.child(Icon::new(arrow).size(px(12.)).flex_shrink_0().text_color(p.text_secondary)))
+                .when(active, |d| d.child(Icon::new(arrow).size(px(12.)).flex_shrink_0().text_color(p.text_tertiary)))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_sort(key, cx)));
             d = match w {
                 Some(w) => d.w(w).flex_shrink_0(),
@@ -3829,14 +3942,16 @@ impl FolderView {
             };
             d
         };
+        // the theme's header: a filled, rounded strip (Canopy) or a plain row ruled off under it
+        let filled = p.header_fill.a > 0.;
         h_flex()
-            .h(px(30.))
-            .pl(px(10.))
-            .pr(px(10. + self.gutter()))
+            .h(px(p.header_h))
+            .pl(px(if filled { 4. } else { 10. }))
+            .pr(px(if filled { 4. } else { 10. + self.gutter() }))
+            .when(filled, |d| d.mx(px(6.)).mr(px(6. + self.gutter())).mb(px(2.)).rounded(px(p.control_radius)).bg(p.header_fill))
             .overflow_hidden()
-            .text_xs()
-            .border_b_1()
-            .border_color(p.border)
+            .text_size(px(p.fs_xs))
+            .when(!filled, |d| d.border_b_1().border_color(p.border))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ColumnResize>, _, cx| {
                 let Some((ix, sx, sw)) = this.col_drag else { return };
                 let dx = f32::from(e.event.position.x) - sx;
@@ -3871,6 +3986,7 @@ impl FolderView {
             .children(vis.commit[1].then(|| plain("h-gauth", t!("Commit author"), w[8]).child(handle(8, cx))))
             .children(vis.commit[2].then(|| plain("h-gdate", t!("Commit date"), w[9]).child(handle(9, cx))))
             .children(vis.commit[3].then(|| plain("h-ghash", t!("Commit hash"), w[10]).child(handle(10, cx))))
+            .children(vis.size.then(|| col("h-size", t!("Size"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))))
             .children(vis.modified.then(|| {
                 col("h-mod", t!("Date modified"), SortKey::Modified, Some(px(w[0])), false, cx).relative().child(handle(0, cx))
             }))
@@ -3882,7 +3998,6 @@ impl FolderView {
                 let c = col("h-type", if search { t!("Location") } else { t!("Type") }, if search { SortKey::Path } else { SortKey::Type }, Some(self.type_col_w(cx)), false, cx).relative();
                 if search { c } else { c.child(handle(2, cx)) }
             }))
-            .children(vis.size.then(|| col("h-size", t!("Size"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))))
             .children(self.props_header_cells(p, cx))
             // (the room left over, once the Name column has a width of its own)
             .when(self.name_fixed(cx).is_some(), |d| d.child(div().flex_1()))
@@ -4051,6 +4166,8 @@ impl FolderView {
                 }
             });
             let calc_link = dir_path.filter(|_| dir_size.is_none());
+            // a folder whose size is not measured shows how many items it holds ("24 items", the mockups'); a click still measures it
+            let child_count = calc_link.clone().and_then(|d| self.child_count(d, cx));
             let e = &self.entries[ei as usize];
             let selected = self.selected.contains(&ei);
             // (the rows next to it that are selected too: the pill joins them)
@@ -4223,6 +4340,40 @@ impl FolderView {
                     .child(name)
                     .into_any_element(),
             };
+            let size_cell = show_size.then(|| {
+                let cell = div().w(px(cw[3])).flex_shrink_0().px_2().flex().justify_end().whitespace_nowrap().overflow_hidden();
+                match calc_link {
+                    // "Boyutu hesapla": measures just this folder (doesn't select the row)
+                    Some(dir) => cell.child(
+                        div()
+                            .id(("calc-size", vi))
+                            .text_size(px(p.fs_small))
+                            .text_color(if child_count.is_some() { p.text_secondary } else { p.text_tertiary })
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(p.accent).underline())
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Calculate size")).build(w, cx))
+                            .child(match child_count {
+                                Some(Some(n)) => crate::i18n::items(n as usize),
+                                Some(None) => String::new(),
+                                None => t!("Calculate size").to_string(),
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.folder_size(dir.clone(), cx);
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+                    None => {
+                        let text = if !e.is_dir() { format::size(e.size) } else { dir_size.clone().unwrap_or_default() };
+                        cell.text_size(px(p.fs_small)).text_color(p.text_secondary).when(mono, |d| d.font_family(p.font_mono)).child(text)
+                    }
+                }
+            });
             let row = h_flex()
                 .id(("row", vi))
                 .group("rowgrp")
@@ -4330,11 +4481,14 @@ impl FolderView {
                 .children(git_cell)
                 .children(sync_cell)
                 .children(commit_cells)
+                // (Size comes right after the name, then the dates and the type: the mockups' order)
+                .children(size_cell)
                 .children(show_date.then(|| {
                     div()
                         .w(px(cw[0]))
                         .flex_shrink_0()
                         .px_2()
+                        .text_size(px(p.fs_small))
                         .text_color(p.text_secondary)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -4347,6 +4501,7 @@ impl FolderView {
                         .w(px(cw[1]))
                         .flex_shrink_0()
                         .px_2()
+                        .text_size(px(p.fs_small))
                         .text_color(p.text_secondary)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -4359,7 +4514,8 @@ impl FolderView {
                         .w(type_w)
                         .flex_shrink_0()
                         .px_2()
-                        .text_color(p.text_secondary)
+                        .text_size(px(p.fs_small))
+                        .text_color(p.text_tertiary)
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_ellipsis()
@@ -4369,36 +4525,6 @@ impl FolderView {
                             icons::type_label(e)
                         }),
                 ))
-                .when(show_size, |row| {
-                    let cell = div().w(px(cw[3])).flex_shrink_0().px_2().flex().justify_end().whitespace_nowrap().overflow_hidden();
-                    let cell = match calc_link {
-                        // "Boyutu hesapla": measures just this folder (doesn't select the row)
-                        Some(dir) => cell.child(
-                            div()
-                                .id(("calc-size", vi))
-                                .text_xs()
-                                .text_color(p.text_tertiary)
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(p.accent).underline())
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(t!("Calculate size"))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                        cx.stop_propagation();
-                                        this.folder_size(dir.clone(), cx);
-                                        cx.notify();
-                                    }),
-                                ),
-                        ),
-                        None => {
-                            let text = if !e.is_dir() { format::size(e.size) } else { dir_size.clone().unwrap_or_default() };
-                            cell.text_color(p.text_secondary).when(mono, |d| d.font_family(p.font_mono)).child(text)
-                        }
-                    };
-                    row.child(cell)
-                })
                 .children(prop_cells)
                 .when(name_w.is_some(), |row| row.child(div().flex_1()))
                 // Settings → "Select files and folders on hover"

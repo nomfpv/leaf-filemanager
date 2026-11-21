@@ -32,11 +32,6 @@ pub fn items(n: usize) -> String {
     if n == 1 { "1 item".to_string() } else { format!("{n} items") }
 }
 
-/// "1 item selected" / "3 items selected".
-pub fn items_selected(n: usize) -> String {
-    if n == 1 { "1 item selected".to_string() } else { format!("{n} items selected") }
-}
-
 #[macro_export]
 macro_rules! t {
     ($s:literal) => {
@@ -55,8 +50,6 @@ mod tests {
         assert_eq!(td("Folder not found: C:/x"), "Folder not found: C:/x");
         assert_eq!(items(1), "1 item");
         assert_eq!(items(3), "3 items");
-        assert_eq!(items_selected(1), "1 item selected");
-        assert_eq!(items_selected(2), "2 items selected");
         assert_eq!(pct(53.), "53%");
         assert_eq!(rf_core::format::size(1536), "1.50 KB");
     }

@@ -101,10 +101,28 @@ pub struct Filter {
     pub patterns: String,
     /// Open/Save dialog picking a folder: files are hidden.
     pub folders_only: bool,
+    /// The type bar: only items of one type are shown.
+    pub kind: Option<KindFilter>,
+}
+
+/// One type of item (a chip of the type bar): the folders, or the files with one of these extensions ("" for none).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KindFilter {
+    pub folders: bool,
+    pub exts: Vec<Arc<str>>,
+}
+
+impl KindFilter {
+    pub fn accepts(&self, e: &Entry) -> bool {
+        if e.is_dir() { self.folders } else { !self.folders && self.exts.iter().any(|x| **x == *e.ext) }
+    }
 }
 
 impl Filter {
     pub fn accepts(&self, e: &Entry) -> bool {
+        if self.kind.as_ref().is_some_and(|k| !k.accepts(e)) {
+            return false;
+        }
         if !self.show_hidden && (e.is_hidden() || (self.dot_hidden && e.name.starts_with('.'))) {
             return false;
         }
