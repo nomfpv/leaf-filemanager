@@ -521,16 +521,26 @@ pub fn list(store: &Store) -> Result<Vec<Checkpoint>, Error> {
 
 /// The tree of the work tree as it is now, through leaf's own index (made again from nothing once should it be damaged).
 fn snapshot_tree(root: &Path, git_dir: &Path, empty_tree: &str) -> Result<String, Error> {
-    let add = |()| run(with_args(store_git(root, git_dir, empty_tree, true), &["add", "-A", "--", ":/"]), &[0], LONG);
-    if add(()).is_err() {
-        let _ = std::fs::remove_file(git_dir.join(INDEX_NAME));
-        add(()).map_err(|e| Error::new("The files could not be read into the checkpoint", e.details))?;
+    let index = git_dir.join(INDEX_NAME);
+    // a lock older than any git call may last is left by a leaf that was stopped mid-way: nothing holds it any more
+    let lock = git_dir.join(format!("{INDEX_NAME}.lock"));
+    if std::fs::metadata(&lock).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > LONG)) {
+        let _ = std::fs::remove_file(&lock);
     }
-    let tree = text(run(with_args(store_git(root, git_dir, empty_tree, true), &["write-tree"]), &[0], LONG)?);
-    if tree.is_empty() {
-        return Err(Error::new("The checkpoint could not be written", "write-tree gave nothing"));
-    }
-    Ok(tree)
+    let once = || -> Result<String, Error> {
+        run(with_args(store_git(root, git_dir, empty_tree, true), &["add", "-A", "--", ":/"]), &[0], LONG)
+            .map_err(|e| Error::new("The files could not be read into the checkpoint", e.details))?;
+        let tree = text(run(with_args(store_git(root, git_dir, empty_tree, true), &["write-tree"]), &[0], LONG).map_err(|e| Error::new("The checkpoint could not be written", e.details))?);
+        if tree.is_empty() {
+            return Err(Error::new("The checkpoint could not be written", "write-tree gave nothing"));
+        }
+        Ok(tree)
+    };
+    // leaf's own index can be made again from nothing: once, should it be damaged
+    once().or_else(|_| {
+        let _ = std::fs::remove_file(&index);
+        once()
+    })
 }
 
 /// (files, bytes) of a tree: its blobs, not counting submodules.
