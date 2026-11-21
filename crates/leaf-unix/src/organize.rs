@@ -480,7 +480,8 @@ fn bad_ancestor(src: &Path, root_norm: &str) -> Option<Why> {
 
 /// Makes `dir` and its missing parents, one `mkdir` each (it never follows a link at the name it makes; a name that appeared
 /// meanwhile is accepted only when it is a real folder, and is not counted as made). The existing part of the path is the folder the
-/// user chose and is taken as it resolves. The ones made go into `created`, outermost first.
+/// user chose and is taken as it resolves. Each folder made has its parent fsynced at once, so every new level is durable before any
+/// source is removed. The ones made go into `created`, outermost first.
 fn ensure_dir(dir: &Path, created: &mut Vec<PathBuf>) -> std::io::Result<()> {
     let mut missing = Vec::new();
     let mut cur = dir;
@@ -508,7 +509,15 @@ fn ensure_dir(dir: &Path, created: &mut Vec<PathBuf>) -> std::io::Result<()> {
     }
     for d in missing.into_iter().rev() {
         match std::fs::create_dir(&d) {
-            Ok(()) => created.push(d),
+            Ok(()) => {
+                created.push(d.clone());
+                // the new folder's entry made durable in its parent: with nested new folders on a file system without a journal
+                // (vfat) only the innermost would be written by the file's own folder fsync, and a source removed after that could
+                // end up as a lost cluster chain
+                if let Some(p) = d.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    sync_dir(p)?;
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) => {}
             Err(e) => return Err(e),
         }
