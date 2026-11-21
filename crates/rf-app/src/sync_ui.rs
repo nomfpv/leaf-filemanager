@@ -637,6 +637,10 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                 if let Err(e) = job.sides() {
                     return fail(error_text(&e), cx);
                 }
+                if (moved || job.mode != init.mode) && current.is_some() && is_running(&job.id) {
+                    // the run would write the old state back over the one forgotten here
+                    return fail(t!("This job is running. Wait until its run ends, then change its folders or mode.").to_string(), cx);
+                }
                 if (moved || job.mode != init.mode) && current.is_some() {
                     // other folders: what the last run saw there means nothing now; another mode: a Backup's state still has files
                     // the left side deleted since, which Two-way would read as "removed on the left" and remove on the right
