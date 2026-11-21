@@ -5562,6 +5562,12 @@ impl FolderView {
                     }))
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                         if let Some(dir) = this.current_dir() {
+                            // a web address dragged from a browser: downloaded into this folder, the file selected when it is there
+                            if let Some(url) = crate::downloads::dropped_link(paths.paths()) {
+                                let after = this.select_arrived(dir.clone(), cx);
+                                crate::downloads::start(cx, url, dir, Some(after));
+                                return;
+                            }
                             crate::workspace::drop_files(paths, dir, cx);
                         } else if let Some(dir) = this.remote_writable_dir() {
                             // files of this PC dropped on a folder on a server: uploaded

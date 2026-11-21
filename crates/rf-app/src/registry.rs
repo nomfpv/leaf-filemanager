@@ -268,6 +268,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(ReopenClosedTab, Tabs, "Reopen closed tab", "Opens the tab closed last again.", RotateCcw, [w("ctrl-shift-t")], keywords: &["undo close", "restore"]),
     c!(NewFolder, Files, "New folder", "Makes a new folder here and lets you name it.", FolderPlus, [f("ctrl-shift-n")], keywords: &["create", "directory"]),
     c!(NewTextFile, Files, "New text document", "Makes a new empty text file here.", FilePlus, [], keywords: &["create", "txt"]),
+    c!(DownloadHere, Files, "Download here…", "Downloads a web address (http or https) into this folder: several connections at once, resumed after a cut line or a restart, shown in the Status Center with pause and cancel. An address on the clipboard is already in the box. From a terminal: leaf download <address> [folder].", Download, [], keywords: &["http", "https", "url", "link", "web", "fetch", "internet"], places: Places::LISTED, since: "0.9.6"),
     c!(Refresh, Navigation, "Refresh", "Reads the folder again.", RotateCw, [w("f5"), w("ctrl-r")], keywords: &["reload"], places: Places::LISTED_MENU, menu: &[place(K::Refresh, "Refresh", L::RotateCw, T::BACKGROUND, S::View, 40).hint("Ctrl+R")]),
     c!(MapNetworkDrive, Tools, "Map network drive…", "Gives a shared network folder a drive letter.", Network, [], keywords: &["smb", "share"], platforms: Platforms::WINDOWS),
     c!(RestartApp, App, "Restart leaf", "Closes leaf and starts it again with the same tabs.", RotateCw, [w("ctrl-alt-shift-r")]),

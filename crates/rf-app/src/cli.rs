@@ -1,4 +1,4 @@
-//! The documented command line (`docs/cli.md`): `leaf <path>`, `leaf reveal <file>`, `leaf --new-tab <path>`.
+//! The documented command line (`docs/cli.md`): `leaf <path>`, `leaf reveal <file>`, `leaf --new-tab <path>`, `leaf download <address> [folder]`.
 //! The arguments are brought into the shape the start-up code reads (Explorer's `/select,<file>` for `reveal`, absolute paths,
 //! no `--new-tab`), because the window that takes the request over may run in another folder.
 
@@ -13,11 +13,24 @@ pub const NEW_TAB_PREFIX: &str = "\u{1}new-tab:";
 pub struct Cli {
     pub args: Vec<String>,
     pub new_tab: bool,
+    /// `leaf download <address> [folder]`: the address and the folder (absolute) when one was named. The arguments are then just
+    /// the program's name.
+    pub download: Option<(String, Option<String>)>,
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Cli {
     let mut it = args.into_iter();
     let mut out: Vec<String> = it.next().into_iter().collect();
+    // `leaf download <address> [folder]` (only with a web address after it: a folder that is called "download" still opens)
+    let rest: Vec<String> = it.collect();
+    if let [verb, url, more @ ..] = rest.as_slice()
+        && verb.eq_ignore_ascii_case("download")
+        && leaf_download::is_http_url(url.trim())
+    {
+        let folder = more.iter().find(|a| !a.starts_with('-')).map(|a| absolute(a));
+        return Cli { args: out, new_tab: false, download: Some((url.trim().to_string(), folder)) };
+    }
+    let it = rest.into_iter();
     let mut new_tab = false;
     let mut reveal_next = false;
     let mut first_positional = true;
@@ -41,7 +54,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Cli {
         }
         out.push(if is_plain_relative(&a) { absolute(&a) } else { a });
     }
-    Cli { args: out, new_tab }
+    Cli { args: out, new_tab, download: None }
 }
 
 /// A relative file name that is there (not a switch, a shell name or a URL).

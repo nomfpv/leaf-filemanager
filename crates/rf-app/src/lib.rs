@@ -74,6 +74,7 @@ mod shelf_view;
 mod status_center;
 mod mcp_host;
 mod space_check;
+mod downloads;
 mod transfer_view;
 mod tags;
 mod terminal;
@@ -453,6 +454,13 @@ pub fn main() {
             })
     };
     let arg = if select.is_some() { None } else { arg };
+    // `leaf download <address> [folder]`: the window opens in that folder (when it is there), the download is started once it is up
+    let download = cli.download.clone();
+    if let Some((_, Some(folder))) = &download
+        && is_dir_bounded(PathBuf::from(folder), std::time::Duration::from_secs(2)) == Some(true)
+    {
+        start = Some(Location::Path(PathBuf::from(folder)));
+    }
     if let Some(file) = &select {
         let p = PathBuf::from(file);
         start = p.parent().map(|d| Location::Path(d.to_path_buf()));
@@ -567,6 +575,10 @@ pub fn main() {
 
     // Single instance: a second launch opens its folder as a tab in the running window.
     let message = match &start {
+        _ if download.is_some() => {
+            let (url, folder) = download.clone().unwrap_or_default();
+            downloads::message(&url, folder.as_deref())
+        }
         _ if open_look_settings => look::ipc::ToApp::OpenSettings.encode(),
         _ if new_window => leaf_sys::jumplist::NEW_WINDOW_ARG.to_string(),
         _ if quick_search => quick_search::LAUNCH_ARG.to_string(),
@@ -693,6 +705,9 @@ pub fn main() {
             start_mark("opening the window");
             open_main_window(if open_look_settings { Some(Location::Settings) } else { start }, None, None, cx);
             start_mark("window opened");
+            if let Some((url, folder)) = download {
+                downloads::start_cli(url, folder, cx);
+            }
             fast_start::remember(cx);
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);

@@ -3130,6 +3130,57 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 |s, v| s.copy_speed_limit = v,
             ),
         ),
+        section(p, t!("Downloads")),
+        card(
+            p,
+            L::Network,
+            t!("Connections per download"),
+            Some(t!("A file is fetched over several connections at once when the server allows it. More is faster on a fast line, up to what the server gives.")),
+            dropdown("download-segments", p, s.download_segments, [1u32, 2, 4, 6, 8, 12, 16].into_iter().map(|n| (n, n.to_string())).collect(), |s, v| s.download_segments = v),
+        ),
+        card(
+            p,
+            L::Download,
+            t!("Downloads at once"),
+            Some(t!("The others wait in the Status Center until one is done.")),
+            dropdown("download-parallel", p, s.download_parallel, [1u32, 2, 3, 4, 6, 8].into_iter().map(|n| (n, n.to_string())).collect(), |s, v| s.download_parallel = v),
+        ),
+        card(
+            p,
+            L::Gauge,
+            t!("Download speed limit"),
+            Some(t!("For each download, over all its connections.")),
+            dropdown(
+                "download-limit",
+                p,
+                s.download_speed_limit,
+                std::iter::once((0, t!("Unlimited").to_string())).chain([1u32, 2, 5, 10, 25, 50].into_iter().map(|m| (m, format!("{m} MB/s")))).collect(),
+                |s, v| s.download_speed_limit = v,
+            ),
+        ),
+        card(
+            p,
+            L::FolderDown,
+            t!("Download folder"),
+            Some(crate::downloads::default_folder(s).to_string_lossy().into_owned().as_str()),
+            h_flex()
+                .gap_2()
+                .children((!s.download_folder.trim().is_empty()).then(|| button("download-folder-reset", p, t!("Default"), |_, cx| crate::settings::update(cx, |s| s.download_folder.clear()))))
+                .child(button("download-folder", p, t!("Change…"), |_, cx| {
+                    let (tx, rx) = futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
+                    let title = t!("Choose the folder for downloads");
+                    leaf_sys::sta::run(move |owner| {
+                        let _ = tx.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::Folder));
+                    });
+                    cx.spawn(async move |cx| {
+                        if let Ok(Some(path)) = rx.await {
+                            let _ = cx.update(|cx| crate::settings::update(cx, |s| s.download_folder = path.to_string_lossy().into_owned()));
+                        }
+                    })
+                    .detach();
+                }))
+                .into_any_element(),
+        ),
         card(
             p,
             L::Activity,

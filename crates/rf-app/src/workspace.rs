@@ -565,7 +565,7 @@ fn remember_named(list: &mut Vec<crate::settings::NamedSession>, session: crate:
 
 /// Selects `file` in the newest window whose current tab shows its folder (and brings that window
 /// forward); false when none does.
-fn select_in_open_folder(file: &std::path::Path, cx: &mut App) -> bool {
+pub(crate) fn select_in_open_folder(file: &std::path::Path, cx: &mut App) -> bool {
     let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else { return false };
     let key = |p: &std::path::Path| rf_core::pathkey::path_key_trimmed(p);
     let want = key(dir);
@@ -641,6 +641,10 @@ pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
             return show_settings(cx);
         }
         None => {}
+    }
+    // `leaf download <address> [folder]`
+    if let Some(rest) = msg.strip_prefix(crate::downloads::MESSAGE_PREFIX) {
+        return crate::downloads::from_message(rest, cx);
     }
     if let Some(file) = msg.strip_prefix(SELECT_HERE_PREFIX) {
         if !select_in_open_folder(std::path::Path::new(file), cx) {
@@ -4984,6 +4988,11 @@ pub fn open_in_ide(dir: PathBuf, ide: String) {
 }
 
 pub(crate) fn drop_files(paths: &ExternalPaths, dest: PathBuf, cx: &mut App) {
+    // a web address dragged out of a browser: downloaded here
+    if let Some(url) = crate::downloads::dropped_link(paths.paths()) {
+        crate::downloads::start(cx, url, dest, None);
+        return;
+    }
     let sources: Vec<PathBuf> = paths.paths().to_vec();
     if sources.is_empty() || leaf_sys::dnd::is_invalid_drop(&sources, &dest) {
         return;
@@ -6013,6 +6022,15 @@ impl Render for Workspace {
                 };
                 if let Ok(v) = rf_core::vpath::VPath::new("docker", &authority, "/") {
                     this.navigate(Location::Remote(v), window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &DownloadHere, window, cx| {
+                // the folder shown, when it is a folder on this PC
+                let v = this.active_tab().clone();
+                let dir = v.read(cx).current_dir().filter(|d| crate::downloads::can_save_in(d));
+                match dir {
+                    Some(dir) => crate::downloads::ask(v.downgrade(), dir, window, cx),
+                    None => crate::prompt::notice(t!("Download here"), t!("This works in a folder on this PC. Open the folder the file should go to first.").to_string(), window, cx),
                 }
             }))
             .on_action(cx.listener(|this, _: &BookmarkRemoteFolder, window, cx| {

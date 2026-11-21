@@ -11,7 +11,7 @@ are MIT, Copyright (c) 2026 Ozer Guzel and the leaf authors; they appear in the 
 
 | Licence | Crates |
 |---|---|
-| MIT License (MIT) | 584 |
+| MIT License (MIT) | 585 |
 | Apache License 2.0 (Apache-2.0) | 39 |
 | Unicode License v3 (Unicode-3.0) | 25 |
 | ISC License (ISC) | 23 |
@@ -10978,6 +10978,7 @@ Used by:
 - leaf-common 0.9.4
 - leaf-decode 0.9.4
 - leaf-dev 0.9.4
+- leaf-download 0.9.4
 - leaf-remote 0.9.4
 - leaf-sys 0.9.4
 - leaf-vfs 0.9.4

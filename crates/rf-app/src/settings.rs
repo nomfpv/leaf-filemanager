@@ -638,6 +638,14 @@ pub struct Settings {
     pub wsl_drop_zone: bool,
     /// Copy speed limit in MB/s (0 = none).
     pub copy_speed_limit: u32,
+    /// Connections to one file in a download (the server must take byte ranges).
+    pub download_segments: u32,
+    /// Download speed limit in MB/s over all connections of a download (0 = none).
+    pub download_speed_limit: u32,
+    /// Downloads that run at once; the others wait in line.
+    pub download_parallel: u32,
+    /// Where `leaf download <address>` saves without a folder; empty: the Downloads folder.
+    pub download_folder: String,
     /// Where a running operation's progress is shown (see [`TransferProgress`]).
     pub transfer_progress: TransferProgress,
     /// The thumbnail cache's limit in MB (the cache is in memory); `None` = the default, 64 MB, and no key in the file.
@@ -860,6 +868,10 @@ impl Default for Settings {
             copy_verify: CopyVerify::Off,
             wsl_drop_zone: false,
             copy_speed_limit: 0,
+            download_segments: 6,
+            download_speed_limit: 0,
+            download_parallel: 3,
+            download_folder: String::new(),
             transfer_progress: TransferProgress::StatusBar,
             thumb_cache_mb: None,
             show_libraries: false,

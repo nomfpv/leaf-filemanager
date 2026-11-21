@@ -402,7 +402,7 @@ fn listed(data: &IDataObject) -> Option<Vec<Item>> {
 /// The paths of a drag of virtual files under `root`: with `fetch` false the paths its files will have (nothing is written), with
 /// `fetch` true the files are written and their real paths given. `None`: the drag lists no virtual file, or none could be written.
 pub fn drag_paths_under(data: &IDataObject, fetch: bool, root: &Path) -> Option<Vec<PathBuf>> {
-    let items = listed(data)?;
+    let Some(items) = listed(data) else { return link_paths(data, fetch, root) };
     let mut slot = DROP_DIR.lock().unwrap_or_else(|e| e.into_inner());
     if !fetch {
         let dir = slot.get_or_insert_with(|| new_drop_dir(root)).clone();
@@ -431,6 +431,55 @@ pub fn drag_paths_under(data: &IDataObject, fetch: bool, root: &Path) -> Option<
             None
         }
     }
+}
+
+/// The extension of the one-line file a dragged web address becomes (its text is the address).
+pub const LINK_EXT: &str = "leaf-url";
+
+/// The web address a drag carries (a link dragged out of a browser): from "UniformResourceLocatorW", else the plain text, else the
+/// ANSI "UniformResourceLocator"; only an `http://` or `https://` address without blanks.
+fn link_of(data: &IDataObject) -> Option<String> {
+    let formats: [(u16, bool); 3] = unsafe {
+        [(RegisterClipboardFormatW(w!("UniformResourceLocatorW")) as u16, true), (13, true), (RegisterClipboardFormatW(w!("UniformResourceLocator")) as u16, false)]
+    };
+    for (format, wide) in formats {
+        let Ok(m) = ask(data, format, -1, TYMED_HGLOBAL.0 as u32) else { continue };
+        if m.0.tymed != TYMED_HGLOBAL.0 as u32 {
+            continue;
+        }
+        // SAFETY: the medium says its union holds a global block
+        let bytes = unsafe { global_bytes(m.0.u.hGlobal, Some(8192)) };
+        let text = if wide {
+            let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+            String::from_utf16_lossy(&units)
+        } else {
+            String::from_utf8_lossy(bytes.split(|b| *b == 0).next().unwrap_or_default()).into_owned()
+        };
+        // (the first line: a text drag can carry more)
+        let first = text.lines().next().unwrap_or_default().trim().to_string();
+        let lower = first.to_ascii_lowercase();
+        if (lower.starts_with("http://") || lower.starts_with("https://")) && !first.contains(char::is_whitespace) {
+            return Some(first);
+        }
+    }
+    None
+}
+
+/// A drag of a web address, as a drop of one file (`link.leaf-url`) whose text is the address: the same two steps as virtual files
+/// (the path it will have while the pointer is over, the file written at the drop). The app starts a download from it.
+fn link_paths(data: &IDataObject, fetch: bool, root: &Path) -> Option<Vec<PathBuf>> {
+    let url = link_of(data)?;
+    let mut slot = DROP_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    let name = format!("link.{LINK_EXT}");
+    if !fetch {
+        return Some(vec![slot.get_or_insert_with(|| new_drop_dir(root)).join(name)]);
+    }
+    let dir = slot.take().unwrap_or_else(|| new_drop_dir(root));
+    drop(slot);
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(name);
+    std::fs::write(&path, url).ok()?;
+    Some(vec![path])
 }
 
 /// [`drag_paths_under`] the drops' folder, for the GPUI fork's drop target: `data` is the drag's `IDataObject`, borrowed.

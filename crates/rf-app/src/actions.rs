@@ -122,6 +122,7 @@ gpui_kit::actions!(
         NewWorktree,
         ShowProjectBrain,
         BookmarkRemoteFolder,
+        DownloadHere,
         AddToBasket,
         RemoveFromBasket,
         NewBasket,

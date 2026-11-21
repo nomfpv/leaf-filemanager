@@ -802,6 +802,12 @@ fn own_new_items(me: &Me) -> Vec<Item> {
         Item::action(t!("Folder"), MenuIcon::Tinted(L::Folder, crate::theme::kind_color(crate::icons::Category::Folder, true)), act(me, |v, _, cx| v.create_new(true, cx)))
             .hint("Ctrl+Shift+N"),
         Item::action(t!("Text document"), icon(L::FileText), act(me, |v, _, cx| v.create_new(false, cx))),
+        Item::Separator,
+        Item::action(t!("Download here…"), icon(L::Download), act(me, |v, w, cx| {
+            if let Some(dir) = v.current_dir().filter(|d| crate::downloads::can_save_in(d)) {
+                crate::downloads::ask(cx.entity().downgrade(), dir, w, cx);
+            }
+        })),
     ]
 }
 
