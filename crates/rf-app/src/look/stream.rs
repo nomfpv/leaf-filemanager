@@ -1,12 +1,12 @@
-//! A file being downloaded by HyperDownload, shown by DirectLook from the add-on's local stream. It travels as a "path" of its own
-//! (DirectLook's messages carry paths): `hdstream:\<the stream's URL in hex>\<the file's name>`. The name gives the window its title
+//! A file being downloaded by HyperDownload, shown by leaf-look from the add-on's local stream. It travels as a "path" of its own
+//! (leaf-look's messages carry paths): `hdstream:\<the stream's URL in hex>\<the file's name>`. The name gives the window its title
 //! and the viewer the file's kind; the URL is where the bytes come from.
 
 use std::path::{Path, PathBuf};
 
 const PREFIX: &str = "hdstream:\\";
 
-/// The path DirectLook is given for the stream at `url` of the file `name`.
+/// The path leaf-look is given for the stream at `url` of the file `name`.
 pub fn path(url: &str, name: &str) -> PathBuf {
     let hex: String = url.bytes().map(|b| format!("{b:02x}")).collect();
     // (a name with a path separator in it keeps only its last part)

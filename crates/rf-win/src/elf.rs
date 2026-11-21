@@ -1,5 +1,5 @@
 //! What a Linux / Android / embedded program says about itself (ELF header, program headers and
-//! the dynamic section), for DirectLook's info card. Reads the first part of the file only.
+//! the dynamic section), for leaf-look's info card. Reads the first part of the file only.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;

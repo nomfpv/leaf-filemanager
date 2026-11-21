@@ -48,7 +48,7 @@ fn remembered() -> Option<u32> {
 /// dock has several windows (its islands and panels); the switch to the card's device went through for four of its six windows
 /// ("new GPU device ready" six times, "new swap chain committed" four times in its log), the islands drew nothing, two empty panels
 /// stood in the middle of the screen, and with Explorer's taskbar hidden by the dock there was no taskbar at all. The fast start
-/// was measured with one window only. Every other kind of process (the dock, DirectLook, the Open/Save picker, previews) opens on
+/// was measured with one window only. Every other kind of process (the dock, leaf-look, the Open/Save picker, previews) opens on
 /// the card, as before 0.8.6.
 pub fn before_app(main_window: bool) {
     gpui_windows::hybrid::set_fast_start(main_window && wanted(remembered()));

@@ -1,4 +1,4 @@
-//! The Share buttons (the file list's menu and toolbar, DirectLook): Windows' share sheet over the window they were pressed in
+//! The Share buttons (the file list's menu and toolbar, leaf-look): Windows' share sheet over the window they were pressed in
 //! (`rf_win::share`, issue 48). The items are looked up on a worker; the sheet is shown from a task of the window's thread, which
 //! runs outside the app's own work (Windows pumps messages while it shows the sheet).
 

@@ -1,4 +1,4 @@
-//! DirectLook programının girişi: ayrı süreç, kendi tek örnek borusu, kendi bildirim alanı simgesi.
+//! leaf-look programının girişi: ayrı süreç, kendi tek örnek borusu, kendi bildirim alanı simgesi.
 //! rustyfiles'tan iletiler (`ipc::Msg`) ve isteğe bağlı sistem geneli klavye kancasıyla çalışır.
 //! rustyfiles'ın `settings.toml`'undan yalnız dil ve temayı okur, hiç yazmaz.
 
@@ -25,8 +25,8 @@ pub fn parse_args(args: &[&str]) -> Msg {
 
 fn tray_labels() -> rf_win::tray::Labels {
     rf_win::tray::Labels {
-        tooltip: "DirectLook".into(),
-        open: crate::t!("DirectLook settings").into(),
+        tooltip: "leaf Preview".into(),
+        open: crate::t!("Preview settings").into(),
         new_window: String::new(),
         settings: String::new(),
         quit: crate::t!("Exit").into(),
@@ -48,12 +48,12 @@ fn open_settings() {
             return;
         }
         if let Ok(me) = std::env::current_exe() {
-            let _ = std::process::Command::new(me.with_file_name("rustyfiles.exe")).arg("--settings=directlook").spawn();
+            let _ = std::process::Command::new(me.with_file_name("rustyfiles.exe")).arg("--settings=look").spawn();
         }
     });
 }
 
-/// DirectLook's own icon: when its setting is on and rustyfiles has none (rustyfiles running in
+/// leaf-look's own icon: when its setting is on and rustyfiles has none (rustyfiles running in
 /// the background has one, with the settings in its menu): one icon, not two.
 fn tray_wanted(cx: &App) -> bool {
     cx.global::<LookSettings>().look_tray_icon && !cx.global::<crate::settings::Settings>().run_in_background
@@ -106,7 +106,7 @@ pub fn main() {
     rf_win::shell::suppress_critical_error_dialogs();
     rf_win::thumbs::keep_gdiplus_alive();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).target(env_logger::Target::Stderr).init();
-    crate::background::DIRECTLOOK_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::background::LOOK_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let first = parse_args(&raw.iter().map(String::as_str).collect::<Vec<_>>());
@@ -128,7 +128,7 @@ pub fn main() {
         let _ = tray_tx.unbounded_send(e);
     });
 
-    // (DirectLook opens on the card: the fast start is for the file manager's own window only, see `fast_start::before_app`)
+    // (leaf-look opens on the card: the fast start is for the file manager's own window only, see `fast_start::before_app`)
     crate::fast_start::before_app(false);
     gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(move |cx| {
         gpui_kit::init(cx);
@@ -140,7 +140,7 @@ pub fn main() {
         crate::settings::apply_component_theme(cx);
         cx.set_global(LookSettings::load());
         sync_tray(cx);
-        // önizleme penceresi kapanınca DirectLook çalışmayı sürdürür (arka planda bekler)
+        // önizleme penceresi kapanınca leaf-look çalışmayı sürdürür (arka planda bekler)
         cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
         cx.on_window_closed(|cx, _| {
             if !LookManager::is_visible(cx) {

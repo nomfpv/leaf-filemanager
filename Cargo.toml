@@ -108,7 +108,7 @@ windows = { version = "0.62", features = [
     "Win32_Security_WinTrust",
     # the session number of a process (the single-instance names carry it)
     "Win32_System_RemoteDesktop",
-    # our own toasts (Ferry's questions and arrivals: rf-win toast_post.rs)
+    # our own toasts (Nearby's questions and arrivals: rf-win toast_post.rs)
     "UI_Notifications",
     "Data_Xml_Dom",
     "ApplicationModel",

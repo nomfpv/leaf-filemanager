@@ -210,7 +210,7 @@ pub fn is_removable(path: &std::path::Path) -> bool {
 }
 
 /// Whether reading `path` may take seconds: a network share, a removable or optical disk, or a
-/// cloud file whose data is not on this PC (reading it downloads it). DirectLook opens such files
+/// cloud file whose data is not on this PC (reading it downloads it). leaf-look opens such files
 /// off the UI thread.
 pub fn slow_to_read(path: &std::path::Path) -> bool {
     if crate::localized::is_network(path) {

@@ -142,7 +142,7 @@ fn delete_dialog(ix: usize, window: &mut Window, cx: &mut App) {
     );
 }
 
-/// For a process that was started long ago and does not hear of a change of the settings (DirectLook stays in the background): takes
+/// For a process that was started long ago and does not hear of a change of the settings (leaf-look stays in the background): takes
 /// the lists from the settings file as it is now, just before a file is opened. A small file read, on the thread that opens.
 pub(crate) fn follow_file() {
     if let Some(s) = Settings::load_readonly() {

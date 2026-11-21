@@ -269,7 +269,7 @@ fn menu(hwnd: HWND) {
         let ws = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
         let (a, b, c, d) = (ws(&l.open), ws(&l.new_window), ws(&l.quit), ws(&l.settings));
         let _ = AppendMenuW(m, MF_STRING, 1, PCWSTR(a.as_ptr()));
-        // boş etiket: öğe yok (DirectLook'un menüsünde "Yeni pencere" yok)
+        // boş etiket: öğe yok (leaf-look'un menüsünde "Yeni pencere" yok)
         if !l.new_window.is_empty() {
             let _ = AppendMenuW(m, MF_STRING, 2, PCWSTR(b.as_ptr()));
         }

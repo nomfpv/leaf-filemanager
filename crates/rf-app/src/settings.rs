@@ -585,10 +585,10 @@ pub struct Settings {
     // ---- Advanced
     pub show_flatten: bool,
 
-    // ---- DirectLook (Hızlı Bakış, ayrı program): ayarları kendi dosyasında (`look::config`)
-    /// DirectLook kullanılsın mı (kapalıyken rustyfiles onu başlatmaz, Boşluk bir şey yapmaz).
-    pub directlook_enabled: bool,
-    /// Space hands the file to QuickLook (QL-Win) instead of DirectLook (`quicklook`).
+    // ---- leaf-look (Hızlı Bakış, ayrı program): ayarları kendi dosyasında (`look::config`)
+    /// leaf-look kullanılsın mı (kapalıyken rustyfiles onu başlatmaz, Boşluk bir şey yapmaz).
+    pub look_enabled: bool,
+    /// Space hands the file to QuickLook (QL-Win) instead of leaf-look (`quicklook`).
     pub space_quicklook: bool,
 
     // ---- Quick search (quick_search.rs)
@@ -606,18 +606,18 @@ pub struct Settings {
     /// commands only; Ctrl+P still searches past folders.
     pub palette_folder_history: bool,
 
-    // ---- Ferry (sending files to rustyfiles on the network's other devices; Settings -> "Ferry"; crates/rf-nearby and ferry.rs)
-    /// Ferry runs in the main process (off by default: it listens on a network port, and Windows' firewall may ask about that).
-    pub ferry_enabled: bool,
+    // ---- Nearby (sending files to rustyfiles on the network's other devices; Settings -> "Nearby"; crates/rf-nearby and nearby.rs)
+    /// Nearby runs in the main process (off by default: it listens on a network port, and Windows' firewall may ask about that).
+    pub nearby_enabled: bool,
     /// Who sees this PC: nobody, its trusted devices (the default), or everyone. "Everyone" lasts ten minutes and a start reads it as
     /// trusted devices.
-    pub ferry_visibility: FerryVisibility,
+    pub nearby_visibility: NearbyVisibility,
     /// The name the other devices show for this PC; empty: the PC's own name.
-    pub ferry_name: String,
+    pub nearby_name: String,
     /// Where received files go; empty: the Downloads folder.
-    pub ferry_inbox: String,
+    pub nearby_inbox: String,
     /// Files from a trusted device are taken without asking, into the folder above (on).
-    pub ferry_auto_accept_trusted: bool,
+    pub nearby_auto_accept_trusted: bool,
 }
 
 /// Settings -> General: what a new tab opens.
@@ -629,10 +629,10 @@ pub enum NewTabOpens {
     Current,
 }
 
-/// Settings -> Ferry: who sees this PC.
+/// Settings -> Nearby: who sees this PC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum FerryVisibility {
+pub enum NearbyVisibility {
     Off,
     #[default]
     Trusted,
@@ -753,18 +753,18 @@ impl Default for Settings {
             ide_path: String::new(),
             show_flatten: false,
             space_quicklook: false,
-            directlook_enabled: true,
+            look_enabled: true,
             quick_search: true,
             quick_search_keys: "alt-space".into(),
             web_search: WebSearch::Google,
             quick_search_bookmarks: true,
             quick_search_recent: true,
             palette_folder_history: true,
-            ferry_enabled: false,
-            ferry_visibility: FerryVisibility::Trusted,
-            ferry_name: String::new(),
-            ferry_inbox: String::new(),
-            ferry_auto_accept_trusted: true,
+            nearby_enabled: false,
+            nearby_visibility: NearbyVisibility::Trusted,
+            nearby_name: String::new(),
+            nearby_inbox: String::new(),
+            nearby_auto_accept_trusted: true,
         }
     }
 }
@@ -1070,8 +1070,8 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     s.apply_side_effects();
     apply_component_theme(cx);
     std::thread::spawn(move || s.save());
-    // (Ferry follows its settings: started, stopped, started anew, or shown to others differently)
-    crate::ferry::apply(cx);
+    // (Nearby follows its settings: started, stopped, started anew, or shown to others differently)
+    crate::nearby::apply(cx);
     cx.refresh_windows();
 }
 
@@ -1332,7 +1332,7 @@ theme = \"dark\"
 /// so it never competes with opening the window.
 fn sync_name_index(on: bool, excluded: &[String]) {
     use std::sync::atomic::{AtomicU8, Ordering};
-    // DirectLook reads these settings too: the index is rustyfiles' (a second indexer would walk
+    // leaf-look reads these settings too: the index is rustyfiles' (a second indexer would walk
     // every drive again and write the same index files)
     if crate::background::side_process() {
         return;

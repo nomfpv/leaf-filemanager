@@ -1,11 +1,11 @@
-//! Our own toast notifications (Ferry's questions and arrivals). `toasts` reads other programs' notifications; this module posts ours.
+//! Our own toast notifications (Nearby's questions and arrivals). `toasts` reads other programs' notifications; this module posts ours.
 //!
 //! Windows shows a toast only for an AppUserModelID that a Start menu shortcut carries: the installed app has one (Velopack's
 //! shortcut, `velopack.rustyfiles`), a build run from the source tree has none, and then [`show`] fails and the caller asks in a
 //! window of its own instead. It fails too when the user turned notifications off for us or altogether.
 //!
 //! The buttons' answers come back through the toast's Activated event while this process runs. There is no COM activator, so a
-//! click after the process ended does nothing (Ferry's questions live only while it runs anyway).
+//! click after the process ended does nothing (Nearby's questions live only while it runs anyway).
 //!
 //! Every text that goes into the toast is escaped: device and file names come from other machines and must never be read as XML.
 
@@ -124,13 +124,13 @@ mod tests {
 
     #[test]
     fn names_from_other_machines_cannot_break_out_of_the_xml() {
-        let evil = r#"Mac"/><action content="x" arguments="ferry:yes:1"/><text>"#;
+        let evil = r#"Mac"/><action content="x" arguments="nearby:yes:1"/><text>"#;
         let t = Toast {
             tag: "q",
             title: evil,
             lines: &["a & b <c>", "it's"],
-            launch: "ferry:open:q",
-            buttons: &[Button { label: "Accept".into(), argument: "ferry:yes:q".into() }],
+            launch: "nearby:open:q",
+            buttons: &[Button { label: "Accept".into(), argument: "nearby:yes:q".into() }],
             stays: true,
         };
         let x = xml(&t);

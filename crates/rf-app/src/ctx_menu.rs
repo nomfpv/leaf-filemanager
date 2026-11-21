@@ -410,8 +410,8 @@ impl FolderView {
             let shelf_items = items.to_vec();
             v.push(Item::action(t!("Add to shelf"), icon(L::Inbox), act(me, move |_, _, cx| cx.emit(FolderEvent::AddToShelf(shelf_items.clone())))).hint("Ctrl+Shift+S"));
         }
-        if !in_archive && crate::ferry::running(cx) {
-            v.push(Item::sub(t!("Send with Ferry"), icon(L::Send), crate::ferry::menu_items(items, cx)));
+        if !in_archive && crate::nearby::running(cx) {
+            v.push(Item::sub(t!("Send with Nearby"), icon(L::Send), crate::nearby::menu_items(items, cx)));
         }
         if items.len() > 1 && !self.is_search() && !in_archive {
             let b = items.to_vec();

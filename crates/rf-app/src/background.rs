@@ -30,16 +30,16 @@ fn labels() -> rf_win::tray::Labels {
     }
 }
 
-/// Bu süreç DirectLook: rustyfiles'ın bildirim alanı simgesi gösterilmez (DirectLook'un kendisi var).
-pub static DIRECTLOOK_PROCESS: AtomicBool = AtomicBool::new(false);
+/// Bu süreç leaf-look: rustyfiles'ın bildirim alanı simgesi gösterilmez (leaf-look'un kendisi var).
+pub static LOOK_PROCESS: AtomicBool = AtomicBool::new(false);
 
-/// This process is the dock (`rustyfiles --dock`): a side process like DirectLook, so it owns no tray icon, no name index and no
+/// This process is the dock (`rustyfiles --dock`): a side process like leaf-look, so it owns no tray icon, no name index and no
 /// hotkey, and does not start or stop the dock itself.
 pub static DOCK_PROCESS: AtomicBool = AtomicBool::new(false);
 
-/// A process that only helps the main rustyfiles (DirectLook, the dock) and must leave the machine-wide things to it.
+/// A process that only helps the main rustyfiles (leaf-look, the dock) and must leave the machine-wide things to it.
 pub fn side_process() -> bool {
-    DIRECTLOOK_PROCESS.load(Ordering::Relaxed) || DOCK_PROCESS.load(Ordering::Relaxed)
+    LOOK_PROCESS.load(Ordering::Relaxed) || DOCK_PROCESS.load(Ordering::Relaxed)
 }
 
 /// Settings changed: the tray icon is there exactly while background mode is on.
@@ -55,7 +55,7 @@ pub fn sync_tray(on: bool) {
     } else {
         rf_win::tray::hide();
     }
-    // One icon in the notification area: while ours is there, DirectLook leaves its own out
+    // One icon in the notification area: while ours is there, leaf-look leaves its own out
     // (it reads this setting when told to reload; see look::app::tray_wanted).
     crate::look::ipc::send(crate::look::ipc::Msg::Reload, false);
 }

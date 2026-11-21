@@ -2488,7 +2488,7 @@ impl FolderView {
         cx.notify();
     }
 
-    /// The selection moves to the next or the previous item (DirectLook's arrow keys, see `workspace::step_quick_look`).
+    /// The selection moves to the next or the previous item (leaf-look's arrow keys, see `workspace::step_quick_look`).
     pub(crate) fn step_selection(&mut self, forward: bool, cx: &mut Context<Self>) {
         self.move_cursor(if forward { 1 } else { -1 }, false, cx);
     }

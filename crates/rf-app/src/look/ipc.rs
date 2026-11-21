@@ -1,14 +1,14 @@
-//! rustyfiles ↔ DirectLook iletileri (tek örnek borusu üzerinden, satır başına bir ileti).
+//! rustyfiles ↔ leaf-look iletileri (tek örnek borusu üzerinden, satır başına bir ileti).
 
 use std::path::PathBuf;
 
 use super::ShowOpts;
 
-/// DirectLook'un tek örnek adı (boru ve kilit).
+/// leaf-look'un tek örnek adı (boru ve kilit).
 pub const APP: &str = "directlook";
 
 /// The single-instance name. `LEAF_LOOK_INSTANCE=<x>` gives a test copy its own
-/// ("directlook-<x>"), so it never talks to the user's running DirectLook.
+/// ("directlook-<x>"), so it never talks to the user's running leaf-look.
 pub fn app_name() -> String {
     match std::env::var("LEAF_LOOK_INSTANCE") {
         Ok(x) if !x.is_empty() => format!("{APP}-{x}"),
@@ -18,7 +18,7 @@ pub fn app_name() -> String {
 const PREFIX: &str = "\u{1}dl:";
 const TO_APP_PREFIX: &str = "\u{1}directlook:";
 
-/// DirectLook'a giden ileti.
+/// leaf-look'a giden ileti.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Msg {
     /// Göster (komut satırı `--look`).
@@ -78,14 +78,14 @@ impl Msg {
     }
 }
 
-/// DirectLook'tan rustyfiles'a giden ileti.
+/// leaf-look'tan rustyfiles'a giden ileti.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToApp {
     /// Önizleme penceresi kapandı (rustyfiles "açık" bilgisini bırakır).
     LookClosed,
-    /// Ayarlar → DirectLook sayfasını aç.
+    /// Ayarlar → leaf-look sayfasını aç.
     OpenSettings,
-    /// An arrow key in DirectLook: the list's selection moves to the next (true) or the previous item, and DirectLook shows that.
+    /// An arrow key in leaf-look: the list's selection moves to the next (true) or the previous item, and leaf-look shows that.
     Step(bool),
 }
 
@@ -117,7 +117,7 @@ pub fn exe() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// İletiyi DirectLook'a gönderir; çalışmıyorsa (ve `start` ise) onu bu iletiyle başlatır.
+/// İletiyi leaf-look'a gönderir; çalışmıyorsa (ve `start` ise) onu bu iletiyle başlatır.
 /// Hiç beklemez: arka planda yapılır.
 pub fn send(msg: Msg, start: bool) {
     std::thread::spawn(move || {

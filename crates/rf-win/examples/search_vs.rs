@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     // a rustyfiles of its own (settings folder, instance group), with the index of `root` ready
     let cfg = std::env::temp_dir().join("rf-search-vs-cfg");
     let _ = std::fs::create_dir_all(&cfg);
-    std::fs::write(cfg.join("settings.toml"), "restore_session = false\nrun_in_background = false\nauto_update = false\nstar_asked = true\nstarts = 1\ndirectlook_enabled = false\n")?;
+    std::fs::write(cfg.join("settings.toml"), "restore_session = false\nrun_in_background = false\nauto_update = false\nstar_asked = true\nstarts = 1\nlook_enabled = false\n")?;
     let log = std::env::temp_dir().join("rf-search-vs.log");
     let env = |c: &mut Command| {
         // an instance group of its own: never the user's running copy

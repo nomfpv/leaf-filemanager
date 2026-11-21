@@ -1,4 +1,4 @@
-//! DirectLook's rustdecoder route (opt-in: `LEAF_RUSTDECODER=1`): MP4 / MOV files with H.264
+//! leaf-look's rustdecoder route (opt-in: `LEAF_RUSTDECODER=1`): MP4 / MOV files with H.264
 //! or HEVC play through `rustdecoder` (own container parser, GPU video decoder, WASAPI sound,
 //! flip-model swap chain) in a popup window owned by the viewer window and placed over the video
 //! area, the way the Media Foundation route does it. Whatever rustdecoder cannot open falls back

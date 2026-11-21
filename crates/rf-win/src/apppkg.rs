@@ -1,4 +1,4 @@
-//! What an app package says about itself, for DirectLook's info card: Windows packages (MSIX,
+//! What an app package says about itself, for leaf-look's info card: Windows packages (MSIX,
 //! APPX and their bundles), Android packages (APK, its binary AndroidManifest.xml), iOS apps (IPA,
 //! the app's Info.plist, binary or XML) and NuGet packages. Read from the zip's directory and one
 //! or two small members; nothing is extracted to disk.

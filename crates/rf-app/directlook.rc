@@ -12,7 +12,7 @@ BEGIN
   BEGIN
     BLOCK "041F04B0"
     BEGIN
-      VALUE "FileDescription", "DirectLook"
+      VALUE "FileDescription", "leaf-look"
       VALUE "ProductName", "rustyfiles"
       VALUE "FileVersion", "0.1.0"
       VALUE "ProductVersion", "0.1.0"

@@ -1,6 +1,6 @@
-# Ferry: the protocol
+# Nearby: the protocol
 
-How rustyfiles devices on the same network find each other and send files. **Ferry** is the feature's name; the code is
+How rustyfiles devices on the same network find each other and send files. **Nearby** is the feature's name; the code is
 `crates/rf-nearby` (platform-free Rust, used by the Windows app and, through UniFFI, by the macOS app). Protocol version: **1**.
 
 ## Discovery
@@ -68,8 +68,8 @@ and reserved device names (CON, NUL, COM1...) get a leading `_`.
    file's bytes from `offset` to the end, then it finishes the stream. Several files go at once (the reference sends four).
 3. Client → server on the control stream: `Done` `{ "hashes": ["<blake3 hex of the whole file>", ...] }`, one per item, empty for
    folders.
-4. The receiver writes everything at a **staging** path: a top-level file as `<name>.ferrying`, everything inside a top-level
-   folder under `<folder>.ferrying/` ("still on its way"). It checks the BLAKE3 of every file; when all match, each top-level item is renamed to its real name.
+4. The receiver writes everything at a **staging** path: a top-level file as `<name>.nearby-part`, everything inside a top-level
+   folder under `<folder>.nearby-part/` ("still on its way"). It checks the BLAKE3 of every file; when all match, each top-level item is renamed to its real name.
    Then `Outcome` `{ "ok": true, "error": null }`. A file whose hash does not match is deleted and `ok` is false; the other parts
    stay where they are, so sending the same items again resumes them (`resume` offsets) and sends the damaged file anew.
 

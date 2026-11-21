@@ -44,7 +44,7 @@ impl Viewer for ArchiveViewer {
         self.view.as_ref().map_or_else(|| div().into_any_element(), |v| v.clone().into_any_element())
     }
     fn more_menu(&self) -> Vec<MoreItem> {
-        // DirectLook ayrı süreç: çıkarma rustyfiles'ın işlem merkezinde yapılır, arşiv oraya gönderilir.
+        // leaf-look ayrı süreç: çıkarma rustyfiles'ın işlem merkezinde yapılır, arşiv oraya gönderilir.
         let path = self.path.clone();
         vec![MoreItem {
             label: t!("Open in rustyfiles").into(),

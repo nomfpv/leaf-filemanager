@@ -39,7 +39,7 @@ pub fn work_area_of(hwnd: isize) -> [f32; 4] {
     unsafe { work_of(MonitorFromWindow(h(hwnd), MONITOR_DEFAULTTONEAREST)) }
 }
 
-/// Başka bir sürecin (ör. DirectLook'tan çağrılan rustyfiles) pencereyi öne alabilmesine izin verir;
+/// Başka bir sürecin (ör. leaf-look'tan çağrılan rustyfiles) pencereyi öne alabilmesine izin verir;
 /// yoksa Windows ön plan kilidi yüzünden pencere yalnız görev çubuğunda yanıp söner.
 pub fn allow_any_foreground() {
     use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};

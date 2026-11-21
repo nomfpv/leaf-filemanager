@@ -1,7 +1,7 @@
 //! Quick search (Alt+Space by default): a small window over whatever app is in front that finds
 //! installed apps, files and folders (rustyfiles' name index), Chrome / Edge bookmarks, and
 //! offers a web search. Enter opens, Ctrl+Enter shows the item in its folder, Shift+Enter
-//! previews it with DirectLook, Esc closes. What is opened often comes first, and what was chosen
+//! previews it with leaf-look, Esc closes. What is opened often comes first, and what was chosen
 //! for the same typed letters before comes first of all ("En iyi eşleşme": see `Picks`).
 //!
 //! The hotkey is registered by the running rustyfiles (`rf_win::hotkey`); with "keep running in
@@ -50,12 +50,12 @@ static HELD: Mutex<Option<(Option<String>, Option<rf_win::hotkey::HotkeyError>)>
 
 static NO_HOTKEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// This process registers the hotkey: the one rustyfiles (not DirectLook, not a test copy). `LEAF_QUICK_HOTKEY=1` lets a test
+/// This process registers the hotkey: the one rustyfiles (not leaf-look, not a test copy). `LEAF_QUICK_HOTKEY=1` lets a test
 /// copy hold it like the real one (a copy the user tries the next version with, while the installed app is not running); without it a
 /// test copy never takes the user's hotkey.
 fn hotkey_owner() -> bool {
     let test_copy = std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || std::env::var_os("LEAF_INSTANCE").is_some();
-    !crate::background::DIRECTLOOK_PROCESS.load(std::sync::atomic::Ordering::Relaxed)
+    !crate::background::LOOK_PROCESS.load(std::sync::atomic::Ordering::Relaxed)
         && !NO_HOTKEY.load(std::sync::atomic::Ordering::Relaxed)
         && (!test_copy || std::env::var_os("LEAF_QUICK_HOTKEY").is_some())
 }

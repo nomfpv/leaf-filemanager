@@ -1,13 +1,13 @@
 # rustdecoder
 
-rustyfiles' own video engine, replacing FilmCraft in DirectLook and the preview pane.
+rustyfiles' own video engine, replacing FilmCraft in leaf-look and the preview pane.
 
 ## Why
 
-DirectLook decoded video with FilmCraft, on the CPU. A 4K 59.94 fps HEVC Main 10 clip
+leaf-look decoded video with FilmCraft, on the CPU. A 4K 59.94 fps HEVC Main 10 clip
 (Sony XAVC HS, 77 Mbit/s) decoded at 42 frames a second on a Ryzen 7 9800X3D with nothing
 else running, and stuttered under load. Media Foundation (the GPU's video engine) plays it
-smoothly, so DirectLook routes videos past 1080p60 there for now (commit 32e9c58).
+smoothly, so leaf-look routes videos past 1080p60 there for now (commit 32e9c58).
 Media Foundation is a black box, though: no frame-exact seeking, no control over presentation,
 and the MFPlay API it goes through is deprecated.
 
@@ -147,7 +147,7 @@ Frames stay on the GPU from decode to screen: no copy back to system memory.
      not switch it on by itself yet (`StreamInfo` does not say a stream is interlaced).
      `tests/deinterlace.rs`: a 60 fps source woven into 30 interlaced frames, comb measure 1.50 woven,
      0.38 blended.
-4. Playback in DirectLook: clock, frame queue, seeking, audio; replaces the Media Foundation
+4. Playback in leaf-look: clock, frame queue, seeking, audio; replaces the Media Foundation
    route, and FilmCraft for video.
    **Phase 4 groundwork, headless core done (2026-11-09):**
    - `present` (`Converter`): NV12 / P010 slice → BGRA8 texture of any size on the decoder's
@@ -186,7 +186,7 @@ Frames stay on the GPU from decode to screen: no copy back to system memory.
      (4K 59.94 fps Main 10, stored rotated 270): 5 s at real-time speed, decode + convert to
      1080x1920, 298..300 of 300 frames shown, 0..2 dropped, 0 late, 0.5 ms GPU per conversion
      (`examples/play_headless.rs`).
-   - Left for phase 4: window / swap chain presentation in DirectLook (flip model swap chain,
+   - Left for phase 4: window / swap chain presentation in leaf-look (flip model swap chain,
      present the converted target or convert straight into the back buffer, vsync-aligned
      `frame_for`), audio (decode, output device, the audio clock as the master clock and A/V
      sync by dropping or repeating pictures against it), pause on a seek target, playback
@@ -376,7 +376,7 @@ Frames stay on the GPU from decode to screen: no copy back to system memory.
      `frame_refs_short_signaling` (written to the spec, no encoder here uses it), intrabc
      (libaom screen content may not have used it), multiple video decoders at once with AV1,
      Opus / Vorbis audio, the player and `Playback` on AV1 files (the `Video` path is shared,
-     but no sync test has run on an AV1 clip), the rf-app side (`rd_video.rs` probe, `DirectLook`
+     but no sync test has run on an AV1 clip), the rf-app side (`rd_video.rs` probe, `leaf-look`
      route).
    - Left for phase 5: (AV1 is done, see above),
      Opus and Vorbis decoding (own, like the rest)
@@ -619,7 +619,7 @@ Frames stay on the GPU from decode to screen: no copy back to system memory.
 Fallback: GPUs without a decoder for the stream (old cards, AV1 before 2020) keep the
 Media Foundation route.
 
-DirectLook route, gaps closed (2026-11-09, branch worktree-agent-a657e1e417248d476):
+leaf-look route, gaps closed (2026-11-09, branch worktree-agent-a657e1e417248d476):
 - Double click: the popup reports `WindowEvent::DoubleClick`; `poll_rd` in `video.rs` sets a flag
   and the next `render` calls `window.toggle_fullscreen()` (it has the window), as the root's
   `on_mouse_down` does for the other routes. The popup follows through the rect that `render`
@@ -651,7 +651,7 @@ DirectLook route, gaps closed (2026-11-09, branch worktree-agent-a657e1e417248d4
   the first guess). Tests (`tests/par.rs`): `setsar=4/3` H.264 and HEVC MP4 with `pasp` and with
   the `pasp` box renamed (VUI only), 12:11 from the table, MKV 4:3 and 9/8, WebM VP9, and the
   hidden window's letterbox rows (853x360 in 800x600: rows 131..469).
-- Viewer moves: no fix was needed. Checked on a DirectLook test instance
+- Viewer moves: no fix was needed. Checked on a leaf-look test instance
   (`LEAF_RUSTDECODER=1`, muted, own config dir, a 640x360 `setsar=4/3` clip) driven only
   with `SetWindowPos` / `PostMessage` on its own windows: three moves of the viewer left the popup
   at the same offset (8, 43) each time, a resize to 900x700 re-fitted it (883x373, the 853:360
@@ -992,6 +992,6 @@ than two channels reaches the sink as its first two (left, right): the sink's 5.
 assume surround layouts, which camera tracks are not. The other channels stay in the decoder
 (`AudioDecoder::next_block`).
 
-Not done: a UI to choose (DirectLook); choosing which mono tracks form the pair, or mixing all of
+Not done: a UI to choose (leaf-look); choosing which mono tracks form the pair, or mixing all of
 them; non-PCM mono tracks (AAC and the like) are never grouped; MXF track names / languages (the
 MXF reader fills no `meta`); AVI / TS / PS have no language either.

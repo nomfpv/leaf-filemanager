@@ -1,4 +1,4 @@
-//! rustyfiles ve DirectLook'un ortak kodu; iki program da bu kütüphaneyi kullanır.
+//! rustyfiles ve leaf-look'un ortak kodu; iki program da bu kütüphaneyi kullanır.
 
 mod actions;
 mod aliases;
@@ -6,7 +6,7 @@ mod background;
 pub mod bench;
 mod fast_start;
 mod bench_view;
-mod ferry;
+mod nearby;
 mod archive_view;
 mod bulk_rename;
 mod command_palette;
@@ -247,9 +247,9 @@ fn save_and_quit(cx: &mut App) {
 /// The variable a restarted rustyfiles is started with: the process id of the one that is ending (see [`restart`]).
 const AFTER_EXIT_ENV: &str = "LEAF_AFTER_EXIT";
 
-/// Restarts rustyfiles: DirectLook is asked to stop, a new rustyfiles is started that waits for this one to end, and
+/// Restarts rustyfiles: leaf-look is asked to stop, a new rustyfiles is started that waits for this one to end, and
 /// this one quits the usual way (settings and session written). The new one opens its last session and brings
-/// DirectLook back as the settings say. WHY (the owner, 2026-11-17, after a morning where the dock came up empty: "bir de bir
+/// leaf-look back as the settings say. WHY (the owner, 2026-11-17, after a morning where the dock came up empty: "bir de bir
 /// kısayol ekleyelim. rustyfiles'ı restart etsin"): there was no way to start everything afresh short of ending the processes by
 /// hand. Ctrl+Alt+Shift+R and the command palette.
 pub(crate) fn restart(cx: &mut App) {
@@ -352,7 +352,7 @@ pub fn main() {
     // non-folders: hand those back to Explorer so nothing becomes unreachable.
     // The folder check is bounded: an offline network path must not keep the window from
     // appearing for the whole SMB timeout. Undecided after 2 s = treat as a (slow) folder.
-    // `--settings=directlook`: DirectLook'un simge menüsünden "DirectLook ayarları"
+    // `--settings=look`: leaf-look'un simge menüsünden "leaf-look ayarları"
     // `--settings=speed`: straight to Settings → Speed test
     let settings_arg = std::env::args().nth(1).and_then(|a| a.strip_prefix("--settings=").map(str::to_string));
     let open_look_settings = settings_arg.is_some();
@@ -426,7 +426,7 @@ pub fn main() {
             } else {
                 is_dir_bounded(PathBuf::from(&arg), std::time::Duration::from_secs(2))
             };
-            // a browsable archive (DirectLook's "rustyfiles'ta aç") opens like a folder, here
+            // a browsable archive (leaf-look's "rustyfiles'ta aç") opens like a folder, here
             let archive = !shell_namespace && archive_view::is_browsable(std::path::Path::new(&arg));
             if is_dir == Some(false) && !archive {
                 // Explorer opens folders through the verb we took over: what we just handed it may
@@ -632,8 +632,8 @@ pub fn main() {
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);
         }
-        // DirectLook ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
-        if cx.global::<settings::Settings>().directlook_enabled && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
+        // leaf-look ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
+        if cx.global::<settings::Settings>().look_enabled && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
             look::ipc::send(look::ipc::Msg::Wake, true);
         }
         // "Safely remove" / eject: let go of a drive when Windows asks (see rf_win::removal)
@@ -685,8 +685,8 @@ pub fn main() {
         // the folder organizer's watchers (only if a rule runs by itself); not in helper processes
         if primary_instance {
             organizer::init(cx);
-            // Ferry (off until the user turns it on): only the main process listens
-            ferry::init(cx);
+            // Nearby (off until the user turns it on): only the main process listens
+            nearby::init(cx);
         }
         // GPUI would quit by itself when the last window closes (QuitMode::Default on Windows):
         // that cut running copies in half and makes background mode impossible. We decide.

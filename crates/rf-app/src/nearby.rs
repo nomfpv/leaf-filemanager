@@ -1,8 +1,8 @@
-//! Ferry, the Windows side: sending files to rustyfiles on the network's other devices, and taking theirs. The network part is
+//! Nearby, the Windows side: sending files to rustyfiles on the network's other devices, and taking theirs. The network part is
 //! `crates/rf-nearby` (shared with the macOS app); this is the service in the main process, the Status Center cards for the transfers,
-//! the small window that asks about an offer or a pairing code, the "Send with Ferry" menu and the Settings page.
+//! the small window that asks about an offer or a pairing code, the "Send with Nearby" menu and the Settings page.
 //!
-//! Off until the user turns it on (Settings > Ferry): it listens on a network port, and Windows' firewall may ask about that. It runs
+//! Off until the user turns it on (Settings > Nearby): it listens on a network port, and Windows' firewall may ask about that. It runs
 //! while rustyfiles runs (a window open, or in the notification area).
 
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use gpui_kit::*;
 use rf_nearby::{Config, EstimateSource, LinkKind, NearbyListener, NetStatus, Nearby, Offer, Peer, SpeedResult, TransferResult, Visibility};
 
 use crate::fluent_menu::{Item, MenuIcon};
-use crate::settings::{self, FerryVisibility, Settings};
+use crate::settings::{self, NearbyVisibility, Settings};
 use crate::t;
 use crate::theme::{self, Palette};
 
@@ -42,7 +42,7 @@ enum Ev {
     Paired(String),
     Visibility(Visibility),
     Status(NetStatus),
-    /// A click on one of our toasts: its argument (`ferry:yes:<key>`, `ferry:no:<key>`, `ferry:show:<key>`, `ferry:open:<path>`).
+    /// A click on one of our toasts: its argument (`nearby:yes:<key>`, `nearby:no:<key>`, `nearby:show:<key>`, `nearby:open:<path>`).
     Toast(String),
     Speed(String, SpeedResult),
 }
@@ -113,7 +113,7 @@ struct Started {
 }
 
 #[derive(Default)]
-pub struct Ferry {
+pub struct NearbyService {
     nearby: Option<Arc<Nearby>>,
     started: Option<Started>,
     peers: Vec<Peer>,
@@ -127,18 +127,18 @@ pub struct Ferry {
     in_toast: std::collections::HashSet<String>,
     window: Option<WindowHandle<QuestionView>>,
     events: Option<mpsc::UnboundedSender<Ev>>,
-    /// Settings > Ferry is on screen: see [`page_seen`].
+    /// Settings > Nearby is on screen: see [`page_seen`].
     viewing: Option<Viewing>,
     /// The speed tests running now (by device), and the last result with each device in this run.
     measuring: std::collections::HashSet<String>,
     speeds: HashMap<String, SpeedResult>,
 }
 
-/// Settings > Ferry on screen, in `window`, last drawn at `seen`; `restore` is the visibility to go back to when it goes.
+/// Settings > Nearby on screen, in `window`, last drawn at `seen`; `restore` is the visibility to go back to when it goes.
 struct Viewing {
     window: AnyWindowHandle,
     seen: std::time::Instant,
-    restore: Option<FerryVisibility>,
+    restore: Option<NearbyVisibility>,
 }
 
 /// The user picked a visibility in the list: a choice that stays when the page goes.
@@ -146,12 +146,12 @@ static CHOSEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 /// The page counts as gone when it was not drawn for this long (its window is redrawn every two seconds while it is open).
 const PAGE_GONE: Duration = Duration::from_secs(5);
 
-impl Global for Ferry {}
+impl Global for NearbyService {}
 
-/// At start, in the main process only: Ferry follows the settings from here on ([`apply`], called by every settings change).
+/// At start, in the main process only: Nearby follows the settings from here on ([`apply`], called by every settings change).
 pub fn init(cx: &mut App) {
     let (tx, mut rx) = mpsc::unbounded::<Ev>();
-    cx.set_global(Ferry { events: Some(tx), ..Default::default() });
+    cx.set_global(NearbyService { events: Some(tx), ..Default::default() });
     cx.spawn(async move |cx| {
         while let Some(ev) = rx.next().await {
             cx.update(|cx| on_event(ev, cx));
@@ -159,8 +159,8 @@ pub fn init(cx: &mut App) {
     })
     .detach();
     // "everyone" never outlives a run: it is a ten-minute state
-    if cx.global::<Settings>().ferry_visibility == FerryVisibility::Everyone {
-        settings::update(cx, |s| s.ferry_visibility = FerryVisibility::Trusted);
+    if cx.global::<Settings>().nearby_visibility == NearbyVisibility::Everyone {
+        settings::update(cx, |s| s.nearby_visibility = NearbyVisibility::Trusted);
     }
     apply(cx);
 }
@@ -168,24 +168,24 @@ pub fn init(cx: &mut App) {
 /// Brings the service in line with the settings: starts or stops it, starts it anew when its name or folder changed, sets who sees
 /// this PC. Cheap when nothing changed.
 pub fn apply(cx: &mut App) {
-    if cx.try_global::<Ferry>().is_none() {
+    if cx.try_global::<NearbyService>().is_none() {
         return;
     }
     let s = cx.global::<Settings>();
-    let want = s.ferry_enabled.then(|| Started { name: name_of(s), inbox: inbox_of(s).to_string_lossy().into_owned(), auto_accept_trusted: s.ferry_auto_accept_trusted });
-    let vis = match s.ferry_visibility {
-        FerryVisibility::Off => Visibility::Off,
-        FerryVisibility::Trusted => Visibility::Trusted,
-        FerryVisibility::Everyone => Visibility::Everyone,
+    let want = s.nearby_enabled.then(|| Started { name: name_of(s), inbox: inbox_of(s).to_string_lossy().into_owned(), auto_accept_trusted: s.nearby_auto_accept_trusted });
+    let vis = match s.nearby_visibility {
+        NearbyVisibility::Off => Visibility::Off,
+        NearbyVisibility::Trusted => Visibility::Trusted,
+        NearbyVisibility::Everyone => Visibility::Everyone,
     };
-    if cx.global::<Ferry>().started != want {
+    if cx.global::<NearbyService>().started != want {
         stop(cx);
         if let Some(w) = want {
             start(w, cx);
         }
         cx.refresh_windows();
     }
-    if let Some(n) = cx.global::<Ferry>().nearby.clone()
+    if let Some(n) = cx.global::<NearbyService>().nearby.clone()
         && n.visibility() != vis
     {
         n.set_visibility(vis);
@@ -193,8 +193,8 @@ pub fn apply(cx: &mut App) {
 }
 
 fn start(w: Started, cx: &mut App) {
-    let Some(tx) = cx.global::<Ferry>().events.clone() else { return };
-    let Some(dir) = settings::app_dir().map(|d| d.join("ferry")) else { return };
+    let Some(tx) = cx.global::<NearbyService>().events.clone() else { return };
+    let Some(dir) = settings::app_dir().map(|d| d.join("nearby")) else { return };
     let config = Config {
         name: w.name.clone(),
         os: "windows".into(),
@@ -206,7 +206,7 @@ fn start(w: Started, cx: &mut App) {
         everyone_minutes: EVERYONE_MINUTES,
         local_only: false,
     };
-    let f = cx.global_mut::<Ferry>();
+    let f = cx.global_mut::<NearbyService>();
     f.started = Some(w);
     match Nearby::start(config, Arc::new(Listener(tx))) {
         Ok(n) => {
@@ -215,14 +215,14 @@ fn start(w: Started, cx: &mut App) {
             watch_link(cx);
         }
         Err(e) => {
-            log::warn!("ferry: cannot start: {e}");
+            log::warn!("nearby: cannot start: {e}");
             f.problem = Some(e.to_string());
         }
     }
 }
 
 fn stop(cx: &mut App) {
-    let f = cx.global_mut::<Ferry>();
+    let f = cx.global_mut::<NearbyService>();
     f.started = None;
     f.peers.clear();
     f.problem = None;
@@ -245,7 +245,7 @@ fn stop(cx: &mut App) {
 }
 
 fn name_of(s: &Settings) -> String {
-    let name = s.ferry_name.trim();
+    let name = s.nearby_name.trim();
     if !name.is_empty() {
         return name.to_string();
     }
@@ -253,56 +253,56 @@ fn name_of(s: &Settings) -> String {
 }
 
 fn inbox_of(s: &Settings) -> PathBuf {
-    let custom = s.ferry_inbox.trim();
+    let custom = s.nearby_inbox.trim();
     if !custom.is_empty() {
         return PathBuf::from(custom);
     }
     dirs::download_dir().or_else(|| dirs::home_dir().map(|h| h.join("Downloads"))).unwrap_or_default()
 }
 
-/// Whether Ferry runs (the menu offers it only then).
+/// Whether Nearby runs (the menu offers it only then).
 pub(crate) fn running(cx: &App) -> bool {
-    cx.try_global::<Ferry>().is_some_and(|f| f.nearby.is_some())
+    cx.try_global::<NearbyService>().is_some_and(|f| f.nearby.is_some())
 }
 
 fn on_event(ev: Ev, cx: &mut App) {
     match ev {
         Ev::Peers(peers) => {
-            cx.global_mut::<Ferry>().peers = peers;
+            cx.global_mut::<NearbyService>().peers = peers;
             cx.refresh_windows();
         }
         Ev::Offer(offer) => ask(Question::Offer(offer), cx),
         Ev::Receiving(offer) => {
             let dest = inbox_of(cx.global::<Settings>());
-            cx.global_mut::<Ferry>().incoming.insert(offer.transfer, offer.from_name.clone());
+            cx.global_mut::<NearbyService>().incoming.insert(offer.transfer, offer.from_name.clone());
             incoming_started(&offer, cx);
-            track(cx, offer.transfer, format!("{}: {}", t!("Receiving with Ferry"), offer.from_name), Some(dest));
+            track(cx, offer.transfer, format!("{}: {}", t!("Receiving with Nearby"), offer.from_name), Some(dest));
         }
         Ev::Progress(transfer, done, total) => {
-            if let Some(tx) = cx.global::<Ferry>().transfers.get(&transfer) {
+            if let Some(tx) = cx.global::<NearbyService>().transfers.get(&transfer) {
                 let _ = tx.send(Step::Progress(done, total));
             }
         }
         Ev::Finished(transfer, result) => {
-            let from = cx.global_mut::<Ferry>().incoming.remove(&transfer);
+            let from = cx.global_mut::<NearbyService>().incoming.remove(&transfer);
             if let Some(from) = from
                 && result.ok
             {
                 arrived(transfer, from, result.paths.clone(), cx);
             }
-            if let Some(tx) = cx.global_mut::<Ferry>().transfers.remove(&transfer) {
+            if let Some(tx) = cx.global_mut::<NearbyService>().transfers.remove(&transfer) {
                 let _ = tx.send(Step::End(result));
             }
         }
         Ev::Toast(arg) => on_toast(&arg, cx),
         Ev::Speed(peer, result) => {
-            let f = cx.global_mut::<Ferry>();
+            let f = cx.global_mut::<NearbyService>();
             f.measuring.remove(&peer);
             f.speeds.insert(peer, result);
             cx.refresh_windows();
         }
         Ev::Code(peer, code) => {
-            let f = cx.global::<Ferry>();
+            let f = cx.global::<NearbyService>();
             let name = f.peers.iter().find(|p| p.id == peer).map(|p| p.name.clone()).unwrap_or_else(|| peer.clone());
             ask(Question::Pair { peer, name, code }, cx);
         }
@@ -312,18 +312,18 @@ fn on_event(ev: Ev, cx: &mut App) {
         }
         Ev::Visibility(v) => {
             // (the ten-minute fall-back is not undone when the page goes)
-            if let Some(view) = cx.global_mut::<Ferry>().viewing.as_mut() {
+            if let Some(view) = cx.global_mut::<NearbyService>().viewing.as_mut() {
                 view.restore = None;
             }
             let vis = match v {
-                Visibility::Off => FerryVisibility::Off,
-                Visibility::Trusted => FerryVisibility::Trusted,
-                Visibility::Everyone => FerryVisibility::Everyone,
+                Visibility::Off => NearbyVisibility::Off,
+                Visibility::Trusted => NearbyVisibility::Trusted,
+                Visibility::Everyone => NearbyVisibility::Everyone,
             };
-            settings::update(cx, |s| s.ferry_visibility = vis);
+            settings::update(cx, |s| s.nearby_visibility = vis);
         }
         Ev::Status(status) => {
-            cx.global_mut::<Ferry>().problem = match status {
+            cx.global_mut::<NearbyService>().problem = match status {
                 NetStatus::Ready => None,
                 NetStatus::DiscoveryUnavailable { reason } => Some(reason),
             };
@@ -334,9 +334,9 @@ fn on_event(ev: Ev, cx: &mut App) {
 
 /// A Status Center card for a transfer: its progress, its end, and its cancel button stopping the transfer.
 fn track(cx: &mut App, transfer: u64, title: String, dest: Option<PathBuf>) {
-    let Some(nearby) = cx.global::<Ferry>().nearby.clone() else { return };
+    let Some(nearby) = cx.global::<NearbyService>().nearby.clone() else { return };
     let (tx, rx) = std::sync::mpsc::channel::<Step>();
-    cx.global_mut::<Ferry>().transfers.insert(transfer, tx);
+    cx.global_mut::<NearbyService>().transfers.insert(transfer, tx);
     let id = crate::status_center::start_with_id(
         cx,
         title,
@@ -358,7 +358,7 @@ fn track(cx: &mut App, transfer: u64, title: String, dest: Option<PathBuf>) {
                             nearby.cancel(transfer);
                         }
                     }
-                    // (Ferry stopped meanwhile)
+                    // (Nearby stopped meanwhile)
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(false),
                 }
             }
@@ -399,7 +399,7 @@ fn failure_text(error: Option<&str>) -> String {
 fn ask(q: Question, cx: &mut App) {
     let key = q.key();
     let toasted = toast_question(&q, cx);
-    let f = cx.global_mut::<Ferry>();
+    let f = cx.global_mut::<NearbyService>();
     f.questions.retain(|x| x.key() != key);
     f.questions.push(q);
     if toasted {
@@ -416,13 +416,13 @@ fn ask(q: Question, cx: &mut App) {
 
 fn answer(q: &Question, yes: bool, cx: &mut App) {
     forget_question(&q.key(), cx);
-    let Some(n) = cx.global::<Ferry>().nearby.clone() else { return };
+    let Some(n) = cx.global::<NearbyService>().nearby.clone() else { return };
     match q {
         Question::Offer(o) if yes => {
             let dest = inbox_of(cx.global::<Settings>());
             n.accept(o.id, dest.to_string_lossy().into_owned());
-            cx.global_mut::<Ferry>().incoming.insert(o.transfer, o.from_name.clone());
-            track(cx, o.transfer, format!("{}: {}", t!("Receiving with Ferry"), o.from_name), Some(dest));
+            cx.global_mut::<NearbyService>().incoming.insert(o.transfer, o.from_name.clone());
+            track(cx, o.transfer, format!("{}: {}", t!("Receiving with Nearby"), o.from_name), Some(dest));
         }
         Question::Offer(o) => n.reject(o.id),
         Question::Pair { peer, .. } => n.confirm_pairing(peer.clone(), yes),
@@ -431,10 +431,10 @@ fn answer(q: &Question, yes: bool, cx: &mut App) {
 
 /// A question is no longer asked (answered, given up, or out of time): out of the window, and its toast taken away.
 fn forget_question(key: &str, cx: &mut App) {
-    if !cx.has_global::<Ferry>() {
+    if !cx.has_global::<NearbyService>() {
         return;
     }
-    let f = cx.global_mut::<Ferry>();
+    let f = cx.global_mut::<NearbyService>();
     f.questions.retain(|x| x.key() != key);
     if f.in_toast.remove(key) {
         rf_win::toast_post::remove(crate::installer::APP_ID, key);
@@ -479,23 +479,23 @@ fn toast_question(q: &Question, cx: &App) -> bool {
     if !toasts_usable() {
         return false;
     }
-    let Some(tx) = cx.global::<Ferry>().events.clone() else { return false };
+    let Some(tx) = cx.global::<NearbyService>().events.clone() else { return false };
     let key = q.key();
     let (title, lines, code, no, yes) = texts(q);
     let mut all: Vec<String> = code.map(|c| format!("{} {c}", t!("Code:"))).into_iter().collect();
     all.extend(lines);
     let refs: Vec<&str> = all.iter().map(String::as_str).collect();
     let buttons = [
-        rf_win::toast_post::Button { label: no.to_string(), argument: format!("ferry:no:{key}") },
-        rf_win::toast_post::Button { label: yes.to_string(), argument: format!("ferry:yes:{key}") },
+        rf_win::toast_post::Button { label: no.to_string(), argument: format!("nearby:no:{key}") },
+        rf_win::toast_post::Button { label: yes.to_string(), argument: format!("nearby:yes:{key}") },
     ];
-    let toast = rf_win::toast_post::Toast { tag: &key, title: &title, lines: &refs, launch: &format!("ferry:show:{key}"), buttons: &buttons, stays: true };
+    let toast = rf_win::toast_post::Toast { tag: &key, title: &title, lines: &refs, launch: &format!("nearby:show:{key}"), buttons: &buttons, stays: true };
     match rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
         let _ = tx.unbounded_send(Ev::Toast(arg));
     }) {
         Ok(()) => true,
         Err(e) => {
-            log::info!("ferry: no toast ({e}); asking in the window");
+            log::info!("nearby: no toast ({e}); asking in the window");
             false
         }
     }
@@ -503,17 +503,17 @@ fn toast_question(q: &Question, cx: &App) -> bool {
 
 fn on_toast(arg: &str, cx: &mut App) {
     let mut parts = arg.splitn(3, ':');
-    let (Some("ferry"), Some(kind), Some(rest)) = (parts.next(), parts.next(), parts.next()) else { return };
+    let (Some("nearby"), Some(kind), Some(rest)) = (parts.next(), parts.next(), parts.next()) else { return };
     match kind {
         "yes" | "no" => {
-            let q = cx.global::<Ferry>().questions.iter().find(|q| q.key() == rest).cloned();
+            let q = cx.global::<NearbyService>().questions.iter().find(|q| q.key() == rest).cloned();
             if let Some(q) = q {
                 answer(&q, kind == "yes", cx);
             }
         }
         // a click on the question's toast itself: it goes away, so the question moves to the window
         "show" => {
-            cx.global_mut::<Ferry>().in_toast.remove(rest);
+            cx.global_mut::<NearbyService>().in_toast.remove(rest);
             sync_window(cx);
         }
         "open" => {
@@ -533,10 +533,10 @@ fn incoming_started(offer: &Offer, cx: &mut App) {
     };
     let line = format!("{what} · {}", rf_core::format::size(offer.total_bytes));
     let shown = toasts_usable()
-        && cx.global::<Ferry>().events.clone().is_some_and(|tx| {
+        && cx.global::<NearbyService>().events.clone().is_some_and(|tx| {
             let title = format!("{} {}", offer.from_name, t!("is sending you files"));
             let lines = [line.as_str()];
-            let toast = rf_win::toast_post::Toast { tag: &format!("in-{}", offer.transfer), title: &title, lines: &lines, launch: "ferry:none:", buttons: &[], stays: false };
+            let toast = rf_win::toast_post::Toast { tag: &format!("in-{}", offer.transfer), title: &title, lines: &lines, launch: "nearby:none:", buttons: &[], stays: false };
             rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
                 let _ = tx.unbounded_send(Ev::Toast(arg));
             })
@@ -550,7 +550,7 @@ fn incoming_started(offer: &Offer, cx: &mut App) {
 /// Files came in: each is marked as come from another computer (SmartScreen asks before a program among them runs), and the installed
 /// app says so in a toast that opens them.
 fn arrived(transfer: u64, from: String, paths: Vec<String>, cx: &mut App) {
-    let referrer = format!("ferry://{from}");
+    let referrer = format!("nearby://{from}");
     let marked = paths.clone();
     std::thread::spawn(move || {
         for p in &marked {
@@ -561,16 +561,16 @@ fn arrived(transfer: u64, from: String, paths: Vec<String>, cx: &mut App) {
     if !toasts_usable() {
         return;
     }
-    let Some(tx) = cx.global::<Ferry>().events.clone() else { return };
+    let Some(tx) = cx.global::<NearbyService>().events.clone() else { return };
     let name = std::path::Path::new(&first).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let what = if paths.len() == 1 { name } else { format!("{name} {} {}", t!("and"), crate::i18n::items(paths.len() - 1)) };
     let title = format!("{from} {}", t!("sent you files"));
     let lines = [what.as_str(), t!("Click to see them")];
-    let toast = rf_win::toast_post::Toast { tag: &format!("got-{transfer}"), title: &title, lines: &lines, launch: &format!("ferry:open:{first}"), buttons: &[], stays: false };
+    let toast = rf_win::toast_post::Toast { tag: &format!("got-{transfer}"), title: &title, lines: &lines, launch: &format!("nearby:open:{first}"), buttons: &[], stays: false };
     if let Err(e) = rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
         let _ = tx.unbounded_send(Ev::Toast(arg));
     }) {
-        log::info!("ferry: no toast for an arrival: {e}");
+        log::info!("nearby: no toast for an arrival: {e}");
     }
 }
 
@@ -586,23 +586,23 @@ fn mark_tree(path: &std::path::Path, from: &str) {
     } else if meta.is_file()
         && let Err(e) = rf_win::fileinfo::mark_downloaded(path, from)
     {
-        log::info!("ferry: cannot mark {}: {e}", path.display());
+        log::info!("nearby: cannot mark {}: {e}", path.display());
     }
 }
 
 /// The question window: open while a question is asked in it (not in a toast), closed when none is, redrawn when they change.
 fn sync_window(cx: &mut App) {
-    let Some(f) = cx.try_global::<Ferry>() else { return };
+    let Some(f) = cx.try_global::<NearbyService>() else { return };
     let empty = f.questions.iter().all(|q| f.in_toast.contains(&q.key()));
     let window = f.window;
     match (empty, window) {
         (true, Some(w)) => {
-            cx.global_mut::<Ferry>().window = None;
+            cx.global_mut::<NearbyService>().window = None;
             let _ = w.update(cx, |_, window, _| window.remove_window());
         }
         (false, Some(w)) => {
             if w.update(cx, |_, _, cx| cx.notify()).is_err() {
-                cx.global_mut::<Ferry>().window = None;
+                cx.global_mut::<NearbyService>().window = None;
                 open_window(cx);
             }
         }
@@ -636,8 +636,8 @@ fn open_window(cx: &mut App) {
         rf_win::window::set_dark_mode(hwnd, Palette::for_window(window).dark);
         cx.new(|cx| QuestionView::new(glass, window, cx))
     }) {
-        Ok(w) => cx.global_mut::<Ferry>().window = Some(w),
-        Err(e) => log::warn!("ferry: question window: {e:#}"),
+        Ok(w) => cx.global_mut::<NearbyService>().window = Some(w),
+        Err(e) => log::warn!("nearby: question window: {e:#}"),
     }
 }
 
@@ -664,7 +664,7 @@ impl Render for QuestionView {
         let p = Palette::for_window(window);
         // (the questions asked in a toast are not asked here too)
         let questions: Vec<Question> = cx
-            .try_global::<Ferry>()
+            .try_global::<NearbyService>()
             .map(|f| f.questions.iter().filter(|q| !f.in_toast.contains(&q.key())).cloned().collect())
             .unwrap_or_default();
         let Some(q) = questions.first().cloned() else { return div().into_any_element() };
@@ -682,7 +682,7 @@ impl Render for QuestionView {
                     .gap_2()
                     .items_center()
                     .child(Icon::new(L::Send).size(px(16.)).text_color(p.accent))
-                    .child(div().text_xs().text_color(p.text_secondary).child("Ferry"))
+                    .child(div().text_xs().text_color(p.text_secondary).child("Nearby"))
                     .children((waiting > 0).then(|| div().ml_auto().text_xs().text_color(p.text_secondary).child(format!("+{waiting}")))),
             )
             .child(div().mt_1().text_sm().font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(title))
@@ -693,8 +693,8 @@ impl Render for QuestionView {
                     .mt_3()
                     .gap_2()
                     .justify_end()
-                    .child(crate::settings_view::button("ferry-no", &p, no, move |_, cx| answer(&qn, false, cx)))
-                    .child(primary("ferry-yes", &p, yes, move |_, cx| answer(&qy, true, cx))),
+                    .child(crate::settings_view::button("nearby-no", &p, no, move |_, cx| answer(&qn, false, cx)))
+                    .child(primary("nearby-yes", &p, yes, move |_, cx| answer(&qy, true, cx))),
             );
         // the window is as tall as what it says, growing upwards (its bottom stays above the taskbar)
         let vh = window.viewport_size().height;
@@ -749,9 +749,9 @@ fn primary(id: &'static str, p: &Palette, label: &str, run: impl Fn(&mut Window,
 
 // ------------------------------------------------------------------------------------------------------------------ sending
 
-/// The "Send with Ferry" submenu for `paths`: the devices seen now (the trusted ones first), and the way to the settings.
+/// The "Send with Nearby" submenu for `paths`: the devices seen now (the trusted ones first), and the way to the settings.
 pub(crate) fn menu_items(paths: &[PathBuf], cx: &App) -> Vec<Item> {
-    let peers = cx.try_global::<Ferry>().map(|f| f.peers.clone()).unwrap_or_default();
+    let peers = cx.try_global::<NearbyService>().map(|f| f.peers.clone()).unwrap_or_default();
     let mut v: Vec<Item> = peers
         .into_iter()
         .map(|peer| {
@@ -764,40 +764,40 @@ pub(crate) fn menu_items(paths: &[PathBuf], cx: &App) -> Vec<Item> {
         v.push(Item::action(t!("No devices nearby"), MenuIcon::Lucide(L::Wifi), |_, _| {}).enabled(false));
     }
     v.push(Item::Separator);
-    v.push(Item::action(t!("Ferry settings…"), MenuIcon::Lucide(L::Settings), |_, cx| open_settings(cx)));
+    v.push(Item::action(t!("Nearby settings…"), MenuIcon::Lucide(L::Settings), |_, cx| open_settings(cx)));
     v
 }
 
 pub(crate) fn open_settings(cx: &mut App) {
-    crate::settings_view::open_page(crate::settings_view::Page::Ferry, cx);
+    crate::settings_view::open_page(crate::settings_view::Page::Nearby, cx);
     crate::workspace::show_settings(cx);
 }
 
 fn send(peer: &Peer, paths: Vec<PathBuf>, cx: &mut App) {
-    let Some(n) = cx.global::<Ferry>().nearby.clone() else { return };
+    let Some(n) = cx.global::<NearbyService>().nearby.clone() else { return };
     match n.send(peer.id.clone(), paths.iter().map(|p| p.to_string_lossy().into_owned()).collect()) {
-        Ok(transfer) => track(cx, transfer, format!("{}: {}", t!("Sending with Ferry"), peer.name), None),
-        Err(e) => log::warn!("ferry: cannot send to {}: {e}", peer.name),
+        Ok(transfer) => track(cx, transfer, format!("{}: {}", t!("Sending with Nearby"), peer.name), None),
+        Err(e) => log::warn!("nearby: cannot send to {}: {e}", peer.name),
     }
 }
 
 // ------------------------------------------------------------------------------------------------------------------ settings
 
-/// Settings > Ferry.
+/// Settings > Nearby.
 pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     use crate::settings_view::{button, card, dropdown, section, switch};
-    let on = s.ferry_enabled;
+    let on = s.nearby_enabled;
     let mut v = vec![card(
         p,
         L::Send,
-        t!("Use Ferry"),
+        t!("Use Nearby"),
         Some(t!("rustyfiles on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, Windows Firewall may ask you to let rustyfiles use the network: allow it for private networks.")),
-        switch("ferry-on", p, on, move |_, cx| settings::update(cx, |s| s.ferry_enabled = !on)),
+        switch("nearby-on", p, on, move |_, cx| settings::update(cx, |s| s.nearby_enabled = !on)),
     )];
     if !on {
         return v;
     }
-    let (nearby, peers, problem) = cx.try_global::<Ferry>().map(|f| (f.nearby.clone(), f.peers.clone(), f.problem.clone())).unwrap_or_default();
+    let (nearby, peers, problem) = cx.try_global::<NearbyService>().map(|f| (f.nearby.clone(), f.peers.clone(), f.problem.clone())).unwrap_or_default();
     if let Some(problem) = problem {
         v.push(card(p, L::TriangleAlert, t!("Can't look for nearby devices"), Some(problem.as_str()), div().into_any_element()));
     }
@@ -807,16 +807,16 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         t!("Who can see this PC"),
         Some(t!("Everyone lasts 10 minutes, then it goes back to trusted devices only. To take files from a device you haven't paired with, or to pair with one, choose Everyone.")),
         dropdown(
-            "ferry-vis",
+            "nearby-vis",
             p,
-            s.ferry_visibility,
+            s.nearby_visibility,
             vec![
-                (FerryVisibility::Off, t!("No one").to_string()),
-                (FerryVisibility::Trusted, t!("Trusted devices only").to_string()),
-                (FerryVisibility::Everyone, t!("Everyone (10 minutes)").to_string()),
+                (NearbyVisibility::Off, t!("No one").to_string()),
+                (NearbyVisibility::Trusted, t!("Trusted devices only").to_string()),
+                (NearbyVisibility::Everyone, t!("Everyone (10 minutes)").to_string()),
             ],
             |s, v| {
-                s.ferry_visibility = v;
+                s.nearby_visibility = v;
                 CHOSEN.store(true, Ordering::Relaxed);
             },
         ),
@@ -827,13 +827,13 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         L::Pencil,
         t!("Device name"),
         Some(name.as_str()),
-        button("ferry-name", p, t!("Change…"), move |window, cx| {
+        button("nearby-name", p, t!("Change…"), move |window, cx| {
             let ok = crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |text, _, cx| {
                 let text = text.unwrap_or_default().trim().to_string();
-                settings::update(cx, |s| s.ferry_name = text);
+                settings::update(cx, |s| s.nearby_name = text);
                 Ok(())
             });
-            let current = cx.global::<Settings>().ferry_name.clone();
+            let current = cx.global::<Settings>().nearby_name.clone();
             crate::prompt::show(
                 t!("Device name"),
                 Some(t!("Other devices see this PC by this name. Leave it empty to use the computer's name.").to_string()),
@@ -845,7 +845,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         }),
     ));
     let inbox = inbox_of(s).to_string_lossy().into_owned();
-    let custom = !s.ferry_inbox.trim().is_empty();
+    let custom = !s.nearby_inbox.trim().is_empty();
     v.push(card(
         p,
         L::FolderDown,
@@ -853,8 +853,8 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         Some(inbox.as_str()),
         h_flex()
             .gap_2()
-            .children(custom.then(|| button("ferry-inbox-reset", p, t!("Default"), |_, cx| settings::update(cx, |s| s.ferry_inbox.clear()))))
-            .child(button("ferry-inbox", p, t!("Change…"), |_, cx| {
+            .children(custom.then(|| button("nearby-inbox-reset", p, t!("Default"), |_, cx| settings::update(cx, |s| s.nearby_inbox.clear()))))
+            .child(button("nearby-inbox", p, t!("Change…"), |_, cx| {
                 let (tx, rx) = futures::channel::oneshot::channel::<Option<PathBuf>>();
                 let title = t!("Choose the folder for received files");
                 rf_win::sta::run(move |owner| {
@@ -862,24 +862,24 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 });
                 cx.spawn(async move |cx| {
                     if let Ok(Some(path)) = rx.await {
-                        let _ = cx.update(|cx| settings::update(cx, |s| s.ferry_inbox = path.to_string_lossy().into_owned()));
+                        let _ = cx.update(|cx| settings::update(cx, |s| s.nearby_inbox = path.to_string_lossy().into_owned()));
                     }
                 })
                 .detach();
             }))
             .into_any_element(),
     ));
-    let auto = s.ferry_auto_accept_trusted;
+    let auto = s.nearby_auto_accept_trusted;
     v.push(card(
         p,
         L::ShieldCheck,
         t!("Take files from trusted devices without asking"),
         Some(t!("Files from devices you paired with go straight to the Received files folder; other devices are asked about every time.")),
-        switch("ferry-auto", p, auto, move |_, cx| settings::update(cx, |s| s.ferry_auto_accept_trusted = !auto)),
+        switch("nearby-auto", p, auto, move |_, cx| settings::update(cx, |s| s.nearby_auto_accept_trusted = !auto)),
     ));
 
     v.push(section(p, t!("Nearby devices")));
-    let everyone = s.ferry_visibility == FerryVisibility::Everyone;
+    let everyone = s.nearby_visibility == NearbyVisibility::Everyone;
     v.push(card(
         p,
         L::RefreshCw,
@@ -887,9 +887,9 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         Some(t!("Devices on the network are found by themselves; if one that just came on doesn't show up, look again.")),
         h_flex()
             .gap_2()
-            .children((!everyone).then(|| button("ferry-everyone", p, t!("Show to everyone for 10 minutes"), |_, cx| settings::update(cx, |s| s.ferry_visibility = FerryVisibility::Everyone))))
-            .child(button("ferry-refresh", p, t!("Refresh"), |_, cx| {
-                if let Some(n) = cx.global::<Ferry>().nearby.clone() {
+            .children((!everyone).then(|| button("nearby-everyone", p, t!("Show to everyone for 10 minutes"), |_, cx| settings::update(cx, |s| s.nearby_visibility = NearbyVisibility::Everyone))))
+            .child(button("nearby-refresh", p, t!("Refresh"), |_, cx| {
+                if let Some(n) = cx.global::<NearbyService>().nearby.clone() {
                     n.refresh();
                 }
             }))
@@ -900,12 +900,12 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::Wifi,
             t!("No devices yet"),
-            Some(t!("rustyfiles must be open on the other device, with Ferry on. If the two haven't paired yet, at least one must be visible to Everyone.")),
+            Some(t!("rustyfiles must be open on the other device, with Nearby on. If the two haven't paired yet, at least one must be visible to Everyone.")),
             div().into_any_element(),
         ));
     }
     for (i, peer) in peers.iter().enumerate() {
-        let (measuring, last) = cx.try_global::<Ferry>().map(|f| (f.measuring.contains(&peer.id), f.speeds.get(&peer.id).cloned())).unwrap_or_default();
+        let (measuring, last) = cx.try_global::<NearbyService>().map(|f| (f.measuring.contains(&peer.id), f.speeds.get(&peer.id).cloned())).unwrap_or_default();
         let mut desc = os_name(&peer.os).to_string();
         if peer.trusted {
             desc = format!("{desc} · {}", t!("Trusted"));
@@ -916,10 +916,10 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         let id = peer.id.clone();
         let control = h_flex()
             .gap_2()
-            .child(button(("ferry-speed", i), p, if measuring { t!("Measuring…") } else { t!("Test speed") }, move |_, cx| measure(id.clone(), cx)))
+            .child(button(("nearby-speed", i), p, if measuring { t!("Measuring…") } else { t!("Test speed") }, move |_, cx| measure(id.clone(), cx)))
             .children((!peer.trusted).then(|| {
                 let id = peer.id.clone();
-                button(("ferry-pair", i), p, t!("Pair"), move |_, cx| pair(id.clone(), cx))
+                button(("nearby-pair", i), p, t!("Pair"), move |_, cx| pair(id.clone(), cx))
             }))
             .into_any_element();
         v.push(card(p, if peer.trusted { L::ShieldCheck } else { L::Monitor }, &peer.name, Some(desc.as_str()), control));
@@ -935,11 +935,11 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 L::ShieldCheck,
                 &peer.name,
                 None,
-                button(("ferry-forget", i), p, t!("Forget"), move |_, cx| {
-                    if let Some(n) = cx.global::<Ferry>().nearby.clone()
+                button(("nearby-forget", i), p, t!("Forget"), move |_, cx| {
+                    if let Some(n) = cx.global::<NearbyService>().nearby.clone()
                         && let Err(e) = n.forget(id.clone())
                     {
-                        log::warn!("ferry: cannot forget a device: {e}");
+                        log::warn!("nearby: cannot forget a device: {e}");
                     }
                     cx.refresh_windows();
                 }),
@@ -949,16 +949,16 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     v
 }
 
-/// Settings > Ferry was drawn in `window`. While it is on screen this PC is seen by everyone, the way a Mac is while Finder's AirDrop
+/// Settings > Nearby was drawn in `window`. While it is on screen this PC is seen by everyone, the way a Mac is while Finder's AirDrop
 /// window is open (the user asked for both platforms): the first drawing remembers the visibility and sets Everyone, and when the
 /// page has not been drawn for [`PAGE_GONE`] (left, another tab, the window closed or minimized) the remembered value comes back, if
 /// it is still Everyone. A choice in the list, or the ten-minute fall-back, is kept instead.
 pub(crate) fn page_seen(window: AnyWindowHandle, cx: &mut App) {
-    if !cx.has_global::<Ferry>() || cx.global::<Ferry>().nearby.is_none() {
+    if !cx.has_global::<NearbyService>() || cx.global::<NearbyService>().nearby.is_none() {
         return;
     }
-    let vis = cx.global::<Settings>().ferry_visibility;
-    let f = cx.global_mut::<Ferry>();
+    let vis = cx.global::<Settings>().nearby_visibility;
+    let f = cx.global_mut::<NearbyService>();
     if let Some(view) = f.viewing.as_mut() {
         view.seen = std::time::Instant::now();
         view.window = window;
@@ -968,18 +968,18 @@ pub(crate) fn page_seen(window: AnyWindowHandle, cx: &mut App) {
         return;
     }
     CHOSEN.store(false, Ordering::Relaxed);
-    let restore = (vis != FerryVisibility::Everyone).then_some(vis);
+    let restore = (vis != NearbyVisibility::Everyone).then_some(vis);
     f.viewing = Some(Viewing { window, seen: std::time::Instant::now(), restore });
     if restore.is_some() {
         // (not while the page is drawn)
-        cx.defer(|cx| settings::update(cx, |s| s.ferry_visibility = FerryVisibility::Everyone));
+        cx.defer(|cx| settings::update(cx, |s| s.nearby_visibility = NearbyVisibility::Everyone));
     }
     // the heartbeat: the page's window is redrawn now and then, and the page that is no longer drawn is gone
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(Duration::from_secs(2)).await;
             let over = cx.update(|cx| {
-                let Some(view) = cx.has_global::<Ferry>().then(|| cx.global::<Ferry>().viewing.as_ref().map(|v| (v.window, v.seen))).flatten() else {
+                let Some(view) = cx.has_global::<NearbyService>().then(|| cx.global::<NearbyService>().viewing.as_ref().map(|v| (v.window, v.seen))).flatten() else {
                     return true;
                 };
                 let minimized = view.0.update(cx, |_, w, _| rf_win::window::is_minimized(crate::look::window::hwnd_of(w))).unwrap_or(true);
@@ -999,13 +999,13 @@ pub(crate) fn page_seen(window: AnyWindowHandle, cx: &mut App) {
 }
 
 fn page_gone(cx: &mut App) {
-    let Some(view) = cx.global_mut::<Ferry>().viewing.take() else { return };
+    let Some(view) = cx.global_mut::<NearbyService>().viewing.take() else { return };
     let chosen = CHOSEN.swap(false, Ordering::Relaxed);
     if let Some(back) = view.restore
         && !chosen
-        && cx.global::<Settings>().ferry_visibility == FerryVisibility::Everyone
+        && cx.global::<Settings>().nearby_visibility == NearbyVisibility::Everyone
     {
-        settings::update(cx, |s| s.ferry_visibility = back);
+        settings::update(cx, |s| s.nearby_visibility = back);
     }
 }
 
@@ -1045,29 +1045,29 @@ fn speed_text(peer: &Peer, measuring: bool, last: Option<&SpeedResult>) -> Optio
 }
 
 fn measure(peer_id: String, cx: &mut App) {
-    let Some(n) = cx.global::<Ferry>().nearby.clone() else { return };
-    if cx.global::<Ferry>().measuring.contains(&peer_id) {
+    let Some(n) = cx.global::<NearbyService>().nearby.clone() else { return };
+    if cx.global::<NearbyService>().measuring.contains(&peer_id) {
         return;
     }
     match n.measure_speed(peer_id.clone()) {
         Ok(_) => {
-            let f = cx.global_mut::<Ferry>();
+            let f = cx.global_mut::<NearbyService>();
             f.speeds.remove(&peer_id);
             f.measuring.insert(peer_id);
             cx.refresh_windows();
         }
-        Err(e) => log::warn!("ferry: cannot measure: {e}"),
+        Err(e) => log::warn!("nearby: cannot measure: {e}"),
     }
 }
 
-/// Tells the crate this PC's network link and keeps telling it while Ferry runs (a Wi-Fi rate drifts; the crate announces a real
+/// Tells the crate this PC's network link and keeps telling it while Nearby runs (a Wi-Fi rate drifts; the crate announces a real
 /// change only). Read every 30 seconds, off the UI thread: one routing-table look and one interface row.
 fn watch_link(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             let link = cx.background_executor().spawn(async { rf_win::network::lan_link() }).await;
             let running = cx.update(|cx| {
-                let Some(n) = cx.has_global::<Ferry>().then(|| cx.global::<Ferry>().nearby.clone()).flatten() else { return false };
+                let Some(n) = cx.has_global::<NearbyService>().then(|| cx.global::<NearbyService>().nearby.clone()).flatten() else { return false };
                 let (kind, mbps) = match link {
                     Some((rf_win::network::LinkType::Wifi, m)) => (LinkKind::Wifi, m),
                     Some((rf_win::network::LinkType::Ethernet, m)) => (LinkKind::Ethernet, m),
@@ -1087,9 +1087,9 @@ fn watch_link(cx: &mut App) {
 }
 
 fn pair(peer_id: String, cx: &mut App) {
-    let Some(n) = cx.global::<Ferry>().nearby.clone() else { return };
+    let Some(n) = cx.global::<NearbyService>().nearby.clone() else { return };
     if let Err(e) = n.pair(peer_id) {
-        log::warn!("ferry: cannot pair: {e}");
+        log::warn!("nearby: cannot pair: {e}");
     }
 }
 

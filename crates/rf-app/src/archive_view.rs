@@ -422,15 +422,15 @@ pub fn copy_items(cx: &mut gpui_kit::App, paths: Vec<PathBuf>) {
     });
 }
 
-/// Copies extracted for DirectLook: (archive, mtime, inner) → file. Moving through an archive
+/// Copies extracted for leaf-look: (archive, mtime, inner) → file. Moving through an archive
 /// with the arrow keys must not extract the same member again and again.
 static LOOK_COPIES: Mutex<Option<HashMap<(PathBuf, i64, PathBuf), PathBuf>>> = Mutex::new(None);
 
 /// Members bigger than this are not extracted just because the selection passed over them.
 const LOOK_FOLLOW_MAX: u64 = 64 << 20;
 
-/// Sends a DirectLook message for `path`. An item inside an archive is extracted first (in the
-/// background) and DirectLook gets the real file; `follow` (selection moved) skips big members.
+/// Sends a leaf-look message for `path`. An item inside an archive is extracted first (in the
+/// background) and leaf-look gets the real file; `follow` (selection moved) skips big members.
 pub fn look_send(path: PathBuf, size: u64, follow: bool) {
     use crate::look::ipc::{Msg, send};
     let msg = move |p: PathBuf| if follow { Msg::Follow(p) } else { Msg::Toggle(p) };

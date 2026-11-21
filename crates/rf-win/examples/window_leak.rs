@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&cfg)?;
     std::fs::write(
         cfg.join("settings.toml"),
-        "restore_session = false\nrun_in_background = true\nauto_update = false\nstar_asked = true\nstarts = 5\nname_index = false\ndirectlook_enabled = false\n",
+        "restore_session = false\nrun_in_background = true\nauto_update = false\nstar_asked = true\nstarts = 5\nname_index = false\nlook_enabled = false\n",
     )?;
     let log = std::env::temp_dir().join("rf-window-leak.log");
     let launch = |first: bool| -> anyhow::Result<std::process::Child> {

@@ -62,7 +62,7 @@ fn open_pdf(path: PathBuf, wait: Duration) -> Opened {
     let (req, req_rx) = mpsc::channel::<(u32, u32)>();
     let (out_tx, out) = futures::channel::mpsc::unbounded::<Out>();
     std::thread::Builder::new()
-        .name("directlook-pdf".into())
+        .name("look-pdf".into())
         .spawn(move || worker(path, opened_tx, req_rx, out_tx))
         .ok();
     let result = opened_rx.recv_timeout(wait).unwrap_or_else(|_| Err(t!("The PDF could not be opened.").to_string()));
@@ -123,7 +123,7 @@ fn worker(path: PathBuf, opened: mpsc::Sender<Result<Vec<(f32, f32)>, String>>, 
         Ok(p) => p,
         Err(e) => {
             let msg = match e.downcast_ref::<PdfError>() {
-                Some(PdfError::Password) => t!("This PDF is protected with a password; DirectLook doesn't open those yet."),
+                Some(PdfError::Password) => t!("This PDF is protected with a password; Preview doesn't open those yet."),
                 _ => t!("This file can't be read as a PDF; it may be damaged."),
             };
             let _ = opened.send(Err(msg.to_string()));

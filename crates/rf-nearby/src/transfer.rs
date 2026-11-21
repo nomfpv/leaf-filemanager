@@ -20,7 +20,7 @@ const BLOCK: usize = 4 << 20;
 const DECISION: Duration = Duration::from_secs(180);
 const CONNECT: Duration = Duration::from_secs(6);
 /// The suffix of a file being received: renamed away only once its BLAKE3 matches.
-pub const PART: &str = ".ferrying";
+pub const PART: &str = ".nearby-part";
 /// A transfer that moved less than this tells nothing about the speed.
 const SPEED_FROM_TRANSFER_MIN: u64 = 4 << 20;
 
@@ -500,7 +500,7 @@ async fn receive(
 }
 
 /// Where each item goes under `dest`, each name as this platform can store it ([`proto::local_name`]). A top-level name that is
-/// already taken there (by a finished file or folder, not by an unfinished `.ferrying`) gets " (2)", " (3)"... before its extension, and
+/// already taken there (by a finished file or folder, not by an unfinished `.nearby-part`) gets " (2)", " (3)"... before its extension, and
 /// so does an item whose path differs from an earlier one only in letter case (they would be one file on NTFS and APFS).
 pub fn targets(dest: &Path, items: &[Item]) -> Vec<PathBuf> {
     let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -610,8 +610,8 @@ pub fn link_stays_inside(rel: &str, to: &str) -> bool {
     true
 }
 
-/// Where an item is written while it arrives: a top-level file as `<name>.ferrying`, and everything of a top-level folder under
-/// `<folder>.ferrying/`. A broken transfer so leaves nothing that looks finished, and sending the same things again finds the parts
+/// Where an item is written while it arrives: a top-level file as `<name>.nearby-part`, and everything of a top-level folder under
+/// `<folder>.nearby-part/`. A broken transfer so leaves nothing that looks finished, and sending the same things again finds the parts
 /// at the same place (the real name is still free) and goes on from there.
 fn staging(dest: &Path, target: &Path) -> PathBuf {
     let rel = target.strip_prefix(dest).unwrap_or(target);

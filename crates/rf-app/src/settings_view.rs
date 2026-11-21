@@ -30,7 +30,7 @@ pub enum Page {
     Actions,
     Tags,
     Look,
-    Ferry,
+    Nearby,
     Search,
     Advanced,
     Speed,
@@ -46,9 +46,9 @@ const PAGES: [(Page, L, &str); 14] = [
     (Page::FileTypes, L::FileType, "File types"),
     (Page::Actions, L::Keyboard, "Actions"),
     (Page::Tags, L::Tag, "Tags"),
-    (Page::Look, L::Eye, "DirectLook"),
+    (Page::Look, L::Eye, "Preview"),
     (Page::Search, L::Search, "HyperSearch"),
-    (Page::Ferry, L::Send, "Ferry"),
+    (Page::Nearby, L::Send, "Nearby"),
     (Page::Advanced, L::Wrench, "Advanced"),
     (Page::Speed, L::Gauge, "Speed test"),
     (Page::Organizer, L::WandSparkles, "File organizer"),
@@ -58,7 +58,7 @@ const PAGES: [(Page, L, &str); 14] = [
 /// The pages that are experimental: marked with a small "Deneysel" pill in the page list and "(deneysel)" in their title. The mark is
 /// NOT part of the page name in [`PAGES`], so the search and the translations still know the pages as "Dock" and "Masaüstü".
 fn experimental(page: Page) -> bool {
-    matches!(page, Page::Ferry)
+    matches!(page, Page::Nearby)
 }
 
 /// The heading of a page: its name, and "(deneysel)" after it for an experimental page.
@@ -207,7 +207,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Actions => actions(p, s, cx),
         Page::Tags => tags(p, cx),
         Page::Look => look(p, s, cx),
-        Page::Ferry => crate::ferry::page(p, s, cx),
+        Page::Nearby => crate::nearby::page(p, s, cx),
         Page::Search => quick_search_cards(p, s, cx),
         // the developer tools are a part of Gelişmiş (they had a page of their own)
         Page::Advanced => {
@@ -513,9 +513,9 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
                 }),
         );
     }
-    // (Ferry's page on screen shows this PC to everyone while it is: `ferry::page_seen`)
-    if query.is_empty() && page == Page::Ferry {
-        crate::ferry::page_seen(window.window_handle(), cx);
+    // (Nearby's page on screen shows this PC to everyone while it is: `nearby::page_seen`)
+    if query.is_empty() && page == Page::Nearby {
+        crate::nearby::page_seen(window.window_handle(), cx);
     }
     let (title, body): (String, Vec<AnyElement>) = if query.is_empty() {
         (PAGES.iter().find(|x| x.0 == page).map(|x| page_title(x.0, crate::i18n::t(x.2))).unwrap_or_default(), build_page(page, p, &s, cx))
@@ -2447,7 +2447,7 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     ]
 }
 
-/// DirectLook ayarı anahtarı (ayrı dosya `directlook.toml`; değişince DirectLook'a haber verilir).
+/// leaf-look ayarı anahtarı (ayrı dosya `leaf-look.toml`; değişince leaf-look'a haber verilir).
 fn lsw(id: &'static str, p: &Palette, on: bool, set: fn(&mut LookSettings, bool)) -> AnyElement {
     switch(id, p, on, move |_, cx| look_update(cx, |s| set(s, !on)))
 }
@@ -2467,19 +2467,19 @@ fn ldropdown<T: Copy + PartialEq + 'static>(id: &'static str, p: &Palette, curre
     })
 }
 
-/// DirectLook (Hızlı Bakış, ayrı program) ayarları.
+/// leaf-look (Hızlı Bakış, ayrı program) ayarları.
 fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     use crate::settings::{LookBackdrop, LookImageTheme};
-    // DirectLook da yazabilir: sayfa her açılışta dosyadan okunur
+    // leaf-look da yazabilir: sayfa her açılışta dosyadan okunur
     let l = LookSettings::load();
-    let enabled = s.directlook_enabled;
+    let enabled = s.look_enabled;
     let mut v = vec![card(
         p,
         L::Eye,
-        t!("Use DirectLook"),
+        t!("Use Preview"),
         Some(t!("Preview with Space. Runs as a separate program: it doesn't slow rustyfiles down, and if one closes the other is unaffected.")),
         switch("dl-enabled", p, enabled, move |_, cx| {
-            settings::update(cx, |s| s.directlook_enabled = !enabled);
+            settings::update(cx, |s| s.look_enabled = !enabled);
             if enabled {
                 crate::look::ipc::send(crate::look::ipc::Msg::Quit, false);
             } else {
@@ -2487,14 +2487,14 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             }
         }),
     )];
-    // QuickLook instead (asked on Discord): shown with DirectLook off too, as that is how it is meant to be used
+    // QuickLook instead (asked on Discord): shown with leaf-look off too, as that is how it is meant to be used
     let ql = s.space_quicklook;
     v.push(card(
         p,
         L::ScanEye,
         t!("Space opens QuickLook"),
         Some(if crate::quicklook::installed() {
-            t!("Files go to QuickLook, and an open preview follows the selection. You can turn DirectLook off above.")
+            t!("Files go to QuickLook, and an open preview follows the selection. You can turn Preview off above.")
         } else {
             t!("QuickLook is not installed: get it from the Microsoft Store or GitHub (QL-Win/QuickLook).")
         }),
@@ -2507,14 +2507,14 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Monitor,
         t!("Preview with Space in Explorer and on the desktop too"),
-        Some(t!("DirectLook keeps running in the background and opens when Windows starts (icon in the notification area), even while rustyfiles is closed")),
+        Some(t!("Preview keeps running in the background and opens when Windows starts (icon in the notification area), even while rustyfiles is closed")),
         switch("look-wide", p, l.look_system_wide, {
             let on = l.look_system_wide;
             move |_, cx| {
                 look_update(cx, |s| s.look_system_wide = !on);
                 if let Some(exe) = crate::look::ipc::exe() {
-                    if let Err(e) = rf_win::dialogs::set_start_with_windows_as("DirectLook", &exe, &["--background"], !on) {
-                        log::warn!("DirectLook start with Windows: {e}");
+                    if let Err(e) = rf_win::dialogs::set_start_with_windows_as("leaf-look", &exe, &["--background"], !on) {
+                        log::warn!("Preview start with Windows: {e}");
                     }
                 }
                 crate::look::ipc::send(crate::look::ipc::Msg::Wake, true);
@@ -2559,7 +2559,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         card(
             p,
             L::AppWindow,
-            t!("DirectLook icon in the notification area"),
+            t!("Preview icon in the notification area"),
             Some(t!("Not shown while rustyfiles runs in the background: then rustyfiles' icon is the only one")),
             lsw("look-tray", p, l.look_tray_icon, |s, v| s.look_tray_icon = v),
         ),
@@ -2622,7 +2622,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 .collect()
         }),
     ));
-    // which file types DirectLook previews
+    // which file types leaf-look previews
     v.push(card(
         p,
         L::ListFilter,

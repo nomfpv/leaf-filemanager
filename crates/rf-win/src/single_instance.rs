@@ -37,7 +37,7 @@ pub fn session_id() -> u32 {
     if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut id) }.is_ok() { id } else { 0 }
 }
 
-/// (kilit adı, boru adı) bir uygulama için: rustyfiles ve DirectLook ayrı örnek gruplarıdır.
+/// (kilit adı, boru adı) bir uygulama için: rustyfiles ve leaf-look ayrı örnek gruplarıdır.
 pub(crate) fn names_for(app: &str) -> (String, String) {
     names_in_session(app, session_id())
 }
@@ -242,7 +242,7 @@ mod app_tests {
         assert!(!p1.contains("-s1"), "{p1}");
         // the same session, the same name: a second --dock or --shell finds the first
         assert_eq!(names_in_session("rustyfiles-dock", 1), (m1, p1));
-        // the main app and DirectLook keep the names older copies know
+        // the main app and leaf-look keep the names older copies know
         assert_eq!(names_in_session("rustyfiles", 1), names_in_session("rustyfiles", 2));
         assert_eq!(names_in_session("directlook", 1), names_in_session("directlook", 5));
         assert!(session_id() < 1_000_000);

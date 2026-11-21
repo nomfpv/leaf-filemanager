@@ -38,15 +38,15 @@ pub fn startup() {
         .run();
 }
 
-/// Registrations that are on follow this install: the default file manager and DirectLook's start
+/// Registrations that are on follow this install: the default file manager and leaf-look's start
 /// with Windows.
 fn after_install_or_update() {
     let Ok(me) = std::env::current_exe() else { return };
     if rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES) {
         let _ = rf_win::default_fm::enable(&me.display().to_string(), rf_win::default_fm::CLASSES);
     }
-    if rf_win::dialogs::starts_with_windows_as("DirectLook") {
-        let _ = rf_win::dialogs::set_start_with_windows_as("DirectLook", &me.with_file_name("directlook.exe"), &["--background"], true);
+    if rf_win::dialogs::starts_with_windows_as("leaf-look") {
+        let _ = rf_win::dialogs::set_start_with_windows_as("leaf-look", &me.with_file_name("directlook.exe"), &["--background"], true);
     }
 }
 
@@ -57,9 +57,9 @@ fn before_uninstall() {
         let _ = rf_win::default_fm::disable(classes);
     }
     let none = Path::new("");
-    let _ = rf_win::dialogs::set_start_with_windows_as("DirectLook", none, &[], false);
+    let _ = rf_win::dialogs::set_start_with_windows_as("leaf-look", none, &[], false);
     let _ = rf_win::dialogs::set_start_with_windows(none, false);
-    // DirectLook holds its exe open
+    // leaf-look holds its exe open
     rf_win::single_instance::send_to(&crate::look::ipc::app_name(), &crate::look::ipc::Msg::Quit.encode());
     std::thread::sleep(Duration::from_millis(500));
 }

@@ -254,7 +254,7 @@ unsafe extern "system" fn each(h: HWND, lp: LPARAM) -> BOOL {
         // A popup menu of ANY program, this one included, is taken like a glass window of another process: it stands in front of the
         // glass (a tray menu over the dock's island) and nobody can register it, the menu being Windows' own window in its owner's
         // process. Without this the glass shows the menu again, bent, around the menu (the user, 2026-11-15, with a picture of
-        // DirectLook's tray menu over the dock: "öndeki pencere arkadaki camı etkiliyor").
+        // leaf-look's tray menu over the dock: "öndeki pencere arkadaki camı etkiliyor").
         let menu = !mine && GetClassLongPtrW(h, GCW_ATOM) & 0xFFFF == MENU_CLASS_ATOM;
         // the property first: it is the cheap test that rules out nearly every window of the desktop
         if !mine && !menu && !is_marked(h) {

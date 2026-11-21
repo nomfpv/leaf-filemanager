@@ -335,7 +335,7 @@ fn update_jump_list(places: &crate::places::Places) {
 /// How long the jump list waits after a change of its content before it is written (see `update_jump_list`).
 const JUMP_LIST_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// Settings, asked for from outside a window (DirectLook's tray icon, the tray menu, a start with `--settings=<page>`): the window
+/// Settings, asked for from outside a window (leaf-look's tray icon, the tray menu, a start with `--settings=<page>`): the window
 /// that has Settings open comes forward, on that tab; a new window is opened only when none has. WHY (issue 33: "... opens the
 /// Settings window multiple times (up to 5)"): every such request opened another window, so the five messages a tray sends for a
 /// double click made five windows. 0.8.2 made those five one request; with this a second request is harmless whoever sends it.
@@ -382,7 +382,7 @@ pub fn release_drive(letter: char, cx: &mut App) {
 }
 
 /// Whether any app window (not a menu / flyout popup) is still open.
-/// The open main windows (not Settings, DirectLook or popups).
+/// The open main windows (not Settings, leaf-look or popups).
 pub fn main_windows(cx: &App) -> Vec<AnyWindowHandle> {
     let open = cx.windows();
     cx.try_global::<OpenWorkspaces>()
@@ -470,8 +470,8 @@ pub fn parse_launch(msg: &str) -> (Location, Option<String>) {
     if m.is_empty() { (Location::Home, None) } else { (Location::Path(PathBuf::from(m)), None) }
 }
 
-/// DirectLook asked for the next or the previous item (an arrow key in its window): the list of the newest window moves its
-/// selection by one and DirectLook is sent the item now selected. Only while DirectLook was opened from our list.
+/// leaf-look asked for the next or the previous item (an arrow key in its window): the list of the newest window moves its
+/// selection by one and leaf-look is sent the item now selected. Only while leaf-look was opened from our list.
 fn step_quick_look(forward: bool, cx: &mut App) {
     if !crate::folder_view::QUICK_LOOK_OPEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
@@ -560,7 +560,7 @@ fn select_in_open_folder(file: &std::path::Path, cx: &mut App) -> bool {
 /// The `/select,` file of the first launch, picked up by the first window.
 pub static START_SELECT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// DirectLook'a en son gönderilen dosya (seçim değişince yalnız yenisi gider).
+/// leaf-look'a en son gönderilen dosya (seçim değişince yalnız yenisi gider).
 static LOOK_FOLLOWED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 /// Whether any main browser window is currently open.
@@ -1508,10 +1508,10 @@ impl Workspace {
         .detach();
     }
 
-    /// Boşluk: DirectLook'a (ayrı süreç) aç/kapat iletisi. DirectLook kapalıyken bir şey yapmaz.
+    /// Boşluk: leaf-look'a (ayrı süreç) aç/kapat iletisi. leaf-look kapalıyken bir şey yapmaz.
     fn toggle_quick_look(&mut self, cx: &mut Context<Self>) {
         use std::sync::atomic::Ordering;
-        // Settings › DirectLook › "Space opens QuickLook": the file goes to QuickLook (a file inside an archive has no path it can open)
+        // Settings › leaf-look › "Space opens QuickLook": the file goes to QuickLook (a file inside an archive has no path it can open)
         if cx.global::<crate::settings::Settings>().space_quicklook {
             match self.active_tab().read(cx).preview_target() {
                 Some((path, _)) if crate::archive_view::split_inside(&path).is_none() => crate::quicklook::space(path),
@@ -1519,7 +1519,7 @@ impl Workspace {
             }
             return;
         }
-        if !cx.global::<crate::settings::Settings>().directlook_enabled {
+        if !cx.global::<crate::settings::Settings>().look_enabled {
             return;
         }
         let open = crate::folder_view::QUICK_LOOK_OPEN.load(Ordering::Relaxed);

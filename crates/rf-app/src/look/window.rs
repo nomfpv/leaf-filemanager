@@ -397,7 +397,7 @@ impl LookWindow {
         });
     }
 
-    /// Windows' share sheet for the shown file, over DirectLook's window (`rf_win::share`, issue 48).
+    /// Windows' share sheet for the shown file, over leaf-look's window (`rf_win::share`, issue 48).
     fn share(&self, window: &Window, cx: &mut App) {
         crate::share::open(hwnd_of(window), vec![self.path.clone()], cx);
     }

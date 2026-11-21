@@ -142,7 +142,7 @@ fn stream_name(raw: &str) -> Option<&str> {
 }
 
 /// Marks a file as come from another computer (the Internet zone), as a browser marks a download: SmartScreen then asks before a
-/// program in it runs and Office opens its documents in Protected View. Ferry marks what it receives. A file system without named
+/// program in it runs and Office opens its documents in Protected View. Nearby marks what it receives. A file system without named
 /// streams (FAT32, exFAT) cannot carry the mark: an error, which the caller may ignore.
 pub fn mark_downloaded(path: &Path, from: &str) -> std::io::Result<()> {
     let from: String = from.chars().filter(|c| !c.is_control()).collect();
@@ -327,7 +327,7 @@ mod tests {
         let f = dir.join("got.exe");
         std::fs::write(&f, b"MZ").unwrap();
         assert!(!super::zone_blocked(&f));
-        super::mark_downloaded(&f, "ferry://Mac\u{0}").unwrap();
+        super::mark_downloaded(&f, "nearby://Mac\u{0}").unwrap();
         assert!(super::zone_blocked(&f));
         super::unblock(&f).unwrap();
         assert!(!super::zone_blocked(&f));

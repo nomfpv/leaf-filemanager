@@ -645,7 +645,7 @@ star_asked = true
 starts = 1
 search_index = false
 name_index = false
-directlook_enabled = false
+look_enabled = false
 ").unwrap();
         let warm = App {
             kind: AppKind::Rustyfiles,

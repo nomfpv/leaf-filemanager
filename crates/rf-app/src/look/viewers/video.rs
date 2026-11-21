@@ -1093,7 +1093,7 @@ impl MediaView {
     /// sung, then the waveform as the timeline and the transport row under it.
     fn render_audio_inner(&mut self, cover: Option<Arc<RenderImage>>, window: &mut Window, cx: &mut Context<Self>, lyric: Option<String>) -> AnyElement {
         let p = crate::theme::Palette::for_window(window);
-        // (the system's accent, as the app's selection: DirectLook's own theme colour is a neutral grey)
+        // (the system's accent, as the app's selection: leaf-look's own theme colour is a neutral grey)
         let accent = p.accent;
         let field = |k: &str| self.meta.iter().find(|(l, _)| *l == k).map(|(_, v)| v.clone()).filter(|v| !v.trim().is_empty());
         let title = field("Title").unwrap_or_else(|| {

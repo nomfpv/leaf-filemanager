@@ -1,4 +1,4 @@
-//! DirectLook ayarları: kendi dosyası `directlook.toml` (rustyfiles'ın `settings.toml`'u ile iki
+//! leaf-look ayarları: kendi dosyası `leaf-look.toml` (rustyfiles'ın `settings.toml`'u ile iki
 //! süreç birbirinin değişikliğini ezmesin diye ayrı). Her değişiklik diskten taze okunur, üzerine
 //! yazılır, kaydedilir.
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings::{LookBackdrop, LookImageTheme};
 
-/// DirectLook ayarları (varsayılanlar QuickLook'unkiler).
+/// leaf-look ayarları (varsayılanlar QuickLook'unkiler).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LookSettings {
@@ -82,7 +82,7 @@ impl Default for LookSettings {
 impl Global for LookSettings {}
 
 pub fn path() -> Option<PathBuf> {
-    crate::settings::app_dir().map(|d| d.join("directlook.toml"))
+    crate::settings::app_dir().map(|d| d.join("leaf-look.toml"))
 }
 
 impl LookSettings {
@@ -93,7 +93,7 @@ impl LookSettings {
     pub fn load_from(p: &Path) -> LookSettings {
         match rf_core::read_config(p) {
             Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-                log::warn!("directlook.toml: {e}");
+                log::warn!("leaf-look.toml: {e}");
                 LookSettings::default()
             }),
             Err(_) => LookSettings::default(),
@@ -156,7 +156,7 @@ mod tests {
     fn round_trip_and_unknown_or_missing_keys() {
         let dir = std::env::temp_dir().join(format!("rf-lookcfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("directlook.toml");
+        let p = dir.join("leaf-look.toml");
         let mut s = LookSettings::default();
         s.look_topmost = false;
         s.look_volume = 0.5;
