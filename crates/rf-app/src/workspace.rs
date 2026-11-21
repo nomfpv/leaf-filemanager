@@ -1105,7 +1105,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_));
+                let wanted = matches!(loc, Location::DiskUsage(_) | Location::Duplicates(_) | Location::BuildJunk(_));
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -2892,6 +2892,7 @@ impl Workspace {
                     Location::Path(p) => p.to_string_lossy().into_owned(),
                     Location::DiskUsage(p) => crate::disk_usage::title(p),
                     Location::Duplicates(r) => crate::duplicates_view::title(r),
+                    Location::BuildJunk(p) => crate::junk_view::title(p),
                     other => crate::i18n::td(&other.title()),
                 })
                 .collect()
@@ -3669,6 +3670,7 @@ impl Workspace {
             Location::Shell { .. } => vec![(self.active_tab().read(cx).title(cx), loc.clone())],
             Location::DiskUsage(path) => vec![(crate::disk_usage::title(path), loc.clone())],
             Location::Duplicates(roots) => vec![(crate::duplicates_view::title(roots), loc.clone())],
+            Location::BuildJunk(path) => vec![(crate::junk_view::title(path), loc.clone())],
             other => vec![(crate::i18n::td(&other.title()), other.clone())],
         };
         // Too long for the address box: hide leading segments after the drive behind "…"
@@ -4293,6 +4295,22 @@ impl Workspace {
                 }
             } else {
                 left = left.child(crate::i18n::items(count));
+            }
+            // "Hide git-ignored files": how many items it leaves out; a click shows them again
+            let ignored = tab.ignored_hidden();
+            if ignored > 0 {
+                left = left.child(dot()).child(
+                    div()
+                        .id("ignored-hidden")
+                        .cursor_pointer()
+                        .rounded(theme::RADIUS_SM)
+                        .px_1()
+                        .text_color(p.text_secondary)
+                        .hover(|s| s.bg(p.hover).text_color(p.text))
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Show the git-ignored items")).build(w, cx))
+                        .child(format!("{} {}", ignored, t!("ignored items hidden")))
+                        .on_click(|_, _, cx| crate::settings::update(cx, |s| s.hide_ignored = false)),
+                );
             }
             if let Some(free) = free {
                 left = left.child(dot()).child(div().text_color(p.text_tertiary).child(free));
@@ -5440,6 +5458,33 @@ impl Render for Workspace {
                 if !roots.is_empty() {
                     v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::Duplicates(roots))));
                 }
+            }))
+            .on_action(cx.listener(|this, _: &FindBuildJunk, _, cx| {
+                // the selected folder, else this folder
+                let v = this.active_tab().clone();
+                let root = {
+                    let v = v.read(cx);
+                    let sel: Vec<PathBuf> = v.selection_paths().into_iter().filter(|p| p.is_dir()).collect();
+                    if sel.len() == 1 { sel.into_iter().next() } else { v.current_dir() }
+                };
+                if let Some(root) = root {
+                    v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::BuildJunk(root))));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleHideIgnored, window, cx| {
+                let on = cx.global::<crate::settings::Settings>().hide_ignored;
+                let dir = this.active_tab().read(cx).location().path().map(Path::to_path_buf);
+                // outside a git repository the switch has nothing to hide: it stays off and says so
+                if !on && !dir.as_deref().is_some_and(|d| leaf_dev::gitignore::repo_root(d).is_some()) {
+                    crate::prompt::notice(
+                        t!("Not in a git repository"),
+                        t!("Hide git-ignored files works inside a git repository. This folder is not in one, so nothing changes.").to_string(),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                crate::settings::update(cx, |s| s.hide_ignored = !on);
             }))
             .on_action(cx.listener(|this, _: &OrganizeFolder, window, cx| {
                 match this.active_tab().read(cx).location().path().map(Path::to_path_buf) {

@@ -104,6 +104,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Customize Home | Opens Home with buttons to add, remove, resize and reorder its widgets. |  |
 | Reset Home | Puts the Home page back to its default widgets. |  |
 | Show/hide hidden items | Shows or hides hidden files and folders. | `Ctrl+H` |
+| Hide git-ignored files | Inside a git repository, leaves out the files and folders .gitignore ignores (node_modules, target, logs...). The status line says how many are hidden. |  |
 | Details view | Shows the folder as a list with columns. | `Ctrl+Shift+1` |
 | Grid view | Shows the folder as large icons. | `Ctrl+Shift+2` |
 | Columns view | Shows the folder and the ones above it side by side. | `Ctrl+Shift+3` |
@@ -143,6 +144,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Open in editor | Opens this folder in your code editor. |  |
 | Compare folders | Marks what differs between the two panes' folders: only here, newer, older, other size. |  |
 | Find duplicates | Looks for files with identical content in this folder or the selected folders. |  |
+| Find build junk | Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin. |  |
 | Organize folder | Sorts the folder's files into folders by kind. |  |
 
 ## leaf itself

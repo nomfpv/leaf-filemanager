@@ -582,6 +582,13 @@ pub struct FolderView {
     /// The duplicate finder page and the file it has selected (for the preview pane).
     dups: Option<Entity<crate::duplicates_view::DuplicatesView>>,
     dup_selected: Option<(PathBuf, Entry)>,
+    /// The build-junk finder's page of this tab.
+    junk: Option<Entity<crate::junk_view::JunkView>>,
+    /// How many git-ignored items the list leaves out now ("Hide git-ignored files"), and the matching in flight.
+    ignored_n: usize,
+    ignore_on: bool,
+    ignore_serial: u64,
+    _ignore_task: Option<Task<()>>,
     /// Git status of the repository containing this folder (if any).
     pub git: Option<Arc<leaf_sys::git::GitStatus>>,
     /// Last commit per child of the current folder (commit columns), keyed by name.
@@ -666,6 +673,10 @@ impl FolderView {
             }
             // folders show (and sort by) size on disk or the sum of their files, as set
             this.resort_for_sizes(cx);
+            let want = cx.global::<crate::settings::Settings>().hide_ignored;
+            if want != this.ignore_on {
+                this.refresh_ignored(cx);
+            }
             // turning a commit column on loads the commits
             if this.git.is_some() && this.git_commits.is_none() && Self::commit_cols_on(cx) {
                 this.refresh_git(cx);
@@ -778,6 +789,11 @@ impl FolderView {
             recycle: None,
             disk_usage: None,
             dups: None,
+            junk: None,
+            ignored_n: 0,
+            ignore_on: false,
+            ignore_serial: 0,
+            _ignore_task: None,
             dup_selected: None,
             git: None,
             git_commits: None,
@@ -837,6 +853,9 @@ impl FolderView {
         if let Location::Duplicates(r) = self.location() {
             return crate::duplicates_view::title(r);
         }
+        if let Location::BuildJunk(p) = self.location() {
+            return crate::junk_view::title(p);
+        }
         crate::i18n::td(&self.location().title())
     }
 
@@ -851,6 +870,7 @@ impl FolderView {
             Location::Shell { .. } => L::Usb,
             Location::DiskUsage(_) => L::ChartPie,
             Location::Duplicates(_) => L::Copy,
+            Location::BuildJunk(_) => L::Eraser,
             Location::Downloads => L::ArrowDownToLine,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
@@ -1265,6 +1285,10 @@ impl FolderView {
         self.git = None;
         self.git_commits = None;
         self.refresh_git(cx);
+        // (the ignored names of the folder left do not apply to this one; they are matched again when the listing is in)
+        self.ignore_serial += 1;
+        self.ignored_n = 0;
+        self.filter.hide = None;
         self.overlay_cancel.store(true, Ordering::Relaxed);
         self.overlays = None;
         self._overlay_task = None;
@@ -1928,6 +1952,7 @@ impl FolderView {
         if done {
             self.resort_for_sizes(cx);
             self.refresh_overlays(cx);
+            self.refresh_ignored(cx);
             self.apply_reselect(cx);
             // a sort by tag or path makes its ranks now that the listing is complete
             self.sortx_ensure(cx);
@@ -2136,6 +2161,7 @@ impl FolderView {
         // a sort or grouping by a property column is made again for the new entries
         self.props_entries_changed(cx);
         self.sortx_ensure(cx);
+        self.refresh_ignored(cx);
         cx.notify();
     }
 
@@ -2517,6 +2543,55 @@ impl FolderView {
             self.filter.query = q;
             self.rebuild_visible();
             cx.notify();
+        }
+    }
+
+    /// How many items "Hide git-ignored files" leaves out of this folder's list.
+    pub fn ignored_hidden(&self) -> usize {
+        self.ignored_n
+    }
+
+    /// "Hide git-ignored files": which names of this folder git ignores, matched off the UI thread (`leaf_dev::gitignore`, cached per
+    /// folder until an ignore file changes). Outside a repository nothing is left out.
+    fn refresh_ignored(&mut self, cx: &mut Context<Self>) {
+        let on = cx.global::<crate::settings::Settings>().hide_ignored;
+        let dir = self.location().path().map(|p| p.to_path_buf()).filter(|_| !self.is_search() && self.error.is_none());
+        self.ignore_serial += 1;
+        let serial = self.ignore_serial;
+        self.ignore_on = on;
+        let (true, Some(dir)) = (on, dir) else {
+            self._ignore_task = None;
+            self.set_ignored(None, 0);
+            return;
+        };
+        let items: Vec<(String, bool)> = self.entries.iter().map(|e| (e.name.to_string(), e.is_dir())).collect();
+        let work = cx.background_spawn(async move { leaf_dev::gitignore::ignored_among(&dir, &items) });
+        self._ignore_task = Some(cx.spawn(async move |this, cx| {
+            let got = work.await;
+            let _ = this.update(cx, |v, cx| {
+                if v.ignore_serial != serial {
+                    return;
+                }
+                match got {
+                    Some(names) if !names.is_empty() => {
+                        let set: HashSet<String> = names.iter().map(|n| rf_core::pathkey::fold(n)).collect();
+                        let plain = Filter { hide: None, ..v.filter.clone() };
+                        let n = v.entries.iter().filter(|e| set.contains(&rf_core::pathkey::fold(&e.name)) && plain.accepts(e)).count();
+                        v.set_ignored(Some(Arc::new(set)), n);
+                    }
+                    _ => v.set_ignored(None, 0),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn set_ignored(&mut self, set: Option<Arc<HashSet<String>>>, n: usize) {
+        self.ignored_n = n;
+        if self.filter.hide != set {
+            self.filter.hide = set;
+            self.column_cache.clear();
+            self.rebuild_visible();
         }
     }
 
@@ -5356,6 +5431,27 @@ impl Render for FolderView {
                     }
                 };
                 div().size_full().child(dv).into_any_element()
+            }
+            Location::BuildJunk(root) => {
+                let root = root.clone();
+                let jv = match &self.junk {
+                    Some(jv) if jv.read(cx).root() == root.as_path() => jv.clone(),
+                    _ => {
+                        let jv = cx.new(|cx| crate::junk_view::JunkView::new(root, cx));
+                        cx.subscribe(&jv, |this, _, ev: &crate::junk_view::JunkEvent, cx| match ev {
+                            crate::junk_view::JunkEvent::ShowInFolder(path) => {
+                                if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+                                    this.set_reselect(name.to_string_lossy().into_owned());
+                                    this.navigate(Location::Path(parent.to_path_buf()), cx);
+                                }
+                            }
+                        })
+                        .detach();
+                        self.junk = Some(jv.clone());
+                        jv
+                    }
+                };
+                div().size_full().child(jv).into_any_element()
             }
             // (the HyperDownload page is cut: a tab restored on it shows nothing)
             Location::Downloads => div().size_full().into_any_element(),

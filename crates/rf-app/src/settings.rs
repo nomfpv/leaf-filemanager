@@ -386,6 +386,8 @@ pub struct Settings {
     pub accent: String,
     pub default_view: DefaultView,
     pub show_hidden: bool,
+    /// Inside a git repository the list leaves out what `.gitignore` (and the other git excludes) ignores.
+    pub hide_ignored: bool,
     pub preview_open: bool,
     pub sidebar_open: bool,
     /// The sidebar as a narrow strip of icons (drag it narrow to get there).
@@ -689,6 +691,7 @@ impl Default for Settings {
             accent: String::new(),
             default_view: DefaultView::Adaptive,
             show_hidden: false,
+            hide_ignored: false,
             preview_open: true,
             sidebar_open: true,
             sidebar_rail: false,
