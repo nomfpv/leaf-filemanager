@@ -555,17 +555,20 @@ impl ChangesView {
     fn load_checkpoints(&mut self, cx: &mut Context<Self>) {
         let (dir, store) = (self.dir.clone(), self.cps.store.clone());
         let work = cx.background_spawn(async move {
-            let store = store.unwrap_or_else(|| Arc::new(crate::checkpoint_ui::store_of(&dir)));
-            let list = checkpoint::list(&store);
-            (store, list)
+            let store = match store {
+                Some(s) => s,
+                None => Arc::new(crate::checkpoint_ui::store_of(&dir)?),
+            };
+            let list = checkpoint::list(&store)?;
+            Ok::<_, checkpoint::Error>((store, list))
         });
         self.cps._task = Some(cx.spawn(async move |this, cx| {
-            let (store, list) = work.await;
+            let got = work.await;
             let _ = this.update(cx, |v, cx| {
-                v.cps.store = Some(store);
                 v.cps.loaded = true;
-                match list {
-                    Ok(l) => {
+                match got {
+                    Ok((store, l)) => {
+                        v.cps.store = Some(store);
                         v.cps.list = l;
                         v.cps.error = None;
                     }

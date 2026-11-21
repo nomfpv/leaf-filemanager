@@ -179,28 +179,34 @@ fn key_of(p: &Path) -> String {
     format!("{h:016x}")
 }
 
-/// The store of `folder`: its repository when it is in one (and git runs), else copies under `data_dir/checkpoints`.
-pub fn store_for(folder: &Path, data_dir: &Path) -> Store {
-    if let Some(s) = git_store(folder) {
-        return s;
-    }
-    Store::Copy { folder: folder.to_path_buf(), base: data_dir.join("checkpoints").join(key_of(folder)) }
+/// Looks like a bare repository (git's own files, no work tree).
+fn looks_bare(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
 }
 
-fn git_store(folder: &Path) -> Option<Store> {
-    // (a cheap look up the folders first: most folders are in no repository)
-    crate::gitignore::repo_root(folder)?;
-    let t = run(with_args(plain_git(folder), &["rev-parse", "--show-toplevel", "--absolute-git-dir"]), &[0], Duration::from_secs(10)).ok()?;
-    let t = String::from_utf8_lossy(&t).into_owned();
-    let mut lines = t.lines();
-    let root = PathBuf::from(lines.next()?.trim());
-    let git_dir = PathBuf::from(lines.next()?.trim());
-    let et = run(with_args(plain_git(&root), &["hash-object", "-t", "tree", "--stdin"]), &[0], Duration::from_secs(10)).ok()?;
-    let empty_tree = String::from_utf8_lossy(&et).trim().to_string();
-    if root.as_os_str().is_empty() || empty_tree.is_empty() {
-        return None;
+/// The store of `folder`: its repository when it is in one, else copies under `data_dir/checkpoints`. A folder that is in a
+/// repository git cannot be run for (git missing, a repository owned by another user, git's own folder, a bare repository) is an
+/// error: copying it would copy and later overwrite `.git` itself.
+pub fn store_for(folder: &Path, data_dir: &Path) -> Result<Store, Error> {
+    if folder.components().any(|c| c.as_os_str() == ".git") || looks_bare(folder) {
+        return Err(Error::new("This is git's own folder of a repository: checkpoints are taken of the files of a repository, not of it", ""));
     }
-    Some(Store::Git { key: key_of(&root), root, git_dir, empty_tree })
+    if crate::gitignore::repo_root(folder).is_none() {
+        return Ok(Store::Copy { folder: folder.to_path_buf(), base: data_dir.join("checkpoints").join(key_of(folder)) });
+    }
+    git_store(folder).map_err(|e| Error::new("This folder is in a git repository, but git could not be run for it", e.details))
+}
+
+fn git_store(folder: &Path) -> Result<Store, Error> {
+    let t = text(run(with_args(plain_git(folder), &["rev-parse", "--show-toplevel", "--absolute-git-dir"]), &[0], Duration::from_secs(10))?);
+    let mut lines = t.lines();
+    let root = PathBuf::from(lines.next().unwrap_or("").trim());
+    let git_dir = PathBuf::from(lines.next().unwrap_or("").trim());
+    let empty_tree = text(run(with_args(plain_git(&root), &["hash-object", "-t", "tree", "--stdin"]), &[0], Duration::from_secs(10))?);
+    if root.as_os_str().is_empty() || git_dir.as_os_str().is_empty() || empty_tree.is_empty() {
+        return Err(Error::new("git failed", "no work tree"));
+    }
+    Ok(Store::Git { key: key_of(&root), root, git_dir, empty_tree })
 }
 
 // ---------------------------------------------------------------------------------------------------------------- running git
@@ -403,6 +409,10 @@ fn walk(dir: &Path, skip: Option<&Path>) -> Result<BTreeMap<String, (PathBuf, u6
                 continue;
             }
             let Ok(ft) = e.file_type() else { continue };
+            // (git's own folder is never copied, compared or written, wherever it is)
+            if e.file_name() == ".git" {
+                continue;
+            }
             let name = e.file_name().to_string_lossy().into_owned();
             let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };
             if ft.is_symlink() {
@@ -975,7 +985,7 @@ mod tests {
         let head = g(&d, &["rev-parse", "HEAD"]);
         let stash = g(&d, &["stash", "list"]);
 
-        let store = store_for(&d, &temp("status-data"));
+        let store = store_for(&d, &temp("status-data")).unwrap();
         assert!(store.is_git());
         let cp = create(&store, "before the agent", false, None).unwrap();
 
@@ -997,7 +1007,7 @@ mod tests {
         let mut stores = Vec::new();
         if git_ok() {
             let d = repo("undo-git");
-            stores.push((d.clone(), store_for(&d, &temp("undo-git-data"))));
+            stores.push((d.clone(), store_for(&d, &temp("undo-git-data")).unwrap()));
         }
         let plain = temp("undo-copy");
         write(&plain, "a.txt", b"one\ntwo\n");
@@ -1041,7 +1051,7 @@ mod tests {
         }
         let d = repo("ignored-now");
         write(&d, "build.out", b"from then");
-        let store = store_for(&d, &temp("ignored-now-data"));
+        let store = store_for(&d, &temp("ignored-now-data")).unwrap();
         let cp = create(&store, "", false, None).unwrap();
         // later git ignores it, and it holds other bytes: the automatic checkpoint will not have them
         write(&d, ".gitignore", b"*.log

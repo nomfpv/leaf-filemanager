@@ -27,7 +27,7 @@ pub fn take_want(dir: &Path) -> bool {
 }
 
 /// Where the checkpoints of `dir` are kept (blocks: runs git).
-pub fn store_of(dir: &Path) -> Store {
+pub fn store_of(dir: &Path) -> Result<Store, checkpoint::Error> {
     let data = crate::settings::local_data_dir().unwrap_or_else(std::env::temp_dir);
     checkpoint::store_for(dir, &data)
 }
@@ -75,15 +75,18 @@ pub fn show_list(dir: PathBuf, tab: WeakEntity<FolderView>, cx: &mut App) {
 pub fn new_checkpoint(dir: PathBuf, tab: WeakEntity<FolderView>, window: &mut Window, cx: &mut App) {
     let d2 = dir.clone();
     let work = cx.background_spawn(async move {
-        let store = store_of(&d2);
+        let store = store_of(&d2)?;
         let est = if store.is_git() { None } else { Some(checkpoint::estimate(&store)) };
-        (store, est)
+        Ok::<_, checkpoint::Error>((store, est))
     });
     let cap = cap_bytes(cx);
     window
         .spawn(cx, async move |cx| {
-            let (store, est) = work.await;
-            let _ = cx.update(|window, cx| ask(dir, store, est, cap, tab, window, cx));
+            let got = work.await;
+            let _ = cx.update(|window, cx| match got {
+                Ok((store, est)) => ask(dir, store, est, cap, tab, window, cx),
+                Err(e) => crate::prompt::notice(t!("The checkpoint could not be taken"), error_text(&e), window, cx),
+            });
         })
         .detach();
 }
