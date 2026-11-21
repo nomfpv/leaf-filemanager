@@ -101,7 +101,7 @@ fn cache_ids(mime: &str) -> Vec<String> {
 }
 
 /// The entry for `id` (`a.desktop`; `a-b.desktop` may be the file `a/b.desktop`), when it is one to show.
-fn read_entry(id: &str) -> Option<DesktopApp> {
+pub(crate) fn read_entry(id: &str) -> Option<DesktopApp> {
     let text = data_dirs().into_iter().find_map(|d| {
         let p = d.join("applications").join(id);
         std::fs::read_to_string(&p).ok().or_else(|| std::fs::read_to_string(d.join("applications").join(id.replacen('-', "/", 1))).ok())
@@ -174,6 +174,11 @@ pub fn apps_for(mime: &str) -> Vec<DesktopApp> {
 /// The words of an `Exec` line (double quotes group; a backslash escapes inside them), with the field codes filled in: `%f %F %u %U` the
 /// file, `%%` a percent sign, the other codes dropped. Without a file code the file is appended.
 pub(crate) fn exec_words(exec: &str, file: &Path) -> Vec<std::ffi::OsString> {
+    exec_words_for(exec, Some(file))
+}
+
+/// `exec_words` for a start without a file (the apps list): the file codes are dropped and nothing is appended.
+pub(crate) fn exec_words_for(exec: &str, file: Option<&Path>) -> Vec<std::ffi::OsString> {
     let mut words: Vec<String> = Vec::new();
     let (mut cur, mut have, mut quoted) = (String::new(), false, false);
     let mut chars = exec.chars().peekable();
@@ -208,7 +213,9 @@ pub(crate) fn exec_words(exec: &str, file: &Path) -> Vec<std::ffi::OsString> {
     for w in words {
         match w.as_str() {
             "%f" | "%F" | "%u" | "%U" => {
-                out.push(file.as_os_str().to_owned());
+                if let Some(f) = file {
+                    out.push(f.as_os_str().to_owned());
+                }
                 gave_file = true;
             }
             "%i" | "%c" | "%k" | "%d" | "%D" | "%n" | "%N" | "%v" | "%m" => {}
@@ -224,7 +231,9 @@ pub(crate) fn exec_words(exec: &str, file: &Path) -> Vec<std::ffi::OsString> {
                     match it.next() {
                         Some('%') => s.push('%'),
                         Some('f' | 'F' | 'u' | 'U') => {
-                            s.push_str(&file.to_string_lossy());
+                            if let Some(f) = file {
+                                s.push_str(&f.to_string_lossy());
+                            }
                             gave_file = true;
                         }
                         _ => {}
@@ -235,10 +244,16 @@ pub(crate) fn exec_words(exec: &str, file: &Path) -> Vec<std::ffi::OsString> {
             w => out.push(w.into()),
         }
     }
-    if !gave_file {
-        out.push(file.as_os_str().to_owned());
+    if !gave_file && let Some(f) = file {
+        out.push(f.as_os_str().to_owned());
     }
     out
+}
+
+/// Starts the program of the desktop entry `id` (`org.kde.kate.desktop`) on `path`, detached.
+pub fn launch_id(id: &str, path: &Path) -> anyhow::Result<()> {
+    let app = read_entry(id).ok_or_else(|| anyhow::anyhow!("{id} is not an installed program"))?;
+    launch(&app, path)
 }
 
 /// Starts `app` on `path`, detached.

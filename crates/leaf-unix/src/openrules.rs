@@ -21,12 +21,22 @@ pub fn rules() -> Arc<Vec<OpenRule>> {
     RULES.read().ok().and_then(|r| r.clone()).unwrap_or_default()
 }
 
-/// The user's programs for this file ("Open with"), in their order; empty when its type has no list.
+/// The programs offered for this file under "Open with": the user's own for its type first, in their order, then the desktop's
+/// (`mimeapps.list` and the `.desktop` files that list the media type) as their desktop-entry ids (`org.kde.kate.desktop`), each once.
 pub fn programs_for(path: &Path) -> Vec<String> {
-    match openrules::ext_of(path) {
+    let mut out: Vec<String> = match openrules::ext_of(path) {
         Some(ext) => openrules::programs_for(&rules(), &ext).to_vec(),
         None => Vec::new(),
+    };
+    // the extension's type, not `xdg-mime` (this runs when a menu opens, on the interface thread)
+    if let Some(mime) = crate::fileinfo::mime_guess(path) {
+        for a in crate::openwith::apps_for(mime).into_iter().take(12) {
+            if !out.contains(&a.id) {
+                out.push(a.id);
+            }
+        }
     }
+    out
 }
 
 // TYPE-COPY(rf-win src/openrules.rs:34)
@@ -63,6 +73,10 @@ pub fn open(path: &Path) -> anyhow::Result<Opened> {
 
 /// Starts `program` with the file as its one argument (no shell), in the file's folder, detached.
 pub fn open_in(program: &str, file: &Path) -> anyhow::Result<()> {
+    // a desktop entry's id (from `programs_for`): its Exec line, field codes filled in
+    if program.ends_with(".desktop") && !program.contains('/') {
+        return crate::openwith::launch_id(program, file);
+    }
     let mut c = std::process::Command::new(program);
     c.arg(file).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     if let Some(dir) = file.parent().filter(|d| d.is_dir()) {

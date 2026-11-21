@@ -87,6 +87,10 @@ pub fn clean_program(raw: &str) -> Option<String> {
 
 /// The name a program goes by in the list and in the menu: its file's name without the extension ("dnSpy" for `...\dnSpy.exe`).
 pub fn program_label(path: &str) -> String {
+    // a desktop entry's id (Linux "Open with"): its last word, `org.kde.kate.desktop` is `kate`
+    if let Some(id) = path.strip_suffix(".desktop").filter(|_| !path.contains(['/', '\\'])) {
+        return id.rsplit('.').next().filter(|w| !w.is_empty()).unwrap_or(id).to_string();
+    }
     let stem = Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     if stem.is_empty() { path.to_string() } else { stem }
 }
