@@ -88,7 +88,7 @@ fn reload(cx: &mut App) {
     cx.global_mut::<State>().stamp = stamp;
 }
 
-fn icon_of(a: &CustomAction) -> L {
+pub fn icon_of(a: &CustomAction) -> L {
     match a.icon.as_deref().unwrap_or("").to_lowercase().as_str() {
         "code" | "editor" => L::Code,
         "terminal" | "square-terminal" => L::SquareTerminal,
@@ -348,4 +348,28 @@ fn launch(argv: Vec<OsString>, env: Vec<(&'static str, OsString)>, dir: Option<P
         anyhow::bail!("{} {code}", tx("The program ended with the code"));
     }
     anyhow::bail!("{} {code}\n{said}", tx("The program ended with the code"));
+}
+
+/// The actions with `where = toolbar`, in file order.
+pub fn toolbar_actions(cx: &App) -> Vec<CustomAction> {
+    list(cx).into_iter().filter(|a| a.offered_in(Place::Toolbar)).collect()
+}
+
+/// How many of the tool bar's actions have room as buttons at this window width (logical px); the rest go to the More menu.
+pub fn toolbar_fit(width: f32) -> usize {
+    (((width - 820.0) / 150.0).floor().max(0.0)) as usize
+}
+
+/// The tool bar actions that did not fit, as items for the More menu (with a separator before them).
+pub fn toolbar_overflow(width: f32, files: Vec<PathBuf>, dir: Option<PathBuf>, cx: &App) -> Vec<Item> {
+    let rest: Vec<CustomAction> = toolbar_actions(cx).into_iter().skip(toolbar_fit(width)).collect();
+    if rest.is_empty() {
+        return Vec::new();
+    }
+    let mut v = vec![Item::Separator];
+    v.extend(rest.into_iter().map(|a| {
+        let (files, dir) = (files.clone(), dir.clone());
+        Item::action(a.name.clone(), MenuIcon::Lucide(icon_of(&a)), move |w, cx| run(a.clone(), files.clone(), dir.clone(), w, cx))
+    }));
+    v
 }

@@ -3317,6 +3317,8 @@ impl Workspace {
             }
         }
         let menu_name = crate::i18n::tx("Custom commands");
+        let bar_actions = crate::custom_actions::toolbar_actions(cx);
+        let bar_fit = crate::custom_actions::toolbar_fit(self.viewport_w);
 
         // The search field at the bar's right end (the mockups'): typing in it filters this folder, Enter searches the folders inside;
         // a search that is on shows its words here with an x, and the history drops down under it.
@@ -3499,6 +3501,35 @@ impl Workspace {
                         }),
                 )
             })
+            // the user's own actions with `where = toolbar` (Settings > Your actions); the ones without room are in More
+            .children((!bar_actions.is_empty()).then(sep))
+            .children(bar_actions.into_iter().take(bar_fit).enumerate().map(|(i, a)| {
+                let tip = a.name.clone();
+                div()
+                    .id(("cb-action", i))
+                    .role(Role::Button)
+                    .aria_label(tip.clone())
+                    .h(px(32.))
+                    .max_w(px(160.))
+                    .flex_shrink_0()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .rounded(theme::RADIUS_SM)
+                    .text_sm()
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(p.hover))
+                    .active(|s| s.bg(p.pressed))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    .child(Icon::new(crate::custom_actions::icon_of(&a)).size(px(18.)).flex_shrink_0())
+                    .child(div().truncate().child(a.name.clone()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let view = this.active_tab().read(cx);
+                        crate::custom_actions::run(a.clone(), view.selection_paths(), view.current_dir(), window, cx);
+                    }))
+            }))
             .children(on("view").then(sep))
             // details or grid, as a two-button switch (the other layouts are in the Appearance menu)
             .children(on("view").then(|| {

@@ -669,7 +669,7 @@ impl FolderView {
                 let none = self.selected.is_empty();
                 // (the commands the tool bar leaves out to stay as short as the mockups': paste, cut by its own name, share)
                 let paste_ok = self.location().path().is_some() && leaf_sys::clipboard::can_paste();
-                vec![
+                let mut more = vec![
                     Item::action(t!("Paste"), icon(L::ClipboardPaste), act(&me, |v, w, cx| v.paste(w, cx))).hint("Ctrl+V").enabled(paste_ok),
                     Item::action(t!("Cut"), icon(L::Scissors), act(&me, |v, w, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))).hint("Ctrl+X").enabled(!none),
                     Item::action(t!("Share"), icon(L::Share2), act(&me, |v, w, cx| v.share(w, cx))).enabled(!none),
@@ -683,7 +683,10 @@ impl FolderView {
                     Item::Separator,
                     Item::action(t!("Properties"), icon(L::Wrench), act(&me, |v, _, cx| v.folder_properties(cx))),
                     Item::action(t!("Settings"), icon(L::Settings), |w, cx| w.dispatch_action(Box::new(crate::actions::GoSettings), cx)).hint("Ctrl+,"),
-                ]
+                ];
+                // the user's tool bar actions that had no room on the bar
+                more.extend(crate::custom_actions::toolbar_overflow(f32::from(window.viewport_size().width), self.selection_paths(), self.current_dir(), cx));
+                more
             }
             BarMenu::Sort => {
                 // Files' layout: Sort ▸ / Group ▸, then the folder/file order; these apply to
