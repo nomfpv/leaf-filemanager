@@ -58,7 +58,9 @@ message, and starting it again from the browser carries on from the part already
 The toolbar button's popup has **Browse through Mullvad**: the browser's proxy is set to leaf's SOCKS5 proxy on 127.0.0.1 (in leaf:
 Settings > VPN > Let other programs use the VPN), so pages go through leaf's Mullvad VPN and names are looked up through it (Chromium:
 `chrome.proxy` fixed_servers socks5; Firefox: `proxy.settings` with `proxyDNS: true`, or per request through `proxy.onRequest` when
-leaf's proxy asks for a password). Addresses of this PC and the local network stay direct.
+leaf's proxy asks for a password). Addresses of this PC and the local network stay direct, and so do single-word names (`nas`,
+`printer`) and `.local` names: they are looked up by the PC's resolver, outside the VPN (also a single word typed in the address bar,
+which Chromium checks with a lookup), so names on your own network keep working.
 
 Firefox: the switch turns on only when the add-on is allowed in private windows (about:addons > leaf browser capture > Run in Private
 Windows > Allow), so private windows go through Mullvad too. With leaf's proxy password the proxy can only be given per request, and
@@ -75,7 +77,8 @@ the proxy's address every half minute. The switch never turns itself off: while 
 not running or does not answer, and at the browser's start before leaf runs, the proxy stays pointed at leaf's (which refuses, or is
 closed), so pages fail rather than load directly; the badge turns red and one notice says so. Only the popup's "Turn off (browse
 without VPN)" puts the browser's own settings back. A new port or password in leaf is taken over.
-Chromium browsers cannot give a SOCKS proxy a password: with leaf's "Ask for a password" on, the switch works in Firefox only.
+Chromium browsers cannot give a SOCKS proxy a password: with leaf's "Ask for a password" on (the default when the PC has more than one
+user, on Windows and Linux), the switch works in Firefox only, and the popup says so.
 
 New permissions for it:
 

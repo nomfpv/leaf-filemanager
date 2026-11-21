@@ -358,7 +358,8 @@ function cannotUse(vpn) {
   if (!vpn) return "leaf cannot be reached. Start leaf, connect its VPN, then try again.";
   if (!vpn.proxy) return "In leaf, turn on Settings > VPN > Let other programs use the VPN.";
   if (vpn.state !== "on") return "leaf's VPN is not connected. Connect it in leaf (Settings > VPN), then try again.";
-  if (!IS_FIREFOX && vpn.proxy.user) return "This browser cannot give a SOCKS proxy a password. In leaf, turn off Settings > VPN > Ask for a password.";
+  // (leaf asks for a password by default when the PC has more than one user)
+  if (!IS_FIREFOX && vpn.proxy.user) return "leaf's proxy asks for a password (this PC has more than one user), and Chrome, Edge and Brave cannot give a SOCKS proxy one. Use Browse through Mullvad in Firefox, or turn off Settings > VPN > Ask for a password in leaf (other users of this PC could then use your VPN).";
   return null;
 }
 
