@@ -8,6 +8,7 @@ mod host;
 mod http;
 mod mark;
 mod name;
+pub mod pattern;
 pub mod queue;
 pub mod store;
 #[cfg(test)]

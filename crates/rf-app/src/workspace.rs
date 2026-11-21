@@ -6125,6 +6125,15 @@ impl Render for Workspace {
                     None => crate::prompt::notice(t!("Download here"), t!("This works in a folder on this PC. Open the folder the file should go to first.").to_string(), window, cx),
                 }
             }))
+            .on_action(cx.listener(|this, _: &DownloadMany, window, cx| {
+                // the folder shown, when it is a folder on this PC
+                let v = this.active_tab().clone();
+                let dir = v.read(cx).current_dir().filter(|d| crate::downloads::can_save_in(d));
+                match dir {
+                    Some(dir) => crate::downloads::ask_many(v.downgrade(), dir, window, cx),
+                    None => crate::prompt::notice(t!("Download several"), t!("This works in a folder on this PC. Open the folder the file should go to first.").to_string(), window, cx),
+                }
+            }))
             .on_action(cx.listener(|this, _: &BookmarkRemoteFolder, window, cx| {
                 // the folder shown, when it is on a saved host
                 let loc = this.active_tab().read(cx).location().clone();

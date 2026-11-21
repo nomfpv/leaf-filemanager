@@ -818,6 +818,11 @@ fn own_new_items(me: &Me) -> Vec<Item> {
                 crate::downloads::ask(cx.entity().downgrade(), dir, w, cx);
             }
         })),
+        Item::action(t!("Download several…"), icon(L::Download), act(me, |v, w, cx| {
+            if let Some(dir) = v.current_dir().filter(|d| crate::downloads::can_save_in(d)) {
+                crate::downloads::ask_many(cx.entity().downgrade(), dir, w, cx);
+            }
+        })),
     ]
 }
 

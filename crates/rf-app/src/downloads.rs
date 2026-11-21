@@ -111,6 +111,72 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
     );
 }
 
+/// The addresses a "Download several" box stands for: its words (links pasted one per line arrive separated by spaces) with the
+/// patterns expanded. The second number is how many words were left out (not a web address, a password in it, a pattern that
+/// makes too many).
+pub fn expand_many(text: &str) -> (Vec<String>, usize) {
+    let (mut urls, mut skipped) = (Vec::new(), 0);
+    for word in text.split_whitespace() {
+        let word = word.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | ','));
+        let Some(list) = dl::pattern::expand(word) else {
+            skipped += 1;
+            continue;
+        };
+        for u in list {
+            if dl::is_http_url(&u) && !dl::has_password(&u) {
+                if !urls.contains(&u) {
+                    urls.push(u);
+                }
+            } else {
+                skipped += 1;
+            }
+        }
+    }
+    (urls, skipped)
+}
+
+/// "Download several…": the addresses (links of the clipboard are already in the box) or a pattern, then a list with the count
+/// before anything is added; all go into the queue, into `dir`.
+pub fn ask_many(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: &mut App) {
+    let initial = cx.read_from_clipboard().and_then(|c| c.text()).map(|t| t.split_whitespace().filter(|w| dl::is_http_url(w)).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    let shown = dir.clone();
+    let preview = Button::new(t!("Preview"), Kind::Primary, move |text, window, cx| {
+        let (urls, skipped) = expand_many(text.as_deref().unwrap_or_default());
+        if urls.is_empty() {
+            return Err(t!("Enter web addresses that start with http:// or https://, or a pattern such as https://example.com/file[001-100].zip").into());
+        }
+        confirm_many(view.clone(), dir.clone(), urls, skipped, window, cx);
+        Ok(())
+    });
+    prompt::show(
+        t!("Download several"),
+        Some(format!("{} {}\n{}", t!("The files are saved in"), shown.display(), t!("Paste links (one per line) or a pattern: file[001-100].zip, photo[a-f].jpg."))),
+        Some((initial, "https://example.com/file[001-100].zip".to_string())),
+        vec![preview, Button::cancel()],
+        window,
+        cx,
+    );
+}
+
+/// The list before they are added: how many, the first few and the last.
+fn confirm_many(view: WeakEntity<FolderView>, dir: PathBuf, urls: Vec<String>, skipped: usize, window: &mut Window, cx: &mut App) {
+    let n = urls.len();
+    let mut lines: Vec<String> = if n <= 9 { urls.clone() } else { urls[..6].iter().cloned().chain(std::iter::once("…".to_string())).chain(urls[n - 2..].iter().cloned()).collect() };
+    let mut head = format!("{n} {}", if n == 1 { t!("download") } else { t!("downloads") });
+    if skipped > 0 {
+        head.push_str(&format!(" ({skipped} {})", t!("left out: not a web address")));
+    }
+    lines.insert(0, head);
+    let add = Button::new(t!("Add to the queue"), Kind::Primary, move |_, _, cx| {
+        for u in &urls {
+            start_with(cx, Request::new(u.clone(), dir.clone()), None);
+        }
+        let _ = view.update(cx, |_, cx| cx.notify());
+        Ok(())
+    });
+    prompt::show(t!("Download several"), Some(lines.join("\n")), None, vec![add, Button::cancel()], window, cx);
+}
+
 /// `leaf download <url> [folder]`, as the running window (or this process, once its window is up) takes it over.
 pub fn message(url: &str, folder: Option<&str>) -> String {
     format!("{MESSAGE_PREFIX}{url}{SEP}{}", folder.unwrap_or_default())
