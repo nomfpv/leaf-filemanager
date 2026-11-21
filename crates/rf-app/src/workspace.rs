@@ -3921,6 +3921,12 @@ impl Workspace {
             hidden = Some(loc);
         }
         let n = crumbs.len();
+        // a folder on a drive starts at the drive, with the drive's icon in its crumb (the mockups': no house and no arrow before
+        // "C:"; Home is the title bar's button)
+        let drive_root = crumbs.first().and_then(|(_, t)| t.path()).is_some_and(|p| {
+            let b = p.as_os_str().as_encoded_bytes();
+            (2..=3).contains(&b.len()) && b[1] == b':'
+        });
         let home_icon = div()
             .id("crumb-home")
             .px_1()
@@ -3932,7 +3938,9 @@ impl Workspace {
                 cx.stop_propagation();
                 this.navigate(Location::Home, window, cx);
             }));
-        row = row.child(home_icon);
+        if !drive_root {
+            row = row.child(home_icon);
+        }
         let chevron = |id: (&'static str, usize), dir: Option<PathBuf>, p: &Palette, cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -3970,17 +3978,23 @@ impl Workspace {
                     );
                 }
             }
-            row = row.child(chevron(("crumb-chev", i), prev_dir.clone(), p, cx));
+            if !(drive_root && i == 0) {
+                row = row.child(chevron(("crumb-chev", i), prev_dir.clone(), p, cx));
+            }
             prev_dir = target.path().map(Path::to_path_buf);
             let last = i + 1 == n;
             row = row.child(
-                div()
+                h_flex()
                     .id(("crumb", i))
+                    .gap(px(6.))
+                    .items_center()
                     .px_1p5()
                     .py_0p5()
                     .rounded(theme::RADIUS_SM)
                     .whitespace_nowrap()
-                    .when(last, |d| d.font_weight(FontWeight::MEDIUM))
+                    .when(drive_root && i == 0, |d| d.child(Icon::new(L::HardDrive).size(px(16.)).text_color(p.text_secondary)))
+                    // (the mockups' current folder: 600)
+                    .when(last, |d| d.font_weight(FontWeight::SEMIBOLD))
                     .when(!last, |d| d.text_color(p.text_secondary))
                     .hover(|s| s.bg(p.hover).text_color(p.text))
                     .child(crate::rtl::display_text(&label))
@@ -3995,10 +4009,11 @@ impl Workspace {
                     })),
             );
         }
+        // (the arrow to the folders inside the current one shows while the pointer is over the path: the mockups' path ends at its name)
         if let Some(d) = last_dir {
-            row = row.child(chevron(("crumb-chev", 999), Some(d), p, cx));
+            row = row.child(chevron(("crumb-chev", 999), Some(d), p, cx).invisible().group_hover("crumbs", |s| s.visible()));
         }
-        row
+        row.group("crumbs")
     }
 
     fn sidebar_item(
