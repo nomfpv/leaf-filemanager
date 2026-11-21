@@ -1,5 +1,5 @@
 ﻿//! Linux backend of rf_win::shell. Status: REAL for open (xdg-open), open-with and the terminal; properties (the system's own
-//! dialog, leaf has its own page) and the admin terminal stay stubs.
+//! dialog, leaf has its own page) goes through the FileManager1 D-Bus call; the admin terminal stays a stub.
 
 use crate::Owner;
 use leaf_common::{stub, stub_err};
@@ -45,8 +45,40 @@ pub fn open_with(path: &Path) -> anyhow::Result<()> {
     crate::openwith::open_with(path, false).map(|_| ())
 }
 
-pub fn properties(_path: &Path) -> anyhow::Result<()> {
-    stub_err!("shell::properties")
+/// The file manager's own properties window through the freedesktop `org.freedesktop.FileManager1.ShowItemProperties` call (Nautilus,
+/// Dolphin, Nemo and others answer it), made with `gdbus` or `dbus-send`. An error when neither tool or no such service is there.
+pub fn properties(path: &Path) -> anyhow::Result<()> {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // a file: URI with the bytes that are not safe percent-encoded
+    let mut uri = String::from("file://");
+    {
+        use std::os::unix::ffi::OsStrExt;
+        for &b in abs.as_os_str().as_bytes() {
+            if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+                uri.push(b as char);
+            } else {
+                uri.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    let (exe, args): (PathBuf, Vec<String>) = if let Some(g) = which("gdbus") {
+        (
+            g,
+            vec!["call".into(), "--session".into(), "--dest".into(), "org.freedesktop.FileManager1".into(), "--object-path".into(), "/org/freedesktop/FileManager1".into(),
+                 "--method".into(), "org.freedesktop.FileManager1.ShowItemProperties".into(), format!("['{uri}']"), "".into()],
+        )
+    } else if let Some(d) = which("dbus-send") {
+        (
+            d,
+            vec!["--session".into(), "--print-reply".into(), "--dest=org.freedesktop.FileManager1".into(), "/org/freedesktop/FileManager1".into(),
+                 "org.freedesktop.FileManager1.ShowItemProperties".into(), format!("array:string:{uri}"), "string:".into()],
+        )
+    } else {
+        anyhow::bail!("neither gdbus nor dbus-send is installed");
+    };
+    let out = Command::new(exe).args(args).stdin(Stdio::null()).output()?;
+    anyhow::ensure!(out.status.success(), "no file manager answers the properties request");
+    Ok(())
 }
 
 pub fn open_terminal(dir: &Path) -> anyhow::Result<()> {
