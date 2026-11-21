@@ -189,7 +189,7 @@ impl DuplicatesView {
     }
 
     /// Replaces the ticks of one group (`Some`) or of every group (`None`) with the ones `keep` gives.
-    fn apply_keep(&mut self, group: Option<usize>, keep: Keep, cx: &mut Context<Self>) {
+    pub(crate) fn apply_keep(&mut self, group: Option<usize>, keep: Keep, cx: &mut Context<Self>) {
         let range = match group {
             Some(g) => g..g + 1,
             None => 0..self.groups.len(),
@@ -246,7 +246,7 @@ impl DuplicatesView {
     }
 
     /// "Delete ticked": checked, asked, then the normal delete to the Recycle Bin.
-    fn ask_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ask_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match plan_delete(&self.groups, &self.ticked, Self::stat) {
             Plan::LastCopy(_) => {
                 crate::prompt::notice(

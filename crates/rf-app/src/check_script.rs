@@ -1,6 +1,6 @@
 //! Test driver (tools/TESTING.md): `LEAF_CHECK_SCRIPT=<file>` runs the file's lines, in order, on the UI thread once the first
 //! folder is listed. Off (and free) unless the variable is set. Lines: `select a|b|c`, `run <CommandId>` (the action is dispatched
-//! like a key press), `type <text>`, `key <name>` (enter, escape, tab, ...), `wait <ms>`, `wait-idle`, `goto <path|home>`, `usage <path>` (storage usage view), `bin restore`, `bulk apply`, `settings <page>`,
+//! like a key press), `type <text>`, `key <name>` (enter, escape, tab, ...), `wait <ms>`, `wait-idle`, `goto <path|home>`, `usage <path>` (storage usage view), `bin restore`, `bulk apply`, `dups newest|delete`, `settings <page>`,
 //! `pane left|right`, `shot <name>` (prints `LEAF_SHOT <name>` on stdout and waits for the wrapper's picture), `quit`.
 //! Blank lines and lines starting with `#` are ignored; an unknown line is logged and skipped.
 
@@ -176,6 +176,18 @@ impl Workspace {
             "bin" if arg == "restore" => {
                 if let Some(rv) = self.active_tab().read(cx).recycle_view() {
                     rv.update(cx, |rv, cx| rv.restore_selected(cx));
+                }
+            }
+            // the duplicate finder page: `dups newest` ticks every copy but the newest of each group, `dups delete` is its Delete ticked button
+            "dups" if arg == "newest" || arg == "delete" => {
+                if let Some(dv) = self.active_tab().read(cx).dups_view() {
+                    dv.update(cx, |dv, cx| {
+                        if arg == "newest" {
+                            dv.apply_keep(None, rf_core::dupes::Keep::Newest, cx)
+                        } else {
+                            dv.ask_delete(window, cx)
+                        }
+                    });
                 }
             }
             // Settings on one page: `settings appearance`

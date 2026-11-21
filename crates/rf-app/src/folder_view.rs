@@ -3736,6 +3736,11 @@ impl FolderView {
         self.recycle.clone()
     }
 
+    /// The duplicate finder page of this view while it shows one (the scripted test driver ticks and deletes through it).
+    pub(crate) fn dups_view(&self) -> Option<Entity<crate::duplicates_view::DuplicatesView>> {
+        self.dups.clone()
+    }
+
     pub(crate) fn set_reselect(&mut self, name: String) {
         self.reselect = Some(name);
     }
@@ -5478,6 +5483,7 @@ impl Render for FolderView {
             .on_action(cx.listener(|this, _: &NewFolder, _, cx| this.create_new(true, cx)))
             .on_action(cx.listener(|this, _: &NewTextFile, _, cx| this.create_new(false, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
+            .on_action(cx.listener(|this, _: &CopyAsContext, window, cx| this.copy_as_context(window, cx)))
             .on_action(cx.listener(|this, _: &CopyPathQuoted, _, cx| this.copy_path_with(true, cx)))
             .on_action(cx.listener(|this, _: &CopyPathName, _, cx| this.copy_path_as(CopyPathKind::Name, cx)))
             .on_action(cx.listener(|this, _: &CopyPathFolder, _, cx| this.copy_path_as(CopyPathKind::Folder, cx)))
