@@ -994,10 +994,11 @@ fn create_shortcuts(items: Vec<PathBuf>) {
         for target in items {
             let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else { continue };
             let base = format!("{} - {}", name.to_string_lossy(), t!("Shortcut"));
-            let mut link = parent.join(format!("{base}.lnk"));
+            let ext = if cfg!(windows) { ".lnk" } else { "" };
+            let mut link = parent.join(format!("{base}{ext}"));
             let mut n = 2;
-            while link.exists() {
-                link = parent.join(format!("{base} ({n}).lnk"));
+            while link.symlink_metadata().is_ok() {
+                link = parent.join(format!("{base} ({n}){ext}"));
                 n += 1;
             }
             if let Err(e) = leaf_sys::shortcut::create(&link, &target) {

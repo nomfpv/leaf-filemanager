@@ -341,10 +341,11 @@ impl FolderView {
                 for p in paths {
                     let stem = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Shortcut".into());
                     // never overwrite: "x.lnk", "x (2).lnk", …
-                    let mut link = dir.join(format!("{stem}.lnk"));
+                    let ext = if cfg!(windows) { ".lnk" } else { "" };
+                    let mut link = dir.join(format!("{stem}{ext}"));
                     let mut n = 2;
-                    while link.exists() {
-                        link = dir.join(format!("{stem} ({n}).lnk"));
+                    while link.symlink_metadata().is_ok() {
+                        link = dir.join(format!("{stem} ({n}){ext}"));
                         n += 1;
                     }
                     if let Err(e) = leaf_sys::shortcut::create(&link, &p) {
