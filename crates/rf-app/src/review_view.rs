@@ -500,6 +500,9 @@ impl ReviewView {
             return;
         }
         self.busy = true;
+        // (the difference shown is out of date from now on: a and r wait for the new one, so the same hunk is never sent twice)
+        self.shown = None;
+        self.rebuild();
         let task = cx.background_spawn(async move { work() });
         self._act = Some(cx.spawn(async move |this, cx| {
             let r = task.await;
