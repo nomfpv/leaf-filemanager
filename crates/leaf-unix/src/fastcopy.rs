@@ -202,7 +202,7 @@ fn tree_bytes(p: &Path, cancel: &std::sync::atomic::AtomicBool) -> u64 {
 /// What a source item was when it was copied: removed after a move only while all of it still matches (a file saved or replaced
 /// meanwhile has another inode, size, mtime or ctime and is kept).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Ident {
+pub(crate) struct Ident {
     dev: u64,
     ino: u64,
     size: u64,
@@ -211,7 +211,7 @@ struct Ident {
 }
 
 impl Ident {
-    fn of(m: &std::fs::Metadata) -> Self {
+    pub(crate) fn of(m: &std::fs::Metadata) -> Self {
         Self { dev: m.dev(), ino: m.ino(), size: m.len(), mtime: (m.mtime(), m.mtime_nsec()), ctime: (m.ctime(), m.ctime_nsec()) }
     }
 }
@@ -769,6 +769,36 @@ pub(crate) fn move_across(src: &Path, dst: &Path) -> anyhow::Result<()> {
     remove_copied(&mut job, &copied);
     anyhow::ensure!(job.failed_count == 0, "{}", job.failed.join("; "));
     Ok(())
+}
+
+/// One regular file copied to `dst` (which must not exist: `O_EXCL`, a taken name is `AlreadyExists` and is not touched), fsynced,
+/// checked (the size, the first and the last MiB read back) and its name made durable in its folder. The source is opened without
+/// following a link and must be a regular file. The answer is the source as it was when it was opened, for the caller to compare
+/// before it removes anything. On any failure after `dst` was made, the partial `dst` is removed. (The organizer's move to another
+/// device; nothing here removes a source.)
+pub(crate) fn copy_one_file(src: &Path, dst: &Path) -> io::Result<Ident> {
+    let tracker = Tracker::new(Box::new(|_, _, _| {}), Default::default());
+    let mut job = Job {
+        tracker: &tracker,
+        verify: Verify::Quick,
+        total: 0,
+        done: 0,
+        started: Instant::now(),
+        paced: 0,
+        failed: Vec::new(),
+        failed_count: 0,
+        skipped: Vec::new(),
+        decide: HashMap::new(),
+        force_copy: true,
+        temp_seq: 0,
+        stay_on: None,
+    };
+    let was = copy_file(&mut job, src, dst, Verify::Quick)?;
+    if let Err(e) = sync_dir(parent_of(dst)) {
+        let _ = std::fs::remove_file(dst);
+        return Err(e);
+    }
+    Ok(was)
 }
 
 /// Where journals live: this engine keeps none (no resume, decision D2).
