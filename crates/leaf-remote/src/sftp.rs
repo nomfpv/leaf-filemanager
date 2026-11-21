@@ -71,6 +71,21 @@ impl SftpFs {
         conn::target(&self.cfg, v)
     }
 
+    /// Whether a connection to the server of `v` is open now.
+    pub fn target_connected(&self, v: &VPath) -> bool {
+        self.target(v).is_ok_and(|t| self.shared.is_connected(&t))
+    }
+
+    /// Free space on the server, only while a connection to it is open already (nothing connects for this; `None` otherwise
+    /// and when the server does not tell).
+    pub fn free_if_connected(&self, v: &VPath) -> Option<Space> {
+        let t = self.target(v).ok()?;
+        if !self.shared.is_connected(&t) {
+            return None;
+        }
+        self.free_space(v).ok().flatten()
+    }
+
     /// The folder the server logs the user into (its home), as an address on the same server.
     pub fn home(&self, v: &VPath) -> Result<VPath, FsError> {
         let p = self.with(v, &|| false, async |c| Ok(c.home.clone()))?;

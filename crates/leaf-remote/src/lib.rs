@@ -55,3 +55,16 @@ pub fn home(v: &VPath) -> Result<VPath, FsError> {
         _ => Ok(v.root()),
     }
 }
+
+/// Whether a connection to the server of this `sftp://` address is open now (never connects).
+pub fn is_connected(v: &VPath) -> bool {
+    v.scheme() == "sftp" && sftp_backend().target_connected(v)
+}
+
+/// Free bytes on the server, only while it is connected already (never connects; `None` when unknown).
+pub fn free_if_connected(v: &VPath) -> Option<u64> {
+    if v.scheme() != "sftp" {
+        return None;
+    }
+    sftp_backend().free_if_connected(&v.with_path("/~")).map(|s| s.free)
+}

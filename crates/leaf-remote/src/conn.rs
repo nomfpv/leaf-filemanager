@@ -214,6 +214,12 @@ impl Shared {
         Ok(c)
     }
 
+    /// Whether a live connection to the target is open now; never connects.
+    pub fn is_connected(&self, t: &Target) -> bool {
+        let Some(slot) = lock(&self.pool).get(&t.key).cloned() else { return false };
+        slot.try_lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.alive()))
+    }
+
     /// Forgets every secret kept for the host `name` (`host` or `[host]:port`): its passwords, and the unlocked key files
     /// (asked again next time). Called when the host shows a key that is not the one accepted before.
     fn forget_secrets(&self, name: &str) {

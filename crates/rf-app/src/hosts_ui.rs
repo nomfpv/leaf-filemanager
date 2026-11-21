@@ -177,6 +177,70 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     v
 }
 
+/// What the tile of a host shows about it: found by a short TCP connect to its port (no login, no session), and the free space
+/// only while a connection to the host is open already.
+#[derive(Clone, Default)]
+struct Probe {
+    online: Option<bool>,
+    ping_ms: Option<u32>,
+    free: Option<u64>,
+    at: Option<std::time::Instant>,
+    running: bool,
+}
+
+#[derive(Default)]
+struct Probes(std::collections::HashMap<String, Probe>);
+impl Global for Probes {}
+
+/// The probe is looked at again after this long, and only while a tile is drawn.
+const PROBE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn probe_host(h: &Host) -> Probe {
+    use std::net::ToSocketAddrs;
+    let port = h.port.unwrap_or(if h.scheme.to_ascii_lowercase().starts_with("ftp") { 21 } else { 22 });
+    let started = std::time::Instant::now();
+    let online = (h.host.as_str(), port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.find_map(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(2)).ok()))
+        .is_some();
+    let ping_ms = online.then(|| started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32);
+    let free = if online { VPath::parse(&h.address()).ok().and_then(|v| leaf_remote::free_if_connected(&v)) } else { None };
+    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false }
+}
+
+/// Starts the probes of the hosts whose answer is old (the page is redrawn when one comes back).
+fn refresh_probes(hosts: &[Host], cx: &mut Context<crate::folder_view::FolderView>) {
+    if !cx.has_global::<Probes>() {
+        cx.set_global(Probes::default());
+    }
+    for h in hosts {
+        let stale = {
+            let p = cx.global_mut::<Probes>().0.entry(h.name.clone()).or_default();
+            let stale = !p.running && p.at.is_none_or(|t| t.elapsed() > PROBE_EVERY);
+            if stale {
+                p.running = true;
+            }
+            stale
+        };
+        if !stale {
+            continue;
+        }
+        let h = h.clone();
+        cx.spawn(async move |this, cx| {
+            let name = h.name.clone();
+            let got = cx.background_spawn(async move { probe_host(&h) }).await;
+            let _ = cx.update(|cx| {
+                if cx.has_global::<Probes>() {
+                    cx.global_mut::<Probes>().0.insert(name, got);
+                }
+            });
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+}
+
 /// The Home widget: one card per host (none: the widget is left out).
 pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx, cx: &mut Context<crate::folder_view::FolderView>) -> Option<AnyElement> {
     let hosts = all(cx);
@@ -184,9 +248,21 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
         return None;
     }
     let p = &w.p;
+    refresh_probes(&hosts, cx);
     let mut grid = div().grid().grid_cols(crate::folder_view::tile_cols(w.width, 240., 340., 12.)).gap_3();
     for (i, h) in hosts.into_iter().enumerate() {
         let loc = location(&h);
+        let probe = cx.global::<Probes>().0.get(&h.name).cloned().unwrap_or_default();
+        let (dot, state) = match (probe.online, probe.ping_ms) {
+            (Some(true), Some(ms)) => (p.success, format!("{} \u{b7} {ms} ms", t!("Online"))),
+            (Some(true), None) => (p.success, t!("Online").to_string()),
+            (Some(false), _) => (p.danger, t!("Not reachable").to_string()),
+            (None, _) => (p.text_tertiary, t!("Checking...").to_string()),
+        };
+        let state = match probe.free {
+            Some(f) => format!("{state} \u{b7} {} {}", rf_core::format::size(f), t!("free")),
+            None => state,
+        };
         grid = grid.child(
             v_flex()
                 .id(("home-host", i))
@@ -209,7 +285,16 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
                                 .flex_1()
                                 .min_w_0()
                                 .child(div().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(h.name.clone()))
-                                .child(div().text_xs().text_color(p.text_secondary).overflow_hidden().text_ellipsis().whitespace_nowrap().child(subtitle(&h))),
+                                .child(div().text_xs().text_color(p.text_secondary).overflow_hidden().text_ellipsis().whitespace_nowrap().child(subtitle(&h)))
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .items_center()
+                                        .text_xs()
+                                        .text_color(p.text_secondary)
+                                        .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(dot))
+                                        .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().child(state)),
+                                ),
                         ),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
