@@ -83,8 +83,10 @@ impl AudioSink for NullSink {
     }
 }
 
+#[cfg(windows)]
 pub use wasapi::wasapi_sink;
 
+#[cfg(windows)]
 mod wasapi {
     use super::AudioSink;
     use anyhow::Context;
