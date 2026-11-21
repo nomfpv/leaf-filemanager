@@ -196,7 +196,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::Foundation::E_ABORT;
-use windows::Win32::UI::Shell::{FOF_SILENT, IFileOperationProgressSink, IFileOperationProgressSink_Impl, SIGDN_NORMALDISPLAY};
+use windows::Win32::UI::Shell::{FOF_NOERRORUI, FOF_SILENT, IFileOperationProgressSink, IFileOperationProgressSink_Impl, SIGDN_NORMALDISPLAY};
 use windows_core::{HRESULT, Ref, implement};
 
 fn fs_path(item: Ref<IShellItem>) -> Option<PathBuf> {
@@ -215,6 +215,8 @@ struct Sink {
     last: std::sync::Mutex<(u32, u32)>,
     /// Raised at the engine's first sign of life (see `engine_guard::supervise`).
     life: Arc<Life>,
+    /// The first delete the engine could not do (with no error box it only says so here): a file in use, access denied.
+    failed: Arc<std::sync::Mutex<Option<HRESULT>>>,
 }
 
 impl Sink {
@@ -252,7 +254,13 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
     fn PreCopyItem(&self, _f: u32, item: Ref<IShellItem>, _d: Ref<IShellItem>, _n: &PCWSTR) -> windows_core::Result<()> { self.item(item); self.check() }
     fn PostCopyItem(&self, _f: u32, i: Ref<IShellItem>, _d: Ref<IShellItem>, _n: &PCWSTR, hr: HRESULT, c: Ref<IShellItem>) -> windows_core::Result<()> { self.record(hr, i, c); self.check() }
     fn PreDeleteItem(&self, _f: u32, item: Ref<IShellItem>) -> windows_core::Result<()> { self.item(item); self.check() }
-    fn PostDeleteItem(&self, _f: u32, i: Ref<IShellItem>, hr: HRESULT, c: Ref<IShellItem>) -> windows_core::Result<()> { self.record(hr, i, c); self.check() }
+    fn PostDeleteItem(&self, _f: u32, i: Ref<IShellItem>, hr: HRESULT, c: Ref<IShellItem>) -> windows_core::Result<()> {
+        if hr.is_err() && hr != E_ABORT {
+            self.failed.lock().unwrap().get_or_insert(hr);
+        }
+        self.record(hr, i, c);
+        self.check()
+    }
     fn PreNewItem(&self, _f: u32, _d: Ref<IShellItem>, _n: &PCWSTR) -> windows_core::Result<()> { self.check() }
     fn PostNewItem(&self, _f: u32, _d: Ref<IShellItem>, _n: &PCWSTR, _t: &PCWSTR, _a: u32, _hr: HRESULT, _c: Ref<IShellItem>) -> windows_core::Result<()> { self.check() }
     fn UpdateProgress(&self, total: u32, done: u32) -> windows_core::Result<()> {
@@ -267,7 +275,8 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
 
 /// Performs the operation with the progress sink attached. Ok(true) when everything completed, Ok(false) when the user cancelled part of it.
 fn perform_tracked(op: &IFileOperation, tracker: Arc<Tracker>, life: Arc<Life>) -> anyhow::Result<bool> {
-    let sink: IFileOperationProgressSink = Sink { tracker: tracker.clone(), last: std::sync::Mutex::new((0, 0)), life }.into();
+    let failed = Arc::new(std::sync::Mutex::new(None));
+    let sink: IFileOperationProgressSink = Sink { tracker: tracker.clone(), last: std::sync::Mutex::new((0, 0)), life, failed: failed.clone() }.into();
     let cookie = unsafe { op.Advise(&sink)? };
     let r = (|| -> anyhow::Result<bool> {
         unsafe {
@@ -280,6 +289,10 @@ fn perform_tracked(op: &IFileOperation, tracker: Arc<Tracker>, life: Arc<Life>) 
     }
     if tracker.cancel.load(Ordering::Relaxed) {
         return Ok(false);
+    }
+    // a delete the engine refused (no error box: FOF_NOERRORUI) is an error with the system's words, not a quiet "aborted"
+    if let Some(hr) = *failed.lock().unwrap() {
+        return Err(anyhow::anyhow!("{}", windows_core::Error::from(hr).message().trim()));
     }
     r
 }
@@ -300,7 +313,9 @@ pub fn transfer_tracked(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tr
 /// `delete` with in-app progress.
 pub fn delete_tracked(paths: &[PathBuf], permanent: bool, tracker: Arc<Tracker>) -> anyhow::Result<bool> {
     let mut flags = if permanent { 0 } else { FOF_ALLOWUNDO.0 as u32 | FOFX_RECYCLEONDELETE.0 | FOFX_ADDUNDORECORD.0 };
-    flags |= FOF_SILENT.0 as u32;
+    // FOF_NOERRORUI: a file another program holds open is a failure we report ("In use by: ..."), not the shell's modal
+    // "file is open in ..." box, which nobody answers and which stops the job for good
+    flags |= FOF_SILENT.0 as u32 | FOF_NOERRORUI.0 as u32;
     delete_through_engine(paths, permanent, flags, tracker)
 }
 
