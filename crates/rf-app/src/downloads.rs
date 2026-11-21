@@ -56,7 +56,7 @@ pub const LINK_EXT: &str = "leaf-url";
 
 /// A folder on this PC a download can be saved in (not an archive, a server or an FTP address).
 pub fn can_save_in(dir: &Path) -> bool {
-    !leaf_sys::ftp::is_ftp(dir) && crate::archive_view::split(dir).is_none()
+    !crate::remote::is_address_path(dir) && crate::archive_view::split(dir).is_none()
 }
 
 /// "Download here…": asks for the address (a web address on the clipboard is already in the box) and starts the download into `dir`;
