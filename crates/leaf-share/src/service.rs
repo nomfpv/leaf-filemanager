@@ -48,6 +48,8 @@ pub struct Config {
     /// the file goes to the share's own `.leaf-sync-trash`.
     pub trash_local: Arc<TrashFn>,
     pub bin_takes: Arc<BinFn>,
+    /// The runtime to run on (the app passes the one its remote connections use); `None`: the service makes its own.
+    pub runtime: Option<tokio::runtime::Handle>,
 }
 
 impl Config {
@@ -61,6 +63,7 @@ impl Config {
             debounce: Duration::from_secs(5),
             trash_local: Arc::new(|_| Err("no Trash here".into())),
             bin_takes: Arc::new(|_| false),
+            runtime: None,
         }
     }
 }
@@ -152,7 +155,11 @@ impl ShareService {
     /// Reads the shares and starts what they need (the listener only when there is one).
     pub fn start(cfg: Config, listener: Arc<dyn ShareListener>) -> Result<Arc<ShareService>, String> {
         let me = Identity::load_or_create(&cfg.identity_dir).map_err(|e| format!("This PC's identity could not be made: {e:#}"))?;
-        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("leaf-share").enable_all().build().map_err(|e| e.to_string())?;
+        let own = match &cfg.runtime {
+            Some(_) => None,
+            None => Some(tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("leaf-share").enable_all().build().map_err(|e| e.to_string())?),
+        };
+        let handle = cfg.runtime.clone().or_else(|| own.as_ref().map(|r| r.handle().clone())).ok_or("no runtime")?;
         let store = Store::load(&cfg.state_dir);
         let ids: Vec<String> = store.shares.iter().map(|s| s.id.clone()).collect();
         let inner = Arc::new(Inner {
@@ -160,7 +167,7 @@ impl ShareService {
             listener,
             me,
             store: Mutex::new(store),
-            rt: rt.handle().clone(),
+            rt: handle,
             transport: Mutex::new(None),
             problem: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
@@ -173,7 +180,7 @@ impl ShareService {
         for id in ids {
             inner.activate(&id);
         }
-        Ok(Arc::new(ShareService { inner, rt: Mutex::new(Some(rt)) }))
+        Ok(Arc::new(ShareService { inner, rt: Mutex::new(own) }))
     }
 
     /// This PC's device id.
@@ -265,8 +272,9 @@ impl ShareService {
         let now = crate::now_ms();
         s.invites.retain(|i| !i.used && i.expires_ms > now);
         s.invites.push(InviteRec { secret_sha256: sha256_hex(&secret), expires_ms, used: false });
+        let name = s.name.clone();
         store.save();
-        Ok(Invite { device: self.inner.me.id.clone(), share: share.to_string(), secret, expires_ms, address }.to_text())
+        Ok(Invite { device: self.inner.me.id.clone(), share: share.to_string(), secret, expires_ms, address, name }.to_text())
     }
 
     /// Joins a friend's shared folder into `folder` (made when missing). The end comes to [`ShareListener::joined`].

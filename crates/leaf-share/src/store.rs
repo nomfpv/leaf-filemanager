@@ -145,14 +145,16 @@ pub struct Invite {
     pub secret: String,
     pub expires_ms: i64,
     pub address: String,
+    /// The shared folder's name (what the friend's folder is called by default).
+    pub name: String,
 }
 
 const MAGIC: &str = "leaf-share1";
 
 impl Invite {
-    /// One line: `leaf-share1 <device> <share> <secret> <expires> <address>`.
+    /// One line: `leaf-share1 <device> <share> <secret> <expires> <address> <folder name>`.
     pub fn to_text(&self) -> String {
-        format!("{MAGIC} {} {} {} {} {}", self.device, self.share, self.secret, self.expires_ms, self.address)
+        format!("{MAGIC} {} {} {} {} {} {}", self.device, self.share, self.secret, self.expires_ms, self.address, self.name).trim_end().to_string()
     }
 
     /// Reads a pasted invite (spaces and line breaks around and between its parts do not matter).
@@ -160,12 +162,19 @@ impl Invite {
         let f: Vec<&str> = text.split_whitespace().collect();
         let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit());
         match f.as_slice() {
-            [m, device, share, secret, expires, address] if *m == MAGIC => {
+            [m, device, share, secret, expires, address, name @ ..] if *m == MAGIC => {
                 if !hex(device, 20) || !hex(share, 16) || !hex(secret, 32) {
                     return Err("The invite is damaged (a part of it is missing or changed)".into());
                 }
                 let expires_ms = expires.parse().map_err(|_| "The invite is damaged (its date cannot be read)".to_string())?;
-                Ok(Invite { device: device.to_string(), share: share.to_string(), secret: secret.to_string(), expires_ms, address: address.to_string() })
+                Ok(Invite {
+                    device: device.to_string(),
+                    share: share.to_string(),
+                    secret: secret.to_string(),
+                    expires_ms,
+                    address: address.to_string(),
+                    name: name.join(" "),
+                })
             }
             _ => Err("This is not a leaf invite. Paste the whole line your friend sent (it starts with leaf-share1)".into()),
         }
