@@ -11,3 +11,11 @@ pub struct EngineStalled {
     pub op: Op,
     pub waited: Duration,
 }
+
+impl std::fmt::Display for EngineStalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The file engine did not start within {} s ({}).", self.waited.as_secs(), self.op.what())
+    }
+}
+
+impl std::error::Error for EngineStalled {}

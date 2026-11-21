@@ -22,3 +22,13 @@ pub struct ShellBin;
 pub fn empty(_confirm: bool) -> anyhow::Result<()> {
     stub_err!("recycle::empty")
 }
+
+impl rf_core::recycle_bin::BinBackend for ShellBin {
+    fn list_keys(&self) -> anyhow::Result<Vec<String>> {
+        stub_err!("recycle::ShellBin::list_keys")
+    }
+
+    fn delete_keys(&self, _keys: &[String]) -> anyhow::Result<()> {
+        stub_err!("recycle::ShellBin::delete_keys")
+    }
+}

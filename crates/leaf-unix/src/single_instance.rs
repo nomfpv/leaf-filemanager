@@ -2,6 +2,8 @@
 //!
 //! The handle types are written in A4 (handover's stubs take them too, from another batch); the functions come with batch B2.
 
+use leaf_common::stub;
+
 /// What starting up found (rf-win single_instance.rs:34).
 pub enum Role {
     /// We are the first instance. Keep the guard alive for the process lifetime.
@@ -25,4 +27,18 @@ impl InstanceGuard {
 /// Never calls `on_message` (serve style): no other launch reaches this process yet.
 pub fn serve_app(_app: &str, _on_message: impl Fn(String) + Send + Sync + 'static) {
     stub!("single_instance::serve_app")
+}
+
+pub fn instance_name() -> String {
+    stub!("single_instance::instance_name")
+}
+
+pub fn acquire_app(_app: &str, _message: &str) -> Role {
+    // STUB(linux): always the primary instance (Forwarded would make the app quit at start)
+    stub::hit("single_instance::acquire_app");
+    Role::Primary(InstanceGuard::inert())
+}
+
+pub fn send_to(_app: &str, _message: &str) -> bool {
+    stub!("single_instance::send_to")
 }

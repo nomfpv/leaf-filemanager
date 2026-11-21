@@ -30,16 +30,20 @@ pub fn applies_update_at_start(first_arg: Option<&str>) -> bool {
 /// First thing in `main`: Velopack's install / update / uninstall hooks run here and exit.
 pub fn startup() {
     let first = std::env::args().nth(1);
-    VelopackApp::build()
-        .set_auto_apply_on_startup(applies_update_at_start(first.as_deref()))
+    let app = VelopackApp::build().set_auto_apply_on_startup(applies_update_at_start(first.as_deref()));
+    // the install / update / uninstall hooks exist in Velopack's Windows build only
+    #[cfg(windows)]
+    let app = app
         .on_after_install_fast_callback(|_| after_install_or_update())
         .on_after_update_fast_callback(|_| after_install_or_update())
-        .on_before_uninstall_fast_callback(|_| before_uninstall())
-        .run();
+        .on_before_uninstall_fast_callback(|_| before_uninstall());
+    let mut app = app;
+    app.run();
 }
 
 /// Registrations that are on follow this install: the default file manager and leaf-look's start
 /// with Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn after_install_or_update() {
     let Ok(me) = std::env::current_exe() else { return };
     if leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES) {
@@ -51,6 +55,7 @@ fn after_install_or_update() {
 }
 
 /// Everything leaf changed in Windows goes back (settings in %APPDATA% stay).
+#[cfg_attr(not(windows), allow(dead_code))]
 fn before_uninstall() {
     let classes = leaf_sys::default_fm::CLASSES;
     if leaf_sys::default_fm::is_enabled(classes) {
