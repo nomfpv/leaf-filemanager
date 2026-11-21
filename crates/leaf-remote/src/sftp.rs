@@ -188,7 +188,7 @@ impl SftpFs {
             }
         };
         c.busy.fetch_add(1, Ordering::Relaxed);
-        Ok(Box::new(Writer { c, handle, off, buf: Vec::new(), queue: VecDeque::new(), op_timeout: limit, place, closed: false, failed: false }))
+        Ok(Box::new(Writer { c, handle, off, buf: Vec::new(), queue: VecDeque::new(), op_timeout: limit, place, handle_closed: false, done: false, failed: false }))
     }
 
     /// A folder and everything in it. Every folder is looked at with LSTAT before it is entered: a link (to a folder or
@@ -687,7 +687,11 @@ struct Writer {
     op_timeout: std::time::Duration,
     /// `None`: written in place.
     place: Option<Place>,
-    closed: bool,
+    /// CLOSE was sent for the handle: its id may belong to another file on this connection from then on, so it is never
+    /// used again (not even by Drop).
+    handle_closed: bool,
+    /// Finished: everything is in place.
+    done: bool,
     failed: bool,
 }
 
@@ -742,7 +746,7 @@ impl Writer {
 
 impl std::io::Write for Writer {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        if self.failed || self.closed {
+        if self.failed || self.handle_closed {
             return Err(std::io::Error::other("the upload broke off"));
         }
         self.buf.extend_from_slice(data);
@@ -766,8 +770,9 @@ impl WriteSink for Writer {
     fn finish(mut self: Box<Self>) -> Result<(), FsError> {
         let r = (|| {
             self.drain().map_err(FsError::from)?;
-            self.closed = true;
-            run(&self.c, self.op_timeout, self.c.sftp.close(self.handle.clone()))?;
+            // (marked before the request: whatever its answer, the id is not ours any more)
+            self.handle_closed = true;
+            run(&self.c, self.op_timeout, self.c.sftp.close(std::mem::take(&mut self.handle)))?;
             match &self.place {
                 Some(p) => put_in_place(&self.c, &p.temp, &p.target, p.replace, p.backup.as_deref(), self.op_timeout),
                 None => Ok(()),
@@ -775,9 +780,9 @@ impl WriteSink for Writer {
         })();
         if r.is_err() {
             // the temporary file goes (the real name was not touched); Drop does it
-            self.closed = false;
             self.failed = true;
         } else {
+            self.done = true;
             self.place = None;
         }
         r
@@ -787,18 +792,24 @@ impl WriteSink for Writer {
 impl Drop for Writer {
     fn drop(&mut self) {
         self.c.busy.fetch_sub(1, Ordering::Relaxed);
-        if self.closed {
+        if self.done {
             return;
         }
-        // not finished: what is on its way is dropped, the handle closed, the temporary file removed (best effort: on a cut
-        // line it stays beside the real file, which is as it was)
+        // not finished: what is on its way is dropped, the handle closed (unless `finish` closed it already), the temporary
+        // file removed (best effort: on a cut line it stays beside the real file, which is as it was)
         for t in self.queue.drain(..) {
             t.abort();
         }
-        let (sftp, h) = (self.c.sftp.clone(), std::mem::take(&mut self.handle));
+        let sftp = self.c.sftp.clone();
+        let h = (!self.handle_closed).then(|| std::mem::take(&mut self.handle));
         let temp = self.place.take().map(|p| p.temp);
+        if h.is_none() && temp.is_none() {
+            return;
+        }
         conn::rt().spawn(async move {
-            let _ = sftp.close(h).await;
+            if let Some(h) = h {
+                let _ = sftp.close(h).await;
+            }
             if let Some(t) = temp {
                 let _ = sftp.remove(t).await;
             }
