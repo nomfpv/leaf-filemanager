@@ -17,20 +17,8 @@ use windows::core::{GUID, PCSTR, PCWSTR, s};
 
 use crate::shell::ensure_com;
 
-/// One item in the Recycle Bin.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecycleItem {
-    /// Original file name as shown by Explorer.
-    pub name: String,
-    /// Folder the item was deleted from.
-    pub original_location: String,
-    /// Deletion time, Unix milliseconds (UTC); 0 when unknown.
-    pub deleted_ms: i64,
-    pub size: u64,
-    /// Real location inside `$Recycle.Bin\<SID>\$R...`; also the key used by [`restore`].
-    pub parsing_path: String,
-    pub is_dir: bool,
-}
+// (defined once for every system in leaf-common)
+pub use leaf_common::recycle::RecycleItem;
 
 // {9B174B33-40FF-11D2-A27E-00C04FC30871}: pid 2 = original location, pid 3 = date deleted.
 const FMTID_DISPLACED: GUID = GUID::from_u128(0x9B174B33_40FF_11D2_A27E_00C04FC30871);

@@ -5,15 +5,11 @@
 //! Windows only: on other systems this crate is empty and `leaf-unix` is the backend (through `leaf-sys`).
 #![cfg(windows)]
 
-/// The file manager's program (its file name without the extension).
-pub const APP_EXE_STEM: &str = "leaf";
-/// The Preview program, the second binary (its file name without the extension).
-pub const LOOK_EXE_STEM: &str = "leaf-look";
+// The programs' names (defined once for every system in leaf-common).
+pub use leaf_common::{APP_EXE_STEM, LOOK_EXE_STEM, exe_name};
 
-/// A program's file name: `leaf.exe` on Windows, `leaf` elsewhere.
-pub fn exe_name(stem: &str) -> String {
-    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
-}
+/// The window a system dialog or menu belongs to (`leaf_sys::Owner`; on Linux a unit struct).
+pub type Owner = windows::Win32::Foundation::HWND;
 
 pub mod accent;
 pub mod activate;

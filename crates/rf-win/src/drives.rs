@@ -5,47 +5,8 @@ use windows::core::PCWSTR;
 
 use crate::wide::{from_wide, wide};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DriveKind {
-    Fixed,
-    Removable,
-    Network,
-    Optical,
-    RamDisk,
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-pub struct Drive {
-    /// "C:\"
-    pub root: PathBuf,
-    pub letter: char,
-    pub label: String,
-    pub kind: DriveKind,
-    pub total: u64,
-    pub free: u64,
-    pub fs: String,
-}
-
-impl Drive {
-    pub fn display_name(&self) -> String {
-        let label = if self.label.is_empty() {
-            match self.kind {
-                DriveKind::Removable => "USB Drive",
-                DriveKind::Network => "Network Drive",
-                DriveKind::Optical => "DVD Drive",
-                _ => "Local Disk",
-            }
-            .to_string()
-        } else {
-            self.label.clone()
-        };
-        format!("{label} ({}:)", self.letter)
-    }
-    pub fn used_fraction(&self) -> f32 {
-        if self.total == 0 { 0.0 } else { 1.0 - self.free as f32 / self.total as f32 }
-    }
-}
+// (defined once for every system in leaf-common)
+pub use leaf_common::drives::{Drive, DriveKind};
 
 // ---------------------------------------------------------------- drives that are not listed
 
@@ -136,7 +97,7 @@ fn list_drives_except(skip: u32) -> Vec<Drive> {
         }
         out.push(Drive {
             root: PathBuf::from(root),
-            letter,
+            letter: Some(letter),
             label: from_wide(&label),
             kind,
             total,
@@ -171,9 +132,9 @@ mod tests {
     /// On the PC the tests run on: a drive that is hidden is not listed and not asked anything, and the others are as they were.
     #[test]
     fn a_hidden_drive_is_left_out_of_the_list() {
-        let all: Vec<char> = list_drives_except(0).into_iter().map(|d| d.letter).collect();
+        let all: Vec<char> = list_drives_except(0).into_iter().filter_map(|d| d.letter).collect();
         let Some(&first) = all.first() else { return };
-        let without: Vec<char> = list_drives_except(letter_bit(first).unwrap()).into_iter().map(|d| d.letter).collect();
+        let without: Vec<char> = list_drives_except(letter_bit(first).unwrap()).into_iter().filter_map(|d| d.letter).collect();
         assert_eq!(without, all[1..]);
         assert!(list_drives_except(0x03FF_FFFF).is_empty(), "every letter hidden: nothing is listed");
         // (reading Explorer's policy never fails: no value is no drive)
@@ -192,7 +153,7 @@ mod tests {
     #[test]
     fn has_c_drive() {
         let d = super::list_drives();
-        let c = d.iter().find(|d| d.letter == 'C').expect("C: exists");
+        let c = d.iter().find(|d| d.letter == Some('C')).expect("C: exists");
         assert!(c.total > 0 && c.free <= c.total);
     }
 }

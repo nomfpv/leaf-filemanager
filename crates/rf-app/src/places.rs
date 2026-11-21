@@ -15,7 +15,10 @@ pub fn drive_name(d: &Drive) -> String {
             DriveKind::Optical => crate::t!("DVD Drive"),
             _ => crate::t!("Local Disk"),
         };
-        format!("{kind} ({}:)", d.letter)
+        match d.letter {
+            Some(l) => format!("{kind} ({l}:)"),
+            None => format!("{kind} ({})", d.root.display()),
+        }
     } else {
         d.display_name()
     }

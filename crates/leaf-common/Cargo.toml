@@ -1,0 +1,25 @@
+[package]
+name = "leaf-common"
+description = "leaf: the data types and portable modules shared by the platform backends (rf-win, leaf-unix)"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+rf-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+crossbeam-channel.workspace = true
+notify.workspace = true
+rayon.workspace = true
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
+# design files' own pictures are ZIP entries (CorelDRAW, Krita, Sketch...): see design.rs
+zip.workspace = true
+roxmltree = "0.20"
+encoding_rs = "0.8"
+md-5.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+crc32fast.workspace = true

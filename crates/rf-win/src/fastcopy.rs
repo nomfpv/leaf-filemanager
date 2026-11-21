@@ -53,44 +53,8 @@ const RESTARTABLE_MIN: u64 = 2 << 30;
 /// A rename counts like this many bytes of progress.
 const RENAME_WEIGHT: u64 = 64 << 10;
 
-/// How copies are checked after writing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-#[repr(u8)]
-pub enum Verify {
-    #[default]
-    Off,
-    /// Same size and modification time.
-    Quick,
-    /// Same bytes, read back from the disk (not from the cache).
-    Full,
-}
-
-/// A name that already exists at the destination.
-#[derive(Clone, Debug)]
-pub struct Conflict {
-    pub src: PathBuf,
-    pub dst: PathBuf,
-    pub src_dir: bool,
-    pub dst_dir: bool,
-    pub src_size: u64,
-    pub dst_size: u64,
-    pub src_time: Option<SystemTime>,
-    pub dst_time: Option<SystemTime>,
-}
-
-impl Conflict {
-    /// A file against a folder (or the other way round): it can't replace, only skip or keep both.
-    pub fn mismatched(&self) -> bool {
-        self.src_dir != self.dst_dir
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Resolve {
-    Replace,
-    Skip,
-    KeepBoth,
-}
+// (the data types are defined once for every system in leaf-common)
+pub use leaf_common::fastcopy::{Conflict, Interrupted, Resolve, Verify};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Op {
@@ -954,19 +918,6 @@ fn journal_start(kind: Transfer, rename: bool, verify: Verify, sources: &[PathBu
         return None;
     }
     Some(Jr { w: Mutex::new((w, Instant::now())), path })
-}
-
-/// A job that was cut off (the app closed or crashed while it ran).
-#[derive(Clone, Debug)]
-pub struct Interrupted {
-    pub journal: PathBuf,
-    pub kind: Transfer,
-    pub verify: Verify,
-    pub sources: Vec<PathBuf>,
-    pub dest: PathBuf,
-    /// Jobs in the plan, and how many were recorded as finished.
-    pub files: usize,
-    pub done: usize,
 }
 
 struct Loaded {

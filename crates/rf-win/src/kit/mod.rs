@@ -2,7 +2,8 @@
 //! buttons for watching pop-up menus, the monitor of a window, the signed-in user's SID and an icon as BGRA.
 
 pub mod icons;
-pub mod spring;
+// (pure math, moved to leaf-common; re-exported at its old path)
+pub use leaf_common::kit::spring;
 
 /// A rectangle in device px, `right` and `bottom` exclusive (the same shape as Win32's `RECT`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

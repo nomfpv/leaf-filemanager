@@ -13,23 +13,8 @@ use windows::core::PCWSTR;
 
 use crate::wide::{from_wide, long_path};
 
-#[derive(Debug, thiserror::Error)]
-pub enum ListError {
-    #[error("Folder not found")]
-    NotFound,
-    #[error("Access denied")]
-    AccessDenied,
-    #[error("Invalid folder name")]
-    InvalidName,
-    #[error("The drive is not ready")]
-    NotReady,
-    #[error("Network path not found")]
-    NetworkPath,
-    #[error("Listing error (code {0})")]
-    Os(u32),
-    #[error("Cancelled")]
-    Cancelled,
-}
+// (defined once for every system in leaf-common)
+pub use leaf_common::listing::ListError;
 
 /// Enumerates `dir` with the fastest Win32 path (basic info, large fetch) and streams entries
 /// to `on_batch` in chunks so the UI can show the first items immediately.

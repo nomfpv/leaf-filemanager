@@ -1,7 +1,7 @@
 //! Shell icons and thumbnails via IShellItemImageFactory, decoded to BGRA pixels.
 //! Blocking + COM: call from the worker pool (`ThumbPool`), never the UI thread.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -21,20 +21,8 @@ use windows::core::PCWSTR;
 use crate::shell::ensure_com;
 use crate::wide::wide;
 
-/// Straight-alpha BGRA, top-down rows.
-#[derive(Clone)]
-pub struct Bgra {
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Kind {
-    Icon,
-    /// Real thumbnail if the shell has one; otherwise falls back to the icon.
-    Thumbnail,
-}
+// (the data types are defined once for every system in leaf-common)
+pub use leaf_common::thumbs::{Bgra, Kind};
 
 /// Starts GDI+ once and never shuts it down.
 ///
@@ -225,34 +213,7 @@ pub fn has_unique_icon(ext: &str) -> bool {
     matches!(ext, "exe" | "lnk" | "ico" | "url" | "cur" | "ani" | "scr" | "cpl" | "msc" | "appref-ms" | "website")
 }
 
-pub struct Request {
-    pub key: u64,
-    pub path: PathBuf,
-    pub size: u32,
-    pub kind: Kind,
-    /// The picture the user is looking at right now (the preview pane's): see `ThumbPool` lanes.
-    pub urgent: bool,
-    /// When it was handed to the pool (for `Response::waited`).
-    queued: std::time::Instant,
-}
-
-impl Request {
-    pub fn new(key: u64, path: PathBuf, size: u32, kind: Kind) -> Self {
-        Self { key, path, size, kind, urgent: false, queued: std::time::Instant::now() }
-    }
-}
-
-pub struct Response {
-    pub key: u64,
-    pub image: Option<Arc<Bgra>>,
-    /// Request was discarded (backlog) — not a failure; may be retried.
-    pub dropped: bool,
-    /// How long the request stood in the queue, and how long making the picture took (zero when dropped).
-    pub waited: std::time::Duration,
-    pub took: std::time::Duration,
-    /// Made by the lane of urgent requests.
-    pub urgent: bool,
-}
+pub use leaf_common::thumbs::{Request, Response};
 
 /// How many urgent requests may stand waiting. The preview pane asks for one picture and Quick Look (over it) for
 /// another, so two are live at the same time; more than that is arrow-keying through files, and only the newest matter.
@@ -306,7 +267,7 @@ impl Lane {
                             let Some(req) = req else { break };
                             let started = std::time::Instant::now();
                             let image = urgent_image(&req.path, req.size, req.kind).map(Arc::new);
-                            on_done(Response { key: req.key, image, dropped: false, waited: started - req.queued, took: started.elapsed(), urgent: true });
+                            on_done(Response { key: req.key, image, dropped: false, waited: started - req.queued(), took: started.elapsed(), urgent: true });
                         }
                     }
                 })
@@ -352,7 +313,7 @@ impl ThumbPool {
                             let Some(req) = req else { break };
                             let started = std::time::Instant::now();
                             let image = get_image(&req.path, req.size, req.kind).ok().map(Arc::new);
-                            on_done(Response { key: req.key, image, dropped: false, waited: started - req.queued, took: started.elapsed(), urgent: false });
+                            on_done(Response { key: req.key, image, dropped: false, waited: started - req.queued(), took: started.elapsed(), urgent: false });
                         }
                     }
                 })
@@ -372,7 +333,7 @@ impl ThumbPool {
         drop(s);
         // Tell the cache so those slots don't stay "pending" forever (they will be re-requested).
         for d in dropped {
-            (self.on_done)(Response { key: d.key, image: None, dropped: true, waited: d.queued.elapsed(), took: std::time::Duration::ZERO, urgent: d.urgent });
+            (self.on_done)(Response { key: d.key, image: None, dropped: true, waited: d.queued().elapsed(), took: std::time::Duration::ZERO, urgent: d.urgent });
         }
         let _ = self.wake.send(());
     }
@@ -386,7 +347,7 @@ impl ThumbPool {
         q.push(req);
         drop(q);
         for d in dropped {
-            (self.on_done)(Response { key: d.key, image: None, dropped: true, waited: d.queued.elapsed(), took: std::time::Duration::ZERO, urgent: true });
+            (self.on_done)(Response { key: d.key, image: None, dropped: true, waited: d.queued().elapsed(), took: std::time::Duration::ZERO, urgent: true });
         }
         let _ = lane.wake.send(());
     }

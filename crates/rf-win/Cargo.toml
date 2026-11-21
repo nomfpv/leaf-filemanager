@@ -15,6 +15,7 @@ zip.workspace = true
 roxmltree = "0.20"
 encoding_rs = "0.8"
 rf-core.workspace = true
+leaf-common.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true

@@ -1113,8 +1113,9 @@ impl PropsView {
                 div().text_xs().text_color(p.text_secondary).child(format!("{} %{:.0}", t!("Full:"), frac * 100.0)).into_any_element(),
             ],
         ));
-        if d.kind != DriveKind::Network && d.kind != DriveKind::Optical {
-            let letter = d.letter;
+        if d.kind != DriveKind::Network && d.kind != DriveKind::Optical
+            && let Some(letter) = d.letter
+        {
             out.push(
                 link_button(p, "cleanup", L::Eraser, t!("Disk Cleanup…"))
                     .on_click(move |_, _, _| {
@@ -1668,7 +1669,7 @@ fn load_one(p: &Path) -> Loaded {
     l.caps = rf_win::fileinfo::volume_caps(p);
     if is_dir && is_root(p) {
         let letter = p.to_string_lossy().chars().next().unwrap_or('C').to_ascii_uppercase();
-        l.drive = rf_win::drives::list_drives().into_iter().find(|d| d.letter.to_ascii_uppercase() == letter);
+        l.drive = rf_win::drives::list_drives().into_iter().find(|d| d.letter.is_some_and(|l| l.to_ascii_uppercase() == letter));
     }
     if is_dir {
         l.share = rf_win::fileinfo::share_of(p);

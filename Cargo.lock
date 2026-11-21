@@ -4244,6 +4244,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
+name = "leaf-common"
+version = "0.9.4"
+dependencies = [
+ "anyhow",
+ "crc32fast",
+ "crossbeam-channel",
+ "encoding_rs",
+ "image",
+ "log",
+ "md-5",
+ "notify",
+ "rayon",
+ "rf-core",
+ "roxmltree 0.20.0",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "zip 9.3.0",
+]
+
+[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6462,6 +6483,7 @@ dependencies = [
  "encoding_rs",
  "image",
  "kamadak-exif",
+ "leaf-common",
  "log",
  "md-5",
  "notify",

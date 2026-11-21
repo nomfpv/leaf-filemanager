@@ -53,7 +53,7 @@ fn volumes() -> Vec<(String, String, u64)> {
     list_drives()
         .into_iter()
         .filter(|d| d.kind == DriveKind::Fixed)
-        .filter_map(|d| Some((volume_id(&d.root.to_string_lossy())?, format!("{}:", d.letter), d.total / (1024 * 1024))))
+        .filter_map(|d| Some((volume_id(&d.root.to_string_lossy())?, format!("{}:", d.letter?), d.total / (1024 * 1024))))
         .collect()
 }
 

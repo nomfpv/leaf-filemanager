@@ -457,6 +457,7 @@ pub(super) fn minidump(path: &Path, tr: Tr) -> Result<String> {
 
 // ---------------------------------------------------------------- prefetch
 
+#[cfg(windows)]
 #[link(name = "ntdll")]
 unsafe extern "system" {
     fn RtlGetCompressionWorkSpaceSize(format: u16, buffer_size: *mut u32, fragment_size: *mut u32) -> i32;
@@ -465,6 +466,7 @@ unsafe extern "system" {
 
 /// Windows 8 and later store prefetch files compressed ("MAM", Xpress Huffman): Windows' own
 /// decompressor opens them.
+#[cfg(windows)]
 fn prefetch_bytes(raw: Vec<u8>) -> Result<Vec<u8>> {
     if !raw.starts_with(b"MAM") {
         return Ok(raw);
@@ -488,6 +490,15 @@ fn prefetch_bytes(raw: Vec<u8>) -> Result<Vec<u8>> {
     }
     out.truncate(done as usize);
     Ok(out)
+}
+
+/// Elsewhere there is no Xpress Huffman decompressor yet: only an uncompressed prefetch file is read.
+#[cfg(not(windows))]
+fn prefetch_bytes(raw: Vec<u8>) -> Result<Vec<u8>> {
+    if raw.starts_with(b"MAM") {
+        bail!("Couldn't decompress the prefetch file");
+    }
+    Ok(raw)
 }
 
 /// (program, run count, last runs as Unix ms, files it loaded) of a decompressed prefetch file.

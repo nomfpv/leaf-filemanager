@@ -7,9 +7,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 /// Keeps the window above all non-topmost windows ("compact overlay" / always on top).
-pub fn set_topmost(hwnd: isize, on: bool) -> windows::core::Result<()> {
+pub fn set_topmost(hwnd: isize, on: bool) -> anyhow::Result<()> {
     let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
-    unsafe { SetWindowPos(HWND(hwnd as *mut _), Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) }
+    unsafe { SetWindowPos(HWND(hwnd as *mut _), Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) }?;
+    Ok(())
 }
 
 pub fn is_topmost(hwnd: isize) -> bool {
