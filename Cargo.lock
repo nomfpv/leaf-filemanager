@@ -4280,11 +4280,13 @@ name = "leaf-unix"
 version = "0.9.4"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs 6.0.0",
  "leaf-common",
  "libc",
  "log",
  "rf-core",
+ "serde",
 ]
 
 [[package]]
