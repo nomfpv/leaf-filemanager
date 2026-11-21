@@ -470,3 +470,18 @@ fn a_sign_in_goes_to_the_server_that_asked_and_not_to_the_first_address() {
     assert!(hop.lock().unwrap().iter().all(|h| !h.contains("authorization")), "the first address saw the sign-in");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn digest_is_chosen_over_basic_when_both_are_offered() {
+    let one_line = ["Basic realm=\"a\", Digest realm=\"a\", nonce=\"n1\", qop=\"auth\"".to_string()];
+    assert_eq!(Challenge::parse(&one_line).map(|c| c.scheme), Some(AuthScheme::Digest));
+    let two_lines = ["Basic realm=\"a\"".to_string(), "Digest realm=\"a\", nonce=\"n1\"".to_string()];
+    assert_eq!(Challenge::parse(&two_lines).map(|c| c.scheme), Some(AuthScheme::Digest));
+    // Basic only; and nothing leaf can answer
+    assert_eq!(Challenge::parse(&["Basic realm=\"a\"".to_string()]).map(|c| c.scheme), Some(AuthScheme::Basic));
+    assert!(Challenge::parse(&["Negotiate".to_string(), "Bearer realm=\"a\"".to_string()]).is_none());
+    // the realm and the stale mark are read from the right challenge
+    let c = Challenge::parse(&["Basic realm=\"b\", Digest realm=\"d\", nonce=\"n\", stale=true".to_string()]).unwrap();
+    assert_eq!(c.realm, "d");
+    assert!(c.is_stale());
+}
