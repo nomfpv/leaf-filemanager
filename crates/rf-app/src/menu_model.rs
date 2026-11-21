@@ -267,10 +267,6 @@ pub struct MenuContext {
     /// The folder of the list is the result of a search.
     pub in_search: bool,
     pub dual: bool,
-    /// The folder is a Git repository.
-    pub in_repository: bool,
-    /// The system is Windows.
-    pub windows: bool,
     pub prefs: MenuPrefs,
     pub show_flatten: bool,
     pub name_index: bool,
@@ -451,7 +447,7 @@ mod tests {
 
     #[test]
     fn background_menu_is_as_recorded() {
-        let bg = MenuContext { target: Target::Background, windows: true, ..Default::default() };
+        let bg = MenuContext { target: Target::Background, ..Default::default() };
         assert_eq!(cases("background").len(), 4);
         check("background plain", bg.clone(), "background");
         check(
@@ -459,7 +455,6 @@ mod tests {
             MenuContext {
                 undo: Some("Delete".into()),
                 redo: Some("Rename".into()),
-                in_repository: true,
                 organizer: true,
                 own_actions: true,
                 ..bg.clone()
@@ -472,7 +467,7 @@ mod tests {
 
     /// One file selected, in a folder on disk.
     fn file() -> MenuContext {
-        MenuContext { target: Target::File, count: 1, has_files: true, send_to_fits: true, windows: true, show_flatten: true, name_index: true, ..Default::default() }
+        MenuContext { target: Target::File, count: 1, has_files: true, send_to_fits: true, show_flatten: true, name_index: true, ..Default::default() }
     }
 
     #[test]
