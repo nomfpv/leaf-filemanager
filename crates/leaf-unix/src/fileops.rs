@@ -77,9 +77,17 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
             // link() does not follow a symlink (linkat without AT_SYMLINK_FOLLOW): the link itself gets the second name
             std::fs::hard_link(from, to)?;
             if let Err(e) = std::fs::remove_file(from) {
-                // both names now point at the same data: take the new one away again, nothing is lost either way
-                let _ = std::fs::remove_file(to);
-                return Err(e);
+                // An error does not prove the old name is still there (NFS: the reply was lost and the retry says ENOENT). The new
+                // name is taken away again only while the old one still names the same item; with the old name gone the rename is
+                // done; with another item there now, both stay and the error is reported.
+                return match (std::fs::symlink_metadata(from), std::fs::symlink_metadata(to)) {
+                    (Ok(a), Ok(b)) if a.dev() == b.dev() && a.ino() == b.ino() => {
+                        let _ = std::fs::remove_file(to);
+                        Err(e)
+                    }
+                    (Err(g), _) if g.kind() == io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(e),
+                };
             }
             Ok(())
         }

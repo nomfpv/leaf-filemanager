@@ -255,11 +255,17 @@ fn move_file(src: &Path, target: &Path, numbered: bool) -> Result<PathBuf, MoveE
 /// 2. the source compared with what was copied (device, inode, size, mtime, ctime): a source saved meanwhile keeps its place and the
 ///    copy goes;
 /// 3. the copy renamed to the first free name without replacing (same folder, so the same device);
-/// 4. the folder fsynced, the source compared once more, and only then unlinked. If it cannot be unlinked, or changed, the copy is
-///    taken back (only the very inode this function made) and the file stays where it was.
+/// 4. the folder fsynced, the source compared once more, and only then unlinked. If it changed, the copy is taken back (only the very
+///    inode this function made) and the file stays where it was. If the unlink reports an error, the copy is taken back only while
+///    the source is still there unchanged; a source that is gone means the unlink took effect and the move is done.
 ///
 /// A crash at any point leaves the source whole; at worst a hidden `.part` copy or a second copy beside it, never no copy at all.
 fn move_by_copy(src: &Path, target: &Path, numbered: bool) -> Result<PathBuf, MoveErr> {
+    move_by_copy_with(src, target, numbered, &remove_source)
+}
+
+/// [`move_by_copy`] with the source's unlink given (the tests stand in an unlink that errors after it took effect).
+fn move_by_copy_with(src: &Path, target: &Path, numbered: bool, unlink: &dyn Fn(&Path) -> std::io::Result<()>) -> Result<PathBuf, MoveErr> {
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     // 1. the copy, under a name of its own
     let mut made = None;
@@ -313,8 +319,19 @@ fn move_by_copy(src: &Path, target: &Path, numbered: bool) -> Result<PathBuf, Mo
         remove_own_file(&at, copy_id);
         return Err(MoveErr::Changed);
     }
-    if let Err(e) = remove_source(src) {
-        remove_own_file(&at, copy_id);
+    if let Err(e) = unlink(src) {
+        // An error does not prove the unlink did not happen (NFS: the reply was lost and the retry says ENOENT; FUSE: EIO after
+        // the fact). The copy is taken back only while the source is provably still there, unchanged.
+        if still(src, &was) {
+            remove_own_file(&at, copy_id);
+            return Err(e.into());
+        }
+        if !exists(src) {
+            // (the unlink did happen: the copy is the file now)
+            log::info!("organizer: {}: the unlink reported {e} but the source is gone: moved", src.display());
+            return Ok(at);
+        }
+        // something else holds the source name now: both stay, reported
         return Err(e.into());
     }
     if let Some(p) = src.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -857,6 +874,27 @@ mod tests {
         let rep = go(&[step(&d, &c, Dest::Move(d.p("hedef/a.txt/c.txt")))]);
         assert_eq!(rep.failed.len(), 1);
         assert!(rep.record.created_dirs.is_empty() && exists(&c));
+    }
+
+    #[test]
+    fn an_unlink_that_errors_after_it_took_effect_keeps_the_copy() {
+        let d = Dir::new("lost-reply");
+        std::fs::create_dir_all(d.p("hedef")).unwrap();
+        // the source is really gone, but the unlink says EIO (an NFS reply lost, a FUSE connection dropped)
+        let a = d.write("a.txt", "only");
+        let liar = |p: &Path| -> std::io::Result<()> {
+            std::fs::remove_file(p)?;
+            Err(std::io::Error::from_raw_os_error(libc::EIO))
+        };
+        assert_eq!(move_by_copy_with(&a, &d.p("hedef/a.txt"), true, &liar).unwrap(), d.p("hedef/a.txt"));
+        assert_eq!(d.read("hedef/a.txt"), "only", "the copy is the file now: it stays");
+        assert!(!exists(&a));
+        // an unlink that really failed: the copy is taken back, the source is whole
+        let b = d.write("b.txt", "bee");
+        let refuse = |_: &Path| -> std::io::Result<()> { Err(std::io::Error::from_raw_os_error(libc::EACCES)) };
+        assert!(move_by_copy_with(&b, &d.p("hedef/b.txt"), true, &refuse).is_err());
+        assert_eq!(d.read("b.txt"), "bee");
+        assert_eq!(d.names("hedef"), ["a.txt"]);
     }
 
     #[test]
