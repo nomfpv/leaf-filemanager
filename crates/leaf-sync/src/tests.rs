@@ -338,3 +338,27 @@ fn a_scheduled_run_never_deletes_when_a_side_is_empty() {
     let p = crate::plan_anyway(&job, &fs, &fs, &state, &no).unwrap();
     assert_eq!(p.counts().delete_right, 1);
 }
+
+#[test]
+fn a_scheduled_plan_without_state_that_removes_something_is_refused() {
+    let state = temp("sched-nostate");
+    let fs = MemFs::new();
+    fs.put_file(&v("mem://t/left/a.txt"), b"a".to_vec(), T0);
+    fs.put_file(&v("mem://t/right/a.txt"), b"a".to_vec(), T0);
+    fs.put_file(&v("mem://t/right/extra.txt"), b"x".to_vec(), T0);
+    for i in 0..9 {
+        for side in ["left", "right"] {
+            fs.put_file(&v(&format!("mem://t/{side}/f{i}.txt")), b"f".to_vec(), T0);
+        }
+    }
+    let job = Job::new("m", "mem://t/left", "mem://t/right");
+    let no = || false;
+    // never run (or its state forgotten): the removal of extra.txt would be unattended and unseen
+    let e = crate::plan_scheduled(&job, &fs, &fs, &state, &no).err().expect("refused");
+    assert!(e.message.contains("no record"), "{e}");
+    // after a run by hand the same plan is allowed
+    let p = plan(&job, &fs, &fs, &state, &no).unwrap();
+    go(&p, &fs, &fs, &state, &no_trash);
+    fs.put_file(&v("mem://t/right/extra2.txt"), b"x".to_vec(), T0);
+    assert!(crate::plan_scheduled(&job, &fs, &fs, &state, &no).is_ok());
+}

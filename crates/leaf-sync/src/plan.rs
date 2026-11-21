@@ -374,6 +374,12 @@ pub fn plan_anyway(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &P
 /// confirmation (it removes a large share of a side) is an error too, so the caller leaves a notice instead of running it.
 pub fn plan_scheduled(job: &Job, left_fs: &dyn Fs, right_fs: &dyn Fs, state_dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Plan, Error> {
     let p = plan_with(job, left_fs, right_fs, state_dir, cancelled, false)?;
+    // no record of an earlier run (a new job, other folders or mode, other filters, or a state file that could not be read): the
+    // missing-side check is off and nobody has seen a preview, so nothing may be removed unattended
+    let c = p.counts();
+    if c.delete_left + c.delete_right > 0 && p.state.entries.is_empty() && p.state.left_files == 0 && p.state.right_files == 0 {
+        return Err(Error::new("The scheduled run was not started: this job has no record of an earlier run and the run would remove files. Run the job by hand once and look at the preview", String::new()));
+    }
     if p.needs_second_ask() {
         let share = (p.delete_share() * 100.0).round() as u32;
         return Err(Error::new(
