@@ -574,6 +574,10 @@ impl FolderView {
 
     /// Properties of the current folder (background menu).
     pub(crate) fn folder_properties(&self, cx: &mut App) {
+        if let rf_core::history::Location::Remote(dir) = self.location() {
+            crate::properties_view::open_remote(dir.clone(), cx);
+            return;
+        }
         let Some(dir) = self.current_dir() else { return };
         crate::properties_view::open(vec![dir], self.images.clone(), cx);
     }

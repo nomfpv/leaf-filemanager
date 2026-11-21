@@ -17,6 +17,9 @@
 //!
 //! Every disk access happens on background threads; the window never waits on a slow drive.
 
+mod remote;
+pub use remote::open as open_remote;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -984,7 +987,7 @@ impl PropsView {
     }
 
     /// The HWND of this window, for dialogs it owns.
-    fn hwnd(window: &Window) -> isize {
+    pub(super) fn hwnd(window: &Window) -> isize {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
             Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),

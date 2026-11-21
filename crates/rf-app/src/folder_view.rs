@@ -4974,7 +4974,14 @@ impl FolderView {
                 let text = if e.mode == 0 {
                     String::new()
                 } else {
-                    let owner = if e.uid == u32::MAX { String::new() } else { format!("  {}", leaf_sys::fileinfo::user_label(e.uid)) };
+                    // (a server's user ids mean nothing in this PC's user list: its number is shown, not a local name)
+                    let owner = if e.uid == u32::MAX {
+                        String::new()
+                    } else if matches!(self.location(), Location::Remote(_)) {
+                        format!("  {}", e.uid)
+                    } else {
+                        format!("  {}", leaf_sys::fileinfo::user_label(e.uid))
+                    };
                     format!("{}{owner}", leaf_sys::perms::Mode::new(u32::from(e.mode)).symbolic())
                 };
                 div().w(px(PERMS_COL_W)).flex_shrink_0().px_2().text_color(p.text_secondary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(text)

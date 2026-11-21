@@ -146,6 +146,22 @@ pub struct MetaChange {
     pub mode: Option<u32>,
 }
 
+/// What a place knows about one item beyond [`Meta`] (the Properties window of a server's file): the Unix owner and group
+/// as the server reports them, the target of a link. `None`: the server does not say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Details {
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    /// The owner's and the group's names, where the server sends them (otherwise the ids are shown).
+    pub owner: Option<String>,
+    pub group: Option<String>,
+    /// Where a symbolic link points, as written in the link.
+    pub link_target: Option<String>,
+    /// `set_meta` can change the mode of this item (the place has the means: SFTP SETSTAT, FTP `SITE CHMOD`).
+    pub can_chmod: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteMode {
     /// Fails with `Exists` when the file is there.
@@ -218,6 +234,11 @@ pub trait Fs: Send + Sync {
     fn remove(&self, p: &VPath, recursive: bool) -> Result<(), FsError>;
 
     fn set_meta(&self, p: &VPath, m: &MetaChange) -> Result<(), FsError>;
+
+    /// Owner, group, mode and a link's target of `p` (never follows a link). `Unsupported` where the place has none of it.
+    fn details(&self, _p: &VPath) -> Result<Details, FsError> {
+        Err(FsError::Unsupported)
+    }
 
     fn watch(&self, _dir: &VPath, _on: WatchCallback) -> Result<WatchGuard, FsError> {
         Err(FsError::Unsupported)

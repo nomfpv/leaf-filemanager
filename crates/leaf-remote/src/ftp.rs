@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use leaf_vfs::{Caps, Entry, EntryKind, Fs, FsError, Kind, Meta, MetaChange, VPath, WriteMode, WriteOpts, WriteSink};
+use leaf_vfs::{Caps, Details, Entry, EntryKind, Fs, FsError, Kind, Meta, MetaChange, VPath, WriteMode, WriteOpts, WriteSink};
 use suppaftp::types::FileType as TransferType;
 use suppaftp::{FtpError, Mode, RustlsConnector, RustlsFtpStream, Status, TlsStream, TransferStream};
 use zeroize::Zeroizing;
@@ -134,6 +134,8 @@ struct Session {
     home: String,
     /// SYST says Windows (IIS and the like): names are compared ignoring case.
     windows: bool,
+    /// The server lists `SITE CHMOD` in its HELP SITE (asked once, when first needed).
+    site_chmod: Option<bool>,
     last_used: Instant,
 }
 
@@ -186,6 +188,20 @@ impl Lease {
     }
     fn windows(&self) -> bool {
         self.sess.as_ref().is_some_and(|s| s.windows)
+    }
+    /// Does the server do `SITE CHMOD`? Its FEAT does not say (SITE commands are not features), so HELP SITE is read once per connection.
+    fn site_chmod(&mut self) -> bool {
+        if let Some(k) = self.sess.as_ref().and_then(|s| s.site_chmod) {
+            return k;
+        }
+        let known = self
+            .s()
+            .custom_command("HELP SITE", &[Status::Help, Status::Ready, Status::CommandOk])
+            .is_ok_and(|r| String::from_utf8_lossy(&r.body).to_ascii_uppercase().contains("CHMOD"));
+        if let Some(s) = self.sess.as_mut() {
+            s.site_chmod = Some(known);
+        }
+        known
     }
     /// Makes the socket fail at once (a transfer stopped half-way: its connection is not used again).
     fn cut(&mut self) {
@@ -516,7 +532,7 @@ impl Inner {
         let home = s.pwd().ok().filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into());
         let windows = s.custom_command("SYST", &[Status::Name]).is_ok_and(|r| String::from_utf8_lossy(&r.body).to_ascii_lowercase().contains("windows"));
         log::info!("ftp: connected to {} (MLSD {mlsx}, Windows {windows})", t.host);
-        Ok(Session { s, mlsx, home, windows, last_used: Instant::now() })
+        Ok(Session { s, mlsx, home, windows, site_chmod: None, last_used: Instant::now() })
     }
 
     // -------------------------------------------------------------------------------------------- certificates
@@ -1389,11 +1405,29 @@ impl Fs for FtpFs {
         })
     }
 
-    fn set_meta(&self, _p: &VPath, m: &MetaChange) -> Result<(), FsError> {
+    fn set_meta(&self, p: &VPath, m: &MetaChange) -> Result<(), FsError> {
         if m.modified_ms.is_none() && m.mode.is_none() {
             return Ok(());
         }
-        Err(FsError::Unsupported)
+        // (times are not set over FTP; the mode only through `SITE CHMOD`, on a server that lists it, and never on a link)
+        let Some(mode) = m.mode.filter(|_| m.modified_ms.is_none()) else { return Err(FsError::Unsupported) };
+        self.inner.op(p, &|| false, |l| {
+            let sp = spath(l.home(), p);
+            if !l.site_chmod() || lstat_on(l, &sp)?.is_none_or(|i| i.kind == Kind::Link) {
+                return Err(Fail::Fs(FsError::Unsupported));
+            }
+            l.s().custom_command(format!("SITE CHMOD {:o} {sp}", mode & 0o7777), &[Status::CommandOk]).ftp().map(|_| ())
+        })
+    }
+
+    fn details(&self, p: &VPath) -> Result<Details, FsError> {
+        self.inner.op(p, &|| false, |l| {
+            let sp = spath(l.home(), p);
+            let it = lstat_on(l, &sp)?.ok_or(Fail::Fs(FsError::NotFound))?;
+            // (the owner is in the MLSD/LIST facts of some servers only; none is read here)
+            let can_chmod = it.kind != Kind::Link && l.site_chmod();
+            Ok(Details { mode: it.mode.map(|m| m & 0o7777), can_chmod, ..Details::default() })
+        })
     }
 }
 

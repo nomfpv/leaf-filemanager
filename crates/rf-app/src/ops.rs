@@ -1174,6 +1174,12 @@ impl FolderView {
 
     /// Our Properties window for the selection (or the current folder when nothing is selected).
     pub fn properties(&self, cx: &mut App) {
+        // a folder on a server: its own small window (what the server says; the permission grid where it can be changed)
+        if let rf_core::history::Location::Remote(dir) = self.location() {
+            let item = self.selection_remote_all().into_iter().next().map_or_else(|| dir.clone(), |(v, _)| v);
+            crate::properties_view::open_remote(item, cx);
+            return;
+        }
         let mut paths = self.selection_paths();
         if paths.is_empty() {
             paths.extend(self.current_dir());

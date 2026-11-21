@@ -17,7 +17,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use leaf_vfs::{Caps, Entry, EntryKind, Fs, FsError, Kind, Meta, MetaChange, Space, VPath, WriteOpts, WriteSink};
+use leaf_vfs::{Caps, Details, Entry, EntryKind, Fs, FsError, Kind, Meta, MetaChange, Space, VPath, WriteOpts, WriteSink};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, Packet, StatusCode};
 
@@ -586,6 +586,26 @@ impl Fs for SftpFs {
                 a.permissions = Some(mode & 0o7777);
             }
             c.sftp.setstat(path, a).await.map(|_| ())
+        })
+    }
+
+    fn details(&self, p: &VPath) -> Result<Details, FsError> {
+        self.with(p, &|| false, async |c| {
+            let path = spath(&c, p);
+            let a = c.sftp.lstat(path.clone()).await?.attrs;
+            let link = kind_of(&a) == Kind::Link;
+            // (READLINK is asked only for a link; a server without it just leaves the target out)
+            let link_target = if link { c.sftp.readlink(path).await.ok().and_then(|n| n.files.into_iter().next()).map(|f| f.filename) } else { None };
+            Ok(Details {
+                mode: a.permissions.map(|m| m & 0o7777),
+                uid: a.uid,
+                gid: a.gid,
+                owner: a.user.filter(|s| !s.is_empty()),
+                group: a.group.filter(|s| !s.is_empty()),
+                link_target,
+                // SETSTAT follows a link: its target is never changed through it
+                can_chmod: !link && a.permissions.is_some(),
+            })
         })
     }
 
