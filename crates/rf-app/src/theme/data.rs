@@ -72,7 +72,7 @@ tokens! {
     kind_text: Color = "Plain text and other files.",
     kind_archive: Color = "Archive icons.",
     kind_app: Color = "Programs and spreadsheets.",
-    backdrop: Bool = "The theme lets the window backdrop (Mica, Acrylic, glass) show through its surfaces.",
+    backdrop: Bool = "true/false: the theme lets the window backdrop (Mica, Acrylic, glass) show through its surfaces.",
     sheet_opacity: Number = "With a backdrop: how opaque the panel surfaces are, 0 to 1.",
     solid_window: Color = "The window colour when the backdrop is off or not available.",
     solid_sheet: Color = "The panel colour when the backdrop is off or not available.",
@@ -88,7 +88,7 @@ tokens! {
     name_weight: Number = "Font weight of file names (400 regular, 500 medium, 600 semibold).",
     font_ui: Text = "The interface font; empty means the system font. A font that is not installed is ignored.",
     font_mono: Text = "The font of number columns when mono_numbers is on.",
-    mono_numbers: Bool = "Sizes and dates in the details list use font_mono.",
+    mono_numbers: Bool = "true/false: sizes and dates in the details list use font_mono.",
 }
 
 pub fn token(key: &str) -> Option<&'static Token> {
@@ -543,5 +543,32 @@ mod tests {
         assert_eq!(got[0].name, "Good");
         assert_eq!(dir_signature(&dir).len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `docs/themes.md` is checked against the real key list: every token is documented with its own meaning, every documented key
+    /// exists, and the sample theme on the page reads without a warning.
+    #[test]
+    fn the_docs_page_matches_the_key_list_and_its_sample_reads_cleanly() {
+        let doc = include_str!("../../../../docs/themes.md");
+        let rows: Vec<(&str, &str)> = doc
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `"))
+            .filter_map(|l| {
+                let (key, rest) = l.split_once('`')?;
+                Some((key, rest.trim_start_matches(" |").trim_end_matches('|').trim()))
+            })
+            .collect();
+        for t in TOKENS {
+            let row = rows.iter().find(|(k, _)| *k == t.key);
+            assert_eq!(row.map(|r| r.1), Some(t.doc), "docs/themes.md: `{}`", t.key);
+        }
+        for (k, _) in &rows {
+            assert!(token(k).is_some() || META_KEYS.contains(k), "docs/themes.md lists `{k}`, which is not a key");
+        }
+        assert_eq!(rows.len(), TOKENS.len() + META_KEYS.len(), "each key once");
+        let sample = doc.split("```toml").nth(1).and_then(|s| s.split("```").next()).expect("a sample theme");
+        let (f, warnings) = parse("moss", sample, false).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!((f.name.as_str(), f.base.as_deref(), f.accents.len()), ("Moss", Some("stem"), 1));
     }
 }
