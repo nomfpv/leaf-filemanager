@@ -81,6 +81,8 @@ mod settings_rows;
 mod hotkey_field;
 mod recycle_settings_view;
 mod recycle_text;
+mod remote;
+mod hosts_ui;
 mod recycle_view;
 mod registry;
 mod rename_exec;

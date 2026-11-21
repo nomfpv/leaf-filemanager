@@ -443,6 +443,8 @@ fn session_text(loc: &Location) -> String {
         Location::RecycleBin => "shell:RecycleBinFolder".into(),
         Location::Downloads => "leaf:downloads".into(),
         Location::Shell { parsing, name } => format!("{SHELL_PREFIX}{parsing}\t{name}"),
+        // (an address never holds a password: VPath refuses one)
+        Location::Remote(v) if crate::remote::usable(v.scheme()) => v.to_string(),
         _ => String::new(),
     }
 }
@@ -485,6 +487,9 @@ pub fn parse_launch(msg: &str) -> (Location, Option<String>) {
         return (Location::Shell { parsing: parsing.to_string(), name: name.to_string() }, None);
     }
     if let Some(loc) = Location::from_shell_name(m) {
+        return (loc, None);
+    }
+    if let Some(loc) = crate::remote::parse_typed(m) {
         return (loc, None);
     }
     if let Some(file) = m.strip_prefix(SELECT_PREFIX) {
@@ -3697,6 +3702,18 @@ impl Workspace {
             Location::Duplicates(roots) => vec![(crate::duplicates_view::title(roots), loc.clone())],
             Location::BuildJunk(path) => vec![(crate::junk_view::title(path), loc.clone())],
             Location::Changes(path) => vec![(crate::changes_view::title(path), loc.clone())],
+            // `server`, then one crumb per folder on it
+            Location::Remote(v) => {
+                let root = v.root();
+                let top = if root.authority().is_empty() { root.scheme().to_string() } else { root.authority().to_string() };
+                let mut out = vec![(top, Location::Remote(root.clone()))];
+                let mut cur = root;
+                for seg in v.segments() {
+                    cur = cur.join(seg);
+                    out.push((seg.to_string(), Location::Remote(cur.clone())));
+                }
+                out
+            }
             other => vec![(crate::i18n::td(&other.title()), other.clone())],
         };
         // Too long for the address box: hide leading segments after the drive behind "…"
@@ -4155,6 +4172,16 @@ impl Workspace {
                 let active = cur == loc;
                 col = col.child(self.sidebar_item(("sb-net", i).into(), L::Network, p.text_secondary, name, loc, active, None, p, cx));
             }
+        }
+        // saved hosts (Settings > Hosts), only while there are any
+        let hosts = if shown("hosts") && places_loaded { crate::hosts_ui::all(cx) } else { Vec::new() };
+        if !hosts.is_empty() {
+            col = col.child(header(t!("Hosts")));
+        }
+        for (i, h) in hosts.into_iter().enumerate() {
+            let Some(loc) = crate::hosts_ui::location(&h) else { continue };
+            let active = matches!((&cur, &loc), (Location::Remote(a), Location::Remote(b)) if a.starts_with(b));
+            col = col.child(self.sidebar_item(("sb-host", i).into(), L::Server, p.text_secondary, h.name.clone(), loc, active, None, p, cx));
         }
         // The tags are known at once, the pins and drives above them a moment later: drawn before those, the coloured tag rows stood
         // at the top of the sidebar for the first 90 ms of a cold start and then jumped down (seen frame by frame: a user's report of
@@ -4690,6 +4717,7 @@ fn pane_header(view: &Entity<FolderView>, marked: bool, dual: bool, p: &Palette,
         Location::Library { .. } => t!("Library"),
         Location::Tag(_) => t!("Tag"),
         Location::Shell { .. } => t!("Device"),
+        Location::Remote(_) => t!("Server"),
         _ => return None,
     };
     let name = v.title(cx);
@@ -4795,6 +4823,11 @@ fn parse_location(text: &str) -> Option<Location> {
     let lower = t.to_lowercase();
     if lower == "home" {
         return Some(Location::Home);
+    }
+    // `mem://demo/` (and later `sftp://...`): a place behind the virtual filesystem; schemes it has no backend for (`ftp://`)
+    // stay paths as before
+    if let Some(remote) = crate::remote::parse_typed(t) {
+        return Some(remote);
     }
     // Environment variables like %USERPROFILE%
     let expanded = expand_env(t);

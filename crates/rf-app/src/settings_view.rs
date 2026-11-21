@@ -31,6 +31,7 @@ pub enum Page {
     Actions,
     YourActions,
     Tags,
+    Hosts,
     Look,
     Nearby,
     Search,
@@ -42,7 +43,7 @@ pub enum Page {
     About,
 }
 
-const PAGES: [(Page, L, &str); 17] = [
+const PAGES: [(Page, L, &str); 18] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -51,6 +52,7 @@ const PAGES: [(Page, L, &str); 17] = [
     (Page::Actions, L::Keyboard, "Actions"),
     (Page::YourActions, L::Zap, "Your actions"),
     (Page::Tags, L::Tag, "Tags"),
+    (Page::Hosts, L::Server, "Hosts"),
     (Page::Look, L::Eye, "Preview"),
     (Page::Search, L::Search, "HyperSearch"),
     (Page::Nearby, L::Send, "Nearby"),
@@ -214,6 +216,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Actions => actions(p, s, cx),
         Page::YourActions => crate::custom_actions_page::page(p, cx),
         Page::Tags => tags(p, cx),
+        Page::Hosts => crate::hosts_ui::page(p, cx),
         Page::Look => look(p, s, cx),
         Page::Nearby => crate::nearby::page(p, s, cx),
         Page::Search => quick_search_cards(p, s, cx),
@@ -1813,6 +1816,10 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 sub(&pp, t!("Network"), None, switch("sb-net", &pp, shown("network"), {
                     let on = shown("network");
                     move |_, cx| settings::update(cx, |s| show_section(s, "network", !on))
+                })),
+                sub(&pp, t!("Hosts"), Some(t!("The servers saved in Settings > Hosts, while there are any")), switch("sb-hosts", &pp, shown("hosts"), {
+                    let on = shown("hosts");
+                    move |_, cx| settings::update(cx, |s| show_section(s, "hosts", !on))
                 })),
                 sub(&pp, t!("Tags"), None, switch("sb-tags", &pp, shown("tags"), {
                     let on = shown("tags");

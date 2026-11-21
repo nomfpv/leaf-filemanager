@@ -229,6 +229,7 @@ impl Workspace {
                     "actions" => Page::Actions,
                     "youractions" => Page::YourActions,
                     "tags" => Page::Tags,
+                    "hosts" => Page::Hosts,
                     "preview" => Page::Look,
                     "search" => Page::Search,
                     "nearby" => Page::Nearby,

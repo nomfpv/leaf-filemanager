@@ -208,10 +208,11 @@ pub static WIDGETS: &[Widget] = &[
         header: Some(dev::reclaim_header),
         since: "0.9.6",
     },
+    Widget { id: "hosts", title: "Hosts", icon: L::Server, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: crate::hosts_ui::widget, header: None, since: "0.9.5" },
 ];
 
-/// The default set, in order. Devices and network locations show themselves only while there are any.
-pub const DEFAULT: &[&str] = &["pinned", "drives", "devices", "network", "recent", "tags"];
+/// The default set, in order. Devices, network locations and hosts show themselves only while there are any.
+pub const DEFAULT: &[&str] = &["pinned", "drives", "devices", "network", "hosts", "recent", "tags"];
 
 /// The keys of the old hide list (`Settings::home_hidden`) and the widgets they were.
 const OLD_KEYS: &[(&str, &str)] = &[("quick", "pinned"), ("drives", "drives"), ("devices", "devices"), ("network", "network"), ("tags", "tags"), ("recent", "recent")];

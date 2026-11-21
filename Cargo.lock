@@ -6692,6 +6692,7 @@ dependencies = [
  "leaf-decode",
  "leaf-dev",
  "leaf-sys",
+ "leaf-vfs",
  "log",
  "mail-parser",
  "parking_lot",

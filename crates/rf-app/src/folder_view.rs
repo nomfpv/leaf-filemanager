@@ -882,6 +882,7 @@ impl FolderView {
             Location::BuildJunk(_) => L::Eraser,
             Location::Changes(_) => L::GitCompare,
             Location::Downloads => L::ArrowDownToLine,
+            Location::Remote(_) => L::Server,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
             Location::Path(p) if crate::archive_view::is_browsable_path_by_name(p) => L::FileArchive,
@@ -950,7 +951,10 @@ impl FolderView {
             // Settings → "Select the previous folder when going up"; in the columns layout always, as Left there walks back the way
             // one came (issue 73: "Back (left arrow) always takes you to top of parent folder")
             if self.view_mode == ViewMode::Columns || cx.global::<crate::settings::Settings>().select_previous_on_up {
-                self.reselect = cur.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+                self.reselect = match &cur {
+                    Location::Remote(v) => Some(v.name().to_string()).filter(|n| !n.is_empty()),
+                    _ => cur.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()),
+                };
             }
             self.navigate(parent, cx);
         }
@@ -1666,6 +1670,36 @@ impl FolderView {
                     msgs.push(m);
                 }
                 let _ = this.update(cx, |v, cx| v.apply(generation, msgs, cx));
+            }));
+            cx.notify();
+            return;
+        }
+        if let Location::Remote(dir) = self.location().clone() {
+            // not a local folder: listed through the virtual filesystem on a worker (local folders never come here)
+            self.loading = true;
+            self.load_started = Instant::now();
+            let generation = self.generation;
+            let cancel = self.cancel.clone();
+            let (tx, mut rx) = mpsc::unbounded::<Msg>();
+            std::thread::Builder::new()
+                .name("rf-remote-list".into())
+                .spawn(move || {
+                    let r = crate::remote::list(&dir, &|| cancel.load(Ordering::Relaxed), &mut |b| {
+                        let _ = tx.unbounded_send(Msg::Batch(b));
+                    });
+                    let _ = tx.unbounded_send(Msg::Done(r));
+                })
+                .ok();
+            self._load_task = Some(cx.spawn(async move |this, cx| {
+                while let Some(first) = rx.next().await {
+                    let mut msgs = vec![first];
+                    while let Ok(m) = rx.try_recv() {
+                        msgs.push(m);
+                    }
+                    if this.update(cx, |v, cx| v.apply(generation, msgs, cx)).is_err() {
+                        break;
+                    }
+                }
             }));
             cx.notify();
             return;
@@ -4034,8 +4068,21 @@ impl FolderView {
         v.into_iter().filter_map(|i| self.shell_items.get(i as usize).cloned()).collect()
     }
 
-    fn open_entry(&mut self, ei: u32, cx: &mut Context<Self>) {
+    pub(crate) fn open_entry(&mut self, ei: u32, cx: &mut Context<Self>) {
         if matches!(self.location(), Location::Shell { .. }) && self.open_shell_entry(ei, cx) {
+            return;
+        }
+        if let Location::Remote(dir) = self.location() {
+            // a remote folder opens here (or in a new tab); files and links are not opened yet (no fetch to a cache copy yet)
+            let e = &self.entries[ei as usize];
+            if e.is_dir() && !e.link {
+                let loc = Location::Remote(dir.join(&e.name));
+                if cx.global::<crate::settings::Settings>().open_folders_in_new_tab {
+                    cx.emit(FolderEvent::OpenInNewTab(loc));
+                } else {
+                    self.navigate(loc, cx);
+                }
+            }
             return;
         }
         let Some(path) = self.path_of(ei) else { return };
@@ -4933,7 +4980,28 @@ impl FolderView {
         let count = self.visible.len();
         // Details and Grid get a scrollbar over the list (Columns has one list per column).
         let mut list_body = false;
-        let body: AnyElement = if let Some(err) = &self.error {
+        let body: AnyElement = if let Some(msg) = self.error.as_deref().and_then(crate::remote::retry_message) {
+            // a server that cannot be reached or refused the login: said quietly, with a way to try again
+            let msg = msg.to_string();
+            empty_state(p, L::CloudOff, msg, "")
+                .child(
+                    div()
+                        .id("remote-retry")
+                        .mt_2()
+                        .px_3()
+                        .py_1()
+                        .rounded(theme::RADIUS_SM)
+                        .border_1()
+                        .border_color(p.divider)
+                        .text_sm()
+                        .text_color(p.text_secondary)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(p.hover))
+                        .child(t!("Retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                )
+                .into_any_element()
+        } else if let Some(err) = &self.error {
             empty_state(p, L::TriangleAlert, crate::i18n::td(err), t!("Couldn't open folder")).into_any_element()
         } else if count == 0 && self.loading && self.load_started.elapsed() >= SLOW_LOAD {
             let text = self.search_stage.map_or_else(|| t!("Loading…").to_string(), |s| s.text().to_string());
@@ -5409,7 +5477,7 @@ const DEFAULT_ROW_SIZE: u8 = 1;
 
 const SLOW_LOAD: std::time::Duration = std::time::Duration::from_millis(400);
 
-fn empty_state(p: &Palette, icon: L, title: String, sub: &'static str) -> impl IntoElement {
+fn empty_state(p: &Palette, icon: L, title: String, sub: &'static str) -> Div {
     v_flex()
         .flex_1()
         .size_full()

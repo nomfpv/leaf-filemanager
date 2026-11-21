@@ -310,6 +310,30 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
 }
 
 impl FolderView {
+    /// The menu in a folder on a server (`Location::Remote`): opening and refreshing work; copy, move, paste, delete and rename
+    /// are not wired to servers yet and say so.
+    fn show_remote_menu(&mut self, background: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let me = cx.entity().downgrade();
+        let one_dir = !background && self.selected_is_single_dir();
+        let mut items = Vec::new();
+        if one_dir {
+            items.push(Item::action(t!("Open"), icon(L::FolderOpen), act(&me, |v, _, cx| {
+                if let Some(ei) = v.cursor_entry() {
+                    v.open_entry(ei, cx);
+                }
+            })));
+            items.push(Item::Separator);
+        }
+        let off = [(t!("Cut"), L::Scissors), (t!("Copy"), L::Copy), (t!("Paste"), L::Clipboard), (t!("Rename"), L::PencilLine), (t!("Delete"), L::Trash)];
+        for (label, l) in off {
+            items.push(Item::action(label, icon(l), |_, _| {}).enabled(false));
+        }
+        items.push(Item::action(crate::i18n::td(crate::remote::NOT_WIRED), icon(L::Info), |_, _| {}).enabled(false));
+        items.push(Item::Separator);
+        items.push(Item::action(t!("Refresh"), icon(L::RefreshCw), act(&me, |v, _, cx| v.refresh(cx))));
+        fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+    }
+
     /// Opens our context menu for the selection (or the folder background) at the mouse.
     pub fn show_context_menu(&mut self, background: bool, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.location(), rf_core::history::Location::Shell { .. }) {
@@ -318,6 +342,10 @@ impl FolderView {
             } else {
                 self.show_shell_fluent_menu(background, window, cx);
             }
+            return;
+        }
+        if matches!(self.location(), rf_core::history::Location::Remote(_)) {
+            self.show_remote_menu(background, window, cx);
             return;
         }
         let shift = leaf_sys::input::shift_down();
