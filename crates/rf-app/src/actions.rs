@@ -117,6 +117,7 @@ gpui_kit::actions!(
         FindBuildJunk,
         ShowChanges,
         ShowWorktrees,
+        OpenDocker,
         NewWorktree,
         ShowProjectBrain,
         BookmarkRemoteFolder,

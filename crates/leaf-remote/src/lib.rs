@@ -10,6 +10,7 @@
 
 pub mod checksum;
 mod conn;
+pub mod docker;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
@@ -48,6 +49,8 @@ fn sftp_backend() -> Arc<SftpFs> {
 pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
     *setup().lock().unwrap_or_else(|e| e.into_inner()) = Some((cfg, prompter));
     leaf_vfs::register("sftp", || sftp_backend() as Arc<dyn leaf_vfs::Fs>);
+    // `docker://local/` and `docker://user@host/`: the containers and their mounts, read-only (nothing runs until opened)
+    leaf_vfs::register("docker", || Arc::new(docker::DockerFs) as Arc<dyn leaf_vfs::Fs>);
     // `rclone://remote/path`, only when the rclone program is installed (a PATH look-up; nothing runs here)
     if rclone::find_exe().is_some() {
         leaf_vfs::register("rclone", || match rclone::find_exe() {
@@ -123,4 +126,9 @@ impl leaf_vfs::Fs for NoRclone {
     fn set_meta(&self, _: &VPath, _: &leaf_vfs::MetaChange) -> Result<(), FsError> {
         Err(FsError::Unsupported)
     }
+}
+
+/// Runs a command on the server of `v` (for the Docker view). The caller quotes what it puts into the command.
+pub(crate) fn exec_on(v: &VPath, command: &str, limit: std::time::Duration) -> Result<ExecOut, FsError> {
+    sftp_backend().exec(v, command, limit, &|| false)
 }

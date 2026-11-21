@@ -5800,6 +5800,16 @@ impl Render for Workspace {
                     v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::BuildJunk(root))));
                 }
             }))
+            .on_action(cx.listener(|this, _: &OpenDocker, window, cx| {
+                // this PC's Docker; in a folder on an sftp:// host, that host's
+                let authority = match this.active_tab().read(cx).location() {
+                    Location::Remote(v) if v.scheme() == "sftp" => v.authority().to_string(),
+                    _ => "local".to_string(),
+                };
+                if let Ok(v) = rf_core::vpath::VPath::new("docker", &authority, "/") {
+                    this.navigate(Location::Remote(v), window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &BookmarkRemoteFolder, window, cx| {
                 // the folder shown, when it is on a saved host
                 let loc = this.active_tab().read(cx).location().clone();
