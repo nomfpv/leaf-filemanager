@@ -736,6 +736,8 @@ pub struct Settings {
     pub nearby_inbox: String,
     /// Files from a trusted device are taken without asking, into the folder above (on).
     pub nearby_auto_accept_trusted: bool,
+    /// Phones and computers running LocalSend may send files to this PC (off: nothing listens; sending to them needs no setting).
+    pub nearby_localsend_receive: bool,
 }
 
 /// Settings -> General: what a new tab opens.
@@ -911,6 +913,7 @@ impl Default for Settings {
             nearby_name: String::new(),
             nearby_inbox: String::new(),
             nearby_auto_accept_trusted: true,
+            nearby_localsend_receive: false,
         }
     }
 }

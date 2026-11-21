@@ -17,7 +17,7 @@ use gpui_kit::assets::IconName as L;
 use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use rf_nearby::{Config, EstimateSource, LinkKind, NearbyListener, NetStatus, Nearby, Offer, Peer, SpeedResult, TransferResult, Visibility};
+use rf_nearby::{Config, EstimateSource, LS_ID_BASE, LS_PORT, LinkKind, LocalSend, LsConfig, LsDevice, LsListener, LsRequest, LsResult, NearbyListener, NetStatus, Nearby, Offer, Peer, SpeedResult, TransferResult, Visibility};
 
 use crate::fluent_menu::{Item, MenuIcon};
 use crate::settings::{self, NearbyVisibility, Settings};
@@ -45,6 +45,28 @@ enum Ev {
     /// A click on one of our toasts: its argument (`nearby:yes:<key>`, `nearby:no:<key>`, `nearby:show:<key>`, `nearby:open:<path>`).
     Toast(String),
     Speed(String, SpeedResult),
+    /// LocalSend: the devices found changed; a device asks to send files.
+    LsDevices(Vec<LsDevice>),
+    LsRequest(LsRequest),
+}
+
+/// What the LocalSend engine says, carried to the UI thread in the same events as the other engine's (its transfer ids are far from
+/// the other's, so one list of transfers serves both).
+struct LsL(mpsc::UnboundedSender<Ev>);
+
+impl LsListener for LsL {
+    fn devices_changed(&self, devices: Vec<LsDevice>) {
+        let _ = self.0.unbounded_send(Ev::LsDevices(devices));
+    }
+    fn request(&self, request: LsRequest) {
+        let _ = self.0.unbounded_send(Ev::LsRequest(request));
+    }
+    fn progress(&self, transfer: u64, done: u64, total: u64) {
+        let _ = self.0.unbounded_send(Ev::Progress(transfer, done, total));
+    }
+    fn finished(&self, transfer: u64, r: LsResult) {
+        let _ = self.0.unbounded_send(Ev::Finished(transfer, TransferResult { ok: r.ok, cancelled: r.cancelled, error: r.error, paths: r.paths }));
+    }
 }
 
 struct Listener(mpsc::UnboundedSender<Ev>);
@@ -92,6 +114,8 @@ enum Step {
 #[derive(Clone)]
 enum Question {
     Offer(Offer),
+    /// A LocalSend device asks to send files.
+    Ls(LsRequest),
     Pair { peer: String, name: String, code: String },
 }
 
@@ -99,6 +123,7 @@ impl Question {
     fn key(&self) -> String {
         match self {
             Question::Offer(o) => format!("offer-{}", o.id),
+            Question::Ls(r) => format!("ls-{}", r.id),
             Question::Pair { peer, .. } => format!("pair-{peer}"),
         }
     }
@@ -115,6 +140,13 @@ struct Started {
 #[derive(Default)]
 pub struct NearbyService {
     nearby: Option<Arc<Nearby>>,
+    /// The LocalSend engine: made at start, silent (nothing bound, nothing sent) until a search or receiving.
+    ls: Option<Arc<LocalSend>>,
+    ls_devices: Vec<LsDevice>,
+    /// Why LocalSend could not receive (the port taken, ...), for the Settings page.
+    ls_problem: Option<String>,
+    /// The device a "Send to device" command goes to again (its fingerprint).
+    ls_last: Option<String>,
     started: Option<Started>,
     peers: Vec<Peer>,
     /// Why discovery or the whole service could not start, for the Settings page.
@@ -162,7 +194,44 @@ pub fn init(cx: &mut App) {
     if cx.global::<Settings>().nearby_visibility == NearbyVisibility::Everyone {
         settings::update(cx, |s| s.nearby_visibility = NearbyVisibility::Trusted);
     }
+    ls_start(cx);
     apply(cx);
+}
+
+fn ls_start(cx: &mut App) {
+    let Some(tx) = cx.global::<NearbyService>().events.clone() else { return };
+    let Some(dir) = settings::app_dir().map(|d| d.join("nearby")) else { return };
+    let model = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    let cfg = LsConfig { alias: name_of(cx.global::<Settings>()), model: model.into(), state_dir: dir.to_string_lossy().into_owned(), port: LS_PORT, multicast: true, local_only: false, pin: None };
+    match LocalSend::new(cfg, Arc::new(LsL(tx))) {
+        Ok(ls) => cx.global_mut::<NearbyService>().ls = Some(ls),
+        Err(e) => log::warn!("localsend: cannot start: {e}"),
+    }
+}
+
+/// Receiving from LocalSend devices follows its setting (and the name they see follows the device name).
+fn ls_apply(cx: &mut App) {
+    let Some(ls) = cx.global::<NearbyService>().ls.clone() else { return };
+    let s = cx.global::<Settings>();
+    ls.set_alias(&name_of(s));
+    let want = s.nearby_localsend_receive;
+    if want == ls.is_receiving() {
+        return;
+    }
+    let problem = match ls.set_receiving(want) {
+        Ok(_) => None,
+        Err(e) => {
+            log::warn!("localsend: cannot receive: {e}");
+            Some(e.to_string())
+        }
+    };
+    cx.global_mut::<NearbyService>().ls_problem = problem;
+    cx.refresh_windows();
 }
 
 /// Brings the service in line with the settings: starts or stops it, starts it anew when its name or folder changed, sets who sees
@@ -190,6 +259,7 @@ pub fn apply(cx: &mut App) {
     {
         n.set_visibility(vis);
     }
+    ls_apply(cx);
 }
 
 fn start(w: Started, cx: &mut App) {
@@ -262,7 +332,8 @@ fn inbox_of(s: &Settings) -> PathBuf {
 
 /// Whether Nearby runs (the menu offers it only then).
 pub(crate) fn running(cx: &App) -> bool {
-    cx.try_global::<NearbyService>().is_some_and(|f| f.nearby.is_some())
+    // (the LocalSend side needs no setting to send: the menu is there whenever the service is)
+    cx.try_global::<NearbyService>().is_some_and(|f| f.nearby.is_some() || f.ls.is_some())
 }
 
 fn on_event(ev: Ev, cx: &mut App) {
@@ -272,6 +343,11 @@ fn on_event(ev: Ev, cx: &mut App) {
             cx.refresh_windows();
         }
         Ev::Offer(offer) => ask(Question::Offer(offer), cx),
+        Ev::LsDevices(devices) => {
+            cx.global_mut::<NearbyService>().ls_devices = devices;
+            cx.refresh_windows();
+        }
+        Ev::LsRequest(request) => ask(Question::Ls(request), cx),
         Ev::Receiving(offer) => {
             let dest = inbox_of(cx.global::<Settings>());
             cx.global_mut::<NearbyService>().incoming.insert(offer.transfer, offer.from_name.clone());
@@ -334,7 +410,14 @@ fn on_event(ev: Ev, cx: &mut App) {
 
 /// A Status Center card for a transfer: its progress, its end, and its cancel button stopping the transfer.
 fn track(cx: &mut App, transfer: u64, title: String, dest: Option<PathBuf>) {
-    let Some(nearby) = cx.global::<NearbyService>().nearby.clone() else { return };
+    let f = cx.global::<NearbyService>();
+    let cancel: Box<dyn Fn(u64) + Send> = if transfer >= LS_ID_BASE {
+        let Some(ls) = f.ls.clone() else { return };
+        Box::new(move |t| ls.cancel(t))
+    } else {
+        let Some(nearby) = f.nearby.clone() else { return };
+        Box::new(move |t| nearby.cancel(t))
+    };
     let (tx, rx) = std::sync::mpsc::channel::<Step>();
     cx.global_mut::<NearbyService>().transfers.insert(transfer, tx);
     let id = crate::status_center::start_with_id(
@@ -355,7 +438,7 @@ fn track(cx: &mut App, transfer: u64, title: String, dest: Option<PathBuf>) {
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         if !cancelled && tracker.cancel.load(Ordering::Relaxed) {
                             cancelled = true;
-                            nearby.cancel(transfer);
+                            cancel(transfer);
                         }
                     }
                     // (Nearby stopped meanwhile)
@@ -378,6 +461,10 @@ fn failure_text(error: Option<&str>) -> String {
         t!("That device only takes files from its trusted devices. Pair with it first.").to_string()
     } else if has("declined") {
         t!("The other device declined.").to_string()
+    } else if has("asks for a PIN") {
+        t!("The other device asks for a PIN, which leaf can't give yet.").to_string()
+    } else if has("busy with another transfer") {
+        t!("The other device is busy with another transfer.").to_string()
     } else if has("did not answer") || has("no answer") || has("timed out") {
         t!("The device did not answer.").to_string()
     } else if has("busy with another speed test") {
@@ -416,6 +503,14 @@ fn ask(q: Question, cx: &mut App) {
 
 fn answer(q: &Question, yes: bool, cx: &mut App) {
     forget_question(&q.key(), cx);
+    if let Question::Ls(r) = q {
+        if yes {
+            ls_accept(r, inbox_of(cx.global::<Settings>()), cx);
+        } else if let Some(ls) = cx.global::<NearbyService>().ls.clone() {
+            ls.decline(r.id);
+        }
+        return;
+    }
     let Some(n) = cx.global::<NearbyService>().nearby.clone() else { return };
     match q {
         Question::Offer(o) if yes => {
@@ -426,7 +521,45 @@ fn answer(q: &Question, yes: bool, cx: &mut App) {
         }
         Question::Offer(o) => n.reject(o.id),
         Question::Pair { peer, .. } => n.confirm_pairing(peer.clone(), yes),
+        Question::Ls(_) => {}
     }
+}
+
+/// Takes a LocalSend request into `dest`, when the drive has room for it (else it is declined and a card says why).
+fn ls_accept(r: &LsRequest, dest: PathBuf, cx: &mut App) {
+    let Some(ls) = cx.global::<NearbyService>().ls.clone() else { return };
+    let root = dest.ancestors().last().map(PathBuf::from).unwrap_or_default();
+    let free = leaf_sys::volume::volume_info(&root).ok().filter(|v| v.total > 0).map(|v| v.free);
+    let title = format!("{}: {}", t!("Receiving with Nearby"), r.from);
+    if let Some(free) = free
+        && free < r.total_bytes
+    {
+        ls.decline(r.id);
+        let msg = format!("{} ({}, {} {})", t!("Not enough free space for these files"), rf_core::format::size(r.total_bytes), rf_core::format::size(free), t!("free"));
+        crate::status_center::start_with_id(cx, title, move |_| Err(anyhow::anyhow!("{msg}")), None);
+        return;
+    }
+    ls.accept(r.id, dest.clone());
+    cx.global_mut::<NearbyService>().incoming.insert(r.transfer, r.from.clone());
+    track(cx, r.transfer, title, Some(dest));
+}
+
+/// "Choose folder…" on a LocalSend request: the files go where the user points (the question stays when the choice is cancelled).
+fn choose_folder(r: LsRequest, cx: &mut App) {
+    let (tx, rx) = futures::channel::oneshot::channel::<Option<PathBuf>>();
+    let title = t!("Choose the folder for received files");
+    leaf_sys::sta::run(move |owner| {
+        let _ = tx.send(leaf_sys::dialogs::pick(owner, title, leaf_sys::dialogs::Pick::Folder));
+    });
+    cx.spawn(async move |cx| {
+        if let Ok(Some(path)) = rx.await {
+            let _ = cx.update(|cx| {
+                forget_question(&Question::Ls(r.clone()).key(), cx);
+                ls_accept(&r, path, cx);
+            });
+        }
+    })
+    .detach();
 }
 
 /// A question is no longer asked (answered, given up, or out of time): out of the window, and its toast taken away.
@@ -458,6 +591,15 @@ fn texts(q: &Question) -> (String, Vec<String>, Option<String>, &'static str, &'
                 lines.push(t!("Unpaired device: its name can't be verified").to_string());
             }
             (format!("{} {}", o.from_name, t!("wants to send you files")), lines, None, t!("Deny"), t!("Accept"))
+        }
+        Question::Ls(r) => {
+            let what = match r.files.len() {
+                0 => crate::i18n::items(0),
+                1 => r.files[0].name.clone(),
+                n => format!("{} {} {}", r.files[0].name, t!("and"), crate::i18n::items(n - 1)),
+            };
+            let lines = vec![format!("{} · {}", what, rf_core::format::size(r.total_bytes)), t!("Unpaired device: its name can't be verified").to_string()];
+            (format!("{} {}", r.from, t!("wants to send you files")), lines, None, t!("Deny"), t!("Accept"))
         }
         Question::Pair { name, code, .. } => (
             format!("{}: {name}", t!("Pair")),
@@ -670,6 +812,10 @@ impl Render for QuestionView {
         let Some(q) = questions.first().cloned() else { return div().into_any_element() };
         let waiting = questions.len() - 1;
         let (title, lines, code, no, yes) = texts(&q);
+        let choose = match &q {
+            Question::Ls(r) => Some(r.clone()),
+            _ => None,
+        };
         let (qn, qy) = (q.clone(), q);
         // over glass a wash, or the plain fill until the glass runs (never a see-through window with nothing behind it)
         let fill = self.glass.as_ref().map(|g| crate::glass_watch::panel_fill(p.dark, g.fallback())).or_else(|| crate::theme::popup_fill(&p));
@@ -694,6 +840,7 @@ impl Render for QuestionView {
                     .gap_2()
                     .justify_end()
                     .child(crate::settings_view::button("nearby-no", &p, no, move |_, cx| answer(&qn, false, cx)))
+                    .children(choose.map(|r| crate::settings_view::button("nearby-choose", &p, t!("Choose folder…"), move |_, cx| choose_folder(r.clone(), cx))))
                     .child(primary("nearby-yes", &p, yes, move |_, cx| answer(&qy, true, cx))),
             );
         // the window is as tall as what it says, growing upwards (its bottom stays above the taskbar)
@@ -752,6 +899,11 @@ fn primary(id: &'static str, p: &Palette, label: &str, run: impl Fn(&mut Window,
 /// The "Send with Nearby" submenu for `paths`: the devices seen now (the trusted ones first), and the way to the settings.
 pub(crate) fn menu_items(paths: &[PathBuf], cx: &App) -> Vec<Item> {
     let peers = cx.try_global::<NearbyService>().map(|f| f.peers.clone()).unwrap_or_default();
+    let (ls, ls_devices) = cx.try_global::<NearbyService>().map(|f| (f.ls.clone(), f.ls_devices.clone())).unwrap_or_default();
+    // (opening the menu is the sending UI being used: devices are looked for now, at most every 30 seconds)
+    if let Some(ls) = &ls {
+        ls.scan_if_stale();
+    }
     let mut v: Vec<Item> = peers
         .into_iter()
         .map(|peer| {
@@ -760,12 +912,47 @@ pub(crate) fn menu_items(paths: &[PathBuf], cx: &App) -> Vec<Item> {
             Item::action(peer.name.clone(), icon, move |_, cx| send(&peer, paths.clone(), cx))
         })
         .collect();
+    v.extend(ls_devices.into_iter().map(|dev| {
+        let paths = paths.to_vec();
+        Item::action(dev.alias.clone(), MenuIcon::Lucide(L::Monitor), move |_, cx| ls_send(&dev, paths.clone(), cx))
+    }));
     if v.is_empty() {
         v.push(Item::action(t!("No devices nearby"), MenuIcon::Lucide(L::Wifi), |_, _| {}).enabled(false));
     }
     v.push(Item::Separator);
     v.push(Item::action(t!("Nearby settings…"), MenuIcon::Lucide(L::Settings), |_, cx| open_settings(cx)));
     v
+}
+
+fn ls_send(dev: &LsDevice, paths: Vec<PathBuf>, cx: &mut App) {
+    let Some(ls) = cx.global::<NearbyService>().ls.clone() else { return };
+    match ls.send(&dev.fingerprint, paths) {
+        Ok(transfer) => {
+            cx.global_mut::<NearbyService>().ls_last = Some(dev.fingerprint.clone());
+            track(cx, transfer, format!("{}: {}", t!("Sending with Nearby"), dev.alias), None);
+        }
+        Err(e) => log::warn!("localsend: cannot send to {}: {e}", dev.alias),
+    }
+}
+
+/// The "Send to device" command: to the device used last, or to the only one found; else a card says where to choose.
+pub(crate) fn send_selection(paths: Vec<PathBuf>, cx: &mut App) {
+    if paths.is_empty() || !cx.has_global::<NearbyService>() {
+        return;
+    }
+    let f = cx.global::<NearbyService>();
+    let (ls, devs, last) = (f.ls.clone(), f.ls_devices.clone(), f.ls_last.clone());
+    if let Some(ls) = &ls {
+        ls.scan_if_stale();
+    }
+    let pick = devs.iter().find(|d| last.as_deref() == Some(d.fingerprint.as_str())).or(if devs.len() == 1 { devs.first() } else { None }).cloned();
+    match pick {
+        Some(dev) => ls_send(&dev, paths, cx),
+        None => {
+            let msg = if devs.is_empty() { t!("No devices found nearby. LocalSend must be open on the other device.") } else { t!("Right-click the items and choose Send with Nearby to pick a device.") };
+            crate::status_center::start_with_id(cx, t!("Send to device").to_string(), move |_| Err(anyhow::anyhow!("{msg}")), None);
+        }
+    }
 }
 
 pub(crate) fn open_settings(cx: &mut App) {
@@ -794,6 +981,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         Some(t!("leaf on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, the firewall may ask you to let leaf use the network: allow it for private networks.")),
         switch("nearby-on", p, on, move |_, cx| settings::update(cx, |s| s.nearby_enabled = !on)),
     )];
+    v.extend(ls_cards(p, s, cx));
     if !on {
         return v;
     }
@@ -945,6 +1133,43 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 }),
             ));
         }
+    }
+    v
+}
+
+/// Settings > Nearby, the LocalSend part: the switch for receiving, and the devices found (a search runs when the page opens).
+fn ls_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
+    use crate::settings_view::{button, card, section, switch};
+    let recv = s.nearby_localsend_receive;
+    let (ls, devices, problem) = cx.try_global::<NearbyService>().map(|f| (f.ls.clone(), f.ls_devices.clone(), f.ls_problem.clone())).unwrap_or_default();
+    if let Some(ls) = &ls {
+        ls.scan_if_stale();
+    }
+    let mut v = vec![card(
+        p,
+        L::Download,
+        t!("Receive from nearby devices"),
+        Some(t!("Lets phones and computers running LocalSend send files to this PC. Off by default: while it is on, leaf listens on port 53317 and appears in their lists. Every request asks you first, and nothing is ever overwritten.")),
+        switch("nearby-ls-recv", p, recv, move |_, cx| settings::update(cx, |s| s.nearby_localsend_receive = !recv)),
+    )];
+    if let Some(problem) = problem.filter(|_| recv) {
+        v.push(card(p, L::TriangleAlert, t!("Can't receive from nearby devices"), Some(problem.as_str()), div().into_any_element()));
+    }
+    v.push(section(p, t!("LocalSend devices")));
+    v.push(card(
+        p,
+        L::RefreshCw,
+        t!("Look for LocalSend devices"),
+        Some(t!("Phones and computers with LocalSend open on this network. Send to them from the right-click menu: Send with Nearby.")),
+        button("nearby-ls-scan", p, t!("Refresh"), |_, cx| {
+            if let Some(ls) = cx.global::<NearbyService>().ls.clone() {
+                ls.scan();
+            }
+        }),
+    ));
+    for d in &devices {
+        let desc = format!("{} · {}", d.model.clone().unwrap_or_else(|| d.device_type.clone()), d.ip);
+        v.push(card(p, L::Monitor, &d.alias, Some(desc.as_str()), div().into_any_element()));
     }
     v
 }

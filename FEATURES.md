@@ -68,6 +68,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 |---|---|---|
 | New folder | Makes a new folder here and lets you name it. | `Ctrl+Shift+N` |
 | New text document | Makes a new empty text file here. |  |
+| Send to device | Sends the selected items to a device nearby: a phone or computer running LocalSend, or another leaf. With several devices in reach, the right-click menu (Send with Nearby) lets you pick; this sends to the one used last, or to the only one found. |  |
 | Download here | Downloads a web address (http or https) into this folder: several connections at once, resumed after a cut line or a restart, shown in the Status Center with pause and cancel. An address on the clipboard is already in the box. From a terminal: leaf download <address> [folder]. |  |
 | Add to shelf | Puts the selected items on the shelf to drop them somewhere else later. | `Ctrl+Shift+S` |
 | Add to basket | Puts the selected items in this project's context basket, a named set of files to hand to an assistant later. |  |

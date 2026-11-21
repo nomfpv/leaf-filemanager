@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::oneshot;
 
-pub use localsend::{LocalSend, LsConfig, LsDevice, LsError, LsFile, LsListener, LsRequest, LsResult};
+pub use localsend::{ID_BASE as LS_ID_BASE, LocalSend, PORT as LS_PORT, LsConfig, LsDevice, LsError, LsFile, LsListener, LsRequest, LsResult};
 pub use transfer::PART;
 
 /// A speed estimated from the two devices' links is shown this much of what the links' rates give (15% less).

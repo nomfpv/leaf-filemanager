@@ -123,6 +123,7 @@ gpui_kit::actions!(
         ShowProjectBrain,
         BookmarkRemoteFolder,
         DownloadHere,
+        SendToDevice,
         AddToBasket,
         RemoveFromBasket,
         NewBasket,

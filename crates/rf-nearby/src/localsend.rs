@@ -44,6 +44,10 @@ const STALE: Duration = Duration::from_secs(60);
 const MAX_JSON: usize = 8 << 20;
 const MAX_FILES: usize = 20_000;
 const BUFFER: usize = 256 << 10;
+/// Transfer and request ids start here (the app's other Nearby engine counts from 1).
+pub const ID_BASE: u64 = 1 << 40;
+/// A search is not repeated sooner than this unless asked for again by name.
+const SCAN_EVERY: Duration = Duration::from_secs(30);
 
 // ------------------------------------------------------------------------------------------------------------------------ public
 
@@ -144,7 +148,10 @@ impl LocalSend {
             devices: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             session: Mutex::new(None),
-            next: AtomicU64::new(1),
+            // (far from the other engine's ids: the app keeps one list of transfers for both)
+            next: AtomicU64::new(ID_BASE),
+            alias: Mutex::new(cfg.alias.clone()),
+            last_scan: Mutex::new(None),
             cancelled: Mutex::new(HashSet::new()),
             receiving: AtomicBool::new(false),
             tcp_port: AtomicU16::new(0),
@@ -173,8 +180,29 @@ impl LocalSend {
 
     /// Looks for devices: announces on the multicast group and listens for a few seconds (devices found come with `devices_changed`).
     pub fn scan(&self) {
+        self.scan_inner(true);
+    }
+
+    /// [`LocalSend::scan`], but not when one ran in the last 30 seconds (for a menu that opens often).
+    pub fn scan_if_stale(&self) {
+        self.scan_inner(false);
+    }
+
+    /// The name the other devices see from now on.
+    pub fn set_alias(&self, alias: &str) {
+        *self.inner.alias.lock().unwrap_or_else(|e| e.into_inner()) = alias.to_string();
+    }
+
+    fn scan_inner(&self, force: bool) {
         if !self.inner.cfg.multicast {
             return;
+        }
+        {
+            let mut last = self.inner.last_scan.lock().unwrap_or_else(|e| e.into_inner());
+            if !force && last.is_some_and(|t| t.elapsed() < SCAN_EVERY) {
+                return;
+            }
+            *last = Some(Instant::now());
         }
         let inner = self.inner.clone();
         inner.prune();
@@ -337,6 +365,8 @@ struct Inner {
     tcp_port: AtomicU16,
     udp: Mutex<Option<Arc<Udp>>>,
     scanning: AtomicBool,
+    alias: Mutex<String>,
+    last_scan: Mutex<Option<Instant>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -397,7 +427,7 @@ impl Inner {
             p => p,
         };
         Info {
-            alias: self.cfg.alias.clone(),
+            alias: self.alias.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             version: "2.0".into(),
             device_model: Some(self.cfg.model.clone()),
             device_type: Some("desktop".into()),
