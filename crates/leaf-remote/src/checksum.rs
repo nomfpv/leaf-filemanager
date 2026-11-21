@@ -18,6 +18,14 @@ impl Algo {
             Algo::Xxh => "xxhsum",
         }
     }
+
+    /// What a message calls the sum ("SHA-256": the program differs by system).
+    pub fn label(self) -> &'static str {
+        match self {
+            Algo::Sha256 => "SHA-256",
+            Algo::Xxh => "xxhsum",
+        }
+    }
 }
 
 /// `s` as one word for a POSIX shell: in single quotes, a quote inside as `'\''`.
@@ -35,9 +43,22 @@ pub fn shell_path(p: &str) -> String {
     }
 }
 
-/// The command line that prints the sum of the file at `path`.
+/// The command line that prints the sum of the file at `path`. The tool is picked on the server by asking the shell which one
+/// exists (not by the kind of system alone): `sha256sum` (GNU, BusyBox), `sha256 -r` (FreeBSD, OpenBSD, NetBSD), `shasum -a 256`
+/// (macOS, Perl); `xxhsum` or `xxh64sum`. Exit code 127 when the server has none of them. The path is one quoted word.
 pub fn command(algo: Algo, path: &str) -> String {
-    format!("{} -- {}", algo.program(), shell_path(path))
+    let f = shell_path(path);
+    match algo {
+        Algo::Sha256 => format!(
+            "f={f}; if command -v sha256sum >/dev/null 2>&1; then sha256sum -- \"$f\"; \
+             elif command -v sha256 >/dev/null 2>&1; then sha256 -r \"$f\" 2>/dev/null || sha256 \"$f\"; \
+             elif command -v shasum >/dev/null 2>&1; then shasum -a 256 -- \"$f\"; else exit 127; fi"
+        ),
+        Algo::Xxh => format!(
+            "f={f}; if command -v xxhsum >/dev/null 2>&1; then xxhsum -- \"$f\"; \
+             elif command -v xxh64sum >/dev/null 2>&1; then xxh64sum -- \"$f\"; else exit 127; fi"
+        ),
+    }
 }
 
 fn is_hex(s: &str, lens: &[usize]) -> bool {
@@ -46,7 +67,12 @@ fn is_hex(s: &str, lens: &[usize]) -> bool {
 
 /// The hash a `sha256sum`/`xxhsum` run printed (`hash  name`), in lower case; none when the output is not one.
 pub fn parse_output(algo: Algo, out: &str) -> Option<String> {
-    let first = out.lines().find(|l| !l.trim().is_empty())?.split_whitespace().next()?;
+    let line = out.lines().find(|l| !l.trim().is_empty())?;
+    // (the BSD tools without `-r` print `SHA256 (name) = hash`; the others `hash  name`)
+    let first = match line.split_once(") = ") {
+        Some((head, hash)) if head.contains(" (") => hash.split_whitespace().next()?,
+        _ => line.split_whitespace().next()?,
+    };
     let lens: &[usize] = match algo {
         Algo::Sha256 => &[64],
         Algo::Xxh => &[8, 16, 32],
@@ -95,14 +121,20 @@ mod tests {
     #[test]
     fn quoting_and_home() {
         assert_eq!(quote("a'b"), r"'a'\''b'");
-        assert_eq!(command(Algo::Sha256, "/srv/x y"), "sha256sum -- '/srv/x y'");
-        assert_eq!(command(Algo::Xxh, "/~/a"), "xxhsum -- \"$HOME\"'/a'");
+        // the path is one quoted word, the tool is the one the server has
+        let c = command(Algo::Sha256, "/srv/x y");
+        assert!(c.starts_with("f='/srv/x y'; if command -v sha256sum") && c.contains("sha256 -r \"$f\"") && c.contains("shasum -a 256 -- \"$f\""));
+        assert!(command(Algo::Xxh, "/~/a").starts_with("f=\"$HOME\"'/a'; if command -v xxhsum"));
     }
 
     #[test]
     fn parses_output_and_sidecars() {
         assert_eq!(parse_output(Algo::Sha256, &format!("{H}  /srv/f\n")).as_deref(), Some(H));
         assert_eq!(parse_output(Algo::Sha256, "sha256sum: f: No such file"), None);
+        // BSD: `sha256 -r` (hash name) and plain `sha256` (tagged); a menu shell's text is no sum
+        assert_eq!(parse_output(Algo::Sha256, &format!("{H} /srv/f\n")).as_deref(), Some(H));
+        assert_eq!(parse_output(Algo::Sha256, &format!("SHA256 (/srv/f) = {H}\n")).as_deref(), Some(H));
+        assert_eq!(parse_output(Algo::Sha256, "Enter an option: "), None);
         assert_eq!(parse_output(Algo::Xxh, "0123456789ABCDEF  f").as_deref(), Some("0123456789abcdef"));
         assert_eq!(parse_sidecar(&format!("{H} *f.iso\n"), "f.iso").as_deref(), Some(H));
         assert_eq!(parse_sidecar(&format!("SHA256 (f.iso) = {H}"), "f.iso").as_deref(), Some(H));

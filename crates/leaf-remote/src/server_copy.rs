@@ -22,33 +22,56 @@ use crate::checksum::shell_path;
 /// What the server copies with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
-    /// `rsync -a --info=progress2`: progress from its output.
+    /// `rsync -a --info=progress2` (rsync 3.1 or newer): progress from its output.
     Rsync,
-    /// `cp -a` (GNU or BusyBox): progress from the part's size (`du -sk`).
+    /// `cp -a` (GNU, BusyBox, FreeBSD, NetBSD, macOS): progress from the part's size (`du -sk`).
     Cp,
+    /// `cp -RPp` where `cp` has no `-a` (OpenBSD): the same copy, progress the same way.
+    CpPosix,
 }
 
 impl Tool {
     pub fn program(self) -> &'static str {
         match self {
             Tool::Rsync => "rsync",
-            Tool::Cp => "cp",
+            Tool::Cp | Tool::CpPosix => "cp",
         }
     }
 }
 
-/// Asks the server's shell which tool it has. Any other shell (cmd.exe, PowerShell, an sftp-only account) prints no
-/// `leaf-tool` line.
-pub const PROBE: &str = "if command -v rsync >/dev/null 2>&1 && rsync --help 2>&1 | grep -q -e --info=; then echo leaf-tool rsync; \
-elif command -v cp >/dev/null 2>&1; then echo leaf-tool cp; else echo leaf-tool none; fi";
+/// Asks the server's shell which tools it has: the system (`uname -s`), the first line of `rsync --version` and whether `cp`
+/// is there. Any other shell (cmd.exe, PowerShell, an sftp-only account, a menu shell) prints no `leaf-probed` line.
+pub const PROBE: &str = "echo \"leaf-uname $(uname -s 2>/dev/null)\"; \
+if command -v rsync >/dev/null 2>&1; then echo \"leaf-rsync $(rsync --version 2>/dev/null | head -n 1)\"; fi; \
+if command -v cp >/dev/null 2>&1; then echo leaf-cp; fi; echo leaf-probed";
+
+/// Whether an `rsync --version` line names rsync 3.1 or newer (`rsync  version 3.2.7  protocol version 31`): that is where
+/// `--info=progress2` begins. Older rsync (macOS's 2.6.9), `openrsync` and anything unreadable are no.
+pub fn rsync_has_progress2(line: &str) -> bool {
+    let l = line.trim();
+    if !l.starts_with("rsync ") {
+        return false;
+    }
+    let Some(rest) = l.split_once("version ").map(|(_, r)| r.trim_start().trim_start_matches('v')) else { return false };
+    let mut nums = rest.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).map(|s| s.parse::<u32>().unwrap_or(0));
+    let (major, minor) = (nums.next().unwrap_or(0), nums.next().unwrap_or(0));
+    major > 3 || (major == 3 && minor >= 1)
+}
 
 /// The tool a `PROBE` run named (none: the server copies nothing itself).
 pub fn parse_probe(out: &str) -> Option<Tool> {
-    match out.lines().map(str::trim).rfind(|l| l.starts_with("leaf-tool "))? {
-        "leaf-tool rsync" => Some(Tool::Rsync),
-        "leaf-tool cp" => Some(Tool::Cp),
-        _ => None,
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    if !lines.contains(&"leaf-probed") {
+        return None;
     }
+    if lines.iter().filter_map(|l| l.strip_prefix("leaf-rsync ")).any(rsync_has_progress2) {
+        return Some(Tool::Rsync);
+    }
+    if !lines.contains(&"leaf-cp") {
+        return None;
+    }
+    let openbsd = lines.iter().any(|l| l.strip_prefix("leaf-uname ").is_some_and(|u| u.trim().eq_ignore_ascii_case("openbsd")));
+    Some(if openbsd { Tool::CpPosix } else { Tool::Cp })
 }
 
 /// The exit code of a copy command that found something under the part name and did not start.
@@ -63,6 +86,7 @@ pub fn copy_command(tool: Tool, src: &str, part: &str, is_dir: bool) -> String {
         Tool::Rsync if is_dir => format!("rsync -a --info=progress2 -- {src}/ \"$P\""),
         Tool::Rsync => format!("rsync -a --info=progress2 -- {src} \"$P\""),
         Tool::Cp => format!("cp -a -- {src} \"$P\""),
+        Tool::CpPosix => format!("cp -RPp -- {src} \"$P\""),
     };
     format!("P={part}; if [ -e \"$P\" ] || [ -L \"$P\" ]; then exit {PART_TAKEN}; fi; echo leaf-pid $$; exec {run} 2>&1")
 }
@@ -275,10 +299,22 @@ mod tests {
 
     #[test]
     fn server_copy_parsing() {
-        assert_eq!(parse_probe("motd\nleaf-tool rsync\n"), Some(Tool::Rsync));
-        assert_eq!(parse_probe("leaf-tool cp"), Some(Tool::Cp));
-        assert_eq!(parse_probe("leaf-tool none"), None);
+        let rs = |v: &str| format!("motd\nleaf-uname FreeBSD\nleaf-rsync {v}\nleaf-cp\nleaf-probed\n");
+        assert_eq!(parse_probe(&rs("rsync  version 3.2.7  protocol version 31")), Some(Tool::Rsync));
+        assert_eq!(parse_probe(&rs("rsync  version 3.1.0  protocol version 31")), Some(Tool::Rsync));
+        assert_eq!(parse_probe(&rs("rsync  version v3.4.1  protocol version 32")), Some(Tool::Rsync));
+        // rsync older than 3.1 has no --info=progress2 (macOS's 2.6.9), openrsync neither: cp
+        assert_eq!(parse_probe(&rs("rsync  version 2.6.9  protocol version 29")), Some(Tool::Cp));
+        assert_eq!(parse_probe(&rs("openrsync: protocol version 29")), Some(Tool::Cp));
+        assert_eq!(parse_probe(&rs("")), Some(Tool::Cp));
+        assert_eq!(parse_probe("leaf-uname Linux\nleaf-cp\nleaf-probed\n"), Some(Tool::Cp));
+        // OpenBSD's cp has no -a
+        assert_eq!(parse_probe("leaf-uname OpenBSD\nleaf-cp\nleaf-probed\n"), Some(Tool::CpPosix));
+        assert_eq!(parse_probe("leaf-uname Linux\nleaf-probed\n"), None);
+        assert!(rsync_has_progress2("rsync  version 3.10.0  protocol version 31") && !rsync_has_progress2("rsync  version 3.0.9  protocol version 30"));
         assert_eq!(parse_probe("'command' is not recognized as an internal or external command"), None);
+        assert_eq!(parse_probe("  1) Assign interfaces\n  8) Shell\nEnter an option: "), None);
+        assert_eq!(copy_command(Tool::CpPosix, "/a", "/p", true), "P='/p'; if [ -e \"$P\" ] || [ -L \"$P\" ]; then exit 17; fi; echo leaf-pid $$; exec cp -RPp -- '/a' \"$P\" 2>&1");
         assert_eq!(parse_pid("leaf-pid 4242\n"), Some(4242));
         // a line that arrived in two pieces is read only once it is whole; pid 1 (and 0) is never taken
         assert_eq!(parse_pid("welcome\nleaf-pid 4"), None);
@@ -291,7 +327,7 @@ mod tests {
         // a timeout is not remembered as "no tool"; a clear answer is
         let host = "u@cache-test:22";
         assert_eq!(tool_of(host, || Err(FsError::Offline("the server did not finish the command in time".into()))), Ok(None));
-        assert_eq!(tool_of(host, || Ok(("leaf-tool cp\n".into(), Some(0)))), Ok(Some(Tool::Cp)));
+        assert_eq!(tool_of(host, || Ok(("leaf-cp\nleaf-probed\n".into(), Some(0)))), Ok(Some(Tool::Cp)));
         assert_eq!(tool_of(host, || panic!("asked again")), Ok(Some(Tool::Cp)));
     }
 

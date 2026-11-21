@@ -20,6 +20,7 @@ mod gvfs;
 mod ftp;
 #[cfg(test)]
 mod ftp_tests;
+pub mod hostkind;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
@@ -166,9 +167,19 @@ pub fn remote_sum(v: &VPath, algo: checksum::Algo, cancelled: &dyn Fn() -> bool)
     let out = sftp_backend().exec(v, &checksum::command(algo, v.path()), std::time::Duration::from_secs(30 * 60), cancelled)?;
     match checksum::parse_output(algo, &out.stdout) {
         Some(h) if out.code.unwrap_or(0) == 0 => Ok(h),
-        _ if out.code == Some(127) => Err(FsError::Other(format!("The server has no {}", algo.program()))),
-        _ => Err(FsError::Other(format!("{} gave no sum for this file", algo.program()))),
+        _ if out.code == Some(127) => Err(FsError::Other(format!("The server has no program for {}", algo.label()))),
+        _ => Err(FsError::Other(format!("The server gave no {} for this file", algo.label()))),
     }
+}
+
+/// What kind of machine the `sftp://` server of `v` is (Linux, a BSD, BusyBox, macOS, or unknown), asked once per connection
+/// with `uname -s` (5 seconds at most) and kept with it. Never fails: a server that runs no commands, a menu shell or an
+/// address that is not `sftp://` is `Unknown`. Blocks: call from a worker thread.
+pub fn host_family(v: &VPath) -> hostkind::HostFamily {
+    if v.scheme() != "sftp" {
+        return hostkind::HostFamily::Unknown;
+    }
+    sftp_backend().family(v, &|| false)
 }
 
 /// Copies `from` (a file or a folder) to `to` on the same `sftp://` server, done by the server itself (`server_copy`): nothing
@@ -196,7 +207,7 @@ pub fn copy_on_server(
     let Some(tool) = server_copy::tool_of(from.authority(), ask)? else { return Err(FsError::Unsupported) };
     let progress = std::cell::RefCell::new(progress);
     server_copy::copy_with(&*fs, tool, &home, from, to, replace, &mut |command, part| {
-        let poll = (tool == server_copy::Tool::Cp).then(|| server_copy::size_command(part.path()));
+        let poll = (tool != server_copy::Tool::Rsync).then(|| server_copy::size_command(part.path()));
         let mut on_text = |t: &str| {
             if tool == server_copy::Tool::Rsync
                 && let Some(n) = server_copy::parse_rsync_progress(t)

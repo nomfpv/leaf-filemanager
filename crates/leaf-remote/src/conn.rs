@@ -195,6 +195,8 @@ pub(crate) struct Conn {
     born: Instant,
     /// The route it was made on (see `leaf_vpn::RouteMark`).
     route: leaf_vpn::RouteMark,
+    /// What kind of machine this is (`uname -s`), asked the first time it is needed and kept as long as the connection lives.
+    family: tokio::sync::OnceCell<crate::hostkind::HostFamily>,
 }
 
 impl Conn {
@@ -473,7 +475,7 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         _ => "/".into(),
     };
     log::info!("remote: connected (SFTP version {}, statvfs {statvfs}, posix-rename {posix_rename})", version.version);
-    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route })
+    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route, family: tokio::sync::OnceCell::new() })
 }
 
 /// What a host set to use leaf's VPN reads while the VPN is down and its kill switch is on.
@@ -851,11 +853,29 @@ const STOP_WAIT: Duration = Duration::from_secs(5);
 const EXEC_CAP: usize = 4 * 1024 * 1024;
 
 impl Conn {
+    /// What kind of machine the server is: asked once (`uname -s`, 5 seconds at most), then kept with this connection. A server
+    /// that runs no commands, answers with something else (a menu shell) or does not answer in time is `Unknown`; this never fails.
+    pub async fn family(&self) -> crate::hostkind::HostFamily {
+        *self
+            .family
+            .get_or_init(|| async {
+                match self.exec(crate::hostkind::PROBE, crate::hostkind::ASK_LIMIT).await {
+                    Ok(o) => crate::hostkind::parse_probe(&o.stdout),
+                    Err(e) => {
+                        log::info!("remote: the server's kind is unknown ({e})");
+                        crate::hostkind::HostFamily::Unknown
+                    }
+                }
+            })
+            .await
+    }
+
     /// Runs `command` (the server's shell parses it) on a new channel of this connection and collects what it prints, waiting
     /// at most `limit` in all.
     pub async fn exec(&self, command: &str, limit: Duration) -> Result<ExecOut, FsError> {
         let mut ch = step(self.limit_open(), self.handle.channel_open_session()).await?;
-        step(self.limit_open(), ch.exec(true, command.as_bytes().to_vec())).await?;
+        // (`sh -c`: the account's own shell may be csh, which does not read POSIX syntax)
+        step(self.limit_open(), ch.exec(true, crate::hostkind::posix(command).into_bytes())).await?;
         let mut out = ExecOut::default();
         let mut bytes: Vec<u8> = Vec::new();
         let read = async {
@@ -903,7 +923,7 @@ impl Conn {
             Tick,
         }
         let mut ch = step(self.limit_open(), self.handle.channel_open_session()).await?;
-        step(self.limit_open(), ch.exec(true, command.as_bytes().to_vec())).await?;
+        step(self.limit_open(), ch.exec(true, crate::hostkind::posix(command).into_bytes())).await?;
         let mut end = Ended::default();
         let mut pid = None;
         let mut head = String::new();

@@ -120,6 +120,20 @@ impl SftpFs {
         })
     }
 
+    /// The kind of machine the server of `v` is (asked once per connection; `Unknown` when it cannot be told, and when the
+    /// server cannot be reached at all: this never fails).
+    pub fn family(&self, v: &VPath, cancelled: &dyn Fn() -> bool) -> crate::hostkind::HostFamily {
+        let Ok(t) = self.target(v) else { return crate::hostkind::HostFamily::Unknown };
+        block_on(cancelled, async {
+            let c = self.shared.conn(&self.cfg, &self.prompter, &t).await?;
+            c.busy.fetch_add(1, Ordering::Relaxed);
+            let f = c.family().await;
+            c.busy.fetch_sub(1, Ordering::Relaxed);
+            Ok(f)
+        })
+        .unwrap_or_default()
+    }
+
     /// Runs a copy command on the server of `v` and follows it to its end (`Conn::exec_watch`); Cancel stops it there.
     pub(crate) fn exec_copy(
         &self,
