@@ -948,7 +948,9 @@ impl Inner {
                 }
                 let welcome = {
                     let mut store = lock(&self.store);
-                    let Some(rec) = store.get_mut(&share) else {
+                    // (another invite of the same share may have been taken during the pairing: the first one in keeps it)
+                    let Some(rec) = store.get_mut(&share).filter(|r| r.peer.is_none()) else {
+                        log::info!("share: a second friend for a share that has one was refused");
                         link.close();
                         return;
                     };
