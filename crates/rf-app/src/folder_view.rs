@@ -1786,6 +1786,7 @@ impl FolderView {
                 .ok();
         } else if let Location::Search { root, query } = self.location().clone() {
             let include_hidden = self.filter.show_hidden;
+            let hide_ignored = cx.global::<crate::settings::Settings>().hide_ignored;
             let use_index = cx.global::<crate::settings::Settings>().search_index;
             // "modified:today" is no part of the name looked for: the hits are cut by day as they arrive (see `Msg::Hits`)
             let query = rf_core::search_date::split(&query, chrono::Local::now().date_naive()).text;
@@ -1832,7 +1833,7 @@ impl FolderView {
                                 let _ = tx.unbounded_send(Msg::Hits(std::mem::take(es), std::mem::take(ps)));
                             }
                         };
-                        let n = rf_core::content_search::search(&root, &re, include_hidden, 5_000, &|| cancel.load(Ordering::Relaxed), &mut |p, size, line, text| {
+                        let n = rf_core::content_search::search(&root, &re, include_hidden, hide_ignored, 5_000, &|| cancel.load(Ordering::Relaxed), &mut |p, size, line, text| {
                             use leaf_sys::fileattr::MetadataExt;
                             let ms = |t: std::io::Result<std::time::SystemTime>| t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64);
                             let (mod_ms, cre_ms, attrs) = std::fs::metadata(p).map_or((0, 0, 0), |m| (ms(m.modified()), ms(m.created()), m.file_attributes()));

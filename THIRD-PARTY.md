@@ -11,7 +11,7 @@ are MIT, Copyright (c) 2026 Ozer Guzel and the leaf authors; they appear in the 
 
 | Licence | Crates |
 |---|---|
-| MIT License (MIT) | 581 |
+| MIT License (MIT) | 584 |
 | Apache License 2.0 (Apache-2.0) | 39 |
 | Unicode License v3 (Unicode-3.0) | 25 |
 | ISC License (ISC) | 23 |
@@ -11984,6 +11984,9 @@ Used by:
 - [byteorder 1.5.0](https://github.com/BurntSushi/byteorder)
 - [encoding_rs_io 0.1.8](https://github.com/BurntSushi/encoding_rs_io)
 - [globset 0.4.21](https://github.com/BurntSushi/ripgrep/tree/master/crates/globset)
+- [grep-matcher 0.1.9](https://github.com/BurntSushi/ripgrep/tree/master/crates/matcher)
+- [grep-regex 0.1.14](https://github.com/BurntSushi/ripgrep/tree/master/crates/regex)
+- [grep-searcher 0.1.17](https://github.com/BurntSushi/ripgrep/tree/master/crates/searcher)
 - [ignore 0.4.34](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore)
 - [jiff-core 0.1.2](https://github.com/BurntSushi/jiff)
 - [jiff 0.2.39](https://github.com/BurntSushi/jiff)
