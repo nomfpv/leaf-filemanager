@@ -1,12 +1,41 @@
-//! Linux backend of rf_win::fileinfo. Status: STUB
+//! Linux backend of rf_win::fileinfo. Status: REAL (reads; the attribute writers are plain chmod; the Windows-only extras answer "not applicable")
+//!
+//! Attribute bits here: READONLY = the owner may not write (writing it clears every write bit; clearing it gives the owner write
+//! back); the ARCHIVE bit carries the EXECUTABLE permission of a file (the properties page labels it so off Windows); HIDDEN is a
+//! name rule (a leading dot) and cannot be written: asking to change it is an error that says to rename instead; NOT_INDEXED,
+//! COMPRESSED and ENCRYPTED have no meaning here and are ignored / refused quietly. Links are never changed (chmod would follow them).
 
-use leaf_common::{stub, stub_err};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-/// A data operation (it writes attributes): `Err`, and `cancel` is never asked.
-pub fn set_attrs_tree(_dir: &Path, _set: u32, _clear: u32, _cancel: &dyn Fn() -> bool) -> std::io::Result<usize> {
-    stub_err!("fileinfo::set_attrs_tree")
+/// `set_attrs` on the files under `dir` (and `dir` itself), links neither changed nor entered. Folders get the read-only and
+/// executable bits only when they are `dir` itself (a folder without write or search permission would lock the tree). Returns how
+/// many items changed; the first error stops; `cancel` is polled per item and ends the walk early with what was done so far.
+pub fn set_attrs_tree(dir: &Path, set: u32, clear: u32, cancel: &dyn Fn() -> bool) -> std::io::Result<usize> {
+    if cancel() {
+        return Ok(0);
+    }
+    let mut changed = usize::from(set_attrs_changed(dir, set, clear)?);
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        // a folder that cannot be listed (no read permission) is an error as on Windows
+        for e in std::fs::read_dir(&d)? {
+            if cancel() {
+                return Ok(changed);
+            }
+            let p = e?.path();
+            let m = std::fs::symlink_metadata(&p)?;
+            if m.file_type().is_symlink() {
+                continue;
+            }
+            if m.is_dir() {
+                stack.push(p);
+            } else if set_attrs_changed(&p, set, clear)? {
+                changed += 1;
+            }
+        }
+    }
+    Ok(changed)
 }
 
 // TYPE-COPY(rf-win src/fileinfo.rs:18)
@@ -38,6 +67,10 @@ fn attr_bits(path: &Path, m: &std::fs::Metadata) -> u32 {
     }
     if path.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b".")) {
         a |= 0x2;
+    }
+    // the ARCHIVE slot is the executable permission of a file
+    if !m.is_dir() && m.mode() & 0o111 != 0 {
+        a |= 0x20;
     }
     a
 }
@@ -197,20 +230,24 @@ pub fn opens_with(path: &Path) -> Option<String> {
     crate::openwith::default_app(&mime).map(|a| a.name)
 }
 
+/// Not applicable on Linux (no download zone marks): never blocked.
 pub fn zone_blocked(_path: &Path) -> bool {
-    stub!("fileinfo::zone_blocked")
+    false
 }
 
+/// Not applicable on Linux (no named data streams).
 pub fn streams(_path: &Path) -> Vec<(String, u64)> {
-    stub!("fileinfo::streams")
+    Vec::new()
 }
 
+/// Not applicable on Linux: nothing is marked, and that is not an error.
 pub fn mark_downloaded(_path: &Path, _from: &str) -> std::io::Result<()> {
-    stub_err!("fileinfo::mark_downloaded")
+    Ok(())
 }
 
+/// Not applicable on Linux: there is nothing to unblock.
 pub fn unblock(_path: &Path) -> std::io::Result<()> {
-    stub_err!("fileinfo::unblock")
+    Ok(())
 }
 
 pub const ARCHIVE: u32 = 0x20;
@@ -221,24 +258,107 @@ pub const COMPRESSED: u32 = 0x800;
 
 pub const ENCRYPTED: u32 = 0x4000;
 
-pub fn set_attrs(_path: &Path, _set: u32, _clear: u32) -> std::io::Result<()> {
-    stub_err!("fileinfo::set_attrs")
+/// Sets the bits in `set` and clears those in `clear` (see the module comment for what each means here). A link is left alone.
+pub fn set_attrs(path: &Path, set: u32, clear: u32) -> std::io::Result<()> {
+    set_attrs_changed(path, set, clear).map(|_| ())
 }
 
+fn set_attrs_changed(path: &Path, set: u32, clear: u32) -> std::io::Result<bool> {
+    let m = std::fs::symlink_metadata(path)?;
+    if m.file_type().is_symlink() {
+        return Ok(false);
+    }
+    let want = |bit: u32| if set & bit != 0 { Some(true) } else if clear & bit != 0 { Some(false) } else { None };
+    let hidden_now = path.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b"."));
+    if let Some(h) = want(0x2)
+        && h != hidden_now
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Hidden is a name rule on Linux: a name that starts with a dot is hidden. Rename the item to hide or show it.",
+        ));
+    }
+    let mode = m.mode() & 0o7777;
+    let mut new = mode;
+    if let Some(ro) = want(0x1) {
+        new = if ro { new & !0o222 } else { new | 0o200 };
+    }
+    // the executable bit is for files (a folder's x bit is the permission to enter it)
+    if !m.is_dir()
+        && let Some(x) = want(0x20)
+    {
+        new = if x { new | ((new & 0o444) >> 2) } else { new & !0o111 };
+    }
+    if new == mode {
+        return Ok(false);
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(new))?;
+    Ok(true)
+}
+
+/// No compression switch on Linux (the file system decides).
 pub fn set_compressed(_path: &Path, _on: bool) -> std::io::Result<()> {
-    stub_err!("fileinfo::set_compressed")
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Compression is not a per-file setting on Linux."))
 }
 
+/// No per-file encryption switch on Linux.
 pub fn set_encrypted(_path: &Path, _on: bool) -> std::io::Result<()> {
-    stub_err!("fileinfo::set_encrypted")
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Encryption is not a per-file setting on Linux."))
 }
 
+/// (compression, encryption) a volume offers per file: neither here (the properties page hides those rows).
 pub fn volume_caps(_path: &Path) -> (bool, bool) {
-    stub!("fileinfo::volume_caps")
+    (false, false)
 }
 
-pub fn share_of(_dir: &Path) -> Option<String> {
-    stub!("fileinfo::share_of")
+/// The network name a folder is known by: the remote of a network mount (`//server/share`, `host:/export`, `user@host:/path`) when
+/// `dir` is the mount point, else the name of a Samba share (user shares and `smb.conf`) that exports it, as `smb://host/name`.
+pub fn share_of(dir: &Path) -> Option<String> {
+    let want = dir.to_string_lossy().trim_end_matches('/').to_string();
+    let want = if want.is_empty() { "/".to_string() } else { want };
+    if let Ok(text) = std::fs::read_to_string("/proc/self/mountinfo") {
+        for line in text.lines() {
+            if let Some((mount, fs, source)) = crate::drives::parse_mount_line(line)
+                && mount == want
+                && crate::drives::is_network_fs(&fs)
+            {
+                return Some(source);
+            }
+        }
+    }
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname").map(|h| h.trim().to_string()).unwrap_or_default();
+    let found = samba_share(&want)?;
+    Some(format!("smb://{host}/{found}"))
+}
+
+/// The share name exporting `want`: from `/var/lib/samba/usershares/*` (`path=` and the file's name) and `/etc/samba/smb.conf`
+/// (a `[name]` section with a `path =` line); the share's path is compared without a trailing slash.
+fn samba_share(want: &str) -> Option<String> {
+    let same = |p: &str| p.trim().trim_end_matches('/') == want;
+    if let Ok(rd) = std::fs::read_dir("/var/lib/samba/usershares") {
+        for e in rd.flatten() {
+            let Ok(t) = std::fs::read_to_string(e.path()) else { continue };
+            if t.lines().filter_map(|l| l.strip_prefix("path=")).any(same) {
+                return Some(e.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let conf = std::fs::read_to_string("/etc/samba/smb.conf").ok()?;
+    let mut section = String::new();
+    for l in conf.lines() {
+        let l = l.trim();
+        if let Some(n) = l.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+            section = n.to_string();
+        } else if let Some((k, v)) = l.split_once('=')
+            && k.trim().eq_ignore_ascii_case("path")
+            && same(v)
+            && !["global", "homes", "printers", "print$"].contains(&section.as_str())
+            && !section.ends_with('$')
+        {
+            return Some(section);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -260,6 +380,33 @@ mod tests {
         assert_eq!(link_target(&l), Some(f.clone()));
         assert!(mode_text(&f).unwrap().starts_with('-') && mode_text(&dir).unwrap().starts_with('d'));
         assert!(owner_name(&f).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chmod_round_trip_readonly_exec_and_hidden_is_a_name() {
+        let dir = std::env::temp_dir().join(format!("leaf-attrs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let f = dir.join("a.sh");
+        std::fs::write(&f, b"x").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        set_attrs(&f, 0x1 | 0x20, 0).unwrap();
+        assert_eq!(std::fs::metadata(&f).unwrap().mode() & 0o777, 0o555);
+        let a = info(&f).unwrap().attrs;
+        assert!(a & 0x1 != 0 && a & 0x20 != 0);
+        set_attrs(&f, 0, 0x1 | 0x20).unwrap();
+        assert_eq!(std::fs::metadata(&f).unwrap().mode() & 0o777, 0o444 | 0o200);
+        // hidden cannot be written, and the error says why
+        let e = set_attrs(&f, 0x2, 0).unwrap_err();
+        assert!(e.to_string().contains("name"));
+        // a tree: files only, cancel honoured
+        std::fs::write(dir.join("sub/b.txt"), b"x").unwrap();
+        assert_eq!(set_attrs_tree(&dir, 0x1, 0, &|| false).unwrap(), 3);
+        assert_eq!(std::fs::metadata(dir.join("sub/b.txt")).unwrap().mode() & 0o222, 0);
+        set_attrs_tree(&dir, 0, 0x1, &|| false).unwrap();
+        assert_eq!(set_attrs_tree(&dir, 0x1, 0, &|| true).unwrap(), 0);
+        assert!(!zone_blocked(&f) && streams(&f).is_empty() && volume_caps(&f) == (false, false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

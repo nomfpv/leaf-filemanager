@@ -35,13 +35,18 @@ fn unescape(s: &str) -> String {
 }
 
 /// One mountinfo line to (mount point, fs type, source), `None` for a line we cannot read.
-fn parse_line(line: &str) -> Option<(String, String, String)> {
+pub(crate) fn parse_mount_line(line: &str) -> Option<(String, String, String)> {
     let (left, right) = line.split_once(" - ")?;
     let mount = unescape(left.split(' ').nth(4)?);
     let mut r = right.split(' ');
     let fs = r.next()?.to_string();
     let source = unescape(r.next().unwrap_or(""));
     Some((mount, fs, source))
+}
+
+/// Whether a file system type is a network one (nfs, cifs, sshfs, ...).
+pub(crate) fn is_network_fs(fs: &str) -> bool {
+    NETWORK.contains(&fs)
 }
 
 fn kind_of(fs: &str, source: &str, mount: &str) -> DriveKind {
@@ -76,7 +81,7 @@ fn from_mountinfo(text: &str) -> Vec<Drive> {
     // the device numbers of the btrfs mounts listed so far
     let mut btrfs_devs: Vec<&str> = Vec::new();
     for line in text.lines() {
-        let Some((mount, fs, source)) = parse_line(line) else { continue };
+        let Some((mount, fs, source)) = parse_mount_line(line) else { continue };
         if PSEUDO.contains(&fs.as_str()) || mount.starts_with("/proc") || mount.starts_with("/sys") || mount.starts_with("/dev")
             || mount.starts_with("/run/user") || mount.starts_with("/var/lib/docker") || mount.starts_with("/snap")
         {

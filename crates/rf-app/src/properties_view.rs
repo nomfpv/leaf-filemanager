@@ -1011,45 +1011,57 @@ impl PropsView {
                 cx.notify();
             }))
         };
+        #[allow(unused_mut)]
         let mut rows = vec![
             section(p, t!("Attributes")),
             flag("ro", if dir { t!("Read-only (only applies to files in folder)") } else { t!("Read-only") }, a.readonly, |a| &mut a.readonly, cx),
-            flag("hid", t!("Hidden"), a.hidden, |a| &mut a.hidden, cx),
         ];
-        let open = self.advanced_open;
-        rows.push(
-            h_flex()
-                .id("adv")
-                .gap_1p5()
-                .py(px(6.))
-                .items_center()
-                .text_sm()
-                .text_color(p.accent)
-                .cursor_pointer()
-                .hover(|s| s.opacity(0.8))
-                .child(Icon::new(if open { L::ChevronDown } else { L::ChevronRight }).size(px(14.)))
-                .child(t!("Advanced attributes"))
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    v.advanced_open = !open;
-                    cx.notify();
-                }))
-                .into_any_element(),
-        );
-        if open {
-            rows.push(flag("arch", if dir { t!("Folder is ready for archiving") } else { t!("File is ready for archiving") }, a.archive, |a| &mut a.archive, cx));
-            rows.push(flag(
-                "idx",
-                if dir { t!("Allow files in this folder to have contents indexed") } else { t!("Allow this file to have contents indexed") },
-                a.indexed,
-                |a| &mut a.indexed,
-                cx,
-            ));
-            if self.caps.0 {
-                rows.push(flag("comp", t!("Compress contents to save disk space"), a.compressed, |a| &mut a.compressed, cx));
+        // Windows: a hidden bit. Elsewhere hidden is a leading dot in the name, so the way to change it is renaming
+        #[cfg(windows)]
+        rows.push(flag("hid", t!("Hidden"), a.hidden, |a| &mut a.hidden, cx));
+        // Windows: the advanced attributes (archive, indexing, compression, encryption)
+        #[cfg(windows)]
+        {
+            let open = self.advanced_open;
+            rows.push(
+                h_flex()
+                    .id("adv")
+                    .gap_1p5()
+                    .py(px(6.))
+                    .items_center()
+                    .text_sm()
+                    .text_color(p.accent)
+                    .cursor_pointer()
+                    .hover(|s| s.opacity(0.8))
+                    .child(Icon::new(if open { L::ChevronDown } else { L::ChevronRight }).size(px(14.)))
+                    .child(t!("Advanced attributes"))
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.advanced_open = !open;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+            if open {
+                rows.push(flag("arch", if dir { t!("Folder is ready for archiving") } else { t!("File is ready for archiving") }, a.archive, |a| &mut a.archive, cx));
+                rows.push(flag(
+                    "idx",
+                    if dir { t!("Allow files in this folder to have contents indexed") } else { t!("Allow this file to have contents indexed") },
+                    a.indexed,
+                    |a| &mut a.indexed,
+                    cx,
+                ));
+                if self.caps.0 {
+                    rows.push(flag("comp", t!("Compress contents to save disk space"), a.compressed, |a| &mut a.compressed, cx));
+                }
+                if self.caps.1 {
+                    rows.push(flag("enc", t!("Encrypt contents to secure data"), a.encrypted, |a| &mut a.encrypted, cx));
+                }
             }
-            if self.caps.1 {
-                rows.push(flag("enc", t!("Encrypt contents to secure data"), a.encrypted, |a| &mut a.encrypted, cx));
-            }
+        }
+        // elsewhere none of those exist; a file's executable permission takes the archive slot
+        #[cfg(not(windows))]
+        if !dir {
+            rows.push(flag("arch", t!("Allow running as a program"), a.archive, |a| &mut a.archive, cx));
         }
         if dir && self.attrs.changed() {
             let on = self.recurse;
