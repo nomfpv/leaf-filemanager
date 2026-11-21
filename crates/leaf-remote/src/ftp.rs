@@ -1407,9 +1407,14 @@ impl Drop for Writer {
         }
         let (inner, v) = (self.inner.clone(), self.v.clone());
         std::thread::spawn(move || {
-            drop(stream);
-            let Some(p) = place else { return };
             let mut lease = lease;
+            // the server's answer to the transfer is read; when it is not the expected one the replies on this connection
+            // may be one behind, so it is not used again
+            let answered = stream.is_none_or(|s| s.finish_box().is_ok());
+            if !answered && let Some(l) = lease.as_mut() {
+                l.cut();
+            }
+            let Some(p) = place else { return };
             let removed = match lease.as_mut() {
                 Some(l) if !l.broken => match l.s().rm(p.temp.as_str()).ftp() {
                     Ok(()) => true,
