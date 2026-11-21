@@ -415,7 +415,24 @@ fn edit_controls(pos: usize, len: usize, i: usize, size: Size, p: &Palette, cx: 
             crate::settings::update(cx, |s| edit(s, |l| move_by(l, i, by)));
         }
     };
-    row.child(icon_btn("earlier", L::ArrowLeft, "Move earlier", pos > 0).when(pos > 0, |d| d.on_click(cx.listener(shift(-1)))))
+    // with the controls focused (a click on them, or Tab), Left / Right or Alt+Left / Alt+Right move the widget as the buttons do
+    let keys = cx.listener(move |_: &mut FolderView, ev: &KeyDownEvent, _: &mut Window, cx: &mut Context<FolderView>| {
+        let by = match ev.keystroke.key.as_str() {
+            "left" => -1,
+            "right" => 1,
+            _ => return,
+        };
+        if ev.keystroke.modifiers.control || ev.keystroke.modifiers.shift {
+            return;
+        }
+        cx.stop_propagation();
+        crate::settings::update(cx, |s| edit(s, |l| move_by(l, i, by)));
+    });
+    row.id(SharedString::from(format!("home-controls-{}", w.id)))
+        .focusable()
+        .tab_stop(true)
+        .on_key_down(keys)
+        .child(icon_btn("earlier", L::ArrowLeft, "Move earlier", pos > 0).when(pos > 0, |d| d.on_click(cx.listener(shift(-1)))))
         .child(icon_btn("later", L::ArrowRight, "Move later", pos + 1 < len).when(pos + 1 < len, |d| d.on_click(cx.listener(shift(1)))))
         .child(icon_btn("remove", L::X, "Remove from Home", true).on_click(cx.listener(move |_, _, _, cx| crate::settings::update(cx, |s| set_shown(s, WIDGETS[i].id, false)))))
         .into_any_element()
