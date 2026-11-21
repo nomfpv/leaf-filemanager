@@ -7,10 +7,14 @@
 //!   the kill switch says (a program set to this proxy expects the VPN or nothing).
 //! - Addresses of this PC or the local network are refused through it (the browser's bypass list keeps those direct itself).
 //! - Optional user name and password (RFC 1929) so other local users or processes cannot use it.
+//! - At most 256 connections at once (more are closed at once); one with no byte either way for 10 minutes is closed.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -27,6 +31,11 @@ pub const USER: &str = "leaf";
 const HANDSHAKE: Duration = Duration::from_secs(15);
 /// How long a connection through the tunnel may take to open.
 const CONNECT: Duration = Duration::from_secs(20);
+/// Connections kept at once (a browser opens a few dozen; each one holds a socket and its buffers in the tunnel's stack, so a
+/// local program must not be able to open thousands and starve leaf's own downloads).
+const MAX_CONNECTIONS: usize = 256;
+/// A connection with no byte either way for this long is closed (a browser's idle kept connections are shorter).
+const IDLE: Duration = Duration::from_secs(600);
 
 /// The proxy's user name and password. `Debug` shows the user only.
 #[derive(Clone)]
@@ -146,7 +155,7 @@ pub fn start(port: u16, credentials: Option<Credentials>) -> io::Result<u16> {
     let before = proxy().as_ref().map(|r| r.port);
     stop();
     let again = before.filter(|b| *b != 0);
-    let (port, stop_tx) = launch_with(port, again, credentials, Arc::new(Tunneled))?;
+    let (port, stop_tx) = launch_with(port, again, credentials, Arc::new(Tunneled), Limits::default())?;
     *proxy() = Some(Running { port, stop: stop_tx });
     log::info!("vpn: the SOCKS proxy listens on 127.0.0.1:{port}");
     Ok(port)
@@ -169,7 +178,26 @@ pub fn port() -> Option<u16> {
 /// sender stops it.
 #[cfg(test)]
 pub(crate) fn launch<U: Upstream>(port: u16, credentials: Option<Credentials>, up: Arc<U>) -> io::Result<(u16, watch::Sender<bool>)> {
-    launch_with(port, None, credentials, up)
+    launch_with(port, None, credentials, up, Limits::default())
+}
+
+/// [`launch`] with other limits (the tests' small ones).
+#[cfg(test)]
+pub(crate) fn launch_limited<U: Upstream>(credentials: Option<Credentials>, up: Arc<U>, limits: Limits) -> io::Result<(u16, watch::Sender<bool>)> {
+    launch_with(0, None, credentials, up, limits)
+}
+
+/// How many connections the proxy keeps at once, and after how long without a byte either way one is closed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Limits {
+    pub connections: usize,
+    pub idle: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits { connections: MAX_CONNECTIONS, idle: IDLE }
+    }
 }
 
 /// Binds `port`; else `again` (the port the proxy just stopped had: tried for up to a second while the old listener goes); else
@@ -202,7 +230,7 @@ fn bind(port: u16, again: Option<u16>) -> io::Result<std::net::TcpListener> {
     try_bind(0)
 }
 
-fn launch_with<U: Upstream>(port: u16, again: Option<u16>, credentials: Option<Credentials>, up: Arc<U>) -> io::Result<(u16, watch::Sender<bool>)> {
+fn launch_with<U: Upstream>(port: u16, again: Option<u16>, credentials: Option<Credentials>, up: Arc<U>, limits: Limits) -> io::Result<(u16, watch::Sender<bool>)> {
     let rt = crate::runtime().ok_or_else(|| io::Error::other("leaf's VPN is not set up in this copy of leaf"))?;
     let listener = bind(port, again)?;
     listener.set_nonblocking(true)?;
@@ -214,12 +242,13 @@ fn launch_with<U: Upstream>(port: u16, again: Option<u16>, credentials: Option<C
             Ok(l) => l,
             Err(e) => return log::warn!("vpn: the SOCKS proxy could not start: {e}"),
         };
-        serve(l, credentials, up, rx).await;
+        serve(l, credentials, up, limits, rx).await;
     });
     Ok((port, tx))
 }
 
-async fn serve<U: Upstream>(l: tokio::net::TcpListener, credentials: Option<Arc<Credentials>>, up: Arc<U>, mut stop: watch::Receiver<bool>) {
+async fn serve<U: Upstream>(l: tokio::net::TcpListener, credentials: Option<Arc<Credentials>>, up: Arc<U>, limits: Limits, mut stop: watch::Receiver<bool>) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(limits.connections));
     loop {
         let (s, peer) = tokio::select! {
             r = l.accept() => match r {
@@ -235,16 +264,83 @@ async fn serve<U: Upstream>(l: tokio::net::TcpListener, credentials: Option<Arc<
         if !peer.ip().is_loopback() {
             continue;
         }
+        // (beyond the limit a connection is closed at once: each one holds a socket and buffers in the tunnel's stack)
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            log::debug!("vpn: a SOCKS connection over the limit of {} was closed", limits.connections);
+            drop(s);
+            continue;
+        };
         let _ = s.set_nodelay(true);
-        let (credentials, up, mut stop) = (credentials.clone(), up.clone(), stop.clone());
+        let (credentials, up, mut stop, idle) = (credentials.clone(), up.clone(), stop.clone(), limits.idle);
         tokio::spawn(async move {
+            let _permit = permit;
             let opened = tokio::time::timeout(HANDSHAKE + CONNECT, negotiate(s, credentials.as_deref(), &*up)).await;
-            let Ok(Some((mut client, mut remote))) = opened else { return };
+            let Ok(Some((client, mut remote))) = opened else { return };
+            let mut client = Active::new(client);
+            let last = client.last.clone();
+            let started = client.started;
+            // nothing in either direction for `idle`: closed
+            let watch = async {
+                loop {
+                    let quiet = started.elapsed().saturating_sub(Duration::from_millis(last.load(Ordering::Relaxed)));
+                    if quiet >= idle {
+                        return;
+                    }
+                    tokio::time::sleep(idle - quiet).await;
+                }
+            };
             tokio::select! {
                 _ = tokio::io::copy_bidirectional(&mut client, &mut remote) => {}
+                _ = watch => log::debug!("vpn: an idle SOCKS connection was closed"),
                 _ = stop.changed() => {}
             }
         });
+    }
+}
+
+/// The client's side of a connection, noting when bytes last went either way (what comes from the far end is written to it).
+struct Active<S> {
+    inner: S,
+    started: std::time::Instant,
+    /// Milliseconds after `started`.
+    last: Arc<AtomicU64>,
+}
+
+impl<S> Active<S> {
+    fn new(inner: S) -> Active<S> {
+        Active { inner, started: std::time::Instant::now(), last: Arc::new(AtomicU64::new(0)) }
+    }
+    fn touch(&self) {
+        self.last.store(self.started.elapsed().as_millis() as u64, Ordering::Relaxed);
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Active<S> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let r = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if buf.filled().len() > before {
+            this.touch();
+        }
+        r
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Active<S> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, data: &[u8]) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let r = Pin::new(&mut this.inner).poll_write(cx, data);
+        if matches!(r, Poll::Ready(Ok(n)) if n > 0) {
+            this.touch();
+        }
+        r
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
     }
 }
 

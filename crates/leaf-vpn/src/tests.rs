@@ -295,6 +295,55 @@ fn socks_wrong_proxy_password_is_refused() {
 }
 
 #[test]
+fn socks_connections_over_the_limit_are_closed() {
+    test_runtime();
+    let (echo_port, _) = counted_echo();
+    let up = fake(true, vec![]);
+    let (port, _stop) = socks::launch_limited(None, up.clone(), socks::Limits { connections: 2, idle: Duration::from_secs(60) }).unwrap();
+    let a = socks_ask(port, None, "127.0.0.1", echo_port).unwrap();
+    let b = socks_ask(port, None, "127.0.0.1", echo_port).unwrap();
+    // the third is closed before its greeting is answered; nothing is opened for it
+    assert_eq!(socks_ask(port, None, "127.0.0.1", echo_port).unwrap_err(), 0xFF);
+    assert_eq!(up.dialed.load(Ordering::SeqCst), 2);
+    // one ends: there is room again
+    drop(a);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let c = loop {
+        match socks_ask(port, None, "127.0.0.1", echo_port) {
+            Ok(c) => break c,
+            Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => panic!("no room after a connection ended ({e:#x})"),
+        }
+    };
+    assert_eq!(round_trip(c), b"leaf");
+    assert_eq!(round_trip(b), b"leaf");
+}
+
+#[test]
+fn socks_idle_connections_are_closed() {
+    use std::io::Read;
+    test_runtime();
+    let (echo_port, _) = counted_echo();
+    let up = fake(true, vec![]);
+    let (port, _stop) = socks::launch_limited(None, up, socks::Limits { connections: 8, idle: Duration::from_millis(300) }).unwrap();
+    let s = socks_ask(port, None, "127.0.0.1", echo_port).unwrap();
+    // busy: kept (each round trip is well within the idle time)
+    let mut s = {
+        let s = s;
+        for _ in 0..4 {
+            std::thread::sleep(Duration::from_millis(150));
+            assert_eq!(round_trip(s.try_clone().unwrap()), b"leaf");
+        }
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s
+    };
+    // quiet: closed by the proxy
+    std::thread::sleep(Duration::from_millis(800));
+    let mut b = [0u8; 1];
+    assert!(matches!(s.read(&mut b), Ok(0) | Err(_)), "an idle connection was kept");
+}
+
+#[test]
 fn a_pooled_direct_connection_is_not_reused_once_the_host_is_set_to_vpn() {
     // made while the host was not ticked: direct, and reusable while it stays so
     let kept = RouteMark::now("files.example.com", false);
