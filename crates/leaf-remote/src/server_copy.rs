@@ -104,7 +104,7 @@ pub fn parse_size(out: &str) -> Option<u64> {
 /// The command that stops a copy whose command printed `leaf-pid <pid>` (its whole process group: rsync's helpers too).
 pub fn kill_command(pid: u32) -> String {
     // (then CONT: a paused group takes the TERM only once it runs again)
-    format!("kill -TERM -- -{pid} 2>/dev/null || kill -TERM {pid}; kill -CONT -- -{pid} 2>/dev/null")
+    format!("kill -TERM -- -{pid} 2>/dev/null || kill -TERM {pid}; kill -CONT -- -{pid} 2>/dev/null || kill -CONT {pid}")
 }
 
 /// The command that pauses (`STOP`) or resumes (`CONT`) a copy's process group, for the job's Pause.

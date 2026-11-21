@@ -68,7 +68,9 @@ pub fn parse_probe(out: &str) -> HostFamily {
 /// `command` as one `sh -c` word: a server whose login shell is csh or tcsh (FreeBSD's root, OPNsense) has the POSIX syntax of
 /// leaf's commands read by `sh` and not by itself. Single-quoted by the same function every path goes through.
 pub fn posix(command: &str) -> String {
-    format!("sh -c {}", crate::checksum::quote(command))
+    // (`exec`: a login shell that runs its last command as a child would leave `$$`, the pid the copy prints, not the leader of its
+    // process group, and `kill -- -pid` would fail; csh, tcsh and fish have `exec`)
+    format!("exec sh -c {}", crate::checksum::quote(command))
 }
 
 #[cfg(test)]
@@ -97,6 +99,6 @@ mod tests {
 
     #[test]
     fn posix_wrapper_quotes_everything() {
-        assert_eq!(posix("echo 'a b'; echo $HOME"), r"sh -c 'echo '\''a b'\''; echo $HOME'");
+        assert_eq!(posix("echo 'a b'; echo $HOME"), r"exec sh -c 'echo '\''a b'\''; echo $HOME'");
     }
 }
