@@ -126,6 +126,143 @@ pub fn mount_path(uri: &str) -> std::io::Result<PathBuf> {
     info(&uri)?.ok_or_else(|| std::io::Error::other("the place is mounted but gio gives no folder for it"))
 }
 
+/// [`mount_path`] with a user name, domain and password from leaf's own dialog or the keyring: `gio mount` asks on its input
+/// and is answered there, each question once, by what it asks (`User`, `Domain`, `Password`; "anonymously" is answered no).
+/// The password never goes on the command line or into the environment. A question asked a second time (the server refused
+/// the answer) ends the input, so gio gives up: one try per call, `PermissionDenied`. Blocks: worker threads only.
+pub fn mount_path_login(uri: &str, user: &str, domain: &str, password: &str) -> std::io::Result<PathBuf> {
+    let uri = encode_uri(uri);
+    let m = gio_answering(&["mount", &uri], Duration::from_secs(90), user, domain, password)?;
+    let t = m.text.trim().to_string();
+    if !m.ok && !t.contains("already mounted") {
+        let low = t.to_lowercase();
+        let kind = if m.asked_twice || low.contains("password") || low.contains("authenticat") || low.contains("permission denied") || low.contains("access denied") || low.contains("aborted") {
+            std::io::ErrorKind::PermissionDenied
+        } else {
+            std::io::ErrorKind::Other
+        };
+        return Err(std::io::Error::new(kind, t));
+    }
+    gio(&["info", "-a", "standard::name", &uri], Duration::from_secs(15))?.ok_then_path().ok_or_else(|| std::io::Error::other("the place is mounted but gio gives no folder for it"))
+}
+
+struct Answered {
+    ok: bool,
+    text: String,
+    /// A question came again after it was answered (the server refused the answer).
+    asked_twice: bool,
+}
+
+/// What to say to one question of `gio mount` (the text it printed since the last answer). `None`: not a question yet.
+fn answer_for<'a>(said: &str, user: &'a str, domain: &'a str, password: &'a str) -> Option<(&'static str, &'a str)> {
+    let t = said.trim_end();
+    if !t.ends_with(':') && !t.ends_with('?') && !t.ends_with(']') {
+        return None;
+    }
+    let last = t.lines().last().unwrap_or("").to_ascii_lowercase();
+    if last.contains("anonymous") {
+        Some(("anonymous", "n"))
+    } else if last.contains("password") {
+        Some(("password", password))
+    } else if last.contains("domain") {
+        Some(("domain", domain))
+    } else if last.contains("user") {
+        Some(("user", user))
+    } else {
+        None
+    }
+}
+
+/// Runs `gio` with its questions answered on its input (see [`mount_path_login`]).
+fn gio_answering(args: &[&str], limit: Duration, user: &str, domain: &str, password: &str) -> std::io::Result<Answered> {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    let exe = std::env::var_os("PATH")
+        .and_then(|p| std::env::split_paths(&p).map(|d| d.join("gio")).find(|f| f.is_file()))
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::Unsupported))?;
+    let mut child = Command::new(exe).args(args).env("LC_ALL", "C").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut stdin = child.stdin.take();
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    // (gio prints its questions without a newline: the bytes are passed on as they come)
+    for pipe in [child.stdout.take().map(|o| Box::new(o) as Box<dyn Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn Read + Send>)].into_iter().flatten() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut pipe = pipe;
+            let mut buf = [0u8; 512];
+            while let Ok(n) = pipe.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    drop(tx);
+    let (mut all, mut since) = (String::new(), String::new());
+    let mut answered: Vec<&'static str> = Vec::new();
+    let mut asked_twice = false;
+    let start = Instant::now();
+    let status = loop {
+        while let Ok(bytes) = rx.try_recv() {
+            let s = String::from_utf8_lossy(&bytes);
+            all.push_str(&s);
+            since.push_str(&s);
+        }
+        if let Some((what, text)) = answer_for(&since, user, domain, password) {
+            since.clear();
+            if answered.contains(&what) {
+                // asked again: the answer was refused; no second try from here
+                asked_twice = true;
+                stdin = None;
+            } else if let Some(i) = stdin.as_mut() {
+                answered.push(what);
+                let mut line = Vec::with_capacity(text.len() + 1);
+                line.extend_from_slice(text.as_bytes());
+                line.push(b'\n');
+                let wrote = i.write_all(&line).and_then(|_| i.flush());
+                for b in line.iter_mut() {
+                    // SAFETY: a plain write into our own buffer; volatile so it is not left out (the password's copy)
+                    unsafe { std::ptr::write_volatile(b, 0) };
+                }
+                if wrote.is_err() {
+                    stdin = None;
+                }
+            }
+        }
+        if let Some(st) = child.try_wait()? {
+            break st;
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "gio took too long"));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    };
+    drop(stdin);
+    std::thread::sleep(Duration::from_millis(20));
+    while let Ok(bytes) = rx.try_recv() {
+        all.push_str(&String::from_utf8_lossy(&bytes));
+    }
+    // (the questions themselves are left out of the text an error shows)
+    let text: String = all.lines().filter(|l| answer_for(l, "", "", "").is_none()).collect::<Vec<_>>().join("\n");
+    Ok(Answered { ok: status.success(), text, asked_twice })
+}
+
+/// Windows' share login (`WNetAddConnection2W`): `Unsupported` here (Linux logs in with [`mount_path_login`]).
+pub fn connect_share(_remote: &str, _user: &str, _password: &str, _remember: bool) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Windows only: `Unsupported` here.
+pub fn cancel_share(_remote: &str) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Whether an error of [`mount_path_login`] or [`mount_path`] says the login was refused.
+pub fn is_login_refused(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::PermissionDenied
+}
+
 impl GioOut {
     fn ok_then_path(self) -> Option<PathBuf> {
         self.ok.then(|| parse_local_path(&self.text)).flatten()

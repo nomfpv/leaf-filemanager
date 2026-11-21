@@ -131,9 +131,72 @@ pub fn mount_path(_uri: &str) -> std::io::Result<PathBuf> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
-/// Lets go of a mounted `smb://` or `nfs://` place: only Linux; `Unsupported` here.
-pub fn disconnect(_uri: &str) -> std::io::Result<()> {
+/// `smb://` with a password: only Linux (`gio mount`); `Unsupported` here (Windows logs in with [`connect_share`]).
+pub fn mount_path_login(_uri: &str, _user: &str, _domain: &str, _password: &str) -> std::io::Result<PathBuf> {
     Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Lets go of `smb://host/share` (the session Windows keeps for `\\host\share`, and for `\\host\IPC$`, the server's own list of
+/// shares): `WNetCancelConnection2W`, never forced (a file still open there keeps it). Not connected counts as done. Other
+/// schemes (`nfs://`): `Unsupported`.
+pub fn disconnect(uri: &str) -> std::io::Result<()> {
+    let Some(rest) = uri.strip_prefix("smb://") else { return Err(std::io::ErrorKind::Unsupported.into()) };
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, h)| h);
+    let (host, share) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = host.split(':').next().unwrap_or(host);
+    let share = share.split('/').next().unwrap_or("");
+    if host.is_empty() {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    let mut first = None;
+    for s in [share, "IPC$"].into_iter().filter(|s| !s.is_empty()) {
+        if let Err(e) = cancel_share(&format!(r"\\{host}\{s}"))
+            && first.is_none()
+        {
+            first = Some(e);
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
+
+/// `WNetCancelConnection2W` on `\\host\share`, not forced; not connected (2250) is no error.
+pub fn cancel_share(remote: &str) -> std::io::Result<()> {
+    use windows::Win32::NetworkManagement::WNet::{NET_CONNECT_FLAGS, WNetCancelConnection2W};
+    let w = wide(remote);
+    // SAFETY: a NUL-terminated name that lives for the call
+    let rc = unsafe { WNetCancelConnection2W(PCWSTR(w.as_ptr()), NET_CONNECT_FLAGS(0), false) };
+    match rc.0 {
+        0 | 2250 => Ok(()),
+        e => Err(std::io::Error::from_raw_os_error(e as i32)),
+    }
+}
+
+/// Logs in to `\\host\share` (`remote`) as `user` (`name`, `DOMAIN\name` or `name@domain`; empty: this PC's user) with `password`:
+/// `WNetAddConnection2W` without a drive letter, `CONNECT_TEMPORARY` unless `remember`. The password's copy made here is wiped
+/// before returning. A refused login reads as [`is_login_refused`].
+pub fn connect_share(remote: &str, user: &str, password: &str, remember: bool) -> std::io::Result<()> {
+    use windows::Win32::NetworkManagement::WNet::{CONNECT_TEMPORARY, NET_CONNECT_FLAGS, NETRESOURCEW, RESOURCETYPE_DISK, WNetAddConnection2W};
+    let mut name = wide(remote);
+    let user_w = wide(user);
+    let mut pw: Vec<u16> = password.encode_utf16().chain(std::iter::once(0)).collect();
+    let res = NETRESOURCEW { dwType: RESOURCETYPE_DISK, lpRemoteName: windows::core::PWSTR(name.as_mut_ptr()), ..Default::default() };
+    let flags = if remember { NET_CONNECT_FLAGS(0) } else { CONNECT_TEMPORARY };
+    let user_p = if user.is_empty() { PCWSTR::null() } else { PCWSTR(user_w.as_ptr()) };
+    // SAFETY: every pointer is to a NUL-terminated buffer that lives for the call
+    let rc = unsafe { WNetAddConnection2W(&res, PCWSTR(pw.as_ptr()), user_p, flags) };
+    for c in pw.iter_mut() {
+        // SAFETY: a plain write into our own buffer; volatile so it is not left out
+        unsafe { std::ptr::write_volatile(c, 0) };
+    }
+    if rc.0 == 0 { Ok(()) } else { Err(std::io::Error::from_raw_os_error(rc.0 as i32)) }
+}
+
+/// Whether a share's error says the user name or the password is wrong (or that this user may not log in there): access
+/// denied, a wrong password, a logon failure, an unknown user, a login that is needed.
+pub fn is_login_refused(e: &std::io::Error) -> bool {
+    // ERROR_ACCESS_DENIED, ERROR_INVALID_PASSWORD, ERROR_NOT_AUTHENTICATED, ERROR_LOGON_FAILURE, ERROR_ACCOUNT_RESTRICTION,
+    // ERROR_BAD_USERNAME, NERR_BadUsername (2202)
+    matches!(e.raw_os_error(), Some(5 | 86 | 1244 | 1326 | 1327 | 2202))
 }
 
 /// Windows' "Disconnect network drive" dialog.
