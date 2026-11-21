@@ -25,6 +25,7 @@ mod prompt;
 pub mod rclone;
 pub mod secrets;
 mod sftp;
+pub mod trash;
 #[cfg(test)]
 mod tests;
 

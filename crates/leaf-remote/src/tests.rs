@@ -973,8 +973,7 @@ fn a_refused_saved_password_is_deleted_and_asked_again() {
     let password = format!("pw-{}-saved", std::process::id());
     let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
     let line = crate::known_hosts::line_for("127.0.0.1", server.port, server.host_key.public_key()).unwrap();
-    std::fs::write(tmp.0.join("known_hosts"), format!("{line}
-")).unwrap();
+    std::fs::write(tmp.0.join("known_hosts"), format!("{line}\n")).unwrap();
     let store = Arc::new(MemoryStore::default());
     let id = SecretId::password("sftp", USER, "127.0.0.1", server.port);
     store.saved.lock().unwrap().insert(id.clone(), "an-old-password".into());
@@ -1002,4 +1001,83 @@ fn a_refused_saved_password_is_deleted_and_asked_again() {
     let fs = SftpFs::new(cfg, ans.clone());
     fs.stat(&server.addr("/")).unwrap();
     assert!(ans.asked().is_empty(), "{:?}", ans.asked());
+}
+
+/// B7: a delete on the server moves the item into `.leaf-trash/<time>/<its path below the login folder>` (a rename: the
+/// bytes stay), Undo moves it back to where it was; the login folder itself is refused; something already in the trash is
+/// not moved again.
+#[test]
+fn remote_delete_lands_in_leaf_trash_and_undo_restores_it() {
+    use crate::trash::{self, TrashError, Trashed};
+    let tmp = Temp::new("trash");
+    let served = Temp::new("trash-served");
+    let password = format!("pw-{}-trash", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    let home_dir = served.0.join("home").join("tester");
+    std::fs::create_dir_all(home_dir.join("docs").join("sub")).unwrap();
+    std::fs::write(home_dir.join("docs").join("a.txt"), b"alpha").unwrap();
+    std::fs::write(home_dir.join("docs").join("sub").join("b.txt"), b"beta").unwrap();
+    let home = fs.home(&server.addr("/")).unwrap();
+    assert_eq!(home.path(), "/home/tester");
+
+    // a file (by its /~ address) and a folder, in one delete
+    let stamp = "2026-11-21_03-00-00.000";
+    let a = trash::move_to_trash(&fs, &home, &server.addr("/~/docs/a.txt"), stamp).unwrap();
+    let sub = trash::move_to_trash(&fs, &home, &server.addr("/home/tester/docs/sub"), stamp).unwrap();
+    assert_eq!(a.path(), format!("/home/tester/.leaf-trash/{stamp}/docs/a.txt"));
+    let in_trash = home_dir.join(".leaf-trash").join(stamp).join("docs");
+    assert_eq!(std::fs::read(in_trash.join("a.txt")).unwrap(), b"alpha");
+    assert_eq!(std::fs::read(in_trash.join("sub").join("b.txt")).unwrap(), b"beta");
+    assert_eq!(names_in(&home_dir.join("docs")), Vec::<String>::new(), "gone from where they were");
+    assert_eq!(trash::usage(&fs, &home, &|| false).unwrap(), (2, 9));
+
+    // Undo: both back, the trash's folders of this delete gone
+    trash::restore(&fs, &home, &Trashed { original: server.addr("/home/tester/docs/sub"), in_trash: sub }).unwrap();
+    trash::restore(&fs, &home, &Trashed { original: server.addr("/~/docs/a.txt"), in_trash: a.clone() }).unwrap();
+    assert_eq!(std::fs::read(home_dir.join("docs").join("a.txt")).unwrap(), b"alpha");
+    assert_eq!(std::fs::read(home_dir.join("docs").join("sub").join("b.txt")).unwrap(), b"beta");
+    assert_eq!(names_in(&home_dir.join(".leaf-trash")), Vec::<String>::new());
+    // undoing twice: it is not in the trash any more, nothing is touched
+    assert!(trash::restore(&fs, &home, &Trashed { original: server.addr("/~/docs/a.txt"), in_trash: a }).is_err());
+    assert_eq!(std::fs::read(home_dir.join("docs").join("a.txt")).unwrap(), b"alpha");
+
+    // never the login folder or above; something in the trash is deleted for good instead (after asking)
+    assert_eq!(trash::move_to_trash(&fs, &home, &server.addr("/~"), stamp), Err(TrashError::Fs(FsError::Denied)));
+    assert_eq!(trash::move_to_trash(&fs, &home, &server.addr("/home"), stamp), Err(TrashError::Fs(FsError::Denied)));
+    let t = trash::move_to_trash(&fs, &home, &server.addr("/~/docs/a.txt"), stamp).unwrap();
+    assert!(matches!(trash::move_to_trash(&fs, &home, &t, "later"), Err(TrashError::CannotMove(_))));
+}
+
+/// "Empty server trash" removes what is in `.leaf-trash` and nothing else: the files beside it stay, and a link inside the
+/// trash is unlinked without touching what it points to.
+#[test]
+fn empty_removes_only_inside_leaf_trash() {
+    use crate::trash;
+    let tmp = Temp::new("empty");
+    let served = Temp::new("empty-served");
+    let password = format!("pw-{}-empty", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    let home_dir = served.0.join("home").join("tester");
+    std::fs::create_dir_all(home_dir.join("keep")).unwrap();
+    std::fs::write(home_dir.join("keep").join("k.txt"), b"keep").unwrap();
+    std::fs::write(home_dir.join("x.txt"), b"x").unwrap();
+    std::fs::create_dir_all(home_dir.join("old")).unwrap();
+    std::fs::write(home_dir.join("old").join("o.txt"), b"old").unwrap();
+    let home = fs.home(&server.addr("/")).unwrap();
+    trash::move_to_trash(&fs, &home, &server.addr("/~/x.txt"), "s1").unwrap();
+    trash::move_to_trash(&fs, &home, &server.addr("/~/old"), "s2").unwrap();
+    // a link in the trash to a folder outside it
+    let local = LocalFs::address(&home_dir);
+    let linked = disk_link(&local.join(".leaf-trash").join("s2").join("out"), &local.join("keep"));
+    assert_eq!(trash::usage(&fs, &home, &|| false).unwrap().0, 2 + u64::from(linked));
+
+    trash::empty(&fs, &home, &|| false).unwrap();
+    assert!(!home_dir.join(".leaf-trash").exists(), "the trash is gone");
+    assert_eq!(names_in(&home_dir), ["keep"]);
+    assert_eq!(std::fs::read(home_dir.join("keep").join("k.txt")).unwrap(), b"keep", "what the link pointed to is untouched");
+    assert_eq!(trash::usage(&fs, &home, &|| false).unwrap(), (0, 0));
+    // an empty (absent) trash: nothing to do
+    trash::empty(&fs, &home, &|| false).unwrap();
 }

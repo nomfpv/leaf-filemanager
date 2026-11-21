@@ -171,9 +171,7 @@ mod tests {
         let s = Secret::new("hunter2-very-secret".into()).remembered(true);
         assert_eq!(format!("{s:?}"), "***");
         assert_eq!(format!("{:?}", Some(&s)), "Some(***)");
-        assert_eq!(format!("{:#?}", vec![s.clone()]), "[
-    ***,
-]");
+        assert_eq!(format!("{:#?}", vec![s.clone()]), "[\n    ***,\n]");
         assert!(!format!("{:?}", (1, &s)).contains("hunter2"));
         assert_eq!(s.as_str(), "hunter2-very-secret");
     }
