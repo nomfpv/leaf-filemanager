@@ -103,6 +103,7 @@ pub struct FileDiff {
 
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
+    crate::checkpoint::clean_env(&mut c);
     c.arg("-C").arg(root).args(["--no-pager", "-c", "core.quotepath=false"]);
     c.env("GIT_OPTIONAL_LOCKS", "0").env("GIT_TERMINAL_PROMPT", "0").env("GIT_LITERAL_PATHSPECS", "1").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(windows)]
@@ -129,6 +130,7 @@ pub fn revert_file(root: &Path, rel: &str, put_away: &dyn Fn(&Path) -> Result<()
         }
     }
     let mut c = Command::new("git");
+    crate::checkpoint::clean_env(&mut c);
     c.arg("-C").arg(root).args(["--no-pager", "restore", "--source=HEAD", "--staged", "--worktree", "--"]).arg(rel);
     // (a path is a path: "[ab].txt" must never restore a.txt and b.txt too)
     c.env("GIT_TERMINAL_PROMPT", "0").env("GIT_LITERAL_PATHSPECS", "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -514,6 +516,7 @@ pub fn add_worktree(root: &Path, branch: &str, new_branch: bool, folder: &Path) 
         return Err("The folder already exists and is not empty".into());
     }
     let mut c = Command::new("git");
+    crate::checkpoint::clean_env(&mut c);
     c.arg("-C").arg(root).args(["--no-pager", "worktree", "add"]);
     if new_branch {
         c.arg("-b").arg(branch).arg("--").arg(folder);

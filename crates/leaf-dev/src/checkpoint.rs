@@ -224,7 +224,7 @@ fn no_window(c: &mut Command) {
 }
 
 /// No repository, work tree or index of leaf's own environment reaches git: it finds them from the folder alone.
-fn clean_env(c: &mut Command) {
+pub(crate) fn clean_env(c: &mut Command) {
     for v in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_INDEX_FILE"] {
         c.env_remove(v);
     }

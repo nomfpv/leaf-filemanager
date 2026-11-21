@@ -54,6 +54,7 @@ impl std::error::Error for LaneError {}
 
 fn git(dir: &Path) -> Command {
     let mut c = Command::new("git");
+    crate::checkpoint::clean_env(&mut c);
     c.arg("-C").arg(dir).args(["--no-pager", "-c", "core.quotepath=false"]);
     c.env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
