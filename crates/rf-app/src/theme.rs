@@ -62,6 +62,8 @@ pub struct Palette {
     pub compare: [Hsla; 4],
     /// The lock mark after the name of a file the secret guard flags.
     pub secret_mark: Hsla,
+    /// A file changed in the last ten minutes: the faint tint of its row (fading in steps).
+    pub fresh_tint: Hsla,
     /// Changes view: added line, removed line, hunk header.
     pub diff: [Hsla; 3],
     /// Icon tints: folder, image, video, document, code, text, archive, app (see `kind_color`).
@@ -283,6 +285,7 @@ impl Palette {
             warning: col("warning"),
             success: col("success"),
             compare: ["compare_only", "compare_newer", "compare_older", "compare_different"].map(col),
+            fresh_tint: col("fresh_tint"),
             secret_mark: col("secret_mark"),
             diff: ["diff_added", "diff_removed", "diff_hunk"].map(col),
             kinds: ["kind_folder", "kind_image", "kind_video", "kind_document", "kind_code", "kind_text", "kind_archive", "kind_app"].map(col),

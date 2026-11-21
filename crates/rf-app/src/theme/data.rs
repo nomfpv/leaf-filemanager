@@ -70,6 +70,7 @@ tokens! {
     compare_newer: Color = "Folder compare: the mark and tint of an item newer than its twin in the other pane.",
     compare_older: Color = "Folder compare: the mark and tint of an item older than its twin in the other pane.",
     compare_different: Color = "Folder compare: the mark and tint of an item that has the same time as its twin but another size.",
+    fresh_tint: Color = "A file changed in the last ten minutes (Settings: Tint fresh changes): the faint tint of its row, fading in steps as it ages.",
     secret_mark: Color = "The small lock after the name of a file that looks like it holds a secret (.env, a private key, credentials).",
     diff_added: Color = "Changes view of a file: the tint of an added line.",
     diff_removed: Color = "Changes view of a file: the tint of a removed line.",
