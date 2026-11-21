@@ -1489,6 +1489,15 @@ fn sync_name_index(on: bool, excluded: &[String]) {
         // a copy with its own settings folder (tests, portable) keeps its index there too
         let dir = match std::env::var_os("LEAF_CONFIG_DIR").map(std::path::PathBuf::from).or_else(leaf_sys::portable::data_dir) {
             Some(cfg) => cfg.join("index"),
+            // Linux: $XDG_CACHE_HOME/leaf/index (the index is rebuildable)
+            #[cfg(not(windows))]
+            None => std::env::var_os("XDG_CACHE_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(std::env::temp_dir)
+                .join("leaf")
+                .join("index"),
+            #[cfg(windows)]
             None => std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, std::path::PathBuf::from).join("leaf").join("index"),
         };
         // LEAF_INDEX_ROOTS="E:\;F:\" picks the roots (testing)

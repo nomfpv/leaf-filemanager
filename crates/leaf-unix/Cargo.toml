@@ -17,6 +17,9 @@ dirs.workspace = true
 libc = "0.2"
 chrono.workspace = true
 serde.workspace = true
+# the name index: inotify watchers and locks (both already in the tree through rf-win)
+notify.workspace = true
+parking_lot.workspace = true
 # pictures: the same decoders as on Windows' image-crate path (leaf-decode adds JPEG XL and AVIF)
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
 kamadak-exif = "0.6"

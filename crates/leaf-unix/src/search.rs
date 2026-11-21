@@ -57,14 +57,14 @@ fn fold(s: &str) -> Vec<char> {
         .collect()
 }
 
-enum Matcher {
+pub(crate) enum Matcher {
     All,
     Substr(Vec<char>),
     Glob(Vec<char>),
 }
 
 impl Matcher {
-    fn new(pattern: &str) -> Self {
+    pub(crate) fn new(pattern: &str) -> Self {
         let p = fold(pattern.trim());
         if p.is_empty() {
             Matcher::All
@@ -75,7 +75,7 @@ impl Matcher {
         }
     }
 
-    fn is_match(&self, name: &str) -> bool {
+    pub(crate) fn is_match(&self, name: &str) -> bool {
         match self {
             Matcher::All => true,
             Matcher::Substr(p) => {
