@@ -73,6 +73,8 @@ fn label_of(mount: &str) -> String {
 
 fn from_mountinfo(text: &str) -> Vec<Drive> {
     let mut out: Vec<Drive> = Vec::new();
+    // the device numbers of the btrfs mounts listed so far
+    let mut btrfs_devs: Vec<&str> = Vec::new();
     for line in text.lines() {
         let Some((mount, fs, source)) = parse_line(line) else { continue };
         if PSEUDO.contains(&fs.as_str()) || mount.starts_with("/proc") || mount.starts_with("/sys") || mount.starts_with("/dev")
@@ -83,6 +85,14 @@ fn from_mountinfo(text: &str) -> Vec<Drive> {
         // a bind or repeat mount of the same place is listed once
         if out.iter().any(|d| d.root == Path::new(&mount)) {
             continue;
+        }
+        // the subvolumes of one btrfs file system (/, /home, /var/log, ...) share its device number: it is one drive
+        if fs == "btrfs" {
+            let dev = line.split(' ').nth(2).unwrap_or("");
+            if btrfs_devs.contains(&dev) {
+                continue;
+            }
+            btrfs_devs.push(dev);
         }
         // the usual boot partitions are not "drives" a person browses
         if mount == "/boot" || mount == "/boot/efi" {
@@ -163,13 +173,17 @@ mod tests {
         let t = "26 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw\n\
                  30 26 0:25 / /proc rw - proc proc rw\n\
                  40 26 8:3 / /run/media/me/My\\040Disk rw - vfat /dev/sdb1 rw\n\
-                 41 26 0:50 / /run/user/1000 rw - tmpfs tmpfs rw\n";
+                 41 26 0:50 / /run/user/1000 rw - tmpfs tmpfs rw\n\
+                 42 26 0:36 /@home /home rw - btrfs /dev/sda2 rw,subvol=/@home\n\
+                 43 26 0:36 /@log /var/log rw - btrfs /dev/sda2 rw,subvol=/@log\n";
         let d = from_mountinfo(t);
-        assert_eq!(d.len(), 2);
+        assert_eq!(d.len(), 3, "the two subvolumes of one btrfs are one drive (the first)");
         assert_eq!(d[0].root, Path::new("/"));
         assert_eq!(d[1].root, Path::new("/run/media/me/My Disk"));
         assert_eq!(d[1].label, "My Disk");
         assert_eq!(d[1].kind, DriveKind::Removable);
+        assert_eq!(d[2].root, Path::new("/home"));
+        assert_eq!(d[2].fs, "btrfs");
     }
 }
 
