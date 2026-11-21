@@ -28,6 +28,8 @@ impl<T: Read + Write + Send> Duplex for T {}
 /// One connection.
 pub(crate) struct Link {
     io: BufReader<Box<dyn Duplex>>,
+    /// The same socket, for changing the read limit of one request.
+    sock: TcpStream,
     idle_since: Instant,
 }
 
@@ -87,6 +89,8 @@ pub(crate) enum Payload<'a> {
 pub(crate) enum Fail {
     /// The connection failed or broke (also a refused certificate: the caller asks the check).
     Io(std::io::Error),
+    /// Like `Io`, and the request cannot have been acted on: a kept connection that turned out dead. Only this is sent again.
+    Stale(std::io::Error),
     Fs(FsError),
 }
 
@@ -276,6 +280,7 @@ fn connect(ep: &Endpoint) -> Result<Link, Fail> {
     tcp.set_read_timeout(Some(ep.io_timeout))?;
     tcp.set_write_timeout(Some(ep.io_timeout))?;
     let _ = tcp.set_nodelay(true);
+    let sock = tcp.try_clone()?;
     let io: Box<dyn Duplex> = match &ep.tls {
         None => Box::new(tcp),
         Some(cfg) => {
@@ -288,7 +293,7 @@ fn connect(ep: &Endpoint) -> Result<Link, Fail> {
             Box::new(rustls::StreamOwned::new(conn, tcp))
         }
     };
-    Ok(Link { io: BufReader::new(io), idle_since: Instant::now() })
+    Ok(Link { io: BufReader::new(io), sock, idle_since: Instant::now() })
 }
 
 /// Sends one request and reads the head of the answer. A kept connection that turns out dead (the server closed it meanwhile) is
@@ -298,11 +303,30 @@ pub(crate) fn send(pool: &Arc<Pool>, ep: &Endpoint, method: &str, target: &str, 
         && let Some(link) = pool.take()
     {
         match exchange(link, pool, ep, method, target, headers, payload) {
-            Err(Fail::Io(e)) => log::debug!("webdav: a kept connection was dead ({e}); a new one is made"),
-            r => return r,
+            Err(Fail::Stale(e)) => log::debug!("webdav: a kept connection was dead ({e}); a new one is made"),
+            r => return r.map_err(unstale),
         }
     }
-    exchange(connect(ep)?, pool, ep, method, target, headers, payload)
+    exchange(connect(ep)?, pool, ep, method, target, headers, payload).map_err(unstale)
+}
+
+fn unstale(f: Fail) -> Fail {
+    match f {
+        Fail::Stale(e) => Fail::Io(e),
+        f => f,
+    }
+}
+
+/// A write that failed (the request was not all sent) or an answer that never began (closed or reset before one byte): the server
+/// cannot have acted on the request. A timeout is neither: the server may be busy with it.
+fn dead_kind(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(e.kind(), UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected)
+}
+
+/// How long a COPY or MOVE (a folder is done by the server before it answers) may take to answer.
+fn read_limit(ep: &Endpoint, method: &str) -> Duration {
+    if matches!(method, "COPY" | "MOVE") { ep.io_timeout.saturating_mul(10).max(Duration::from_secs(300)) } else { ep.io_timeout }
 }
 
 fn exchange(mut link: Link, pool: &Arc<Pool>, ep: &Endpoint, method: &str, target: &str, headers: &[(String, String)], payload: &mut Payload) -> Result<Reply, Fail> {
@@ -320,7 +344,11 @@ fn exchange(mut link: Link, pool: &Arc<Pool>, ep: &Endpoint, method: &str, targe
         Payload::Stream(_) => head.push_str("Transfer-Encoding: chunked\r\n"),
     }
     head.push_str("\r\n");
-    {
+    let long = read_limit(ep, method);
+    if long != ep.io_timeout {
+        let _ = link.sock.set_read_timeout(Some(long));
+    }
+    let sent = (|| -> Result<(), Fail> {
         let w = link.io.get_mut();
         w.write_all(head.as_bytes())?;
         match payload {
@@ -342,8 +370,21 @@ fn exchange(mut link: Link, pool: &Arc<Pool>, ep: &Endpoint, method: &str, targe
             }
         }
         w.flush()?;
+        Ok(())
+    })();
+    if let Err(f) = sent {
+        return Err(match f {
+            Fail::Io(e) if dead_kind(&e) => Fail::Stale(e),
+            f => f,
+        });
     }
-    // the head of the answer (interim 1xx answers are skipped)
+    // the head of the answer (interim 1xx answers are skipped); one that never begins is a dead connection
+    match link.io.fill_buf() {
+        Ok(b) if b.is_empty() => return Err(Fail::Stale(std::io::ErrorKind::UnexpectedEof.into())),
+        Err(e) if dead_kind(&e) => return Err(Fail::Stale(e)),
+        Err(e) => return Err(Fail::Io(e)),
+        Ok(_) => {}
+    }
     let (status, headers, http11) = loop {
         let line = read_line(&mut link.io)?;
         let mut parts = line.splitn(3, ' ');
@@ -371,6 +412,9 @@ fn exchange(mut link: Link, pool: &Arc<Pool>, ep: &Endpoint, method: &str, targe
             break (status, hs, version == "HTTP/1.1");
         }
     };
+    if long != ep.io_timeout {
+        let _ = link.sock.set_read_timeout(Some(ep.io_timeout));
+    }
     let has = |name: &str, token: &str| headers.iter().filter(|(k, _)| k == name).any(|(_, v)| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)));
     let mode = if method == "HEAD" || status == 204 || status == 304 {
         Mode::Length(0)

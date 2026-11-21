@@ -340,7 +340,7 @@ impl Inner {
             let resp = match crate::http::send(&server.pool, &client.endpoint, method, &target, &all, &mut payload) {
                 Ok(r) => r,
                 Err(Fail::Fs(e)) => return Err(e),
-                Err(Fail::Io(e)) => {
+                Err(Fail::Io(e) | Fail::Stale(e)) => {
                     let refusal = client.check.as_ref().and_then(|c| lock(&c.refusal).take());
                     if let (Some((fp, why)), Some(check)) = (refusal, &client.check) {
                         if cert_asks >= 2 {
