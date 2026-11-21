@@ -74,7 +74,7 @@ pub fn stat_entry(dir: &Path, name: &str) -> Result<Option<Entry>, ListError> {
 
 /// One `read_dir` item. Its metadata comes from `lstat`; when that fails (a folder that may be read but not entered, an item gone
 /// meanwhile) the type from the directory itself stands in, without size and times. Nothing at all: left out.
-fn from_dir_entry(dir: &Path, item: &DirEntry) -> Option<Entry> {
+pub(crate) fn from_dir_entry(dir: &Path, item: &DirEntry) -> Option<Entry> {
     let name = item.file_name();
     let name = name.to_string_lossy();
     let path = dir.join(&*name);

@@ -29,11 +29,11 @@ fn ms(t: std::io::Result<std::time::SystemTime>) -> i64 {
         .unwrap_or(0)
 }
 
-/// The Windows-style attribute bits that mean something here: read-only (no write permission bit at all) and hidden (a name
+/// The Windows-style attribute bits that mean something here: read-only (the owner may not write: the same rule as the listing) and hidden (a name
 /// starting with a dot). Nothing else is reported.
 fn attr_bits(path: &Path, m: &std::fs::Metadata) -> u32 {
     let mut a = 0;
-    if m.mode() & 0o222 == 0 {
+    if m.mode() & 0o200 == 0 {
         a |= 0x1;
     }
     if path.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b".")) {
