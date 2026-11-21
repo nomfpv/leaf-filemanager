@@ -561,7 +561,13 @@ impl Palette {
             return *self;
         }
         let t = self.row_selection_text;
-        Self { text: t, text_secondary: Hsla { a: t.a * 0.86, ..t }, text_tertiary: Hsla { a: t.a * 0.86, ..t }, ..*self }
+        // (every mark on the row - lock, compare word - wears the selection's text colour too; the git letters do it in the list)
+        Self { text: t, text_secondary: Hsla { a: t.a * 0.86, ..t }, text_tertiary: Hsla { a: t.a * 0.86, ..t }, secret_mark: t, compare: [t; 4], ..*self }
+    }
+
+    /// The colour of a state word (git letter, ...) on a row: on a solid selection the selection's own text colour, else `c`.
+    pub fn mark_on_row(&self, selected: bool, c: Hsla) -> Hsla {
+        if selected && self.row_selection.a >= 1. { self.row_selection_text } else { c }
     }
 }
 

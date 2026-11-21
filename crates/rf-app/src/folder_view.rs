@@ -1760,6 +1760,10 @@ impl FolderView {
         } else if let Location::Search { root, query } = self.location().clone() {
             let include_hidden = self.filter.show_hidden;
             let use_index = cx.global::<crate::settings::Settings>().search_index;
+            // "modified:today" is no part of the name looked for: the hits are cut by day as they arrive (see `Msg::Hits`)
+            let query = rf_core::search_date::split(&query, chrono::Local::now().date_naive()).text;
+            // (only a date asked: nothing to look up in an index, the folder is walked)
+            let named = !query.is_empty();
             // "tag:Kırmızı" / "etiket:kırmızı": tagged items under this folder (Files' tag: query)
             let tag_paths: Option<Vec<PathBuf>> = {
                 let lower = rf_core::entry::fold_case(&query);
@@ -1809,7 +1813,7 @@ impl FolderView {
                     let _ = tx.unbounded_send(Msg::Stage(SearchStage::Index));
                     // (Windows Search gave up on: the walk keeps saying so)
                     let mut windows_silent = false;
-                    if let Some(paths) = leaf_sys::indexer::search(&query, &root, include_hidden, 50_000) {
+                    if named && let Some(paths) = leaf_sys::indexer::search(&query, &root, include_hidden, 50_000) {
                         let looked_up = t_index.elapsed();
                         found = send_index_hits(&paths, &tx, &cancel);
                         log::info!("search: the index answered \"{query}\" in {} with {} hits ({looked_up:?} to find, {:?} with details)", root.display(), found, t_index.elapsed());
@@ -1819,7 +1823,7 @@ impl FolderView {
                     //    our index, only what it adds (matches inside files)
                     // (both asked of Windows' search service, which can hang where it is broken or switched off: issue 67, "it just
                     // says loading": each answer is waited for only so long, then the disk is walked as where nothing is indexed)
-                    let indexed = use_index && !glob && {
+                    let indexed = use_index && !glob && named && {
                         let r = root.clone();
                         within(Duration::from_secs(3), move || leaf_sys::wsearch::is_indexed(&r)).unwrap_or_else(|| {
                             log::warn!("search: Windows Search did not say in 3 s whether {} is indexed; walking instead", root.display());
@@ -1983,7 +1987,17 @@ impl FolderView {
                     self.entries.extend(b);
                     self.entries_gen += 1;
                 }
-                Msg::Hits(es, ps) => {
+                Msg::Hits(mut es, mut ps) => {
+                    // a search with "modified:..." keeps the hits of those days
+                    if let Location::Search { query, .. } = self.location()
+                        && let Some(days) = rf_core::search_date::split(query, chrono::Local::now().date_naive()).modified
+                    {
+                        let keep: Vec<bool> = es.iter().map(|e| days.contains_ms(e.modified_ms)).collect();
+                        let mut k = keep.iter();
+                        es.retain(|_| *k.next().unwrap_or(&true));
+                        let mut k = keep.iter();
+                        ps.retain(|_| *k.next().unwrap_or(&true));
+                    }
                     self.entries.extend(es);
                     self.entries_gen += 1;
                     self.parents.extend(ps);
@@ -2974,6 +2988,7 @@ impl FolderView {
                 // (a selected tile's text wears the selection's colour: Index's solid accent)
                 let inactive = self.pane_inactive;
                 let p = if selected && !inactive { p.on_row_selection() } else { p };
+                let sel_on = selected && !inactive;
                 let cat = icons::category(e);
                 let dim = e.is_hidden() || e.is_cloud_placeholder();
                 // Settings → "Show thumbnails" off: the file type's icon instead of a preview
@@ -3173,7 +3188,7 @@ impl FolderView {
                                         .items_center()
                                         .child(div().min_w_0().flex_shrink(1.).text_sm().font_weight(FontWeight::MEDIUM).whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
                                         .children(lock)
-                                        .children(git.map(|(g, c)| git_letter(g, c, &p)))
+                                        .children(git.map(|(g, c)| git_letter(g, p.mark_on_row(sel_on, c), &p)))
                                         .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g))),
                                 )
                                 .children(facts.unwrap_or_default().into_iter().map(|t| div().text_xs().text_color(p.text_secondary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(t))),
@@ -3185,7 +3200,7 @@ impl FolderView {
                         .child(div().size(visual_px).flex_shrink_0().flex().items_center().justify_center().child(visual))
                         .child(div().flex_1().min_w_0().text_sm().whitespace_nowrap().overflow_hidden().text_ellipsis().when(dim, |d| d.opacity(0.6)).on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(name_text.clone()))
                         .children(lock)
-                        .children(git.map(|(g, c)| git_letter(g, c, &p)))
+                        .children(git.map(|(g, c)| git_letter(g, p.mark_on_row(sel_on, c), &p)))
                         .children(cmp_word.map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g))),
                 };
                 let renaming_here = self.renaming.as_ref().is_some_and(|(i, _)| *i == ei);
@@ -4633,7 +4648,8 @@ impl FolderView {
             let p = if selected && !inactive { p.on_row_selection() } else { p };
             let cat = icons::category(e);
             // (on a solid selection the icon wears the text's colour, as the mockup's Index: a kind colour on the accent is mud)
-            let kind_c = if selected && !inactive && p.row_selection.a >= 1. { p.row_selection_text } else { theme::kind_color(cat, p.dark) };
+            let sel_on = selected && !inactive;
+            let kind_c = p.mark_on_row(sel_on, theme::kind_color(cat, p.dark));
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
             // (Windows' icons only when asked for: the line icons are the default look)
@@ -4651,7 +4667,7 @@ impl FolderView {
             let git_state = self.git.as_ref().and_then(|g| leaf_sys::git::state_for_child(g, self.parent_of(ei)?, &e.name));
             let git_cell = col_git.then(|| {
                 let (label, color) = match git_state {
-                    Some(st) => (git_label(st), git_style(st).1),
+                    Some(st) => (git_label(st), p.mark_on_row(sel_on, git_style(st).1)),
                     None => ("", p.text_secondary),
                 };
                 div().w(px(cw[5])).flex_shrink_0().px_2().text_color(color).whitespace_nowrap().overflow_hidden().text_ellipsis().child(label)
@@ -4660,6 +4676,7 @@ impl FolderView {
                 let dir = self.parent_of(ei)?;
                 let st = leaf_sys::git::state_for_child(g, dir, &e.name)?;
                 let (letter, color) = git_style(st);
+                let color = p.mark_on_row(sel_on, color);
                 Some(
                     div()
                         .flex_shrink_0()
