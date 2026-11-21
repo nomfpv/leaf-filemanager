@@ -466,7 +466,10 @@ impl Inner {
         let r = self.call(t, "PROPFIND", path, &[("Depth", depth.to_string()), ("Content-Type", "application/xml; charset=utf-8".into())], Payload::Bytes(body.as_bytes()))?;
         match r.status {
             207 | 200 => {
-                let text = r.text(ANSWER_MAX).map_err(|_| FsError::Other("The server's listing is too big or not readable".into()))?;
+                let text = r.text(ANSWER_MAX).map_err(|e| match e.kind() {
+                    std::io::ErrorKind::Other => FsError::Other("The server's listing is too big or not readable".into()),
+                    _ => FsError::Offline(io_words(&e)),
+                })?;
                 parse_multistatus(&text).map(Some)
             }
             404 | 410 => Ok(None),
