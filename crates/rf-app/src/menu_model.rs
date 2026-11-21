@@ -181,6 +181,7 @@ pub enum Slot {
     Extract,
     Tags,
     Shelf,
+    Basket,
     Nearby,
     BulkRename,
     CopyToPane,

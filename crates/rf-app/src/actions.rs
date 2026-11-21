@@ -117,6 +117,11 @@ gpui_kit::actions!(
         ShowChanges,
         ShowWorktrees,
         NewWorktree,
+        AddToBasket,
+        RemoveFromBasket,
+        NewBasket,
+        CopyBasketAsContext,
+        CopyBasketAsMentions,
     ]
 );
 

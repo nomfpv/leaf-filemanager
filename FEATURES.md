@@ -67,6 +67,9 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | New folder | Makes a new folder here and lets you name it. | `Ctrl+Shift+N` |
 | New text document | Makes a new empty text file here. |  |
 | Add to shelf | Puts the selected items on the shelf to drop them somewhere else later. | `Ctrl+Shift+S` |
+| Add to basket | Puts the selected items in this project's context basket, a named set of files to hand to an assistant later. |  |
+| Remove from basket | Takes the selected items out of this project's context basket. |  |
+| New basket | Starts a named context basket for this project; the selected items go in it. |  |
 | Copy | Copies the selected items to paste them somewhere else. | `Ctrl+C` |
 | Cut | Takes the selected items to paste them somewhere else. | `Ctrl+X` |
 | Paste | Puts the copied or cut items into this folder. | `Ctrl+V` |
@@ -86,6 +89,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 
 | Command | What it does | Shortcut |
 |---|---|---|
+| Copy basket as context | Copies the files of this project's context basket as one text block, with a token estimate. |  |
+| Copy basket as @paths | Copies the files of this project's context basket as @path mentions, one per line. |  |
 | Copy path | Copies the full path of the selected items. | `Ctrl+Shift+C` |
 | Copy path as quoted | Copies the paths in quotes, ready for a command line. | `Ctrl+Alt+C` |
 | Copy path as name only | Copies just the names of the selected items. |  |

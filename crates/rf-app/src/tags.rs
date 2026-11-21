@@ -34,6 +34,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut TagStore)) {
 /// is affected.
 pub fn follow(cx: &mut App, pairs: &[(PathBuf, PathBuf)]) {
     crate::layouts::follow(cx, pairs); // a folder's saved sort/view moves with it
+    crate::basket::follow(pairs); // so do the files of the context baskets
     if pairs.is_empty() || !cx.global::<Tags>().0.follows(pairs) {
         return;
     }

@@ -291,6 +291,7 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
             let shelf_items = b.items.to_vec();
             Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::AddToShelf(shelf_items.clone()))))
         }
+        Slot::Basket => Item::sub(label, ic, crate::basket::menu_items(b.items, &b.dir)),
         Slot::Nearby => Item::sub(label, ic, crate::nearby::menu_items(b.items, cx)),
         Slot::BulkRename => {
             let items = b.items.to_vec();

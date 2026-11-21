@@ -5982,6 +5982,24 @@ impl Render for FolderView {
             .on_action(cx.listener(|this, _: &NewTextFile, _, cx| this.create_new(false, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
             .on_action(cx.listener(|this, _: &CopyAsContext, window, cx| this.copy_as_context(window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::AddToBasket, _, _| crate::basket::add(&this.selection_paths())))
+            .on_action(cx.listener(|this, _: &crate::actions::RemoveFromBasket, _, _| crate::basket::remove(&this.selection_paths())))
+            .on_action(cx.listener(|this, _: &crate::actions::NewBasket, window, cx| {
+                let items = this.selection_paths();
+                if let Some(at) = items.first().cloned().or_else(|| this.current_dir()) {
+                    crate::basket::new_named(rf_core::basket::project_of(&at), items, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::CopyBasketAsContext, window, cx| {
+                if let Some(at) = this.selection_paths().first().cloned().or_else(|| this.current_dir()) {
+                    crate::basket::copy_as_context(&at, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::CopyBasketAsMentions, _, cx| {
+                if let Some(at) = this.selection_paths().first().cloned().or_else(|| this.current_dir()) {
+                    crate::basket::copy_mentions(&at, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CopyPathQuoted, _, cx| this.copy_path_with(true, cx)))
             .on_action(cx.listener(|this, _: &CopyPathName, _, cx| this.copy_path_as(CopyPathKind::Name, cx)))
             .on_action(cx.listener(|this, _: &CopyPathFolder, _, cx| this.copy_path_as(CopyPathKind::Folder, cx)))
