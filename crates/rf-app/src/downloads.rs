@@ -398,6 +398,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     let settings = (s.download_segments.clamp(1, 32) as usize, limit, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s), rule.map(|r| r.user_agent.trim().to_string()).filter(|u| !u.is_empty()), proxy_of(s));
     apply_host_caps(s);
     let key = req.key.unwrap_or_else(|| NEXT_KEY.fetch_add(1, Ordering::Relaxed));
+    crate::download_schedule::note_started();
     {
         let mut st = store();
         st.forget(key);

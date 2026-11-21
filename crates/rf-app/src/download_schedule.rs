@@ -43,6 +43,11 @@ static LAST_OPEN: Mutex<Option<bool>> = Mutex::new(None);
 static HAD_WORK: AtomicBool = AtomicBool::new(false);
 static FINISHED_ONE: AtomicBool = AtomicBool::new(false);
 
+/// A download was started (the queue has work, whether or not a tick sees it while it runs).
+pub fn note_started() {
+    HAD_WORK.store(true, Ordering::Relaxed);
+}
+
 /// A download finished: the queue running dry afterwards counts as "done" (cancelling everything does not).
 pub fn note_finished() {
     FINISHED_ONE.store(true, Ordering::Relaxed);
@@ -69,10 +74,13 @@ fn tick(cx: &mut App) {
             crate::downloads::schedule_gate(open);
         }
     }
-    if crate::downloads::live_count() > 0 {
-        HAD_WORK.store(true, Ordering::Relaxed);
-    } else if HAD_WORK.swap(false, Ordering::Relaxed) && FINISHED_ONE.swap(false, Ordering::Relaxed) {
-        done(when, cx);
+    // (empty: it is "done" when something was started and one of them finished; otherwise the mark is dropped, so a download
+    // cancelled later is never taken for the end of a queue)
+    if crate::downloads::live_count() == 0 {
+        let started = HAD_WORK.swap(false, Ordering::Relaxed);
+        if FINISHED_ONE.swap(false, Ordering::Relaxed) && started {
+            done(when, cx);
+        }
     }
 }
 
