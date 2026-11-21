@@ -3181,13 +3181,6 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         ),
         card(
             p,
-            L::Network,
-            t!("Connections to one server"),
-            Some(t!("The most connections open to one server, over all downloads together (default 32, up to 64). Fewer are used when the server asks for it; a server that takes only one connection gets one.")),
-            dropdown("download-per-host", p, s.download_per_host, [0u32, 2, 4, 8, 16, 24, 32, 48, 64].into_iter().map(|n| (n, if n == 0 { t!("No limit").to_string() } else { n.to_string() })).collect(), |s, v| s.download_per_host = v),
-        ),
-        card(
-            p,
             L::Gauge,
             t!("Download speed limit"),
             Some(t!("For each download, over all its connections.")),
@@ -3230,6 +3223,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             sw("download-sort", p, s.download_sort, |s, v| s.download_sort = v),
         ),
         download_categories_card(p, s),
+        download_servers_card(p, s),
         download_schedule_card(p, s),
         card(
             p,
@@ -4009,5 +4003,61 @@ fn download_schedule_card(p: &Palette, s: &Settings) -> AnyElement {
             Some(t!("Sleep and shut down give a 60 second notice you can cancel.").into()),
             Some(dropdown("download-when-done", p, s.download_when_done, when_options, |s, v| s.download_when_done = v)),
         ))
+        .into_any_element()
+}
+
+/// The servers' own settings: the default row (connections to one server over all downloads) and a row per server name.
+fn download_servers_card(p: &Palette, s: &Settings) -> AnyElement {
+    use crate::settings::ServerRule;
+    let edit = |index: Option<usize>, window: &mut Window, cx: &mut App| {
+        let current = index.and_then(|i| cx.global::<Settings>().download_servers.get(i).cloned());
+        let initial = current.as_ref().map(ServerRule::to_line).unwrap_or_default();
+        let mut buttons = vec![crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, move |value, _, cx| {
+            let Some(r) = ServerRule::from_line(&value.unwrap_or_default()) else {
+                return Err(t!("Write the server name, the connections (up to 64), the speed limit in MB/s and the user agent, separated by semicolons").to_string());
+            };
+            settings::update(cx, move |s| match index.filter(|i| *i < s.download_servers.len()) {
+                Some(i) => s.download_servers[i] = r,
+                None => s.download_servers.push(r),
+            });
+            Ok(())
+        })];
+        if let Some(i) = index {
+            buttons.push(crate::prompt::Button::new(t!("Remove"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                settings::update(cx, move |s| {
+                    if i < s.download_servers.len() {
+                        s.download_servers.remove(i);
+                    }
+                });
+                Ok(())
+            }));
+        }
+        buttons.push(crate::prompt::Button::cancel());
+        crate::prompt::show(
+            t!("Server settings"),
+            Some(t!("Server name (it also covers the servers below it); connections (0: the default row); speed limit in MB/s (0: none); user agent (empty: leaf's).").to_string()),
+            Some((initial, "example.com; 4; 2; Mozilla/5.0".to_string())),
+            buttons,
+            window,
+            cx,
+        );
+    };
+    let mut shell = shell(p).child(card_body(
+        p,
+        L::Network,
+        t!("Connections to one server").into(),
+        Some(t!("The most connections open to one server, over all downloads together (default 32, up to 64). Fewer are used when the server asks for it; a server that takes only one connection gets one. This is the row for every server that has none of its own below.").into()),
+        Some(dropdown("download-per-host", p, s.download_per_host, [0u32, 2, 4, 8, 16, 24, 32, 48, 64].into_iter().map(|n| (n, if n == 0 { t!("No limit").to_string() } else { n.to_string() })).collect(), |s, v| s.download_per_host = v)),
+    ));
+    for (i, r) in s.download_servers.iter().enumerate() {
+        let mut parts = vec![if r.connections == 0 { t!("default connections").to_string() } else { format!("{} {}", r.connections, t!("connections")) }];
+        parts.push(if r.limit_mb == 0 { t!("no speed limit").to_string() } else { format!("{} MB/s", r.limit_mb) });
+        if !r.user_agent.trim().is_empty() {
+            parts.push(r.user_agent.clone());
+        }
+        shell = shell.child(card_body(p, L::Globe, r.host.clone().into(), Some(parts.join(" · ").into()), Some(button(("download-server", i), p, t!("Edit"), move |window, cx| edit(Some(i), window, cx)))));
+    }
+    shell
+        .child(card_body(p, L::Plus, t!("Settings for one server").into(), Some(t!("Connections, speed limit and user agent for a server name.").into()), Some(button("download-server-add", p, t!("Add"), move |window, cx| edit(None, window, cx)))))
         .into_any_element()
 }

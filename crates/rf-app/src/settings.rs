@@ -423,6 +423,38 @@ fn is_default_preview_height(h: &f32) -> bool {
     *h == rf_core::previewpane::BOTTOM_DEFAULT_H
 }
 
+/// Download settings for one server (a name also covers the servers below it): connections, speed limit, user agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerRule {
+    pub host: String,
+    /// Connections to the server over all downloads (0 = the default row's number).
+    pub connections: u32,
+    /// Speed limit in MB/s for each download from it (0 = none).
+    pub limit_mb: u32,
+    /// The user agent sent to it (empty = leaf's).
+    pub user_agent: String,
+}
+
+impl ServerRule {
+    /// "host; connections; MB/s; user agent" as the edit box shows it.
+    pub fn to_line(&self) -> String {
+        format!("{}; {}; {}; {}", self.host, self.connections, self.limit_mb, self.user_agent)
+    }
+
+    /// The reverse of [`Self::to_line`] (the user agent last, since it may hold semicolons); `None` when the name or a number is wrong.
+    pub fn from_line(line: &str) -> Option<Self> {
+        let mut it = line.splitn(4, ';').map(str::trim);
+        let host = it.next()?.trim_start_matches("*.").to_ascii_lowercase();
+        let num = |x: Option<&str>| match x {
+            None | Some("") => Some(0),
+            Some(v) => v.parse::<u32>().ok(),
+        };
+        let (connections, limit_mb) = (num(it.next())?, num(it.next())?);
+        let user_agent = it.next().unwrap_or_default().to_string();
+        (!host.is_empty() && !host.contains(['/', ' ', ':']) && connections <= 64).then_some(Self { host, connections, limit_mb, user_agent })
+    }
+}
+
 /// What happens when the download queue is done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -695,6 +727,8 @@ pub struct Settings {
     pub download_per_host: u32,
     /// Where `leaf download <address>` saves without a folder; empty: the Downloads folder.
     pub download_folder: String,
+    /// Settings of single servers, over the default row (`download_per_host` and the speed limit).
+    pub download_servers: Vec<ServerRule>,
     /// Downloads into the download folder (not "Download here…" into a chosen folder) are sorted into subfolders by file type.
     pub download_sort: bool,
     /// The subfolders and the extensions that go into each.
@@ -952,6 +986,7 @@ impl Default for Settings {
             download_parallel: 3,
             download_per_host: 32,
             download_folder: String::new(),
+            download_servers: Vec::new(),
             download_sort: false,
             download_schedule: false,
             download_schedule_start: 22 * 60,

@@ -204,6 +204,23 @@ pub fn start_cli(url: String, folder: Option<String>, cx: &mut App) {
     start_with(cx, Request { sort, ..Request::new(url, dest) }, Some(after));
 }
 
+/// The per-server caps of the settings, given to the engine.
+fn apply_host_caps(s: &Settings) {
+    dl::set_host_cap(s.download_per_host as usize);
+    dl::set_host_caps(s.download_servers.iter().map(|r| (r.host.clone(), r.connections as usize)).collect());
+}
+
+/// Bytes per second for a download from `url`: the lower of the general limit and its server's (0 = none).
+fn limit_for(s: &Settings, url: &str) -> u64 {
+    [u64::from(s.download_speed_limit), server_rule(s, url).map_or(0, |r| u64::from(r.limit_mb))].into_iter().filter(|m| *m > 0).min().unwrap_or(0) << 20
+}
+
+/// The settings row of the server `url` is on (the most specific name wins).
+fn server_rule<'a>(s: &'a Settings, url: &str) -> Option<&'a crate::settings::ServerRule> {
+    let name = dl::host_name(url);
+    s.download_servers.iter().filter(|r| dl::host_matches(&r.host, &name)).max_by_key(|r| r.host.len())
+}
+
 /// The categories a request is sorted by: the settings' list when sorting is on and the request is for the download folder.
 fn categories_for(req: &Request, s: &Settings) -> Vec<(String, Vec<String>)> {
     if req.sort && s.download_sort { s.download_categories.iter().map(|c| (c.folder.clone(), c.exts.clone())).collect() } else { Vec::new() }
@@ -247,6 +264,7 @@ struct Live {
     own_limit: Arc<AtomicBool>,
     /// The schedule paused it (it is not a pause of the user's: it is not saved as one, and the window opening resumes it).
     by_schedule: bool,
+    url: String,
 }
 
 static LIVE: Mutex<Vec<Live>> = Mutex::new(Vec::new());
@@ -320,10 +338,9 @@ pub fn clear_history() {
 /// limit was set from their card).
 pub fn settings_changed(cx: &App) {
     let s = cx.global::<Settings>();
-    dl::set_host_cap(s.download_per_host as usize);
-    let bytes = u64::from(s.download_speed_limit) << 20;
+    apply_host_caps(s);
     for l in LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|l| !l.own_limit.load(Ordering::Relaxed)) {
-        l.limit.store(bytes, Ordering::Relaxed);
+        l.limit.store(limit_for(s, &l.url), Ordering::Relaxed);
     }
 }
 
@@ -352,8 +369,10 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
         return;
     }
     let s = cx.global::<Settings>();
-    let settings = (s.download_segments.clamp(1, 32) as usize, u64::from(s.download_speed_limit) << 20, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s));
-    dl::set_host_cap(s.download_per_host as usize);
+    let rule = server_rule(s, &req.url);
+    let limit = limit_for(s, &req.url);
+    let settings = (s.download_segments.clamp(1, 32) as usize, limit, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s), rule.map(|r| r.user_agent.trim().to_string()).filter(|u| !u.is_empty()));
+    apply_host_caps(s);
     let key = req.key.unwrap_or_else(|| NEXT_KEY.fetch_add(1, Ordering::Relaxed));
     {
         let mut st = store();
@@ -408,7 +427,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
             }
         })
     };
-    let live = Live { key, paused: Arc::default(), limit: Arc::new(AtomicU64::new(settings.1)), own_limit: Arc::default(), by_schedule: false };
+    let live = Live { key, paused: Arc::default(), limit: Arc::new(AtomicU64::new(settings.1)), own_limit: Arc::default(), by_schedule: false, url: req.url.clone() };
     let (limit, own_limit) = (live.limit.clone(), live.own_limit.clone());
     LIVE.lock().unwrap_or_else(|e| e.into_inner()).push(live);
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_req, key, settings, (&limit, &got), &fail_flag), Some(on_done));
@@ -446,7 +465,7 @@ fn ask_limit(limit: Arc<AtomicU64>, own: Arc<AtomicBool>, cx: &mut App) {
     });
 }
 
-fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories): (usize, u64, usize, Vec<(String, Vec<String>)>), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
+fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories, agent): (usize, u64, usize, Vec<(String, Vec<String>)>, Option<String>), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
     // (the saved list reads this job's paused flag, the one the card's pause button flips)
     if let Some(l) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|l| l.key == key) {
         l.paused = tr.paused.clone();
@@ -477,6 +496,9 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
     let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false) };
     let ctl = dl::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
     let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), categories: categories.clone(), ..dl::Options::default() };
+    if let Some(ua) = agent {
+        opts.user_agent = ua;
+    }
     if opts.sha256.is_none() && req.verify {
         match dl::fetch_sidecar(&req.url, &opts) {
             Some(sha) => opts.sha256 = Some(sha),

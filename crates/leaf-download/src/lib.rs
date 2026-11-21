@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 pub use headers::Headers;
-pub use host::set_host_cap;
+pub use host::{host_matches, host_name, set_host_cap, set_host_caps};
 pub use name::{file_name, percent_decode, sanitize};
 
 /// A segment is not split into pieces smaller than this.
