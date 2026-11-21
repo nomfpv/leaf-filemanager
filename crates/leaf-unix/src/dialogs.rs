@@ -50,15 +50,13 @@ fn pick_many_args_kdialog(title: &str) -> Vec<OsString> {
 }
 
 fn pick_many_args_zenity(title: &str) -> Vec<OsString> {
-    ["--file-selection", "--multiple", "--separator=
-", "--title", title].iter().map(OsString::from).collect()
+    ["--file-selection", "--multiple", "--separator=\n", "--title", title].iter().map(OsString::from).collect()
 }
 
 /// One path per line (kdialog `--separate-output`, zenity with a newline separator).
 fn parse_picked(stdout: &[u8]) -> Vec<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
-    stdout.split(|b| *b == b'
-').filter(|l| !l.is_empty()).map(|l| PathBuf::from(std::ffi::OsStr::from_bytes(l))).collect()
+    stdout.split(|b| *b == b'\n').filter(|l| !l.is_empty()).map(|l| PathBuf::from(std::ffi::OsStr::from_bytes(l))).collect()
 }
 
 /// Autostart on Linux is a desktop entry in `$XDG_CONFIG_HOME/autostart/` (the XDG autostart rule: the session starts every entry
@@ -116,11 +114,8 @@ mod tests {
 
     #[test]
     fn picked_paths_split_on_newlines() {
-        assert_eq!(parse_picked(b"/a/b
-/c d
-"), vec![PathBuf::from("/a/b"), PathBuf::from("/c d")]);
-        assert!(parse_picked(b"
-").is_empty());
+        assert_eq!(parse_picked(b"/a/b\n/c d\n"), vec![PathBuf::from("/a/b"), PathBuf::from("/c d")]);
+        assert!(parse_picked(b"\n").is_empty());
     }
 
     #[test]
