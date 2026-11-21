@@ -187,11 +187,25 @@ fn ignored(dir: &Path) -> Result<Vec<String>, LaneError> {
 
 /// The commits of `head` (run in `dir`) that `base` does not have, newest first, as `abc1234 subject` (at most 200).
 fn commits_not_in(dir: &Path, head: &str, base: &str) -> Result<Vec<String>, LaneError> {
-    let o = exec(dir, ["log", "-n200", "--no-color", "--format=%h %s", &format!("{base}..{head}")])?;
+    let o = exec(dir, ["log", "-n200", "--no-color", "--format=%h %s", "--end-of-options", &format!("{base}..{head}")])?;
     if !o.ok {
         return Err(failed("the commits could not be compared", &o));
     }
     Ok(o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+}
+
+/// Could be a branch name or a commit, by git's rules for ref names (no git run): never an option (`-`), no space or control
+/// character, none of `~ ^ : ? * [ \`, no `..` or `@{`, no `/` or `.` at an end. For values read back from a file.
+pub fn plausible_ref(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && !s.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+        && !s.contains("..")
+        && !s.contains("@{")
+        && !s.starts_with('/')
+        && !s.ends_with('/')
+        && !s.ends_with('.')
+        && !s.ends_with(".lock")
 }
 
 /// A branch name git accepts (`git check-ref-format --branch`).
@@ -231,7 +245,7 @@ pub fn progress(dir: &Path, base: &str) -> Option<Progress> {
     if !dir.is_dir() {
         return None;
     }
-    let o = exec(dir, ["rev-list", "--left-right", "--count", &format!("{base}...HEAD")]).ok()?;
+    let o = exec(dir, ["rev-list", "--left-right", "--count", "--end-of-options", &format!("{base}...HEAD")]).ok()?;
     let (ahead, behind) = if o.ok { gitread::parse_counts(&o.stdout).unwrap_or((0, 0)) } else { (0, 0) };
     let changed = gitread::status(dir)?.len();
     Some(Progress { ahead, behind, changed })

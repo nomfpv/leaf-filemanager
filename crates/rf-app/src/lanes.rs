@@ -55,7 +55,17 @@ pub fn init(cx: &mut App) {
             Ok(text) => serde_json::from_str::<Vec<Lane>>(&text).map_err(|e| log::warn!("lanes: {} cannot be read, ignored: {e}", f.display())).ok(),
             Err(_) => None,
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        // a branch or base that git could read as an option (`--output=...`) or that is no ref name at all: the record is left out
+        .filter(|l: &Lane| {
+            let ok = leaf_dev::lanes::plausible_ref(&l.branch) && leaf_dev::lanes::plausible_ref(&l.base) && l.path.is_absolute() && l.repo.is_absolute();
+            if !ok {
+                log::warn!("lanes: the record {:?} is not valid, left out", l.name);
+            }
+            ok
+        })
+        .collect();
     cx.set_global(LanesState { lanes, ..Default::default() });
 }
 
