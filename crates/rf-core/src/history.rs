@@ -223,7 +223,7 @@ pub fn redact_credentials(s: &str) -> String {
 /// opened subfolder"). `None` when `to` is another place, or `from` has no name in it (a drive's root, a place that is no path).
 pub fn came_from(from: &Location, to: &Location) -> Option<String> {
     let (child, parent) = (from.path()?, to.path()?);
-    let spelled = |p: &std::path::Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+    let spelled = |p: &std::path::Path| crate::pathkey::fold_ascii(crate::pathkey::trim_seps(&p.to_string_lossy()));
     if spelled(child.parent()?) != spelled(parent) {
         return None;
     }
@@ -412,6 +412,12 @@ pub fn clean_path(p: &Path) -> PathBuf {
     if s.contains("://") || lower.starts_with("shell:") || s.starts_with("::") || verbatim {
         return p.to_path_buf();
     }
+    if !cfg!(windows) {
+        // Linux: `/` is the separator, a backslash is a letter of a name, there is no drive
+        let rooted = s.starts_with('/');
+        let out = crate::addrcmd::normalize_lexical(p);
+        return if rooted { out } else { p.to_path_buf() };
+    }
     let s = s.replace('/', "\\");
     // the prefix: `C:` or a UNC `\\server\share`
     let (prefix, rest) = if let Some(body) = s.strip_prefix("\\\\") {
@@ -456,6 +462,7 @@ mod clean_tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is clean_paths_on_linux")]
     fn clean_paths() {
         let c = |s: &str| clean_path(Path::new(s)).to_string_lossy().replace('\\', "|");
         assert_eq!(c("C:/Users/user/./y/../z/"), "C:|Users|user|z");
@@ -574,4 +581,18 @@ mod unix_tests {
         assert_eq!(display_name(Path::new("/Users/user/Öğrenci")), "Öğrenci");
         assert_eq!(display_name(Path::new("/Volumes/Yedek/")), "Yedek");
     }
+
+#[cfg(all(test, not(windows)))]
+mod clean_linux_tests {
+    use super::*;
+
+    #[test]
+    fn clean_paths_on_linux() {
+        let c = |s: &str| clean_path(Path::new(s));
+        assert_eq!(c("/a/b/../c/./d"), PathBuf::from("/a/c/d"));
+        assert_eq!(c("/a//b"), PathBuf::from("/a/b"));
+        assert_eq!(c("rel/../x"), PathBuf::from("rel/../x"));
+        assert_eq!(c("/a/b\\c"), PathBuf::from("/a/b\\c"));
+    }
+}
 }

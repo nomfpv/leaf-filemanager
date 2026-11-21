@@ -62,9 +62,9 @@ fn loaded(st: &mut Store) -> &mut Vec<Visit> {
     &mut st.visits
 }
 
-/// The same folder whatever its case or a trailing separator (Windows paths).
+/// The same folder whatever a trailing separator, and its case on Windows.
 fn key(p: &Path) -> String {
-    p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()
+    rf_core::pathkey::path_key_trimmed(p)
 }
 
 /// Notes a visit to `loc` (folders on disk or the network only; a path carrying a password is never kept).

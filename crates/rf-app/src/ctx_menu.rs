@@ -269,13 +269,13 @@ impl FolderView {
         // leave a folder (a build output, a huge cache) out of the search index
         if single_dir && cx.global::<crate::settings::Settings>().name_index && crate::archive_view::split(&target_dir).is_none() {
             let key = target_dir.to_string_lossy().trim_end_matches('\\').to_string();
-            let out = cx.global::<crate::settings::Settings>().index_excluded.iter().any(|e| e.eq_ignore_ascii_case(&key));
+            let out = cx.global::<crate::settings::Settings>().index_excluded.iter().any(|e| rf_core::pathkey::name_eq(e, &key));
             v.push(
                 Item::action(t!("Leave out of the search index"), icon(L::SearchSlash), move |_, cx| {
                     let key = key.clone();
                     crate::settings::update(cx, |s| {
                         if out {
-                            s.index_excluded.retain(|e| !e.eq_ignore_ascii_case(&key));
+                            s.index_excluded.retain(|e| !rf_core::pathkey::name_eq(e, &key));
                         } else {
                             s.index_excluded.push(key);
                         }

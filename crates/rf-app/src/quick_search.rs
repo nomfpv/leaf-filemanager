@@ -623,7 +623,7 @@ impl Target {
     pub(crate) fn key(&self) -> String {
         match self {
             Target::App { id, .. } => format!("app:{id}"),
-            Target::Path { path, .. } => format!("path:{}", path.to_string_lossy().to_lowercase()),
+            Target::Path { path, .. } => format!("path:{}", rf_core::pathkey::path_key(path)),
             Target::Url { url } => format!("url:{url}"),
             Target::Web { query } => format!("web:{query}"),
             Target::Setting { launch, name } => format!("setting:{launch}:{}", name.to_lowercase()),

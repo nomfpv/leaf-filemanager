@@ -540,7 +540,7 @@ fn remember_named(list: &mut Vec<crate::settings::NamedSession>, session: crate:
 /// forward); false when none does.
 fn select_in_open_folder(file: &std::path::Path, cx: &mut App) -> bool {
     let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else { return false };
-    let key = |p: &std::path::Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+    let key = |p: &std::path::Path| rf_core::pathkey::path_key_trimmed(p);
     let want = key(dir);
     let name = name.to_string_lossy().into_owned();
     let list = cx.try_global::<OpenWorkspaces>().map(|g| g.0.clone()).unwrap_or_default();
@@ -1989,7 +1989,7 @@ impl Workspace {
         }
         let pick = self.addr_sel.unwrap_or(0);
         if let Some(p) = self.addr_suggest.get(pick).cloned() {
-            let text = format!("{}\\", p.to_string_lossy().trim_end_matches('\\'));
+            let text = format!("{}{}", p.to_string_lossy().trim_end_matches(rf_core::pathkey::SEP), rf_core::pathkey::SEP);
             self.address.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
             self.update_suggestions(text, cx);
         }
@@ -2619,7 +2619,7 @@ impl Workspace {
                 Item::action(t!("Hide this place"), MenuIcon::Lucide(L::EyeOff), move |_, cx| {
                     let key = key.clone();
                     crate::settings::update(cx, move |s| {
-                        if !s.hidden_places.iter().any(|h| h.eq_ignore_ascii_case(&key)) {
+                        if !s.hidden_places.iter().any(|h| rf_core::pathkey::name_eq(h, &key)) {
                             s.hidden_places.push(key);
                         }
                     })
@@ -5546,7 +5546,7 @@ mod pane_tests {
 
 /// The cloud and WSL places that are not hidden one by one (`Settings::hidden_places`, paths compared without regard to case).
 pub(crate) fn visible_places(places: Vec<crate::places::Pinned>, hidden: &[String]) -> Vec<crate::places::Pinned> {
-    places.into_iter().filter(|c| !hidden.iter().any(|h| c.path.as_os_str().eq_ignore_ascii_case(std::ffi::OsStr::new(h)))).collect()
+    places.into_iter().filter(|c| !hidden.iter().any(|h| rf_core::pathkey::name_eq(&c.path.to_string_lossy(), h))).collect()
 }
 
 #[cfg(test)]

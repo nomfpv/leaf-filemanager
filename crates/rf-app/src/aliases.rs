@@ -43,8 +43,10 @@ fn resolve_in(text: &str, list: &[(String, PathBuf)]) -> Option<String> {
     let (name, sub) = split(text)?;
     let (_, path) = list.iter().find(|(n, _)| n.eq_ignore_ascii_case(name) || n.to_lowercase() == name.to_lowercase())?;
     let base = path.to_string_lossy();
-    let base = base.trim_end_matches(['\\', '/']);
-    Some(if sub.is_empty() { format!("{base}\\") } else { format!("{base}{}", sub.replace('/', "\\")) })
+    let sep = rf_core::pathkey::SEP;
+    let base = base.trim_end_matches(rf_core::pathkey::is_sep);
+    // (the root `/` trims to nothing and gets its separator back)
+    Some(if sub.is_empty() { format!("{base}{sep}") } else { format!("{base}{}", sub.replace(['/', '\\'], &sep.to_string())) })
 }
 
 /// Aliases starting with the typed name, while only the name is typed (`@pro`).

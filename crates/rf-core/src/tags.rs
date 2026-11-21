@@ -53,16 +53,15 @@ impl Default for TagStore {
 }
 
 /// The one place that turns a path into the key its tags are stored under.
-// TODO(linux)
 fn key(p: &Path) -> String {
-    let s = p.to_string_lossy().to_lowercase();
-    if s.len() > 3 { s.trim_end_matches(['\\', '/']).to_string() } else { s }
+    let s = crate::pathkey::path_key(p);
+    if s.len() > 3 { crate::pathkey::trim_seps(&s).to_string() } else { s }
 }
 
 /// The start of the keys of everything below the folder with key `k`.
 fn child_prefix(k: &str) -> String {
     let mut p = k.to_string();
-    if !p.ends_with(['\\', '/']) {
+    if !p.ends_with(crate::pathkey::is_sep) {
         p.push(std::path::MAIN_SEPARATOR);
     }
     p
@@ -139,11 +138,11 @@ impl TagStore {
     /// its tag column will show. `dir` in any letter case, with or without a trailing separator.
     pub fn tagged_in(&self, dir: &Path) -> impl Iterator<Item = &Tagged> + '_ {
         let mut prefix = key(dir);
-        if !prefix.ends_with('\\') {
-            prefix.push('\\');
+        if !prefix.ends_with(crate::pathkey::is_sep) {
+            prefix.push(crate::pathkey::SEP);
         }
         let n = prefix.len();
-        self.items.range(prefix.clone()..).take_while(move |(k, _)| k.starts_with(&prefix)).filter(move |(k, _)| !k[n..].contains('\\')).map(|(_, v)| v)
+        self.items.range(prefix.clone()..).take_while(move |(k, _)| k.starts_with(&prefix)).filter(move |(k, _)| !k[n..].contains(crate::pathkey::is_sep)).map(|(_, v)| v)
     }
 
     /// How many items wear the tag (the sidebar's number).
@@ -359,6 +358,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is tags_follow_exact_paths_on_linux")]
     fn toggle_and_query() {
         let mut s = TagStore::default();
         let a = PathBuf::from(r"C:\A.txt");
@@ -379,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is tags_follow_exact_paths_on_linux")]
     fn folder_first_color_and_trailing_slash() {
         let mut s = TagStore::default();
         let folder = PathBuf::from(r"C:\Work\Sub");
@@ -393,5 +394,19 @@ mod tests {
 
         s.toggle(&[folder.clone()], 3);
         assert_eq!(s.first_color(&folder), Some(0x0A84FF));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn tags_follow_exact_paths_on_linux() {
+        let mut s = TagStore::default();
+        let folder = PathBuf::from("/work/Sub");
+        s.toggle(&[folder.clone(), PathBuf::from("/work/Sub/a.txt")], 3);
+        assert_eq!(s.first_color(&folder), Some(0xFFD60A));
+        assert_eq!(s.first_color(Path::new("/work/Sub/")), Some(0xFFD60A));
+        assert_eq!(s.first_color(Path::new("/work/sub")), None);
+        assert!(s.has(Path::new("/work/Sub/a.txt"), 3) && !s.has(Path::new("/work/Sub/A.txt"), 3));
+        assert_eq!(s.tagged_in(Path::new("/work/Sub")).count(), 1);
+        assert_eq!(s.tagged_in(Path::new("/work")).count(), 1);
     }
 }

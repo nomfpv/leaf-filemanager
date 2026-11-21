@@ -90,9 +90,9 @@ pub(super) fn tag_table(store: &rf_core::tags::TagStore) -> HashMap<String, u32>
 /// (a seek and the folder's own tagged items), not a pass over every tagged file on the machine;
 /// this runs on the UI thread, before the work goes to a worker.
 pub(super) fn tag_table_in(store: &rf_core::tags::TagStore, folder: &Path) -> HashMap<String, u32> {
-    let mut prefix = folder.to_string_lossy().to_lowercase();
-    if !prefix.ends_with('\\') {
-        prefix.push('\\');
+    let mut prefix = rf_core::pathkey::path_key(folder);
+    if !prefix.ends_with(rf_core::pathkey::is_sep) {
+        prefix.push(rf_core::pathkey::SEP);
     }
     let order: HashMap<u32, u32> = store.defs.iter().enumerate().map(|(i, d)| (d.id, i as u32)).collect();
     store
@@ -100,7 +100,7 @@ pub(super) fn tag_table_in(store: &rf_core::tags::TagStore, folder: &Path) -> Ha
         .range::<str, _>((std::ops::Bound::Included(prefix.as_str()), std::ops::Bound::Unbounded))
         .take_while(|(k, _)| k.starts_with(&prefix))
         // (deeper items belong to subfolders: no entry of this listing is one of them)
-        .filter(|(k, _)| !k[prefix.len()..].contains('\\'))
+        .filter(|(k, _)| !k[prefix.len()..].contains(rf_core::pathkey::is_sep))
         .map(|(k, v)| (k.clone(), sortkeys::tag_rank(&v.tags, &|t| order.get(&t).copied())))
         .filter(|&(_, r)| r != NO_RANK)
         .collect()
@@ -145,7 +145,7 @@ pub(super) fn make_ranks(key: SortKey, entries: &[Entry], folders: &Folders, tag
                 .enumerate()
                 .map(|(i, e)| {
                     // the store's keys are the lower-cased path text: the same text is made here
-                    let k = folders.of(i).join(&*e.name).to_string_lossy().to_lowercase();
+                    let k = rf_core::pathkey::path_key(&folders.of(i).join(&*e.name));
                     tags.get(&k).copied().unwrap_or(NO_RANK)
                 })
                 .collect()

@@ -24,9 +24,15 @@ pub fn is_partial_download(name: &str) -> bool {
     PARTIAL_EXTS.contains(&ext)
 }
 
-/// A path as text for comparing: backslashes, no `\\?\` prefix, no trailing separator (except
-/// of a drive root), case and Turkish i-letters folded.
+/// A path as text for comparing. Windows: backslashes, no `\\?\` prefix, no trailing separator
+/// (except of a drive root), case and Turkish i-letters folded. Linux: the path as it is, only
+/// the trailing separator goes (the root `/` keeps its own).
 pub fn norm(p: &Path) -> String {
+    if !cfg!(windows) {
+        let s = p.to_string_lossy();
+        let t = s.trim_end_matches('/');
+        return if t.is_empty() && s.starts_with('/') { "/".to_string() } else { t.to_string() };
+    }
     let mut s = p.to_string_lossy().replace('/', "\\");
     if let Some(r) = s.strip_prefix(r"\\?\UNC\") {
         s = format!(r"\\{r}");
@@ -41,17 +47,21 @@ pub fn norm(p: &Path) -> String {
 
 /// Is `child` the same place as `parent` or somewhere below it? Both from [`norm`].
 pub fn is_inside(child: &str, parent: &str) -> bool {
+    let sep = crate::pathkey::SEP;
     if child == parent {
         return true;
     }
-    if parent.ends_with('\\') {
+    if parent.ends_with(sep) {
         return child.starts_with(parent);
     }
-    child.len() > parent.len() && child.starts_with(parent) && child.as_bytes()[parent.len()] == b'\\'
+    child.len() > parent.len() && child.starts_with(parent) && child[parent.len()..].starts_with(sep)
 }
 
-/// "C:\", "C:" or the root of a share (`\\server\share`).
+/// "C:\", "C:" or the root of a share (`\\server\share`); on Linux the root `/`.
 fn is_root(n: &str) -> bool {
+    if !cfg!(windows) {
+        return n == "/";
+    }
     let b = n.as_bytes();
     if (b.len() == 2 || (b.len() == 3 && b[2] == b'\\')) && b[1] == b':' && b[0].is_ascii_alphabetic() {
         return true;
@@ -200,6 +210,19 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_paths_are_exact() {
+        assert_eq!(norm(Path::new("/")), "/");
+        assert_eq!(norm(Path::new("/Work/A/")), "/Work/A");
+        assert!(is_inside(&norm(Path::new("/Work/A/b")), &norm(Path::new("/Work/A"))));
+        assert!(!is_inside(&norm(Path::new("/Work/A")), &norm(Path::new("/work/a"))));
+        assert!(!is_inside(&norm(Path::new("/Work/Ab")), &norm(Path::new("/Work/A"))));
+        assert!(is_inside("/x", "/"));
+        assert_eq!(ProtectedPaths::default().refuse(Path::new("/"), false), Some(Refusal::DriveRoot));
+        assert_eq!(ProtectedPaths::default().refuse(Path::new("/Work"), false), None);
+    }
+
     #[test]
     fn partial_downloads() {
         for n in ["a.crdownload", "A.CRDOWNLOAD", "film.mp4.part", "x.partial", "x.tmp", "x.download", "x.opdownload", "x.!ut", "x.!qb", "x.bc!", "~$rapor.docx", ".~lock.a.odt#", "indir.aria2", "a.swp"] {
@@ -211,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn norm_and_inside() {
         assert_eq!(norm(Path::new(r"\\?\C:\Users\user\DİR\")), norm(Path::new("c:/users/user/dir")));
         assert_eq!(norm(Path::new(r"\\?\UNC\srv\share\x")), norm(Path::new(r"\\srv\share\x")));
@@ -262,6 +286,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn the_apps_own_files() {
         let p = prot();
         assert!(p.is_app_file(Path::new(r"C:\Users\user\AppData\Roaming\leaf\settings.toml")));
@@ -283,6 +308,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn files_may_not_be_sent_into_protected_places() {
         let p = prot();
         let r = |s: &str| p.refuse_dest(Path::new(s));

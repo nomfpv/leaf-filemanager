@@ -49,7 +49,7 @@ pub fn settled(pairs: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
         .into_iter()
         .filter(|(old, new)| {
             let there = std::fs::symlink_metadata(new).is_ok();
-            let same = old.as_os_str().to_string_lossy().eq_ignore_ascii_case(&new.as_os_str().to_string_lossy());
+            let same = rf_core::pathkey::name_eq(&old.as_os_str().to_string_lossy(), &new.as_os_str().to_string_lossy());
             there && (same || std::fs::symlink_metadata(old).is_err())
         })
         .collect()

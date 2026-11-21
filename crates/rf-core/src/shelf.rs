@@ -9,7 +9,7 @@ pub struct Shelf {
 }
 
 fn key(p: &Path) -> String {
-    p.to_string_lossy().to_lowercase()
+    crate::pathkey::path_key(p)
 }
 
 impl Shelf {
@@ -63,6 +63,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is case_counts_on_linux")]
     fn unique_ordered() {
         let mut s = Shelf::default();
         assert_eq!(s.add([PathBuf::from(r"C:\a.txt"), PathBuf::from(r"C:\B")]), 2);
@@ -72,5 +73,15 @@ mod tests {
         assert_eq!(s.len(), 2);
         s.relocate(Path::new(r"C:\c"), Path::new(r"D:\c"));
         assert!(s.contains(Path::new(r"d:\C")));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn case_counts_on_linux() {
+        let mut s = Shelf::default();
+        assert_eq!(s.add([PathBuf::from("/w/a.txt"), PathBuf::from("/w/A.TXT")]), 2);
+        assert_eq!(s.add([PathBuf::from("/w/a.txt")]), 0);
+        s.relocate(Path::new("/w/a.txt"), Path::new("/v/a.txt"));
+        assert!(s.contains(Path::new("/v/a.txt")) && !s.contains(Path::new("/v/A.txt")));
     }
 }

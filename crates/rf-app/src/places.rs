@@ -75,7 +75,7 @@ fn load_recent(limit: usize) -> Vec<Recent> {
 fn load_cloud_and_wsl() -> Vec<Pinned> {
     let mut out = Vec::new();
     let mut add = |title: String, path: PathBuf, icon: L| {
-        let same = |p: &Pinned| p.path.as_os_str().eq_ignore_ascii_case(path.as_os_str());
+        let same = |p: &Pinned| rf_core::pathkey::name_eq(&p.path.to_string_lossy(), &path.to_string_lossy());
         if path.is_dir() && !out.iter().any(same) {
             out.push(Pinned { title, path, icon });
         }

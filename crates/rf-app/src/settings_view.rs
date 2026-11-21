@@ -3383,7 +3383,7 @@ fn index_exclusions(p: &Palette, s: &Settings) -> AnyElement {
                     if let Some(dir) = leaf_sys::dialogs::pick(owner, t!("Folder to leave out of the index"), leaf_sys::dialogs::Pick::Folder) {
                         let d = dir.to_string_lossy().trim_end_matches('\\').to_string();
                         settings::update(cx, |s| {
-                            if !s.index_excluded.iter().any(|e| e.eq_ignore_ascii_case(&d)) {
+                            if !s.index_excluded.iter().any(|e| rf_core::pathkey::name_eq(e, &d)) {
                                 s.index_excluded.push(d);
                             }
                         });

@@ -741,7 +741,7 @@ impl FolderView {
                     let (src, dst) = (f2.clone(), f2.with_file_name(&n2));
                     let clash = cx
                         .background_spawn(async move {
-                            let case_only = src.to_string_lossy().to_lowercase() == dst.to_string_lossy().to_lowercase();
+                            let case_only = rf_core::pathkey::path_key(&src) == rf_core::pathkey::path_key(&dst);
                             !case_only && std::fs::symlink_metadata(&dst).is_ok()
                         })
                         .await;

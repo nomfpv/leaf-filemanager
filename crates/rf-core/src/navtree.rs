@@ -241,10 +241,17 @@ pub struct NavTree {
     open_all_left: usize,
 }
 
+use crate::pathkey::{SEP, fold};
+
 /// The key a path is compared by: lower case, backslashes, no verbatim prefix, no trailing
 /// separator (a drive root keeps one: `c:\`).
 pub fn norm(p: &Path) -> String {
     let s = p.to_string_lossy();
+    if !cfg!(windows) {
+        // Linux: the path as it is (case counts), `/` is the separator and the root keeps its own
+        let t = s.trim_end_matches('/');
+        return if t.is_empty() && s.starts_with('/') { "/".to_string() } else { t.to_string() };
+    }
     let s = s.strip_prefix(r"\\?\").filter(|r| !r.starts_with("UNC\\")).unwrap_or(&s);
     let t = s.replace('/', "\\").to_lowercase();
     let t = t.trim_end_matches('\\');
@@ -256,13 +263,13 @@ pub fn norm(p: &Path) -> String {
 }
 
 fn child_key(parent_key: &str, name: &str) -> String {
-    format!("{}\\{}", parent_key.trim_end_matches('\\'), name.to_lowercase())
+    format!("{}{}{}", parent_key.trim_end_matches(SEP), SEP, fold(name))
 }
 
 /// Is `key` the folder `root` or somewhere below it?
 fn is_under(root: &str, key: &str) -> bool {
-    let r = root.trim_end_matches('\\');
-    key == root || (key.len() > r.len() && key.starts_with(r) && key.as_bytes()[r.len()] == b'\\')
+    let r = root.trim_end_matches(SEP);
+    key == root || (key.len() > r.len() && key.starts_with(r) && key[r.len()..].starts_with(SEP))
 }
 
 /// Which rows of `n` are built, given where the view is in the tree: `into_tree` pixels of the tree are above the view, the view
@@ -409,7 +416,7 @@ impl NavTree {
             let id = match existing {
                 Some(id) => id,
                 None => {
-                    let name = spec.path.to_string_lossy().trim_end_matches('\\').to_string();
+                    let name = spec.path.to_string_lossy().trim_end_matches(SEP).to_string();
                     self.alloc(key, spec.path.clone(), name, None)
                 }
             };
@@ -754,11 +761,11 @@ impl NavTree {
     /// (open, listed), new ones appear, missing ones go with everything below them.
     fn merge(&mut self, id: NodeId, items: Vec<DirItem>) {
         let old = std::mem::take(&mut self.nodes[id as usize].children);
-        let mut by_name: HashMap<String, NodeId> = old.iter().map(|&c| (self.nodes[c as usize].name.to_lowercase(), c)).collect();
+        let mut by_name: HashMap<String, NodeId> = old.iter().map(|&c| (fold(&self.nodes[c as usize].name), c)).collect();
         let mut kids = Vec::with_capacity(items.len());
         let mut seen = HashSet::new();
         for it in &items {
-            let lk = it.name.to_lowercase();
+            let lk = fold(&it.name);
             if !seen.insert(lk.clone()) {
                 continue;
             }
@@ -1027,8 +1034,8 @@ impl NavTree {
                 break;
             }
             // the next folder on the way
-            let rest = key[nk.trim_end_matches('\\').len()..].trim_start_matches('\\');
-            let Some(comp) = rest.split('\\').next().filter(|c| !c.is_empty()) else {
+            let rest = key[nk.trim_end_matches(SEP).len()..].trim_start_matches(SEP);
+            let Some(comp) = rest.split(SEP).next().filter(|c| !c.is_empty()) else {
                 self.reveal = None;
                 break;
             };
@@ -1074,11 +1081,11 @@ impl NavTree {
                     }
                 }
             }
-            let cut = key.rfind('\\')?;
+            let cut = key.rfind(SEP)?;
             key.truncate(cut);
             if key.is_empty() || key.ends_with(':') {
                 // the drive root's key keeps its separator
-                key.push('\\');
+                key.push(SEP);
                 if let Some(ids) = self.index.get(&key) {
                     for &id in ids {
                         if let Some(i) = self.row_index(id) {
@@ -1311,6 +1318,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn keys_ignore_case_slashes_prefixes_and_trailing_separators() {
         assert_eq!(norm(Path::new(r"C:\Users\user\")), r"c:\users\user");
         assert_eq!(norm(Path::new("C:/Users/user")), r"c:\users\user");
@@ -1385,6 +1393,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn an_answer_for_a_node_that_was_listed_again_or_freed_is_dropped() {
         let mut t = tree();
         let c = id_of(&t, r"C:\");
@@ -1474,6 +1483,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn a_branch_the_user_just_closed_stays_closed_and_the_closed_node_carries_the_mark() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Users\user\Documents", 1_000);
@@ -1528,6 +1538,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn a_follow_that_comes_before_the_roots_waits_for_them() {
         let mut t = NavTree::new();
         assert!(t.follow(Some(Path::new(r"C:\Users")), 0, true).is_empty());
@@ -1570,6 +1581,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn a_listing_again_keeps_what_was_open_and_drops_what_is_gone() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Users\user\Documents\a", 0);
@@ -1661,6 +1673,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn with_the_follow_setting_off_the_open_folder_is_marked_only_when_its_row_is_there() {
         let mut t = tree();
         // nothing is open: no listing, no opening, no scrolling
@@ -1791,6 +1804,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn the_cursor_skips_error_rows_and_starts_at_the_open_folder() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Windows", 0);
@@ -1810,6 +1824,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn a_drive_that_goes_away_takes_its_branch_and_one_that_stays_keeps_its_state() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Windows", 0);
@@ -1841,6 +1856,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn a_change_that_comes_while_a_quiet_relist_is_on_its_way_is_not_taken_away_again() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Users\user\Documents", 0);
@@ -1861,6 +1877,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn reports_that_come_while_a_folder_is_being_listed_ask_for_one_more_listing_not_one_each() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Users\user\Documents", 0);
@@ -1971,6 +1988,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths: case and drive letters count; the Linux twin is linux_keys_are_exact")]
     fn the_row_of_a_node_is_found_without_a_scan_and_never_wrongly() {
         let mut t = tree();
         follow_all(&mut t, r"C:\Users\user\Documents\a", 0);
@@ -2016,5 +2034,16 @@ mod tests {
         assert_eq!(scroll_goal(100., 300., 90., 30., false), 86.);
         assert_eq!(scroll_goal(100., 300., 390., 30., false), 124.);
         assert_eq!(scroll_goal(100., 300., 2., 30., false), 0.);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_keys_are_exact() {
+        assert_eq!(norm(Path::new("/")), "/");
+        assert_eq!(norm(Path::new("/Home/a/")), "/Home/a");
+        assert_ne!(norm(Path::new("/Home")), norm(Path::new("/home")));
+        assert_eq!(child_key("/", "usr"), "/usr");
+        assert_eq!(child_key("/usr", "Lib"), "/usr/Lib");
+        assert!(is_under("/", "/usr/lib") && is_under("/usr", "/usr/lib") && !is_under("/usr", "/usrx"));
     }
 }

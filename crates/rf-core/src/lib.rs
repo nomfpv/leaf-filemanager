@@ -9,6 +9,7 @@ pub mod hotkey;
 pub mod navtree;
 pub mod openrules;
 pub mod organize;
+pub mod pathkey;
 pub mod previewpane;
 pub mod recycle_bin;
 pub mod propcols;

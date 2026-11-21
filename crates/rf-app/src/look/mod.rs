@@ -40,6 +40,11 @@ pub struct LookManager {
 impl Global for LookManager {}
 
 
+/// The Windows shell cannot read `C:/a/b`; on Linux the path is left alone (a backslash is a letter there).
+fn windows_slashes(path: PathBuf) -> PathBuf {
+    if cfg!(windows) { PathBuf::from(path.to_string_lossy().replace('/', "\\")) } else { path }
+}
+
 fn rect(r: [f32; 4]) -> Rect {
     Rect { x: r[0], y: r[1], w: r[2], h: r[3] }
 }
@@ -103,7 +108,7 @@ impl LookManager {
     pub fn show(path: PathBuf, opts: ShowOpts, cx: &mut App) {
         trace::start();
         // kabuk API'leri `C:/a/b` biçimini ayrıştıramaz (özellikler, küçük resimler boş gelir)
-        let path = PathBuf::from(path.to_string_lossy().replace('/', "\\"));
+        let path = windows_slashes(path);
         if opts.pin {
             Self::pin_current(cx);
         } else if Self::with_active(cx, |v, w, cx| v.set_path(path.clone(), w, cx)).is_some() {
@@ -182,7 +187,7 @@ impl LookManager {
 
     /// Seçim değişti: açık pencere yeni dosyayı gösterir.
     pub fn switch(path: PathBuf, cx: &mut App) {
-        let path = PathBuf::from(path.to_string_lossy().replace('/', "\\"));
+        let path = windows_slashes(path);
         if Self::current_path(cx).as_ref() == Some(&path) {
             return;
         }

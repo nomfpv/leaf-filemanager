@@ -220,7 +220,7 @@ pub(crate) fn score(label: &str, q: &str) -> Option<i32> {
 
 fn as_path(q: &str) -> Option<PathBuf> {
     let t = q.trim().trim_matches('"');
-    let looks = t.len() >= 2 && (t.as_bytes()[1] == b':' || t.starts_with("\\\\") || t.starts_with('%'));
+    let looks = t.len() >= 2 && (t.as_bytes()[1] == b':' || t.starts_with("\\\\") || t.starts_with('%') || (!cfg!(windows) && t.starts_with('/')));
     looks.then(|| PathBuf::from(t))
 }
 

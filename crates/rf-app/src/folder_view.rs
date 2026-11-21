@@ -1696,7 +1696,7 @@ impl FolderView {
                         let looked_up = t_index.elapsed();
                         found = send_index_hits(&paths, &tx, &cancel);
                         log::info!("search: the index answered \"{query}\" in {} with {} hits ({looked_up:?} to find, {:?} with details)", root.display(), found, t_index.elapsed());
-                        seen = Some(paths.iter().map(|p| p.to_string_lossy().to_lowercase()).collect());
+                        seen = Some(paths.iter().map(|p| rf_core::pathkey::path_key(p)).collect());
                     }
                     // 2. Windows Search (names + contents + AQS) where the folder is indexed: with
                     //    our index, only what it adds (matches inside files)
@@ -1730,7 +1730,7 @@ impl FolderView {
                                     if !include_hidden && h.entry.is_hidden() {
                                         continue;
                                     }
-                                    if seen2.as_ref().is_some_and(|s| s.contains(&h.path.to_string_lossy().to_lowercase())) {
+                                    if seen2.as_ref().is_some_and(|s| s.contains(&rf_core::pathkey::path_key(&h.path))) {
                                         continue;
                                     }
                                     let parent: Arc<std::path::Path> = h.path.parent().unwrap_or(&h.path).into();
@@ -2400,7 +2400,7 @@ fn known_kind(p: &std::path::Path) -> Option<KnownKind> {
             .filter_map(|(k, kind)| k.path().map(|p| (p, kind)))
             .collect()
     });
-    let lower = |q: &std::path::Path| q.to_string_lossy().to_lowercase();
+    let lower = |q: &std::path::Path| rf_core::pathkey::path_key(q);
     let here = lower(p);
     paths.iter().find_map(|(root, kind)| {
         let r = lower(root);
@@ -6044,7 +6044,7 @@ fn valid_item_drop(sources: &[PathBuf], target: &std::path::Path, is_dir: bool) 
     !sources.is_empty() && if is_dir {
         !leaf_sys::dnd::is_invalid_drop(sources, target)
     } else {
-        !sources.iter().any(|p| p.as_os_str().eq_ignore_ascii_case(target.as_os_str()))
+        !sources.iter().any(|p| rf_core::pathkey::name_eq(&p.to_string_lossy(), &target.to_string_lossy()))
     }
 }
 
