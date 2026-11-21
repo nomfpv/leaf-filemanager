@@ -20,6 +20,7 @@ pub mod propcols;
 pub mod rename;
 pub mod rename_plan;
 pub mod rename_rules;
+pub mod search_date;
 pub mod shelf;
 pub mod sort;
 pub mod sortkeys;

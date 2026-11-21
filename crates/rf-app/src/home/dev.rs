@@ -638,7 +638,16 @@ pub fn activity(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) 
             let fill = if lv == 0 { p.pressed } else { p.accent.opacity([0.0, 0.28, 0.5, 0.75, 1.0][lv]) };
             let date = chrono::NaiveDate::from_num_days_from_ce_opt(day).map(|d| d.format("%a %e %b %Y").to_string()).unwrap_or_default();
             let tip = format!("{} {}: {}", n, if n == 1 { "file modified" } else { "files modified" }, date.trim());
-            col = col.child(cell.bg(fill).tooltip(move |win, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(win, cx)));
+            // a click opens the search of this folder for the files modified that day
+            let query = chrono::NaiveDate::from_num_days_from_ce_opt(day).map(|d| format!("modified:{}", d.format("%Y-%m-%d")));
+            let root = folder.clone();
+            let cell = cell.bg(fill).tooltip(move |win, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(win, cx));
+            col = col.child(match query.filter(|_| n > 0) {
+                Some(query) => cell
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Search { root: root.clone(), query: query.clone() }, cx))),
+                None => cell,
+            });
         }
         weeks = weeks.child(col);
     }

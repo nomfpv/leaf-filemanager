@@ -2130,14 +2130,44 @@ impl Workspace {
 
     /// Under the empty search box: the searches run before (a click runs one again).
     fn render_search_history(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.search_mode || !self.search.read(cx).value().trim().is_empty() {
+        if !self.search_mode {
             return None;
         }
-        let history = cx.global::<crate::settings::Settings>().search_history.clone();
-        if history.is_empty() {
-            return None;
-        }
+        let value = self.search.read(cx).value().to_string();
+        let history = if value.trim().is_empty() { cx.global::<crate::settings::Settings>().search_history.clone() } else { Vec::new() };
         let mut list = v_flex().absolute().top(px(38.)).left_0().right_0().py_1().rounded(theme::RADIUS).bg(p.card_bg).border_1().border_color(p.border).shadow_lg();
+        // the "Modified" chips: they write (or take out) the query's `modified:` word
+        let now = chrono::Local::now().date_naive();
+        let chosen = rf_core::search_date::current(&value, now);
+        let mut chips = h_flex().px_3().py_1().gap_2().items_center().text_sm().child(div().text_color(p.text_secondary).child(t!("Modified")));
+        for (i, (word, label)) in [(None, t!("Any")), (Some("today"), t!("Today")), (Some("week"), t!("This week")), (Some("month"), t!("This month"))].into_iter().enumerate() {
+            let on = chosen.as_deref() == word;
+            let value = value.clone();
+            chips = chips.child(
+                div()
+                    .id(("search-modified", i))
+                    .px_2()
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .rounded(theme::RADIUS_SM)
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(p.selection))
+                    .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+                    .child(label)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            let q = rf_core::search_date::with_modified(&value, word);
+                            this.search.update(cx, |s, cx| s.set_value(q.clone(), window, cx));
+                            this.run_search(q, window, cx);
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
+        list = list.child(chips);
         let row = |id: ElementId| h_flex().id(id).mx_1().px_2().h(px(28.)).gap_2().items_center().rounded(theme::RADIUS_SM).text_sm().hover(|s| s.bg(p.hover)).cursor_pointer();
         for (i, q) in history.into_iter().enumerate() {
             let query = q.clone();
