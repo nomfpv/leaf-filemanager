@@ -584,6 +584,9 @@ pub struct FolderView {
     /// Folder sizes for the Size column: clicked ("Boyutu hesapla") or all visible ones
     /// (Settings → "Calculate folder sizes").
     folder_sizes: std::collections::HashMap<PathBuf, DirSize>,
+    /// Video lengths for the Grid's badge ("1:08"), asked of Windows' property system for the tiles shown; None while asking or
+    /// when it has none.
+    video_lengths: std::collections::HashMap<PathBuf, Option<SharedString>>,
     /// Settings → Layout → "Adaptive": decide details/grid once this folder's listing is in.
     adaptive_pending: bool,
     /// The view's first folder has been given its layout (with "sync layout" on, only that first one takes the shared layout).
@@ -769,6 +772,7 @@ impl FolderView {
             column_cache: Default::default(),
             column_pending: HashSet::new(),
             folder_sizes: Default::default(),
+            video_lengths: Default::default(),
             adaptive_pending: false,
             layout_seeded: false,
             size_queue: Default::default(),
@@ -1432,6 +1436,7 @@ impl FolderView {
             self.props_reset();
             self.sortx_reset();
             self.folder_sizes.clear();
+            self.video_lengths.clear();
             self.size_queue.clear();
             for (b, _) in self.size_batches.drain(..) {
                 b.cancel();
@@ -2615,9 +2620,22 @@ impl FolderView {
             GridStyle::List => px(240.),
         }
     }
+    /// A card's width in Tiles: the size's width, stretched so that the cards of a row fill the list (the mockups' grid).
+    fn grid_card_w(&self) -> Pixels {
+        let base = GRID_SIZES[self.grid_size as usize].0;
+        let gap = f32::from(GRID_GAP);
+        let avail = f32::from(self.content_width) - 12.;
+        if avail <= base {
+            return px(base);
+        }
+        let cols = ((avail + gap) / (base + gap)).floor().max(1.);
+        px(((avail - gap * (cols - 1.)) / cols).floor().clamp(base, base * 1.5))
+    }
+
     fn grid_row_h(&self) -> Pixels {
         match self.grid_style {
-            GridStyle::Tiles => px(GRID_SIZES[self.grid_size as usize].1),
+            // the picture (4:3 inside the 8 px frame) and 66 px for the frame, the name and the size line
+            GridStyle::Tiles => ((self.grid_card_w() - px(16.)) * 0.75).round() + px(66.),
             GridStyle::Cards => px(84.),
             GridStyle::List => px(32.),
         }
@@ -2713,14 +2731,20 @@ impl FolderView {
         let hover_select = cx.global::<crate::settings::Settings>().select_on_hover;
         let p = Palette::for_window(window);
         let cols = self.grid_cols.max(1);
-        let (tile_w, row_h, thumb_px) = (self.grid_tile_w(), self.grid_row_h(), self.grid_thumb_px());
         let style = self.grid_style;
+        let tile_w = if style == GridStyle::Tiles { self.grid_card_w() } else { self.grid_tile_w() };
+        let (row_h, thumb_px) = (self.grid_row_h(), self.grid_thumb_px());
+        // Tiles: the picture is the card's width inside its 8 px frame, at 4:3
+        let tile_pic_w = tile_w - px(16.);
+        let tile_pic_h = (tile_pic_w * 0.75).round();
         let visual_px = match style {
-            GridStyle::Tiles => px(thumb_px as f32 * 0.75),
+            GridStyle::Tiles => tile_pic_h,
             GridStyle::Cards => px(60.),
             GridStyle::List => px(20.),
         };
         let show_ext = cx.global::<crate::settings::Settings>().show_extensions;
+        let system_icons = cx.global::<crate::settings::Settings>().system_icons;
+        let any_cut = crate::cut_marks::any();
         let renamed = self.renamed.clone();
         let mut out = Vec::with_capacity(range.len());
         let units = self.grid_grouped().then(|| self.grid_units_now());
@@ -2772,22 +2796,42 @@ impl FolderView {
                 let dim = e.is_hidden() || e.is_cloud_placeholder();
                 // Settings → "Show thumbnails" off: the file type's icon instead of a preview
                 let thumbs_on = cx.global::<crate::settings::Settings>().show_thumbnails;
-                let thumb = self.parent_of(ei).map(|d| d.to_path_buf()).and_then(|d| {
+                let is_thumb = icons::has_thumbnail(e);
+                // (without Windows' icons only real pictures are asked for: the rest wear the line icon)
+                let ask = system_icons || (thumbs_on && is_thumb);
+                let thumb = ask.then(|| self.parent_of(ei).map(|d| d.to_path_buf())).flatten().and_then(|d| {
                     self.images.update(cx, |c, cx| if thumbs_on { c.thumbnail(&d, e, thumb_px, cx) } else { c.icon(&d, e, cx) })
                 });
-                let is_thumb = icons::has_thumbnail(e);
+                let is_cut = any_cut && self.path_of(ei).is_some_and(|p| crate::cut_marks::contains(&p));
+                let tiles = style == GridStyle::Tiles;
+                // a photo or a video fills its card's picture (the mockups'); a document's page and an icon sit inside it
+                let fills = tiles && is_thumb && matches!(cat, icons::Category::Image | icons::Category::Video);
+                let is_video = cat == icons::Category::Video && !e.is_dir();
+                let has_picture = fills && thumb.is_some();
                 let visual: AnyElement = match thumb {
+                    Some(im) if fills => img(im).w(tile_pic_w).h(tile_pic_h).rounded(px(8.)).object_fit(ObjectFit::Cover).into_any_element(),
                     Some(im) => img(im)
                         .size(visual_px)
                         .object_fit(ObjectFit::Contain)
                         .when(is_thumb, |i| i.rounded(px(4.)))
                         .into_any_element(),
                     None => Icon::new(icons::icon_for(cat))
-                        .size(visual_px * 0.6)
+                        .size(if tiles { visual_px * 0.45 } else { visual_px * 0.6 })
                         .text_color(theme::kind_color(cat, p.dark))
                         .into_any_element(),
                 };
                 let overlay = self.overlay_of(ei, visual_px, cx);
+                // the badge with the video's length, at the picture's lower right
+                let length = (tiles && is_video).then(|| self.path_of(ei)).flatten().and_then(|p| self.video_length(p, cx));
+                // the line under a card's name: the file's size, or how many items a folder holds
+                let meta: Option<String> = tiles.then(|| {
+                    let e = &self.entries[ei as usize];
+                    if e.is_dir() {
+                        self.path_of(ei).and_then(|d| self.child_count(d, cx)).flatten().map(|n| crate::i18n::items(n as usize)).unwrap_or_default()
+                    } else {
+                        format::size(e.size)
+                    }
+                });
                 let e = &self.entries[ei as usize];
                 let visual = link_marked(visual, visual_px, e.link, overlay);
                 let rename_input = self.renaming.as_ref().filter(|(i, _)| *i == ei).map(|(_, inp)| inp.clone());
@@ -2823,13 +2867,16 @@ impl FolderView {
                         .into_any_element(),
                     None => div()
                         .w_full()
-                        .text_xs()
+                        .text_size(px(p.fs_small))
                         .text_center()
-                        .line_clamp(2)
+                        // (a card's name is one line, its size under it: the mockups')
+                        .when(tiles, |d| d.whitespace_nowrap().overflow_hidden())
+                        .when(!tiles, |d| d.line_clamp(2))
                         // a name longer than two lines ends in "…": without this the second line holds everything that is left and is
                         // cut at both ends by the tile ("ding Page HTML Tem"), which reads as a broken name (a user's report)
                         .text_ellipsis()
-                        .when(dim, |d| d.opacity(0.6))
+                        .when(p.name_weight != 400., |d| d.font_weight(FontWeight(p.name_weight)))
+                        .when(dim || is_cut, |d| d.opacity(if is_cut { 0.5 } else { 0.6 }))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true))
                         .child(crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())))
                         .into_any_element(),
@@ -2844,7 +2891,44 @@ impl FolderView {
                 });
                 let name_text = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref()));
                 let base = match style {
-                    GridStyle::Tiles => v_flex().p_1().gap_1().items_center().child(div().size(visual_px + px(4.)).flex().items_center().justify_center().child(visual)).child(label),
+                    // a card: the picture in a rounded box (a quiet fill behind icons, a soft shadow under photos), the name, the size
+                    GridStyle::Tiles => v_flex()
+                        .p(px(8.))
+                        .gap(px(6.))
+                        .items_center()
+                        .child(
+                            div()
+                                .relative()
+                                .w(tile_pic_w)
+                                .h(tile_pic_h)
+                                .flex_shrink_0()
+                                .rounded(px(8.))
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(!has_picture, |d| d.bg(p.field_bg))
+                                .when(has_picture, |d| {
+                                    d.shadow(vec![BoxShadow { color: gpui_kit::hsla(0., 0., 0., 0.22), offset: point(px(0.), px(4.)), blur_radius: px(12.), spread_radius: px(0.), inset: false }])
+                                })
+                                .when(is_cut, |d| d.opacity(0.5))
+                                .child(visual)
+                                .children(length.map(|len| {
+                                    div()
+                                        .absolute()
+                                        .right(px(4.))
+                                        .bottom(px(4.))
+                                        .px(px(4.))
+                                        .rounded(px(3.))
+                                        .bg(gpui_kit::hsla(0., 0., 0., 0.62))
+                                        .text_size(px(10.))
+                                        .line_height(px(16.))
+                                        .text_color(gpui_kit::hsla(0., 0., 1., 1.))
+                                        .child(len)
+                                })),
+                        )
+                        .child(label)
+                        .children(meta.map(|m| div().mt(px(-4.)).w_full().text_center().text_size(px(p.fs_xs)).text_color(if selected { p.text_secondary } else { p.text_tertiary }).whitespace_nowrap().overflow_hidden().text_ellipsis().child(m))),
                     GridStyle::Cards => h_flex()
                         .px_2()
                         .gap_3()
@@ -2890,7 +2974,7 @@ impl FolderView {
                     .id(("cell", vi))
                     .w(tile_w)
                     .h(row_h - px(4.))
-                    .rounded(theme::RADIUS)
+                    .rounded(if tiles { px(12.) } else { theme::RADIUS })
                     // tiles: quiet fill + a thin accent outline (a pill would read as a crop)
                     .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
                     .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { p.selection_inactive }))
@@ -3193,7 +3277,7 @@ impl FolderView {
                 ViewMode::Columns => {}
                 ViewMode::Grid => {
                     let (pt, pl) = (8.0, 6.0);
-                    let cw = f32::from(self.grid_tile_w() + GRID_GAP);
+                    let cw = f32::from(if self.grid_style == GridStyle::Tiles { self.grid_card_w() } else { self.grid_tile_w() } + GRID_GAP);
                     let rh = f32::from(self.grid_row_h());
                     let cols = self.grid_cols.max(1);
                     if self.grid_grouped() && y1 >= pt && x1 >= pl {
@@ -3430,6 +3514,30 @@ impl FolderView {
         })
         .detach();
         Some(None)
+    }
+
+    /// The video's length for its tile's badge, once Windows has told it (asked in the background the first time).
+    fn video_length(&mut self, p: PathBuf, cx: &mut Context<Self>) -> Option<SharedString> {
+        if let Some(v) = self.video_lengths.get(&p) {
+            return v.clone();
+        }
+        self.video_lengths.insert(p.clone(), None);
+        cx.spawn(async move |this, cx| {
+            let q = p.clone();
+            let got = cx
+                .background_spawn(async move {
+                    leaf_sys::props::media_props(&q).into_iter().find(|(k, _)| *k == "Duration").map(|(_, v)| short_length(&v))
+                })
+                .await;
+            if let Some(len) = got.filter(|s| !s.is_empty()) {
+                let _ = this.update(cx, |v, cx| {
+                    v.video_lengths.insert(p, Some(len.into()));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        None
     }
 
     fn folder_size(&mut self, p: PathBuf, cx: &mut Context<Self>) -> DirSize {
@@ -3947,8 +4055,9 @@ impl FolderView {
         h_flex()
             .h(px(p.header_h))
             .pl(px(if filled { 4. } else { 10. }))
-            .pr(px(if filled { 4. } else { 10. + self.gutter() }))
-            .when(filled, |d| d.mx(px(6.)).mr(px(6. + self.gutter())).mb(px(2.)).rounded(px(p.control_radius)).bg(p.header_fill))
+            // (the filled strip runs the pane's full width, the mockups'; its columns keep clear of the scrollbar's gutter like the rows')
+            .pr(px(if filled { 4. + self.gutter() } else { 10. + self.gutter() }))
+            .when(filled, |d| d.mx(px(6.)).mb(px(2.)).rounded(px(p.control_radius)).bg(p.header_fill))
             .overflow_hidden()
             .text_size(px(p.fs_xs))
             .when(!filled, |d| d.border_b_1().border_color(p.border))
@@ -3988,7 +4097,7 @@ impl FolderView {
             .children(vis.commit[3].then(|| plain("h-ghash", t!("Commit hash"), w[10]).child(handle(10, cx))))
             .children(vis.size.then(|| col("h-size", t!("Size"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))))
             .children(vis.modified.then(|| {
-                col("h-mod", t!("Date modified"), SortKey::Modified, Some(px(w[0])), false, cx).relative().child(handle(0, cx))
+                col("h-mod", t!("Modified"), SortKey::Modified, Some(px(w[0])), false, cx).relative().child(handle(0, cx))
             }))
             .children(vis.created.then(|| {
                 col("h-created", t!("Date created"), SortKey::Created, Some(px(w[1])), false, cx).relative().child(handle(1, cx))
@@ -4087,6 +4196,8 @@ impl FolderView {
         let search_mode = self.is_search();
         let prefs = cx.global::<crate::settings::Settings>();
         let show_ext = prefs.show_extensions;
+        let system_icons = prefs.system_icons;
+        let any_cut = crate::cut_marks::any();
         let renamed = self.renamed.clone();
         let checkboxes = prefs.show_checkboxes;
         let hover_select = prefs.select_on_hover;
@@ -4182,10 +4293,13 @@ impl FolderView {
             let cat = icons::category(e);
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
-            let shell_icon = self
-                .parent_of(ei)
-                .map(|d| d.to_path_buf())
+            // (Windows' icons only when asked for: the line icons are the default look)
+            let shell_icon = system_icons
+                .then(|| self.parent_of(ei).map(|d| d.to_path_buf()))
+                .flatten()
                 .and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx)));
+            // cut and waiting for a paste: greyed, with a small "cut" mark after the name
+            let is_cut = any_cut && self.path_of(ei).is_some_and(|p| crate::cut_marks::contains(&p));
             let overlay = self.overlay_of(ei, px(16.), cx);
             let e = &self.entries[ei as usize];
             let git_state = self.git.as_ref().and_then(|g| leaf_sys::git::state_for_child(g, self.parent_of(ei)?, &e.name));
@@ -4335,11 +4449,23 @@ impl FolderView {
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .when(p.name_weight != 400., |d| d.font_weight(FontWeight(p.name_weight)))
-                    .when(dim, |d| d.opacity(0.6))
+                    .when(dim && !is_cut, |d| d.opacity(0.6))
+                    // (a cut row: half strength, the mockups'; at High the text stays whole and turns tertiary and italic)
+                    .when(is_cut, |d| if p.name_weight > 400. { d.italic().text_color(p.text_tertiary) } else { d.opacity(0.5) })
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true))
                     .child(name)
                     .into_any_element(),
             };
+            let cut_mark = is_cut.then(|| {
+                h_flex()
+                    .flex_shrink_0()
+                    .gap(px(3.))
+                    .items_center()
+                    .text_size(px(p.fs_xs))
+                    .text_color(p.text_tertiary)
+                    .child(Icon::new(L::Scissors).size(px(12.)))
+                    .child(t!("cut"))
+            });
             let size_cell = show_size.then(|| {
                 let cell = div().w(px(cw[3])).flex_shrink_0().px_2().flex().justify_end().whitespace_nowrap().overflow_hidden();
                 match calc_link {
@@ -4382,7 +4508,7 @@ impl FolderView {
                 .px(px(4.))
                 .rounded(px(p.row_radius))
                 .items_center()
-                .text_sm()
+                .text_size(px(p.fs))
                 .relative()
                 .when(striped, |d| d.bg(p.stripe))
                 .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
@@ -4458,11 +4584,12 @@ impl FolderView {
                         })
                         .child(link_marked(
                             match &shell_icon {
-                                Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().into_any_element(),
+                                Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().when(is_cut, |d| d.opacity(0.5)).into_any_element(),
                                 None => Icon::new(icons::icon_for(cat))
                                     .size(px(16.))
                                     .flex_shrink_0()
                                     .text_color(theme::kind_color(cat, p.dark))
+                                    .when(is_cut, |d| d.opacity(0.5))
                                     .into_any_element(),
                             },
                             px(16.),
@@ -4473,6 +4600,7 @@ impl FolderView {
                         // encrypted: an archive member that needs a password, or an EFS file
                         .children((e.attrs & rf_core::attrs::ENCRYPTED != 0).then(|| Icon::new(L::Lock).size(px(12.)).flex_shrink_0().text_color(p.text_secondary)))
                         .children(tag_dots)
+                        .children(cut_mark)
                         .children(git_badge)
                         .child(div().flex_1())
                         .children(cloud_badge),
@@ -4552,7 +4680,7 @@ impl FolderView {
             self.render_columns(p, cx)
         } else if self.view_mode == ViewMode::Grid {
             let avail = self.content_width - px(12.);
-            let cols = ((avail / (self.grid_tile_w() + GRID_GAP)).floor() as usize).max(1);
+            let cols = (((avail + GRID_GAP) / (self.grid_tile_w() + GRID_GAP)).floor() as usize).max(1);
             self.grid_cols = cols;
             let rows = if self.grid_grouped() { self.grid_units_now().0.len() } else { count.div_ceil(cols) };
             list_body = true;
@@ -5270,7 +5398,9 @@ fn static_column(
 
 const GRID_GAP: Pixels = px(4.);
 /// Grid sizes (Ctrl+= / Ctrl+-): tile width, row height, thumbnail pixels.
-const GRID_SIZES: [(f32, f32, u32); 5] = [(76., 94., 64), (92., 112., 80), (124., 150., 128), (172., 204., 192), (236., 276., 272)];
+/// (Tiles are the mockups' cards: an 8 px frame round a 4:3 picture, the name and a size line under it: the row is the picture's height
+/// and 56 px.)
+const GRID_SIZES: [(f32, f32, u32); 5] = [(84., 107., 96), (104., 122., 128), (136., 146., 160), (180., 179., 224), (240., 224., 320)];
 const DEFAULT_GRID_SIZE: u8 = 2;
 /// Details row heights for the "Size" slider (30 = the classic one; 22 = as tight as File Explorer's compact rows, asked for on Threads).
 const ROW_SIZES: [f32; 5] = [22., 30., 36., 44., 52.];
@@ -5646,6 +5776,16 @@ fn rtl_grid_lines(name: &str, avail: Pixels, window: &Window) -> Vec<String> {
 }
 
 /// `text` as it is when it fits in `avail`, else shortened at its end (in reading order) to what fits with "…" after it.
+/// Windows' "00:01:08" as the badge's "1:08" (hours only when there are any: "1:02:03").
+fn short_length(s: &str) -> String {
+    let s = s.trim();
+    let s = s.strip_prefix("00:").unwrap_or(s);
+    match s.strip_prefix('0') {
+        Some(rest) if rest.contains(':') => rest.to_string(),
+        _ => s.to_string(),
+    }
+}
+
 fn cut_to_width(text: &str, avail: Pixels, width: &dyn Fn(&str) -> Pixels) -> String {
     if width(text) <= avail {
         return text.to_string();

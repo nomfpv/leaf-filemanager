@@ -207,7 +207,7 @@ impl FolderView {
 
         self.auto_cols = AutoCols {
             w: [
-                Some(fit(date_w, heading(t!("Date modified")), AIR)),
+                Some(fit(date_w, heading(t!("Modified")), AIR)),
                 Some(fit(date_w, heading(t!("Date created")), AIR)),
                 (!types.is_empty()).then(|| fit(type_w, heading(t!("Type")), AIR)),
                 Some(fit(size_w, heading(t!("Size")), 0.)),

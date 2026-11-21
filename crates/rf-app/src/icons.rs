@@ -85,16 +85,37 @@ pub fn type_label(e: &Entry) -> String {
 
 /// [`type_label`] for a folder or for a file's extension (lower case, no dot).
 pub fn type_label_of(dir: bool, ext: &str) -> String {
+    // short names, as in the mockups ("Folder", "JPEG image", "ZIP archive", "Rust source"): the Type column stays narrow
     if dir {
-        return t!("File folder").into();
+        return t!("Folder").into();
     }
-    match ext {
-        "" => t!("File").into(),
-        "exe" => t!("Application").into(),
-        "lnk" => t!("Shortcut").into(),
-        "txt" => t!("Text Document").into(),
-        "pdf" => t!("PDF Document").into(),
-        "zip" => t!("Compressed (zipped) folder").into(),
-        ext => format!("{} {}", ext.to_uppercase(), t!("File")),
+    let named = match ext {
+        "" => t!("File"),
+        "exe" | "com" | "appx" | "msix" => t!("Application"),
+        "msi" => t!("Installer"),
+        "lnk" | "url" => t!("Shortcut"),
+        "txt" | "log" => t!("Text file"),
+        "md" => t!("Markdown"),
+        "pdf" => t!("PDF document"),
+        "csv" => t!("CSV file"),
+        "rs" => t!("Rust source"),
+        "sh" | "ps1" | "bat" | "cmd" => t!("Shell script"),
+        "doc" | "docx" | "odt" | "rtf" => t!("Text document"),
+        "ppt" | "pptx" | "odp" | "key" => t!("Presentation"),
+        "xls" | "xlsx" | "ods" | "numbers" => t!("Spreadsheet"),
+        "jpg" | "jpeg" | "jfif" => t!("JPEG image"),
+        "zst" => t!("Zstd archive"),
+        _ => "",
+    };
+    if !named.is_empty() {
+        return named.into();
     }
+    let kind = match category_for_ext(ext) {
+        Category::Image => t!("image"),
+        Category::Video => t!("video"),
+        Category::Audio => t!("audio"),
+        Category::Archive => t!("archive"),
+        _ => t!("file"),
+    };
+    format!("{} {kind}", ext.to_uppercase())
 }

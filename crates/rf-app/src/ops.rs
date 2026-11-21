@@ -199,6 +199,9 @@ impl FolderView {
             crate::archive_view::copy_items(cx, paths);
             return;
         }
+        // the lists grey what is cut until it is pasted (a copy ends a cut, as in Explorer)
+        crate::cut_marks::set(if kind == Transfer::Move { &paths } else { &[] });
+        cx.refresh_windows();
         // OpenClipboard can wait on other apps: never on the UI thread.
         leaf_sys::sta::run(move |owner| {
             if let Err(e) = leaf_sys::clipboard::set_files(owner, &paths, kind) {
@@ -321,6 +324,11 @@ impl FolderView {
     }
 
     pub(crate) fn paste_to(&mut self, dir: PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
+        // what was cut is on its way: no longer greyed
+        if crate::cut_marks::any() {
+            crate::cut_marks::clear();
+            cx.refresh_windows();
+        }
         // GetClipboardData can block on a slow source app (delayed rendering).
         let (tx, rx) = oneshot::channel();
         leaf_sys::sta::run(move |owner| {
