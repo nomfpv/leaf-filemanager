@@ -414,10 +414,10 @@ impl FolderView {
             v.push(Item::action(t!("Copy to other pane"), icon(L::CopyPlus), act(me, move |_, _, cx| cx.emit(FolderEvent::ToOtherPane(Transfer::Copy, c.clone())))).hint("Shift+F5"));
             v.push(Item::action(t!("Move to other pane"), icon(L::MoveRight), act(me, move |_, _, cx| cx.emit(FolderEvent::ToOtherPane(Transfer::Move, m.clone())))).hint("Shift+F6"));
         }
-        if single_dir && mp.terminal && !in_archive {
+        if single_dir && mp.terminal {
             v.push(Item::Separator);
             let d = target_dir.clone();
-            v.push(Item::action(t!("Open in terminal"), icon(L::SquareTerminal), move |_, _| open_terminal(d.clone())).hint("Ctrl+Shift+`"));
+            v.push(Item::action(t!("Open in terminal"), icon(L::SquareTerminal), move |_, cx| open_terminal(d.clone(), cx)).hint("Ctrl+Shift+`"));
         }
         v.push(Item::Separator);
         v.push(Item::Sub { label: t!("Show more options").into(), icon: icon(L::Ellipsis), items: Sub::Pending { key: "more", fallback: None }, click: None });
@@ -467,9 +467,9 @@ impl FolderView {
         let show_hidden = self.filter.show_hidden;
         v.push(Item::action(t!("Show hidden items"), icon(L::Eye), act(me, |v, _, cx| v.toggle_hidden(cx))).checked(show_hidden).hint("Ctrl+H"));
         v.push(Item::Separator);
-        if !in_archive {
+        {
             let d = dir.to_path_buf();
-            v.push(Item::action(t!("Open in terminal"), icon(L::SquareTerminal), move |_, _| open_terminal(d.clone())).hint("Ctrl+Shift+`"));
+            v.push(Item::action(t!("Open in terminal"), icon(L::SquareTerminal), move |_, cx| open_terminal(d.clone(), cx)).hint("Ctrl+Shift+`"));
         }
         // the folder organizer: only where the folder has rules
         if !self.is_search() && crate::organizer::has_rules_for(dir, cx) {
@@ -933,10 +933,8 @@ fn archive_password(dest: PathBuf, finish: Finish, first: Option<String>, window
     );
 }
 
-fn open_terminal(d: PathBuf) {
-    std::thread::spawn(move || {
-        let _ = leaf_sys::shell::open_terminal(&d);
-    });
+fn open_terminal(d: PathBuf, cx: &App) {
+    crate::terminal::open(d, cx);
 }
 
 /// "<name> - Kısayol.lnk" next to each item (unique name), like Explorer's "Create shortcut".

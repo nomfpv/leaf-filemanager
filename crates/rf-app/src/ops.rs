@@ -848,10 +848,7 @@ impl FolderView {
                 MenuOutcome::Custom(MENU_NEW_TEXT) => v.create_new(false, cx),
                 MenuOutcome::Custom(MENU_COPY_PATH) => v.copy_path(cx),
                 MenuOutcome::Custom(MENU_TERMINAL) => {
-                    let d = target_dir.clone();
-                    std::thread::spawn(move || {
-                        let _ = leaf_sys::shell::open_terminal(&d);
-                    });
+                    crate::terminal::open(target_dir.clone(), cx);
                 }
                 MenuOutcome::Custom(MENU_NEW_TAB) => {
                     cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(rf_core::Location::Path(target_dir.clone())))

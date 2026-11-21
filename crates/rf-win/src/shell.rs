@@ -1,7 +1,10 @@
 //! Shell actions (open, properties). Each call initializes COM on the calling thread,
 //! so run them on a worker thread — shell extensions can block for seconds.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use rf_core::terminal::Terminal;
 
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx};
 use windows::Win32::UI::Shell::{
@@ -74,10 +77,143 @@ pub fn properties(path: &Path) -> anyhow::Result<()> {
 
 /// Opens a terminal (Windows Terminal if present, else PowerShell) in `dir`.
 pub fn open_terminal(dir: &Path) -> anyhow::Result<()> {
-    let d = dir.to_string_lossy().to_string();
-    let wt = std::process::Command::new("wt.exe").args(["-d", &d]).spawn();
-    if wt.is_err() {
-        std::process::Command::new("powershell.exe").current_dir(dir).spawn()?;
+    open_terminal_with(Terminal::Auto, "", dir)
+}
+
+/// A terminal start, ready to run: the program, its command line as written (no further quoting), the working directory (None: the
+/// program's own default) and whether it needs a console of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Launch {
+    pub program: PathBuf,
+    pub args: String,
+    pub cwd: Option<PathBuf>,
+    pub console: bool,
+}
+
+fn is_unc(dir: &Path) -> bool {
+    let s = dir.to_string_lossy();
+    s.starts_with(r"\\") && !s.starts_with(r"\\?\") && !s.starts_with(r"\\.\")
+}
+
+/// `"dir"` for a command line: a trailing backslash would escape the closing quote, so it is doubled.
+fn quoted(dir: &Path) -> String {
+    let d = dir.to_string_lossy();
+    format!("\"{d}{}\"", if d.ends_with('\\') { "\\" } else { "" })
+}
+
+/// Splits a command line into its program and the rest: `"C:\a b\x.exe" -d "{path}"` or `wt -d {path}`.
+fn split_command(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if let Some(rest) = line.strip_prefix('"') {
+        let end = rest.find('"')?;
+        return Some((rest[..end].to_string(), rest[end + 1..].trim().to_string()));
+    }
+    let mut it = line.splitn(2, char::is_whitespace);
+    let prog = it.next().filter(|p| !p.is_empty())?;
+    Some((prog.to_string(), it.next().unwrap_or("").trim().to_string()))
+}
+
+/// How to start `kind` in `dir`, given the program's path. `None` for Custom without a command, and for the Linux terminals.
+pub(crate) fn launch_for(kind: Terminal, custom: &str, dir: &Path, exe: &Path) -> Option<Launch> {
+    let unc = is_unc(dir);
+    // (cmd cannot have a share as its working directory, nor can the programs that start from the process's)
+    let cwd = (!unc).then(|| dir.to_path_buf());
+    let ps_goto = || format!("-NoExit -Command \"Set-Location -LiteralPath '{}'\"", dir.to_string_lossy().replace('\'', "''"));
+    let launch = |args: String, cwd: Option<PathBuf>, console: bool| Launch { program: exe.to_path_buf(), args, cwd, console };
+    Some(match kind {
+        Terminal::Auto | Terminal::WindowsTerminal => launch(format!("-d {}", quoted(dir)), None, false),
+        Terminal::Pwsh | Terminal::WindowsPowerShell => launch(if unc { ps_goto() } else { String::new() }, cwd, true),
+        // pushd maps the share to a drive letter for the session
+        Terminal::Cmd => launch(if unc { format!("/K pushd {}", quoted(dir)) } else { String::new() }, cwd, true),
+        Terminal::Wsl => launch(format!("--cd {}", quoted(dir)), None, true),
+        Terminal::GitBash => launch(format!("--cd={}", quoted(dir)), cwd, false),
+        Terminal::Custom => {
+            let (program, args) = split_command(custom)?;
+            let d = dir.to_string_lossy();
+            let path = format!("{d}{}", if d.ends_with('\\') { "\\" } else { "" });
+            Launch { program: PathBuf::from(program), args: args.replace("{path}", &path), cwd, console: false }
+        }
+        _ => return None,
+    })
+}
+
+fn on_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")?.to_string_lossy().split(';').map(|d| Path::new(d.trim_matches('"')).join(name)).find(|p| p.is_file())
+}
+
+fn env_dir(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+}
+
+/// The program that starts `kind`, if it is installed.
+pub fn terminal_exe(kind: Terminal) -> Option<PathBuf> {
+    let under = |var: &str, rest: &str| env_dir(var).map(|d| d.join(rest)).filter(|p| p.is_file());
+    let system = |rest: &str| under("SystemRoot", rest);
+    match kind {
+        Terminal::Auto => terminal_exe(Terminal::WindowsTerminal).or_else(|| terminal_exe(Terminal::WindowsPowerShell)),
+        Terminal::WindowsTerminal => on_path("wt.exe").or_else(|| under("LOCALAPPDATA", r"Microsoft\WindowsApps\wt.exe")),
+        Terminal::Pwsh => on_path("pwsh.exe")
+            .or_else(|| under("ProgramFiles", r"PowerShell\7\pwsh.exe"))
+            .or_else(|| under("LOCALAPPDATA", r"Microsoft\WindowsApps\pwsh.exe")),
+        Terminal::WindowsPowerShell => system(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+        Terminal::Cmd => env_dir("ComSpec").filter(|p| p.is_file()).or_else(|| system(r"System32\cmd.exe")),
+        Terminal::Wsl => system(r"System32\wsl.exe"),
+        Terminal::GitBash => under("ProgramFiles", r"Git\git-bash.exe")
+            .or_else(|| under("ProgramFiles(x86)", r"Git\git-bash.exe"))
+            .or_else(|| under("LOCALAPPDATA", r"Programs\Git\git-bash.exe"))
+            .or_else(|| on_path("git.exe").and_then(|g| g.parent()?.parent().map(|d| d.join("git-bash.exe"))).filter(|p| p.is_file())),
+        _ => None,
+    }
+}
+
+/// The terminals this PC can start (Automatic first, the custom command last). Looked up once.
+pub fn installed_terminals() -> &'static [Terminal] {
+    static LIST: OnceLock<Vec<Terminal>> = OnceLock::new();
+    LIST.get_or_init(|| {
+        let mut v = vec![Terminal::Auto];
+        v.extend(
+            [Terminal::WindowsTerminal, Terminal::Pwsh, Terminal::WindowsPowerShell, Terminal::Cmd, Terminal::Wsl, Terminal::GitBash]
+                .into_iter()
+                .filter(|t| terminal_exe(*t).is_some()),
+        );
+        v.push(Terminal::Custom);
+        v
+    })
+}
+
+fn spawn(l: &Launch) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x10;
+    let mut c = std::process::Command::new(&l.program);
+    c.raw_arg(&l.args);
+    if let Some(d) = &l.cwd {
+        c.current_dir(d);
+    }
+    if l.console {
+        c.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    c.spawn().map(|_| ())
+}
+
+/// Opens the chosen terminal in `dir`. A terminal that is not installed (or a custom command that is empty or fails) falls back to
+/// Automatic.
+pub fn open_terminal_with(kind: Terminal, custom: &str, dir: &Path) -> anyhow::Result<()> {
+    let chosen = match kind {
+        Terminal::Custom => launch_for(kind, custom, dir, Path::new("")),
+        k => terminal_exe(k).and_then(|exe| launch_for(k, custom, dir, &exe)),
+    };
+    if let Some(l) = chosen {
+        if spawn(&l).is_ok() {
+            return Ok(());
+        }
+    }
+    if kind != Terminal::Auto {
+        return open_terminal_with(Terminal::Auto, "", dir);
+    }
+    // nothing found by path: let the system look the names up
+    let wt = Launch { program: "wt.exe".into(), args: format!("-d {}", quoted(dir)), cwd: None, console: false };
+    if spawn(&wt).is_err() {
+        spawn(&Launch { program: "powershell.exe".into(), args: String::new(), cwd: (!is_unc(dir)).then(|| dir.to_path_buf()), console: true })?;
     }
     Ok(())
 }
@@ -194,5 +330,27 @@ mod tests {
         // a drive root: the backslash must not escape the closing quote
         assert_eq!(super::terminal_args(Path::new(r"D:\")), r#"-d "D:\\""#);
         assert_eq!(super::powershell_args(Path::new(r"C:\it's")), r#"-NoExit -Command "Set-Location -LiteralPath 'C:\it''s'""#);
+    }
+
+    #[test]
+    fn terminal_command_lines() {
+        use super::{Terminal as T, launch_for};
+        let exe = Path::new(r"C:\x\t.exe");
+        let l = |k, c: &str, d: &str| launch_for(k, c, Path::new(d), exe).unwrap();
+        assert_eq!(l(T::WindowsTerminal, "", r"C:\a b").args, r#"-d "C:\a b""#);
+        assert_eq!(l(T::WindowsTerminal, "", r"D:\").args, r#"-d "D:\\""#);
+        let p = l(T::Pwsh, "", r"C:\a");
+        assert_eq!((p.args.as_str(), p.cwd.as_deref()), ("", Some(Path::new(r"C:\a"))));
+        // a share: PowerShell goes there itself, cmd uses pushd, neither gets it as the working directory
+        let p = l(T::Pwsh, "", r"\\srv\it's");
+        assert_eq!((p.args.as_str(), p.cwd), (r#"-NoExit -Command "Set-Location -LiteralPath '\\srv\it''s'""#, None));
+        let c = l(T::Cmd, "", r"\\srv\share");
+        assert_eq!((c.args.as_str(), c.cwd), (r#"/K pushd "\\srv\share""#, None));
+        assert_eq!(l(T::Cmd, "", r"C:\a").args, "");
+        assert_eq!(l(T::Wsl, "", r"C:\a").args, r#"--cd "C:\a""#);
+        let c = l(T::Custom, r#""C:\my term\t.exe" --dir "{path}" -x"#, r"C:\a b");
+        assert_eq!((c.program.as_path(), c.args.as_str()), (Path::new(r"C:\my term\t.exe"), r#"--dir "C:\a b" -x"#));
+        assert!(launch_for(T::Custom, "  ", Path::new(r"C:\a"), exe).is_none());
+        assert!(launch_for(T::Kitty, "", Path::new(r"C:\a"), exe).is_none());
     }
 }

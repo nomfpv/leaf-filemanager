@@ -2522,7 +2522,49 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             settings::update(cx, move |s| s.ide_path = exe)
         })
     });
-    vec![
+    let installed = rf_win::shell::installed_terminals();
+    let mut terminal_cards = vec![card(
+        p,
+        L::SquareTerminal,
+        t!("Terminal"),
+        Some(t!("What \"Open in terminal\" starts: from the context menu, Ctrl+Shift+`, the command palette and the button next to the address. Only the terminals found on this PC are listed.")),
+        dropdown(
+            "terminal-choice",
+            p,
+            s.terminal,
+            installed.iter().map(|t| (*t, crate::i18n::t(t.label()).to_string())).collect(),
+            |s, v| s.terminal = v,
+        ),
+    )];
+    if s.terminal == rf_core::terminal::Terminal::Custom {
+        let shown = if s.terminal_custom.is_empty() { t!("Not set: Automatic is used").to_string() } else { s.terminal_custom.clone() };
+        let current = s.terminal_custom.clone();
+        terminal_cards.push(card(
+            p,
+            L::Pencil,
+            t!("Custom terminal command"),
+            Some(&shown),
+            button("terminal-custom", p, t!("Edit"), move |window, cx| {
+                crate::prompt::show(
+                    t!("Custom terminal command"),
+                    Some(t!("The program and its arguments; {path} stands for the folder, for example: wezterm start --cwd \"{path}\"").to_string()),
+                    Some((current.clone(), t!("program arguments").to_string())),
+                    vec![
+                        crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |value, _, cx| {
+                            let v = value.unwrap_or_default().trim().to_string();
+                            settings::update(cx, move |s| s.terminal_custom = v);
+                            Ok(())
+                        }),
+                        crate::prompt::Button::cancel(),
+                    ],
+                    window,
+                    cx,
+                );
+            }),
+        ));
+    }
+    let mut cards = terminal_cards;
+    cards.extend(vec![
         card(
             p,
             L::Code,
@@ -2554,7 +2596,8 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 .child(button("ide-reset", p, t!("Automatic"), |_, cx| settings::update(cx, |s| s.ide_path.clear())))
                 .into_any_element(),
         ),
-    ]
+    ]);
+    cards
 }
 
 /// leaf-look ayarı anahtarı (ayrı dosya `leaf-look.toml`; değişince leaf-look'a haber verilir).

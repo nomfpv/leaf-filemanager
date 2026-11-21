@@ -2278,13 +2278,7 @@ impl Workspace {
                                 })
                                 .child(Icon::new(L::SquareTerminal).size(px(12.)))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .on_click(cx.listener(move |_this, _, _, cx| {
-                                    let dir = dir.clone();
-                                    cx.background_spawn(async move {
-                                        let _ = leaf_sys::shell::open_terminal(&dir);
-                                    })
-                                    .detach();
-                                })),
+                                .on_click(cx.listener(move |_this, _, _, cx| crate::terminal::open(dir.clone(), cx))),
                         )
                     })
                     .child(
@@ -2563,11 +2557,7 @@ impl Workspace {
             Item::action(t!("Copy path"), MenuIcon::Lucide(L::ClipboardCopy), with(|_, p, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(p.display().to_string()))
             })),
-            Item::action(t!("Open in terminal"), MenuIcon::Lucide(L::SquareTerminal), with(|_, p, _, _| {
-                std::thread::spawn(move || {
-                    let _ = leaf_sys::shell::open_terminal(&p);
-                });
-            })),
+            Item::action(t!("Open in terminal"), MenuIcon::Lucide(L::SquareTerminal), with(|_, p, _, cx| crate::terminal::open(p, cx))),
             // our Properties window (a drive gets its own page there)
             Item::action(t!("Properties"), MenuIcon::Lucide(L::Wrench), with(|ws, p, _, cx| {
                 crate::properties_view::open(vec![p], ws.images.clone(), cx);
@@ -2944,6 +2934,11 @@ impl Workspace {
             .children(suggestions)
             .children(chip)
             .child(div().w(px(1.)).h(px(18.)).mx_1().bg(p.divider))
+            .children(crate::terminal::offered(&loc).then(|| {
+                mode_btn("omni-term", L::SquareTerminal, false, "Open in terminal  (Ctrl+Shift+`)", cx, |_, window, cx| {
+                    window.dispatch_action(Box::new(OpenTerminal), cx)
+                })
+            }))
             .child(mode_btn("omni-cmd", L::SquareChevronRight, self.palette.is_some(), "Command palette  (Ctrl+Shift+P)", cx, |this, window, cx| {
                 this.toggle_command_palette(window, cx)
             }))
@@ -4755,12 +4750,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SplitPaneStacked, window, cx| this.split_pane(false, window, cx)))
             .on_action(cx.listener(|this, _: &CloseActivePane, window, cx| this.close_active_pane(window, cx)))
             .on_action(cx.listener(|this, _: &OpenTerminalAdmin, _, cx| {
-                if let Some(dir) = this.active_tab().read(cx).location().path().map(Path::to_path_buf) {
-                    std::thread::spawn(move || {
-                        if let Err(e) = leaf_sys::shell::open_terminal_admin(&dir) {
-                            log::warn!("terminal (admin): {e:#}");
-                        }
-                    });
+                if let Some(dir) = crate::terminal::location_dir(this.active_tab().read(cx).location()) {
+                    crate::terminal::open_admin(dir);
                 }
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| {
@@ -4825,11 +4816,8 @@ impl Render for Workspace {
                 this.enter_search(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenTerminal, _, cx| {
-                if let Some(dir) = this.active_tab().read(cx).location().path().map(Path::to_path_buf) {
-                    std::thread::spawn(move || {
-                        let _ = leaf_sys::shell::open_terminal(&dir);
-                    });
-                }
+                let loc = this.active_tab().read(cx).location().clone();
+                crate::terminal::open_location(&loc, cx);
             }))
             .relative()
             .children(backdrop_layers)

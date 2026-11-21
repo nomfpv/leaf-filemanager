@@ -603,6 +603,10 @@ pub struct Settings {
     pub ide_button: IdePref,
     /// Editor to open folders with ("code" when empty and VS Code is installed).
     pub ide_path: String,
+    /// The terminal "Open in terminal" starts (Automatic: Windows Terminal, else PowerShell).
+    pub terminal: rf_core::terminal::Terminal,
+    /// The command line of the custom terminal; `{path}` is the folder.
+    pub terminal_custom: String,
 
     // ---- Advanced
     pub show_flatten: bool,
@@ -779,6 +783,8 @@ impl Default for Settings {
             index_excluded: Vec::new(),
             ide_button: IdePref::GitRepos,
             ide_path: String::new(),
+            terminal: rf_core::terminal::Terminal::Auto,
+            terminal_custom: String::new(),
             show_flatten: false,
             space_quicklook: false,
             look_enabled: true,

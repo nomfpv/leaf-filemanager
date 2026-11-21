@@ -19,6 +19,7 @@ pub mod sort;
 pub mod sortkeys;
 pub mod thumbcache;
 pub mod tags;
+pub mod terminal;
 pub mod transfer;
 pub mod treemap;
 
