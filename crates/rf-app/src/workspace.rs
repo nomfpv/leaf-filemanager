@@ -4284,9 +4284,17 @@ impl Workspace {
     fn render_statusbar(&mut self, p: &Palette, strip_bar_w: Option<f32>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // the status line's own colours (Index: an inverted readout)
         let p = &p.for_status();
+        // Settings > "Selection details": read off the UI thread, asked for only while something is selected
+        let details = {
+            let on = cx.global::<crate::settings::Settings>().selection_details;
+            let tab = self.active_tab().clone();
+            (on && tab.read(cx).selection_summary().0 > 0).then(|| tab.update(cx, |t, cx| t.selection_details(cx)))
+        };
         let tab = self.active_tab().read(cx);
         let count = tab.item_count();
         let (sel, sel_size, has_dir) = tab.selection_summary();
+        // with the details on, "+ folders" stays only until the folder sizes have answered
+        let has_dir = details.as_ref().map_or(has_dir, |(_, pending)| has_dir && *pending);
         let loading = tab.loading;
         let ms = tab.load_ms;
         let in_folder = tab.location().path().is_some() || matches!(tab.location(), Location::Tag(_) | Location::Library { .. });
@@ -4343,14 +4351,44 @@ impl Workspace {
         if in_folder {
             // "3 of 19 selected · 48.5 MB · 214 GB free on C:", or "19 items · 214 GB free on C:" (the mockups' status line)
             if sel > 0 {
-                left = left.child(
-                    h_flex()
-                        .gap_1()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(sel.to_string()))
-                        .child(format!("{} {} {}", t!("of"), count, t!("selected"))),
-                );
+                let picked = h_flex()
+                    .id("sel-count")
+                    .gap_1()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(sel.to_string()))
+                    .child(format!("{} {} {}", t!("of"), count, t!("selected")));
+                // a click on the count shows the breakdown by type
+                left = left.child(match details.as_ref().and_then(|(st, _)| st.clone()) {
+                    Some(st) => picked
+                        .cursor_pointer()
+                        .rounded(theme::RADIUS_SM)
+                        .px_1()
+                        .hover(|s| s.bg(p.hover).text_color(p.text))
+                        .on_click(move |_, window, cx| {
+                            let items = crate::selection_stats::breakdown(&st)
+                                .into_iter()
+                                .map(|(label, value)| crate::fluent_menu::Item::action(label, crate::fluent_menu::MenuIcon::None, |_, _| {}).hint(value))
+                                .collect();
+                            crate::fluent_menu::show(crate::fluent_menu::Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+                        })
+                        .into_any_element(),
+                    None => picked.into_any_element(),
+                });
                 if sel_size > 0 {
                     left = left.child(dot()).child(if has_dir { format!("{} + {}", format::size(sel_size), t!("folders")) } else { format::size(sel_size) });
+                    // Settings > "Selection details": lines, play time and pixels, once they are read
+                    if let Some((Some(st), _)) = &details {
+                        use crate::selection_stats as ss;
+                        let more = if st.capped { "+" } else { "" };
+                        if st.text_files > 0 {
+                            left = left.child(dot()).child(format!("{}{more} {}", st.lines, t!("lines")));
+                        }
+                        if st.media_files > 0 {
+                            left = left.child(dot()).child(format!("{}{more}", ss::play_time(st.play_secs)));
+                        }
+                        if st.pictures > 0 {
+                            left = left.child(dot()).child(format!("{}{more}", ss::megapixels(st.pixels)));
+                        }
+                    }
                     // Settings > Developer tools > "Show token estimate": what pasting the selected files into a chat would cost
                     if cx.global::<crate::settings::Settings>().show_token_estimate {
                         let phrase = leaf_dev::context::tokens_phrase(leaf_dev::context::estimate_tokens(sel_size));

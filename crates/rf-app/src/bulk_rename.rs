@@ -609,6 +609,10 @@ impl BulkRename {
         self.applying = false;
         match result {
             Some(Ok(out)) => {
+                if !out.done.is_empty() {
+                    crate::usage::bump(crate::usage::Counter::BulkRenames, 1);
+                    crate::usage::bump(crate::usage::Counter::FilesRenamed, out.done.len() as u64);
+                }
                 if out.failed.is_empty() {
                     cx.emit(BulkRenameEvent::Close);
                 } else {

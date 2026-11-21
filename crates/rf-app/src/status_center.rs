@@ -878,6 +878,13 @@ fn transfer_inner(
             fileops::transfer_tracked(kind, &sources, &dest, t.clone())
         };
         let pairs = t.results.lock().unwrap().clone();
+        if matches!(r, Ok(true)) {
+            use crate::usage::{Counter, bump};
+            bump(if kind == Transfer::Copy { Counter::FilesCopied } else { Counter::FilesMoved }, sources.len() as u64);
+            if kind == Transfer::Copy {
+                bump(Counter::BytesCopied, t.bytes.get().0);
+            }
+        }
         // what now sits directly in the destination: the new item, or the folder a merge went into
         let mut tops: Vec<std::path::PathBuf> = Vec::new();
         for (_, dst) in &pairs {
@@ -1121,6 +1128,7 @@ fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
         let mut prog = archive_progress(&t);
         match rf_archive::extract_with(&archive, &dest, &opts, &mut prog, &|| cancel.load(Ordering::Relaxed)) {
             Ok(_) => {
+                crate::usage::bump(crate::usage::Counter::ArchivesExtracted, 1);
                 *made2.lock() = result;
                 Ok(true)
             }
@@ -1152,7 +1160,10 @@ pub fn compress_opts(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
         match rf_archive::compress_with(&sources, &dest, format, level, &opts, &mut prog, &|| cancel.load(Ordering::Relaxed)) {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                crate::usage::bump(crate::usage::Counter::ArchivesMade, 1);
+                Ok(true)
+            },
             Err(e) if e.downcast_ref::<rf_archive::Cancelled>().is_some() => Ok(false),
             Err(e) => Err(e),
         }
@@ -1166,7 +1177,10 @@ pub fn compress_rar(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::p
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
         match rf_archive::compress_rar(&sources, &dest, level, password.as_deref(), &mut prog, &|| cancel.load(Ordering::Relaxed)) {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                crate::usage::bump(crate::usage::Counter::ArchivesMade, 1);
+                Ok(true)
+            },
             Err(e) if e.downcast_ref::<rf_archive::Cancelled>().is_some() => Ok(false),
             Err(e) => Err(e),
         }
@@ -1184,7 +1198,10 @@ pub fn compress_level(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std:
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
         match rf_archive::compress(&sources, &dest, format, level, &mut prog, &|| cancel.load(Ordering::Relaxed)) {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                crate::usage::bump(crate::usage::Counter::ArchivesMade, 1);
+                Ok(true)
+            },
             Err(e) if e.downcast_ref::<rf_archive::Cancelled>().is_some() => Ok(false),
             Err(e) => Err(e),
         }
@@ -1344,6 +1361,9 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
             },
             ok => ok,
         };
+        if matches!(r, Ok(true)) {
+            crate::usage::bump(crate::usage::Counter::FilesDeleted, paths.len() as u64);
+        }
         let pairs = t.results.lock().unwrap().clone();
         if record && !permanent && !pairs.is_empty() {
             *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());

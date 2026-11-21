@@ -677,6 +677,12 @@ pub struct Settings {
     pub context_max_total_kb: u32,
     /// The status line shows the token estimate (bytes / 4) of the selected files.
     pub show_token_estimate: bool,
+    /// The status line adds lines, play time and pixels of the selected files (read off the UI thread); a click on it breaks the selection down by type.
+    pub selection_details: bool,
+    /// Counts what is done with Leaf (files copied, folders opened, ...) for the "Your numbers" page; the numbers stay in the config folder.
+    pub count_usage: bool,
+    /// Rows of files changed in the last ten minutes get a faint tint that fades.
+    pub fresh_tint: bool,
 
     // ---- Advanced
     pub show_flatten: bool,
@@ -867,6 +873,9 @@ impl Default for Settings {
             context_max_file_kb: 256,
             context_max_total_kb: 2048,
             show_token_estimate: false,
+            selection_details: false,
+            count_usage: true,
+            fresh_tint: false,
             show_flatten: false,
             space_quicklook: false,
             look_enabled: true,
@@ -1111,6 +1120,7 @@ impl Settings {
 
     pub(crate) fn apply_side_effects(&self) {
         sync_name_index(self.name_index, &self.index_excluded);
+        crate::usage::set_enabled(self.count_usage);
         crate::aliases::set(self.folder_aliases.clone());
         leaf_sys::openrules::set(self.open_rules.clone());
         leaf_sys::drives::set_hidden(leaf_sys::drives::mask_of_letters(&self.hidden_drives));

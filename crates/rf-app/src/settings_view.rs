@@ -38,6 +38,7 @@ pub enum Page {
     Advanced,
     Speed,
     Organizer,
+    Numbers,
     Features,
     WhatsNew,
     About,
@@ -59,6 +60,7 @@ const PAGES: [(Page, L, &str); 18] = [
     (Page::Advanced, L::Wrench, "Advanced"),
     (Page::Speed, L::Gauge, "Speed test"),
     (Page::Organizer, L::WandSparkles, "File organizer"),
+    (Page::Numbers, L::Activity, "Your numbers"),
     (Page::Features, L::Sparkles, "What leaf can do"),
     (Page::WhatsNew, L::Bell, "What's new"),
     (Page::About, L::Info, "About"),
@@ -229,6 +231,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         }
         Page::Speed => crate::bench_view::page(p, cx),
         Page::Organizer => crate::organizer::page::page(p, cx),
+        Page::Numbers => crate::numbers_page::page(p, s, cx),
         Page::Features => crate::features_page::page(p, cx),
         Page::WhatsNew => crate::whats_new_page::page(p, cx),
         Page::About => about(p, cx),
@@ -2253,6 +2256,13 @@ fn files(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             |s, v| s.decimal_sizes = v,
         ),
     ));
+    v.push(card(
+        p,
+        L::Clock,
+        t!("Tint fresh changes"),
+        Some(t!("A faint tint on the rows of files changed in the last ten minutes; it fades as they get older.")),
+        sw("fresh-tint", p, s.fresh_tint, |s, v| s.fresh_tint = v),
+    ));
     let pp = *p;
     v.push(expander(
         "folder-sizes",
@@ -2677,6 +2687,13 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             t!("Show token estimate"),
             Some(t!("The status line shows about how many tokens the selected files are (bytes / 4), for pasting into a chat.")),
             sw("token-estimate", p, s.show_token_estimate, |s, v| s.show_token_estimate = v),
+        ),
+        card(
+            p,
+            L::ListTree,
+            t!("Selection details"),
+            Some(t!("The status line adds the lines of the selected text files, the play time of audio and video and the pixels of pictures; a click on it shows the breakdown by type. Read in the background, with a limit for big selections.")),
+            sw("selection-details", p, s.selection_details, |s, v| s.selection_details = v),
         ),
         card(
             p,

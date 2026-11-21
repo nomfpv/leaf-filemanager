@@ -775,6 +775,7 @@ impl FolderView {
                     });
                     match rx.await {
                         Ok(Ok(true)) => {
+                            crate::usage::bump(crate::usage::Counter::FilesRenamed, 1);
                             crate::undo::push(crate::undo::UndoOp::Renamed { from: from.clone(), to: to.clone() });
                             let _ = cx.update(|cx| {
                                 crate::tags::follow(cx, &[(from.clone(), to.clone())]);

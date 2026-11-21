@@ -236,6 +236,7 @@ impl Workspace {
                     "advanced" => Page::Advanced,
                     "speed" => Page::Speed,
                     "organizer" => Page::Organizer,
+                    "numbers" => Page::Numbers,
                     "features" => Page::Features,
                     "whatsnew" => Page::WhatsNew,
                     "about" => Page::About,

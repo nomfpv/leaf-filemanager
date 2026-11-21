@@ -603,6 +603,10 @@ pub struct FolderView {
     /// Folder sizes for the Size column: clicked ("Boyutu hesapla") or all visible ones
     /// (Settings → "Calculate folder sizes").
     folder_sizes: std::collections::HashMap<PathBuf, DirSize>,
+    /// Settings > "Selection details": what was read for the selection with this key (None while it is being read).
+    sel_stats: Option<(u64, Option<Arc<crate::selection_stats::Stats>>)>,
+    _fresh_tick: Option<Task<()>>,
+    _sel_stats_task: Option<Task<()>>,
     /// Video lengths for the Grid's badge ("1:08"), asked of Windows' property system for the tiles shown; None while asking or
     /// when it has none.
     video_lengths: std::collections::HashMap<PathBuf, Option<SharedString>>,
@@ -806,6 +810,9 @@ impl FolderView {
             column_cache: Default::default(),
             column_pending: HashSet::new(),
             folder_sizes: Default::default(),
+            sel_stats: None,
+            _fresh_tick: None,
+            _sel_stats_task: None,
             video_lengths: Default::default(),
             adaptive_pending: false,
             layout_seeded: false,
@@ -903,6 +910,11 @@ impl FolderView {
             self.recycle = None; // fresh listing each visit
         }
         self.home_edit = false;
+        match &to {
+            Location::Search { .. } => crate::usage::bump(crate::usage::Counter::Searches, 1),
+            l if l.path().is_some() => crate::usage::bump(crate::usage::Counter::FoldersOpened, 1),
+            _ => {}
+        }
         self.history.navigate(to);
         self.filter.query.clear();
         self.load(cx);
@@ -3681,6 +3693,43 @@ impl FolderView {
         (self.selected.len(), size, has_dir)
     }
 
+    /// Selection details for the status line: what was read for the selected files (None while it is being read) and whether a
+    /// selected folder is still being measured (its size is not in the total yet). Starts the reading when the selection changed.
+    pub(crate) fn selection_details(&mut self, cx: &mut Context<Self>) -> (Option<Arc<crate::selection_stats::Stats>>, bool) {
+        use std::hash::{Hash, Hasher};
+        let mut ids: Vec<u32> = self.selected.iter().copied().collect();
+        ids.sort_unstable();
+        let mut files = Vec::new();
+        let mut pending = false;
+        for &i in &ids {
+            let Some(e) = self.entries.get(i as usize) else { continue };
+            let (is_dir, size, cat) = (e.is_dir(), e.size, crate::icons::category(e));
+            let Some(path) = self.path_of(i) else { continue };
+            if is_dir {
+                pending |= !matches!(self.folder_size(path.clone(), cx), DirSize::Done(_));
+                files.push(crate::selection_stats::Picked { path, cat, size: 0 });
+            } else {
+                files.push(crate::selection_stats::Picked { path, cat, size });
+            }
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (ids, self.entries.len()).hash(&mut h);
+        let key = h.finish();
+        if self.sel_stats.as_ref().is_none_or(|(k, _)| *k != key) {
+            self.sel_stats = Some((key, None));
+            self._sel_stats_task = Some(cx.spawn(async move |this, cx| {
+                let st = cx.background_spawn(async move { crate::selection_stats::compute(files) }).await;
+                let _ = this.update(cx, |v, cx| {
+                    if v.sel_stats.as_ref().is_some_and(|(k, _)| *k == key) {
+                        v.sel_stats = Some((key, Some(Arc::new(st))));
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        (self.sel_stats.as_ref().and_then(|(_, s)| s.clone()), pending)
+    }
+
     /// Folders whose size was measured carry it in their entry, so sorting by Size puts them
     /// among the files by their real size. Returns whether anything changed.
     fn apply_dir_sizes(&mut self, on_disk: bool) -> bool {
@@ -4489,6 +4538,10 @@ impl FolderView {
         let renamed = self.renamed.clone();
         let checkboxes = prefs.show_checkboxes;
         let hover_select = prefs.select_on_hover;
+        // Settings > "Tint fresh changes": rows of what changed in the last ten minutes
+        let fresh_on = prefs.fresh_tint;
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        let mut any_fresh = false;
         // folders inside an archive have no size of their own to measure
         let measurable = !self.location().path().is_some_and(crate::archive_view::is_browsable_path);
         let folder_sizes = prefs.calculate_folder_sizes;
@@ -4796,6 +4849,8 @@ impl FolderView {
             let cmp = self.compare_look(ei);
             let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
             let cmp_mark = cmp.and_then(|l| l.glyph()).zip(cmp_color).map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g));
+            let fresh = fresh_on.then(|| fresh_step(now_ms - self.entries[ei as usize].modified_ms)).flatten();
+            any_fresh |= fresh.is_some();
             let row = h_flex()
                 .id(("row", vi))
                 .group("rowgrp")
@@ -4807,6 +4862,7 @@ impl FolderView {
                 .text_size(px(p.fs))
                 .relative()
                 .when(striped, |d| d.bg(p.stripe))
+                .when(!selected && cmp_color.is_none() && fresh.is_some(), |d| d.bg(p.fresh_tint.opacity(fresh.unwrap_or(0.))))
                 .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
                 .when(cmp.is_some_and(|l| l.is_same()), |d| d.opacity(0.55))
                 .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
@@ -4971,6 +5027,16 @@ impl FolderView {
                 // Settings → "Select files and folders on hover"
                 .when(hover_select, |row| row.on_hover(cx.listener(move |this, on: &bool, _, cx| this.hover_row(vi, *on, cx))));
             out.push(row.into_any_element());
+        }
+        // one repaint a minute while a tinted row is on screen, so the tint fades on its own (no timer per row)
+        if any_fresh && self._fresh_tick.is_none() {
+            self._fresh_tick = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(60)).await;
+                let _ = this.update(cx, |v, cx| {
+                    v._fresh_tick = None;
+                    cx.notify();
+                });
+            }));
         }
         self.props_after_rows(shown, prop_ctx.is_some(), cx);
         out
@@ -6351,5 +6417,18 @@ mod grid_units_tests {
         assert_eq!(units.len(), 1 + 3 + 1);
         assert_eq!(units[4], GridUnit::Header("Folded".into(), 4));
         assert_eq!(first, [1, 1]);
+    }
+}
+
+/// How strong the tint of a row is for a file changed `age_ms` ago: full for the first minutes, then fading in steps over ten
+/// minutes; None when it is older (or its time is unknown or in the future).
+fn fresh_step(age_ms: i64) -> Option<f32> {
+    const MIN: i64 = 60_000;
+    match age_ms {
+        a if !(0..10 * MIN).contains(&a) => None,
+        a if a < 5 * MIN / 2 => Some(1.0),
+        a if a < 5 * MIN => Some(0.7),
+        a if a < 15 * MIN / 2 => Some(0.45),
+        _ => Some(0.22),
     }
 }

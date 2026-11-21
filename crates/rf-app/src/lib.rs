@@ -21,6 +21,9 @@ mod custom_actions;
 mod custom_actions_page;
 mod cut_marks;
 mod disk_usage;
+mod selection_stats;
+mod numbers_page;
+mod usage;
 mod diff_view;
 mod duplicates_view;
 mod changes_view;
@@ -272,6 +275,7 @@ fn save_and_quit(cx: &mut App) {
     }
     leaf_sys::handover::trace("quit: leaving, requests are refused from now on");
     cx.global::<settings::Settings>().clone().save();
+    usage::flush();
     // the search index keeps its place in the change journal (or its changes): the next start
     // then catches up instead of walking the drives; bounded, quitting must not hang on it
     let (tx, rx) = std::sync::mpsc::channel();
@@ -648,6 +652,7 @@ pub fn main() {
                     "appearance" => settings_view::Page::Appearance,
                     "filetypes" => settings_view::Page::FileTypes,
                     "hypersearch" => settings_view::Page::Search,
+                    "numbers" => settings_view::Page::Numbers,
                     "features" => settings_view::Page::Features,
                     "whatsnew" => settings_view::Page::WhatsNew,
                     "advanced" => settings_view::Page::Advanced,
@@ -731,6 +736,11 @@ pub fn main() {
             organizer::init(cx);
             // Nearby (off until the user turns it on): only the main process listens
             nearby::init(cx);
+        }
+        // "Your numbers": one launch, and the time a window is in front (not in the helper process of quick search)
+        if !quick_search {
+            usage::bump(usage::Counter::Launches, 1);
+            usage::start_focus_clock(cx);
         }
         // GPUI would quit by itself when the last window closes (QuitMode::Default on Windows):
         // that cut running copies in half and makes background mode impossible. We decide.
