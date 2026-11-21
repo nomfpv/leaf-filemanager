@@ -292,6 +292,10 @@ pub(crate) fn save_closed_placement(id: WindowId, cx: &mut App) {
 /// Taskbar jump list: "New window" / "New tab" and the pinned folders. Rewritten only when the
 /// pins or the language change; test runs (several instances) leave the user's list alone.
 fn update_jump_list(places: &crate::places::Places) {
+    // taskbar jump lists are a Windows thing
+    if !cfg!(windows) {
+        return;
+    }
     static LAST: std::sync::Mutex<Option<(Vec<(String, PathBuf)>, Vec<(String, PathBuf)>, [&'static str; 4])>> = std::sync::Mutex::new(None);
     if !places.loaded || !places.extras_loaded || std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || std::env::var_os("LEAF_INSTANCE").is_some() {
         return;

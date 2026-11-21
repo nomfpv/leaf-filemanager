@@ -54,6 +54,10 @@ static NO_HOTKEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 /// copy hold it like the real one (a copy the user tries the next version with, while the installed app is not running); without it a
 /// test copy never takes the user's hotkey.
 fn hotkey_owner() -> bool {
+    // a global hotkey exists on Windows only (Wayland has none to register): nothing to hold, nothing to log
+    if !cfg!(windows) {
+        return false;
+    }
     let test_copy = std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || std::env::var_os("LEAF_INSTANCE").is_some();
     !crate::background::LOOK_PROCESS.load(std::sync::atomic::Ordering::Relaxed)
         && !NO_HOTKEY.load(std::sync::atomic::Ordering::Relaxed)

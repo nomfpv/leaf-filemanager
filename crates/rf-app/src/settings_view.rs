@@ -643,6 +643,7 @@ fn quick_search_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement
     let waiting = crate::keymap_editor::capturing(cx).as_deref() == Some(capture);
     let shown: SharedString = if waiting { t!("Press keys…").into() } else { crate::keymap_editor::pretty(&s.quick_search_keys).into() };
     let keys_desc = match crate::quick_search::problem() {
+        _ if !cfg!(windows) => t!("A shortcut from anywhere is not available on this system (Wayland has no global shortcuts)"),
         Some(leaf_sys::hotkey::HotkeyError::Taken) if s.quick_search => t!("Another app uses this shortcut (ChatGPT, Gemini, PowerToys…): choose another one"),
         Some(leaf_sys::hotkey::HotkeyError::Invalid) if s.quick_search => t!("This shortcut can't be used: choose a key with Ctrl, Alt, Shift or Win"),
         _ => t!("Click and press the new keys to change it"),
