@@ -490,8 +490,9 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                 if let Err(e) = job.sides() {
                     return fail(error_text(&e), cx);
                 }
-                if moved && current.is_some() {
-                    // other folders: what the last run saw there means nothing now
+                if (moved || job.mode != init.mode) && current.is_some() {
+                    // other folders: what the last run saw there means nothing now; another mode: a Backup's state still has files
+                    // the left side deleted since, which Two-way would read as "removed on the left" and remove on the right
                     leaf_sync::forget_state(&state_dir(), &job.id);
                 }
                 if let Err(e) = change(cx, |all| all.put(job)) {
