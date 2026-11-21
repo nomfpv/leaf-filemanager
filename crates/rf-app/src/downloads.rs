@@ -99,7 +99,7 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
         start_with(cx, Request { sha256, verify: verify_on.get(), ..Request::new(url, dir.clone()) }, after);
         Ok(())
     });
-    let check = prompt::Check { label: t!("Verify with the checksum file next to it (address.sha256)").into(), note: "".into(), on: verify };
+    let check = prompt::Check { label: t!("Verify with the checksum file next to it (address.sha256)").into(), note: "".into(), on: verify, enabled: true };
     prompt::show_input_checks(
         t!("Download here"),
         Some(format!("{} {}\n{}", t!("The file is saved in"), shown.display(), t!("To check the file, add its SHA-256 after the address."))),
