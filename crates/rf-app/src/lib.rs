@@ -59,6 +59,7 @@ mod last_window;
 mod logfile;
 mod layouts;
 pub mod look;
+mod host_icons;
 mod icon_pack;
 mod image_cache;
 mod installer;

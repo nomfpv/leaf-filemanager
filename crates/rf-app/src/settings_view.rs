@@ -335,6 +335,11 @@ pub(crate) fn beside(control: AnyElement) -> Div {
 }
 
 pub(crate) fn card_body(p: &Palette, icon: L, title: SharedString, desc: Option<SharedString>, control: Option<AnyElement>) -> Div {
+    card_body_with(p, Icon::new(icon).size(px(18.)).flex_shrink_0().text_color(p.text).into_any_element(), title, desc, control)
+}
+
+/// `card_body` with any picture in place of the line icon.
+pub(crate) fn card_body_with(p: &Palette, icon: AnyElement, title: SharedString, desc: Option<SharedString>, control: Option<AnyElement>) -> Div {
     note_setting(&title, desc.as_deref());
     let marked = title.clone();
     let row = h_flex()
@@ -352,7 +357,7 @@ pub(crate) fn card_body(p: &Palette, icon: L, title: SharedString, desc: Option<
                 .min_w(px(WORDS_MIN + 34.))
                 .gap_4()
                 .items_center()
-                .child(Icon::new(icon).size(px(18.)).flex_shrink_0().text_color(p.text))
+                .child(icon)
                 .child(
                     v_flex()
                         .flex_1()
@@ -1623,6 +1628,13 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             dropdown("visibility", p, s.visibility, vec![(Visibility::High, t!("High").into()), (Visibility::Standard, t!("Standard").into())], |s, v| s.visibility = v),
         ),
         accent_card(p, s),
+        card(
+            p,
+            L::Server,
+            t!("Device icons"),
+            Some(t!("The pictures of hosts and devices on Home and in Settings > Hosts. Clean: line icons in the theme's colours. Realistic: detailed pictures. The sidebar keeps the clean ones in both modes (the realistic ones are too fine at its size).")),
+            dropdown("device-icons", p, s.realistic_device_icons, vec![(false, t!("Clean").into()), (true, t!("Realistic").into())], |s, v| s.realistic_device_icons = v),
+        ),
         icons_card(p, s),
         backdrop_card(p, s),
         themes_folder_card(p),

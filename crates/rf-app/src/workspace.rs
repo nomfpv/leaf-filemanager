@@ -159,6 +159,8 @@ pub struct Workspace {
     /// The selected row of this frame's sidebar has claimed the lens (only the first of several selected rows does). A frame that ends
     /// without a claim takes the lens out.
     sidebar_lens_claimed: std::cell::Cell<bool>,
+    /// Set just before `sidebar_item` for a saved host: the device icon to draw instead of the plain row icon (taken by that call).
+    sidebar_host_kind: std::cell::Cell<Option<rf_core::hosts::HostKind>>,
     /// Set by `render` around the call that builds the tab strip: the selected tab and the "+" button are glass lenses (the engine draws
     /// them behind the scene) instead of the Fluent fill.
     tab_lens: bool,
@@ -929,6 +931,7 @@ impl Workspace {
             glass_gen: 0,
             sidebar_lens: false,
             sidebar_lens_claimed: std::cell::Cell::new(false),
+            sidebar_host_kind: std::cell::Cell::new(None),
             tab_lens: false,
             tab_lens_claimed: false,
             plus_lens_claimed: false,
@@ -4149,6 +4152,7 @@ impl Workspace {
     ) -> Stateful<Div> {
         // (the mockups: quiet icons, the current place's in the accent; a tag keeps its colour, as a dot)
         let wt_id = id.clone();
+        let host_kind = self.sidebar_host_kind.take();
         let tag = matches!(icon, L::Tag);
         let icon_color = if active && !tag { p.accent } else if icon_color == p.accent || icon_color == p.text_secondary { p.text_tertiary } else { icon_color };
         let target2 = target.clone();
@@ -4219,7 +4223,14 @@ impl Workspace {
                     })
                     // (Index: a plain square)
                     .when(tag && p.square_marks, |d| d.size(px(16.)).flex().items_center().justify_center().child(div().size(px(9.)).bg(icon_color)))
-                    .when(!tag, |d| d.child(Icon::new(icon).size(px(if rail { 18. } else { 16. })).text_color(icon_color)))
+                    .when(!tag, |d| {
+                        // a saved host: its device icon (the clean set; the realistic one is too thin at this size)
+                        let size = if rail { 18. } else { 16. };
+                        match host_kind.and_then(|k| crate::host_icons::element(k, false, size, icon_color, p.accent)) {
+                            Some(el) => d.child(el),
+                            None => d.child(Icon::new(icon).size(px(size)).text_color(icon_color)),
+                        }
+                    })
                     .when_some(tag_dot, |d, c| d.child(crate::tags::corner_dot(c, p.card_bg)))
                     .when_some(letter, |d, l| {
                         d.child(
@@ -4556,6 +4567,7 @@ impl Workspace {
         for (i, h) in hosts.into_iter().enumerate() {
             let Some(loc) = crate::hosts_ui::location(&h) else { continue };
             let active = matches!((&cur, &loc), (Location::Remote(a), Location::Remote(b)) if a.starts_with(b));
+            self.sidebar_host_kind.set(Some(h.kind));
             col = col.child(self.sidebar_item(("sb-host", i).into(), L::Server, p.text_secondary, h.name.clone(), loc, active, None, p, cx));
             // the host's bookmarked folders under it
             for (j, b) in h.bookmarks.iter().enumerate() {

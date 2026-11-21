@@ -13,7 +13,7 @@ use rf_core::hosts::{Host, HostKind, Hosts};
 use std::rc::Rc;
 use rf_core::vpath::VPath;
 
-use crate::settings_view::{button, card, section};
+use crate::settings_view::{button, card, card_body_with, section, shell};
 use crate::t;
 use crate::theme::Palette;
 
@@ -248,7 +248,8 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         if let Some(k) = &h.key_file {
             desc.push_str(&format!("  ·  {} {k}", t!("key")));
         }
-        v.push(card(p, L::Server, &h.name, Some(&desc), controls));
+        let icon = device_icon(h.kind, 20., p, cx);
+        v.push(shell(p).child(card_body_with(p, icon, h.name.clone().into(), Some(desc.into()), Some(controls))).into_any_element());
     }
     v.extend(saved_section(p, cx));
     v.push(
@@ -500,7 +501,7 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
                     h_flex()
                         .gap_3()
                         .items_center()
-                        .child(Icon::new(L::Server).size(px(28.)).text_color(p.text_secondary))
+                        .child(device_icon(h.kind, 28., p, cx))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -547,4 +548,12 @@ mod vpn_probe_tests {
         nas.vpn = true;
         assert_eq!(probe_way(&nas, false), ProbeWay::Direct);
     }
+}
+
+/// A host kind's device icon (Settings > Appearance > Device icons picks the clean or the realistic set); the line server icon
+/// if the picture cannot be made.
+fn device_icon(kind: HostKind, size: f32, p: &Palette, cx: &App) -> AnyElement {
+    let realistic = cx.global::<crate::settings::Settings>().realistic_device_icons;
+    crate::host_icons::element(kind, realistic, size, p.text_secondary, p.accent)
+        .unwrap_or_else(|| Icon::new(L::Server).size(px(size)).text_color(p.text_secondary).into_any_element())
 }
