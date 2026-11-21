@@ -9,7 +9,7 @@ use gpui_kit::assets::IconName as L;
 use gpui_kit::{Action, App, KeyBinding};
 
 use crate::actions::{DIALOG_CTX, FOLDER_CTX, TREE_CTX};
-use crate::menu_model::{MenuPlace, Section as S, Slot as K, Targets as T, place};
+use crate::menu_model::{MenuPlace, SW_COPY_PATH, SW_SHELF, SW_TERMINAL, Section as S, Slot as K, Targets as T, place};
 
 /// Where a default key works: everywhere in the window, or only while that part has the keyboard.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -292,7 +292,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(ViewCards, View, "Cards view", "Shows each item as a card with its details.", LayoutList, [w("ctrl-shift-4")], keywords: &["layout", "tiles"]),
     c!(ViewList, View, "List view", "Shows the folder as a compact list of names.", TextAlignJustify, [w("ctrl-shift-5")], keywords: &["layout"]),
     c!(ZoomIn, View, "Zoom in", "Makes the items larger.", ZoomIn, [f("ctrl-="), f("ctrl-+")], keywords: &["bigger", "size"]),
-    c!(AddToShelf, Files, "Add to shelf", "Puts the selected items on the shelf to drop them somewhere else later.", Inbox, [f("ctrl-shift-s")], keywords: &["collect", "basket"]),
+    c!(AddToShelf, Files, "Add to shelf", "Puts the selected items on the shelf to drop them somewhere else later.", Inbox, [f("ctrl-shift-s")], keywords: &["collect", "basket"], places: Places::LISTED_MENU, menu: &[place(K::Shelf, "Add to shelf", L::Inbox, T::ITEMS, S::Pack, 40).hint("Ctrl+Shift+S").switch(SW_SHELF).when(|c| !c.in_archive)]),
     c!(ToggleShelf, View, "Show/hide shelf", "Shows or hides the shelf.", Inbox, []),
     c!(ToggleFullscreen, Tabs, "Full screen", "Fills the screen with the window.", Maximize, [w("f11")]),
     c!(ToggleAlwaysOnTop, Tabs, "Always on top", "Keeps the window above other windows.", Pin, [], keywords: &["pin"]),
@@ -301,8 +301,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(GoToFolderAlias, Navigation, "Go to folder alias", "Opens a folder by its short name: type @ and the name in the address bar.", AtSign, [], hint: "@", keywords: &["bookmark", "shortcut"]),
     c!(SearchFolderHistory, Navigation, "Search past folders", "Finds a folder you went to before.", Clock, [w("ctrl-p")], keywords: &["history", "recent", "jump"]),
     c!(SearchTabs, Tabs, "Search tabs", "Finds an open tab or one closed recently.", PanelTop, [w("ctrl-shift-a")]),
-    c!(RotateRight, Tools, "Rotate right", "Turns the selected pictures a quarter to the right.", RotateCw, [], keywords: &["image", "photo"]),
-    c!(RotateLeft, Tools, "Rotate left", "Turns the selected pictures a quarter to the left.", RotateCcw, [], keywords: &["image", "photo"]),
+    c!(RotateRight, Tools, "Rotate right", "Turns the selected pictures a quarter to the right.", RotateCw, [], keywords: &["image", "photo"], places: Places::LISTED_MENU, menu: &[place(K::RotateRight, "Rotate right", L::RotateCw, T::ITEMS, S::Organize, 140).when(|c| c.rotatable)]),
+    c!(RotateLeft, Tools, "Rotate left", "Turns the selected pictures a quarter to the left.", RotateCcw, [], keywords: &["image", "photo"], places: Places::LISTED_MENU, menu: &[place(K::RotateLeft, "Rotate left", L::RotateCcw, T::ITEMS, S::Organize, 150).when(|c| c.rotatable)]),
     c!(ZoomOut, View, "Zoom out", "Makes the items smaller.", ZoomOut, [f("ctrl--")], keywords: &["smaller", "size"]),
     c!(ToggleDualPane, Panes, "Toggle dual pane", "Splits the tab into two folders side by side, or joins them again.", Columns2, [w("ctrl-shift-d")], keywords: &["split", "commander"]),
     c!(SwitchPane, Panes, "Switch pane", "Moves the keyboard to the other pane.", ArrowLeftRight, [w("f6")]),
@@ -311,12 +311,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CloseActivePane, Panes, "Close active pane", "Closes the pane that has the keyboard.", X, [w("ctrl-shift-w")]),
     c!(TogglePreview, View, "Preview pane", "Shows or hides the preview of the selected file.", PanelRight, [w("alt-p")]),
     c!(ToggleSidebar, View, "Sidebar", "Shows or hides the sidebar.", PanelLeft, [w("ctrl-b")]),
-    c!(OpenTerminal, Tools, "Open in terminal", "Opens a terminal in this folder.", SquareTerminal, [w("ctrl-shift-`")], keywords: &["console", "shell", "command prompt"], places: Places::LISTED_MENU, menu: &[place(K::Terminal, "Open in terminal", L::SquareTerminal, T::BACKGROUND, S::Tools, 10).hint("Ctrl+Shift+`")]),
+    c!(OpenTerminal, Tools, "Open in terminal", "Opens a terminal in this folder.", SquareTerminal, [w("ctrl-shift-`")], keywords: &["console", "shell", "command prompt"], places: Places::LISTED_MENU, menu: &[place(K::Terminal, "Open in terminal", L::SquareTerminal, T::BACKGROUND, S::Tools, 10).hint("Ctrl+Shift+`"), place(K::Terminal, "Open in terminal", L::SquareTerminal, T::FOLDER, S::Terminal, 10).hint("Ctrl+Shift+`").switch(SW_TERMINAL)]),
     c!(OpenTerminalAdmin, Tools, "Open in Terminal as administrator", "Opens an elevated terminal in this folder.", ShieldCheck, [], keywords: &["elevated", "admin"], platforms: Platforms::WINDOWS),
     c!(OpenInIde, Tools, "Open in editor", "Opens this folder in your code editor.", Code, [], keywords: &["ide", "vscode"]),
     c!(CompareFolders, Tools, "Compare folders", "Marks what differs between the two panes' folders: only here, newer, older, other size.", Columns2, [], keywords: &["diff", "difference", "sync", "dual pane"], since: "0.9.5"),
-    c!(FindDuplicates, Tools, "Find duplicates", "Looks for files with identical content in this folder or the selected folders.", Copy, [], keywords: &["duplicate", "same files", "identical", "free space", "clean up"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::FindDuplicates, "Find duplicates", L::Copy, T::BACKGROUND, S::Organize, 90).when(|c| !c.in_search && !c.archive_path && !c.ftp)]),
-    c!(FindBuildJunk, Tools, "Find build junk", "Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin.", Eraser, [], keywords: &["node_modules", "target", "venv", "pycache", "clean up", "free space", "developer", "build"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::FindBuildJunk, "Find build junk", L::Eraser, T::BACKGROUND, S::Organize, 100).when(|c| !c.in_search && !c.archive_path && !c.ftp)]),
+    c!(FindDuplicates, Tools, "Find duplicates", "Looks for files with identical content in this folder or the selected folders.", Copy, [], keywords: &["duplicate", "same files", "identical", "free space", "clean up"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::FindDuplicates, "Find duplicates", L::Copy, T::BACKGROUND, S::Organize, 90).when(|c| !c.in_search && !c.archive_path && !c.ftp), place(K::FindDuplicates, "Find duplicates", L::Copy, T::FOLDER, S::Organize, 80).when(|c| !c.archive_path && !c.ftp)]),
+    c!(FindBuildJunk, Tools, "Find build junk", "Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin.", Eraser, [], keywords: &["node_modules", "target", "venv", "pycache", "clean up", "free space", "developer", "build"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::FindBuildJunk, "Find build junk", L::Eraser, T::BACKGROUND, S::Organize, 100).when(|c| !c.in_search && !c.archive_path && !c.ftp), place(K::FindBuildJunk, "Find build junk", L::Eraser, T::FOLDER, S::Organize, 90).when(|c| !c.archive_path && !c.ftp)]),
     c!(ShowChanges, Tools, "Show changes", "Lists every changed, new, deleted and renamed file of the git repository this folder is in, grouped by folder, with the difference of each in the preview pane. It only reads: nothing in the repository is changed.", GitCompare, [], keywords: &["git", "diff", "changes", "modified", "status", "uncommitted", "developer"], since: "0.9.5"),
     c!(ShowWorktrees, Tools, "Worktrees", "Lists the worktrees of the git repository this folder is in, by branch, to jump to one. It only reads.", GitBranch, [], keywords: &["git", "worktree", "branch", "checkout", "developer"], since: "0.9.5"),
     c!(NewWorktree, Tools, "New worktree…", "Adds a second working folder to the git repository this folder is in, on a new branch from the current head or on an existing branch, and opens it in a new tab. Nothing that exists is changed.", GitBranchPlus, [], keywords: &["git", "worktree", "branch", "developer"], since: "0.9.5"),
@@ -334,11 +334,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(DeleteItems, Files, "Move to Recycle Bin", "Moves the selected items to the Recycle Bin.", Trash, [f("delete"), f("ctrl-d")], keywords: &["delete", "remove"]),
     c!(DeletePermanently, Files, "Delete permanently", "Deletes the selected items without the Recycle Bin.", TrashOff, [f("shift-delete")], keywords: &["remove", "erase"]),
     c!(RenameItem, Files, "Rename", "Renames the selected item.", Pencil, [f("f2")]),
-    c!(DuplicateItems, Files, "Duplicate", "Makes a copy of the selected items next to them.", CopyPlus, [f("ctrl-alt-d")]),
-    c!(CopyToOtherPane, Panes, "Copy to other pane", "Copies the selected items into the other pane's folder.", CopyPlus, [f("shift-f5")]),
-    c!(MoveToOtherPane, Panes, "Move to other pane", "Moves the selected items into the other pane's folder.", MoveRight, [f("shift-f6")]),
+    c!(DuplicateItems, Files, "Duplicate", "Makes a copy of the selected items next to them.", CopyPlus, [f("ctrl-alt-d")], places: Places::LISTED_MENU, menu: &[place(K::Duplicate, "Duplicate", L::CopyPlus, T::ITEMS, S::Organize, 40).hint("Ctrl+Alt+D").when(|c| !c.in_archive)]),
+    c!(CopyToOtherPane, Panes, "Copy to other pane", "Copies the selected items into the other pane's folder.", CopyPlus, [f("shift-f5")], places: Places::LISTED_MENU, menu: &[place(K::CopyToPane, "Copy to other pane", L::CopyPlus, T::ITEMS, S::Pack, 70).hint("Shift+F5").when(|c| c.dual && !c.in_archive)]),
+    c!(MoveToOtherPane, Panes, "Move to other pane", "Moves the selected items into the other pane's folder.", MoveRight, [f("shift-f6")], places: Places::LISTED_MENU, menu: &[place(K::MoveToPane, "Move to other pane", L::MoveRight, T::ITEMS, S::Pack, 80).hint("Shift+F6").when(|c| c.dual && !c.in_archive)]),
     c!(Undo, Files, "Undo", "Takes back the last copy, move, rename or delete.", Undo2, [f("ctrl-z")], places: Places::LISTED_MENU, menu: &[place(K::Undo, "Undo", L::Undo2, T::BACKGROUND, S::Organize, 10).hint("Ctrl+Z").when(|c| c.undo.is_some())]),
-    c!(CopyPath, CopyPath, "Copy path", "Copies the full path of the selected items.", Link, [f("ctrl-shift-c")], places: Places::LISTED_MENU, menu: &[place(K::CopyPath, "Copy path", L::ClipboardCopy, T::BACKGROUND, S::CopyPath, 60)]),
+    c!(CopyPath, CopyPath, "Copy path", "Copies the full path of the selected items.", Link, [f("ctrl-shift-c")], places: Places::LISTED_MENU, menu: &[place(K::CopyPath, "Copy path", L::ClipboardCopy, T::BACKGROUND, S::CopyPath, 60), place(K::CopyPath, "Copy item path", L::ClipboardCopy, T::ITEMS, S::CopyPath, 10).hint("Ctrl+Shift+C").switch(SW_COPY_PATH)]),
     c!(CopyPathQuoted, CopyPath, "Copy path as quoted", "Copies the paths in quotes, ready for a command line.", Link, [f("ctrl-alt-c")]),
     c!(CopyPathName, CopyPath, "Copy path as name only", "Copies just the names of the selected items.", Link, [], since: "0.9.5"),
     c!(CopyPathFolder, CopyPath, "Copy path as folder path", "Copies the path of the folder the items are in.", Link, [], since: "0.9.5"),
@@ -347,12 +347,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(CopyPathAt, CopyPath, "Copy path as @path", "Copies the paths with an @ in front, as coding assistants take them.", Link, [], keywords: &["ai", "agent"], since: "0.9.5"),
     c!(CopyPathWsl, CopyPath, "Copy path as WSL path", "Copies the paths as Linux under WSL sees them (/mnt/c/...).", Link, [], keywords: &["linux"], since: "0.9.5", platforms: Platforms::WINDOWS),
     c!(CopyPathUrl, CopyPath, "Copy path as file URL", "Copies the paths as file:/// addresses.", Link, [], keywords: &["uri", "link"], since: "0.9.5"),
-    c!(CopyAsContext, CopyPath, "Copy as context", "Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files.", FileText, [], keywords: &["ai", "llm", "prompt", "claude", "chatgpt", "tokens", "agent"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::CopyAsContext, "Copy as context", L::FileText, T::BACKGROUND, S::Organize, 70).when(|c| !c.in_archive)]),
-    c!(OpenWith, Files, "Open with…", "Opens the selected file in a program you choose.", AppWindow, []),
+    c!(CopyAsContext, CopyPath, "Copy as context", "Copies the selected files (or this folder) as one text block for a chat: a tree, then each text file under its path. Leaves out .gitignore'd, binary, big and secret files.", FileText, [], keywords: &["ai", "llm", "prompt", "claude", "chatgpt", "tokens", "agent"], since: "0.9.5", places: Places::LISTED_MENU, menu: &[place(K::CopyAsContext, "Copy as context", L::FileText, T::BACKGROUND, S::Organize, 70).when(|c| !c.in_archive), place(K::CopyAsContext, "Copy as context", L::FileText, T::ITEMS, S::CopyPath, 30).when(|c| !c.in_archive)]),
+    c!(OpenWith, Files, "Open with…", "Opens the selected file in a program you choose.", AppWindow, [], places: Places::LISTED_MENU, menu: &[place(K::OpenWith, "Open with", L::LayoutGrid, T::ITEMS, S::Open, 50).sub().when(|c| c.has_files)]),
     c!(Properties, Files, "Properties", "Shows the details of the selected items.", Info, [f("alt-enter")], keywords: &["info", "size", "attributes"]),
     c!(ShowContextMenu, Files, "Context menu", "Opens the right-click menu for the selected items.", Menu, [f("shift-f10"), f("menu")], keywords: &["right click"]),
     // ---- on the page only
-    c!(OpenSelected, Navigation, "Open", "Opens the selected file or folder.", FolderOpen, [f("enter")], places: PAGE_ONLY),
+    c!(OpenSelected, Navigation, "Open", "Opens the selected file or folder.", FolderOpen, [f("enter")], places: Places::PAGE_MENU, menu: &[place(K::Open, "Open", L::SquareArrowOutUpRight, T::ITEMS, S::Open, 10).hint("Enter")]),
     c!(FocusNextPane, Navigation, "Next part of the window", "Moves the keyboard to the next part: address bar, folder tree, file list.", ArrowRight, [f("tab")], places: PAGE_ONLY),
     c!(FocusPrevPane, Navigation, "Previous part of the window", "Moves the keyboard to the part before.", ArrowLeft, [f("shift-tab"), tr("shift-tab")], places: PAGE_ONLY),
     c!(NextTab, Tabs, "Next tab", "Goes to the tab on the right.", ArrowRight, [w("ctrl-tab")], places: PAGE_ONLY),

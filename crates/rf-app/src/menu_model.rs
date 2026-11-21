@@ -48,6 +48,10 @@ impl Targets {
     /// A selection of files and folders in the file list.
     pub const ITEMS: Targets = Targets(2 | 4 | 8);
 
+    pub const fn or(self, o: Targets) -> Targets {
+        Targets(self.0 | o.0)
+    }
+
     pub const fn contains(self, t: Target) -> bool {
         self.0 & (1 << t as u8) != 0
     }
@@ -154,6 +158,33 @@ pub enum Slot {
     Git,
     YourActions,
     More,
+    Open,
+    OpenNewTab,
+    OpenNewWindow,
+    OpenOtherPane,
+    OpenWith,
+    SendTo,
+    OpenLocation,
+    CopyPathAs,
+    Duplicate,
+    Shortcut,
+    FolderWithSelection,
+    Alias,
+    IndexOut,
+    Flatten,
+    RotateRight,
+    RotateLeft,
+    Wallpaper,
+    RunAdmin,
+    InstallFont,
+    Compress,
+    Extract,
+    Tags,
+    Shelf,
+    Nearby,
+    BulkRename,
+    CopyToPane,
+    MoveToPane,
 }
 
 /// Whether a row is in the menu, given the situation.
@@ -206,6 +237,10 @@ impl MenuPlace {
         match self.slot {
             Slot::Undo => crate::ctx_menu::undo_text(ctx.undo.as_deref()),
             Slot::Redo => crate::ctx_menu::redo_text(ctx.redo.as_deref()),
+            Slot::Alias => match &ctx.alias {
+                Some(n) => format!("{} (@{n})…", crate::i18n::t("Edit alias")),
+                None => format!("{}…", crate::i18n::t(self.label)),
+            },
             _ => crate::i18n::t(self.label).to_string(),
         }
     }
@@ -294,10 +329,32 @@ pub static MENU_ONLY: &[MenuPlace] = &[
     place(K::GroupBy, "Group by", L::ListTree, T::BACKGROUND, S::View, 30).sub(),
     place(K::New, "New", L::CirclePlus, T::BACKGROUND, S::Organize, 30).sub(),
     place(K::Pin, "Pin to sidebar", L::Pin, T::BACKGROUND, S::Organize, 50),
+    // ---- files and folders
+    place(K::OpenNewTab, "Open in new tab", L::SquarePlus, T::FILE.or(T::FOLDER), S::Open, 20).switch(SW_NEW_TAB).when(|c| c.single_dir || c.single_archive),
+    place(K::OpenNewWindow, "Open in new window", L::AppWindow, T::FILE.or(T::FOLDER), S::Open, 30).switch(SW_NEW_WINDOW).when(|c| c.single_dir || c.single_archive),
+    place(K::OpenOtherPane, "Open in other pane", L::Columns2, T::FILE.or(T::FOLDER), S::Open, 40).when(|c| (c.single_dir || c.single_archive) && c.dual),
+    place(K::SendTo, "Send to", L::Send, T::ITEMS, S::Open, 60).sub().switch(SW_SEND_TO).when(|c| c.send_to_fits),
+    place(K::OpenLocation, "Open file location", L::FolderOpen, T::ITEMS, S::Open, 70).when(|c| c.in_search && c.count == 1),
+    place(K::CopyPathAs, "Copy path as", L::ClipboardCopy, T::ITEMS, S::CopyPath, 20).sub().switch(SW_COPY_PATH),
+    place(K::Shortcut, "Create shortcut", L::Link, T::ITEMS, S::Organize, 50).switch(SW_SHORTCUT).when(|c| !c.in_archive),
+    place(K::FolderWithSelection, "New folder with selection", L::FolderInput, T::ITEMS, S::Organize, 60).when(|c| !c.in_search && !c.in_archive),
+    place(K::DiskUsage, "Show disk usage", L::ChartPie, T::FOLDER, S::Organize, 70).when(|c| !c.archive_path && !c.ftp),
+    place(K::Pin, "Pin to sidebar", L::Pin, T::FOLDER, S::Organize, 100).switch(SW_PIN),
+    place(K::Alias, "Add alias", L::AtSign, T::FOLDER, S::Organize, 110).when(|c| !c.archive_path),
+    place(K::IndexOut, "Leave out of the search index", L::SearchSlash, T::FOLDER, S::Organize, 120).when(|c| c.name_index && !c.archive_path),
+    place(K::Flatten, "Flatten folder", L::FolderTree, T::FOLDER, S::Organize, 130).when(|c| c.show_flatten && !c.in_archive),
+    place(K::Wallpaper, "Set as desktop background", L::Monitor, T::FILE, S::Organize, 160).when(|c| c.image),
+    place(K::RunAdmin, "Run as administrator", L::ShieldCheck, T::FILE, S::Organize, 170).when(|c| !c.image && c.runnable && !c.in_archive),
+    place(K::InstallFont, "Install font", L::Type, T::ITEMS, S::Organize, 180).when(|c| c.fonts),
+    place(K::Compress, "Compress", L::Archive, T::ITEMS, S::Pack, 10).sub().switch(SW_COMPRESS).when(|c| !c.in_archive),
+    place(K::Extract, "Extract", L::FolderOutput, T::ITEMS, S::Pack, 20).sub().switch(SW_COMPRESS).when(|c| c.extractable),
+    place(K::Tags, "Tags", L::Tag, T::ITEMS, S::Pack, 30).sub().switch(SW_TAGS).when(|c| !c.in_archive),
+    place(K::Nearby, "Send with Nearby", L::Send, T::ITEMS, S::Pack, 50).sub().when(|c| !c.in_archive && c.nearby),
+    place(K::BulkRename, "Bulk rename…", L::PencilLine, T::MULTI, S::Pack, 60).hint("F2").when(|c| !c.in_search && !c.in_archive),
     place(K::DiskUsage, "Show disk usage", L::ChartPie, T::BACKGROUND, S::Organize, 80).when(|c| !c.in_search && !c.archive_path && !c.ftp),
     place(K::Git, "Git", L::GitBranch, T::BACKGROUND, S::Tools, 30).sub().when(|c| !c.in_search && !c.archive_path),
-    place(K::YourActions, "Your actions", L::Zap, T::BACKGROUND, S::YourActions, 10).sub().when(|c| c.own_actions),
-    place(K::More, "Show more options", L::Ellipsis, T::BACKGROUND, S::More, 10).sub(),
+    place(K::YourActions, "Your actions", L::Zap, T::BACKGROUND.or(T::ITEMS), S::YourActions, 10).sub().when(|c| c.own_actions),
+    place(K::More, "Show more options", L::Ellipsis, T::BACKGROUND.or(T::ITEMS), S::More, 10).sub(),
 ];
 
 /// Every row, the registry's commands' first.
@@ -410,5 +467,22 @@ mod tests {
         );
         check("background in archive", MenuContext { in_archive: true, archive_path: true, ..bg.clone() }, "background");
         check("background search results", MenuContext { in_search: true, ..bg }, "background");
+    }
+
+    /// One file selected, in a folder on disk.
+    fn file() -> MenuContext {
+        MenuContext { target: Target::File, count: 1, has_files: true, send_to_fits: true, windows: true, show_flatten: true, name_index: true, ..Default::default() }
+    }
+
+    #[test]
+    fn file_menu_is_as_recorded() {
+        assert_eq!(cases("file").len(), 3);
+        check("file plain", file(), "file");
+        check(
+            "file picture in search results, dual pane",
+            MenuContext { in_search: true, dual: true, rotatable: true, image: true, ..file() },
+            "file",
+        );
+        check("file inside an archive", MenuContext { in_archive: true, send_to_fits: false, ..file() }, "file");
     }
 }

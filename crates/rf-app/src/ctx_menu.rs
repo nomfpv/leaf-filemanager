@@ -63,6 +63,11 @@ fn cursor() -> (i32, i32) {
     (pt.x, pt.y)
 }
 
+/// The targets whose menu is made from the rows of `menu_model`; the archive, Recycle Bin and sidebar menus are still by hand.
+fn generated(t: Target) -> bool {
+    matches!(t, Target::Background | Target::File)
+}
+
 /// What the builders of a menu's entries read: the view, the folder the menu acts on, the user's own actions.
 struct Build<'a> {
     me: &'a Me,
@@ -71,6 +76,8 @@ struct Build<'a> {
     ctx: &'a MenuContext,
     /// The folder the menu acts on: the one of the list, or the selected folder.
     dir: PathBuf,
+    /// The selection (empty on the background).
+    items: &'a [PathBuf],
     own: Option<Item>,
 }
 
@@ -129,6 +136,178 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
             let m = me.clone();
             git_items.push(Item::action(t!("Clone repository…"), icon(L::GitFork), move |w, cx| crate::git_ui::clone_dialog(m.clone(), d.clone(), w, cx)));
             Item::sub(label, ic, git_items)
+        }
+        Slot::Open => Item::action(label, ic, act(me, |v, _, cx| v.open_selected(cx))),
+        Slot::OpenNewTab | Slot::OpenNewWindow => {
+            // (one archive that opens like a folder opens itself; a folder, the selected one)
+            let opened = if b.ctx.single_archive { b.items[0].clone() } else { d };
+            let new_tab = p.slot == Slot::OpenNewTab;
+            Item::action(label, ic, act(me, move |_, _, cx| {
+                let at = Location::Path(opened.clone());
+                cx.emit(if new_tab { FolderEvent::OpenInNewTab(at) } else { FolderEvent::OpenInNewWindow(at) })
+            }))
+        }
+        Slot::OpenOtherPane => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInOtherPane(Location::Path(d.clone()))))),
+        Slot::OpenWith => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "openwith", fallback: None }, click: None },
+        // Explorer's "Send to" in the first menu (issue 117): its entries come with the shell's items (see `show_context_menu`)
+        Slot::SendTo => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "sendto", fallback: None }, click: None },
+        Slot::OpenLocation => {
+            let p = b.items[0].clone();
+            Item::action(label, ic, act(me, move |v, _, cx| {
+                if let (Some(parent), Some(name)) = (p.parent(), p.file_name()) {
+                    v.set_reselect(name.to_string_lossy().into_owned());
+                    v.navigate(Location::Path(parent.to_path_buf()), cx);
+                }
+            }))
+        }
+        Slot::CopyPathAs => Item::sub(label, ic, copy_path_items(me, b.items)),
+        Slot::Duplicate => Item::action(label, ic, act(me, |v, _, cx| v.duplicate_selected(cx))),
+        Slot::Shortcut => {
+            let link_items = b.items.to_vec();
+            Item::action(label, ic, move |_, _| create_shortcuts(link_items.clone()))
+        }
+        Slot::FolderWithSelection => {
+            let sel = b.items.to_vec();
+            Item::action(label, ic, act(me, move |v, _, cx| v.folder_with_selection(sel.clone(), cx)))
+        }
+        Slot::Alias => Item::action(label, ic, move |w, cx| crate::aliases::edit_dialog(d.clone(), w, cx)),
+        // leave a folder (a build output, a huge cache) out of the search index
+        Slot::IndexOut => {
+            let key = d.to_string_lossy().trim_end_matches('\\').to_string();
+            let out = cx.global::<crate::settings::Settings>().index_excluded.iter().any(|e| rf_core::pathkey::name_eq(e, &key));
+            Item::action(label, ic, move |_, cx| {
+                let key = key.clone();
+                crate::settings::update(cx, |s| {
+                    if out {
+                        s.index_excluded.retain(|e| !rf_core::pathkey::name_eq(e, &key));
+                    } else {
+                        s.index_excluded.push(key);
+                    }
+                });
+            })
+            .checked(out)
+        }
+        Slot::Flatten => Item::action(label, ic, act(me, move |v, w, cx| v.flatten_folder(d.clone(), w, cx))),
+        // type-specific actions (Files: rotate, set as background, install font, run as administrator)
+        Slot::RotateRight => Item::action(label, ic, act(me, |v, w, cx| v.rotate_selection(true, w, cx))),
+        Slot::RotateLeft => Item::action(label, ic, act(me, |v, w, cx| v.rotate_selection(false, w, cx))),
+        Slot::Wallpaper => {
+            let p = b.items[0].clone();
+            Item::action(label, ic, move |_, _| {
+                let p = p.clone();
+                std::thread::spawn(move || {
+                    // A picture inside an archive has no file of its own: Windows was given the path inside the archive, could not
+                    // read it and left a plain colour (the owner, 2026-11-18: the background turned purple and pink). It is
+                    // extracted first, into the app's own folder (not the temp folder, which is cleaned after two days: the
+                    // background must still be there next week).
+                    let Some(real) = wallpaper_file(&p) else {
+                        log::warn!("wallpaper: the picture could not be extracted from its archive");
+                        return;
+                    };
+                    if let Err(e) = leaf_sys::fileactions::set_wallpaper(&real) {
+                        log::warn!("wallpaper: {e:#}");
+                    }
+                });
+            })
+        }
+        Slot::RunAdmin => {
+            let p = b.items[0].clone();
+            Item::action(label, ic, move |_, _| {
+                let p = p.clone();
+                leaf_sys::sta::run(move |owner| {
+                    if let Err(e) = leaf_sys::ctxmenu::invoke_verb(owner, &ShellTarget::One(p), "runas", cursor()) {
+                        log::warn!("runas: {e:#}");
+                    }
+                });
+            })
+        }
+        Slot::InstallFont => {
+            let fonts = b.items.to_vec();
+            Item::action(label, ic, move |w, cx| {
+                let fonts = fonts.clone();
+                let title = format!("{} {}", t!("Installing font:"), crate::i18n::items(fonts.len()));
+                crate::status_center::start_with(cx, title, move |_| {
+                    for f in &fonts {
+                        // (a font inside an archive is installed from a copy extracted first)
+                        let real = if f.exists() { Some(f.clone()) } else { crate::archive_view::real_copy(f) };
+                        let real = real.ok_or_else(|| anyhow::anyhow!("{}", t!("Could not extract it from the archive")))?;
+                        leaf_sys::fileactions::install_font_for_user(&real)?;
+                    }
+                    Ok(true)
+                }, None);
+                let _ = w;
+            })
+        }
+        Slot::Compress => {
+            let items = b.items;
+            let (zip_items, z7_items, dlg_items) = (items.to_vec(), items.to_vec(), items.to_vec());
+            let quick = cx.global::<crate::settings::Settings>().quick_compress;
+            let quick_items = items.to_vec();
+            let sub_items: Vec<Item> = vec![
+                Item::action(t!("Create archive…"), icon(L::Archive), move |w, cx| create_archive_dialog(dlg_items.clone(), w, cx)),
+                Item::Separator,
+                Item::action(t!("Compress to ZIP"), icon(L::FileArchive), move |_, cx| compress(cx, zip_items.clone(), rf_archive::Format::Zip)),
+                Item::action(t!("Compress to 7z"), icon(L::FileArchive), move |_, cx| compress(cx, z7_items.clone(), rf_archive::Format::SevenZ)),
+            ]
+            .into_iter()
+            .chain(crate::archive_view::winrar().is_some().then(|| {
+                let rar_items = items.to_vec();
+                Item::action(t!("Compress to RAR"), icon(L::FileArchive), move |_, cx| {
+                    if let Some((dir, stem)) = archive_stem(&rar_items) {
+                        let dest = leaf_sys::fileops::unique_name(&dir, &stem, ".rar");
+                        crate::status_center::compress_rar(cx, rar_items.clone(), dest, 5, None);
+                    }
+                })
+            }))
+            .collect();
+            // (a click on the row compresses at once in the format chosen in Settings; hovering shows the other ways)
+            match quick_compress_format(quick) {
+                Some(f) => Item::sub_click(label, ic, sub_items, move |_, cx| quick_compress(cx, quick_items.clone(), f)),
+                None => Item::sub(label, ic, sub_items),
+            }
+        }
+        Slot::Extract => {
+            use crate::status_center::ExtractTo;
+            let items = b.items;
+            let list = items.to_vec();
+            let act = |label: String, ic: L, to: ExtractTo| {
+                let list = list.clone();
+                Item::action(label, icon(ic), move |_, cx| crate::status_center::extract_to(cx, list.clone(), to.clone()))
+            };
+            let named = if items.len() > 1 {
+                t!("Extract each to its own folder").to_string()
+            } else {
+                format!("{} {}\\", t!("Extract to folder:"), crate::ops::archive_stem(&items[0]))
+            };
+            let pick = list.clone();
+            Item::sub(
+                label,
+                ic,
+                vec![
+                    act(t!("Extract here").to_string(), L::FolderDown, ExtractTo::Here),
+                    act(t!("Extract smartly").to_string(), L::Zap, ExtractTo::Smart),
+                    act(named, L::FolderInput, ExtractTo::Named),
+                    Item::action(t!("Extract to…"), icon(L::FolderSearch), move |_, cx| crate::status_center::extract_pick(cx, pick.clone())),
+                ],
+            )
+        }
+        Slot::Tags => Item::sub(label, ic, tag_items(me, b.items, cx)),
+        Slot::Shelf => {
+            let shelf_items = b.items.to_vec();
+            Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::AddToShelf(shelf_items.clone()))))
+        }
+        Slot::Nearby => Item::sub(label, ic, crate::nearby::menu_items(b.items, cx)),
+        Slot::BulkRename => {
+            let items = b.items.to_vec();
+            Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::BulkRename(items.clone()))))
+        }
+        Slot::CopyToPane => {
+            let items = b.items.to_vec();
+            Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::ToOtherPane(Transfer::Copy, items.clone()))))
+        }
+        Slot::MoveToPane => {
+            let items = b.items.to_vec();
+            Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::ToOtherPane(Transfer::Move, items.clone()))))
         }
         Slot::YourActions => b.own.clone().expect("a row for the user's actions is shown only when there are some"),
         Slot::More => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "more", fallback: None }, click: None },
@@ -250,7 +429,58 @@ impl FolderView {
         ]
     }
 
+    /// The menu of a selection. The areas in [`generated`] come from the rows of `menu_model`, the others are still by hand.
     fn items_menu(&self, me: &Me, dir: &std::path::Path, items: &[PathBuf], cx: &mut Context<Self>) -> Menu {
+        let single_dir = items.len() == 1 && self.selected_is_single_dir();
+        let target = MenuContext::target_of(items.len(), single_dir);
+        if !generated(target) {
+            return self.items_menu_by_hand(me, dir, items, cx);
+        }
+        let ctx_dir = if single_dir { items[0].clone() } else { dir.to_path_buf() };
+        let own = crate::custom_actions::menu_section(&self.selection_with_kind(), dir, false, cx);
+        let in_archive = items.iter().any(|p| crate::archive_view::split(p).is_some() && !p.exists());
+        let prefs = cx.global::<crate::settings::Settings>();
+        let image = items.len() == 1 && leaf_sys::fileactions::is_image(&items[0]);
+        let ctx = MenuContext {
+            target,
+            count: items.len(),
+            single_dir,
+            // one archive that opens like a folder: it can open in a new tab or window too (Discord, 2026-11-20)
+            single_archive: items.len() == 1 && !single_dir && prefs.browse_archives && items[0].exists() && crate::archive_view::is_browsable(&items[0]),
+            has_files: !self.selected_is_single_dir() || items.len() > 1,
+            in_archive,
+            in_search: self.is_search(),
+            dual: self.dual,
+            in_repository: self.git.is_some(),
+            windows: cfg!(windows),
+            prefs: prefs.menu.clone(),
+            show_flatten: prefs.show_flatten,
+            name_index: prefs.name_index,
+            send_to_fits: send_to_fits_files(items),
+            archive_path: crate::archive_view::split(&ctx_dir).is_some(),
+            ftp: leaf_sys::ftp::is_ftp(&ctx_dir),
+            organizer: false,
+            rotatable: !items.is_empty() && items.iter().all(|p| leaf_sys::rotate::can_rotate(p) && crate::archive_view::split(p).is_none()),
+            image,
+            runnable: items.len() == 1 && !image && leaf_sys::fileactions::is_runnable(&items[0]),
+            fonts: !items.is_empty() && items.iter().all(|p| leaf_sys::fileactions::is_font(p)),
+            extractable: !items.is_empty() && items.iter().all(|p| rf_archive::is_supported(p)),
+            nearby: crate::nearby::running(cx),
+            own_actions: own.is_some(),
+            undo: None,
+            redo: None,
+            alias: if single_dir && crate::archive_view::split(&ctx_dir).is_none() { crate::aliases::name_of(&ctx_dir) } else { None },
+        };
+        let build = Build { me, v: self, cx, ctx: &ctx, dir: ctx_dir, items, own };
+        let mut quick = self.quick_clipboard(me, true);
+        if in_archive {
+            // (Windows' share sheet needs real files)
+            quick.retain(|q| q.icon != L::Share2);
+        }
+        Menu { quick, items: generate(&build) }
+    }
+
+    fn items_menu_by_hand(&self, me: &Me, dir: &std::path::Path, items: &[PathBuf], cx: &mut Context<Self>) -> Menu {
         let single_dir = items.len() == 1 && self.selected_is_single_dir();
         // one archive that opens like a folder: it can open in a new tab or window too (Discord, 2026-11-20)
         let single_archive = items.len() == 1
@@ -539,7 +769,7 @@ impl FolderView {
             redo: redo.map(str::to_string),
             ..Default::default()
         };
-        let build = Build { me, v: self, cx, ctx: &ctx, dir: dir.to_path_buf(), own };
+        let build = Build { me, v: self, cx, ctx: &ctx, dir: dir.to_path_buf(), items: &[], own };
         Menu { quick: self.quick_clipboard(me, false), items: generate(&build) }
     }
 
@@ -1094,9 +1324,13 @@ type SendTarget = (leaf_sys::sendto::Target, Option<leaf_sys::thumbs::Bgra>);
 /// The menu has "Send to" for these items: the setting is on and they are files of one folder on disk (not members of an archive, not
 /// on an FTP server: a drop needs the shell's own items of real files).
 fn send_to_fits(items: &[PathBuf], cx: &App) -> bool {
+    cx.global::<crate::settings::Settings>().menu.send_to && send_to_fits_files(items)
+}
+
+/// The same without the setting (the menu's row has the switch itself).
+fn send_to_fits_files(items: &[PathBuf]) -> bool {
     let Some(parent) = items.first().and_then(|p| p.parent()) else { return false };
-    cx.global::<crate::settings::Settings>().menu.send_to
-        && !leaf_sys::ftp::is_ftp(parent)
+    !leaf_sys::ftp::is_ftp(parent)
         && items.iter().all(|p| p.parent() == Some(parent) && !(crate::archive_view::split(p).is_some() && !p.exists()))
 }
 
