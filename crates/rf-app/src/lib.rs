@@ -71,6 +71,7 @@ mod settings_view;
 mod share;
 mod shelf_view;
 mod status_center;
+mod space_check;
 mod transfer_view;
 mod tags;
 mod terminal;

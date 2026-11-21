@@ -832,6 +832,37 @@ fn transfer_inner(
     record: bool,
     after: Option<Box<dyn FnOnce(Vec<std::path::PathBuf>, &mut App)>>,
 ) {
+    // to another drive: the selection's size against the target's free space first (asks before starting when it will not fit)
+    if crate::space_check::needed(&sources, &dest) {
+        let measured = {
+            let (s, d) = (sources.clone(), dest.clone());
+            cx.background_spawn(async move { crate::space_check::shortfall(&s, &d) })
+        };
+        cx.spawn(async move |cx| {
+            let short_by = measured.await;
+            cx.update(|cx| {
+                let go = move |cx: &mut App| transfer_run(cx, kind, sources, dest, record, after);
+                match short_by {
+                    Some((need, free)) => crate::space_check::ask(cx, need, free, go),
+                    None => go(cx),
+                }
+            });
+        })
+        .detach();
+        return;
+    }
+    transfer_run(cx, kind, sources, dest, record, after)
+}
+
+#[allow(clippy::type_complexity)]
+fn transfer_run(
+    cx: &mut App,
+    kind: Transfer,
+    sources: Vec<std::path::PathBuf>,
+    dest: std::path::PathBuf,
+    record: bool,
+    after: Option<Box<dyn FnOnce(Vec<std::path::PathBuf>, &mut App)>>,
+) {
     // into a folder inside an archive: add to the archive (copy semantics; RAR/ISO refuse)
     if let Some((archive, inner)) = crate::archive_view::split(&dest) {
         crate::archive_view::add_into(cx, archive, inner, sources);
