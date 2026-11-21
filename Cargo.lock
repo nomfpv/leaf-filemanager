@@ -4248,10 +4248,12 @@ name = "leaf-common"
 version = "0.9.4"
 dependencies = [
  "anyhow",
+ "chrono",
  "crc32fast",
  "crossbeam-channel",
  "encoding_rs",
  "image",
+ "kamadak-exif",
  "log",
  "md-5",
  "notify",

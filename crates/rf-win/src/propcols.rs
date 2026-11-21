@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -185,23 +185,7 @@ pub fn describe(names: &[Arc<str>]) -> Vec<Option<PropInfo>> {
 
 // ------------------------------------------------------------------ reading values
 
-/// Why a file has no values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadFail {
-    /// The shell did not answer in time (a slow or broken handler).
-    Timeout,
-    /// The file is not there, is a folder, or its handler refused to open.
-    Unavailable,
-    /// The file is in the cloud and was not opened.
-    OnlineOnly,
-}
-
-/// A place the values come from. The real one asks Windows; tests use [`FakeSource`].
-pub trait PropSource: Send + Sync {
-    /// The cells of `names` for the file, in the same order. Blocks, but not longer than the source's
-    /// own limit.
-    fn read(&self, path: &Path, names: &[Arc<str>]) -> Result<Vec<PropCell>, ReadFail>;
-}
+pub use leaf_common::propcols::{PropSource, ReadFail};
 
 type KeyMap = Mutex<HashMap<Arc<str>, Option<PROPERTYKEY>>>;
 
@@ -355,71 +339,13 @@ impl PropSource for SystemSource {
 /// How long a read may wait for the shell thread's turn.
 pub const QUEUE_WAIT: Duration = Duration::from_secs(10);
 
-type FakeAnswer = dyn Fn(&Path, &[Arc<str>]) -> Result<Vec<PropCell>, ReadFail> + Send + Sync;
-
-/// A source made of a closure, for tests: counts its calls.
-pub struct FakeSource {
-    answer: Box<FakeAnswer>,
-    pub calls: AtomicUsize,
-}
-
-impl FakeSource {
-    pub fn new(answer: impl Fn(&Path, &[Arc<str>]) -> Result<Vec<PropCell>, ReadFail> + Send + Sync + 'static) -> Self {
-        Self { answer: Box::new(answer), calls: AtomicUsize::new(0) }
-    }
-}
-
-impl PropSource for FakeSource {
-    fn read(&self, path: &Path, names: &[Arc<str>]) -> Result<Vec<PropCell>, ReadFail> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        (self.answer)(path, names)
-    }
-}
+/// A source made of a closure, for tests (shared with the other systems).
+pub use leaf_common::propcols::FakeSource;
 
 // ------------------------------------------------------------------ a batch
 
-/// How a batch ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BatchEnd {
-    Finished,
-    Cancelled,
-    /// Several files in a row did not answer in time: the rest was not tried.
-    Stalled,
-}
-
-/// This many files in a row that run out of time stop a batch (the shell is stuck on something; asking
-/// on would only queue more work behind it).
-pub const STRIKES: usize = 3;
-
-/// Reads `names` for each job's file, one file after another, and hands every answer to `on_result`
-/// (the job's tag first). Stops between files when `cancel` is set. A file that runs out of time is
-/// reported as such and the batch goes on, unless [`STRIKES`] files in a row did.
-pub fn read_batch<T>(
-    src: &dyn PropSource,
-    jobs: impl IntoIterator<Item = (T, PathBuf)>,
-    names: &[Arc<str>],
-    cancel: &AtomicBool,
-    mut on_result: impl FnMut(T, Result<Vec<PropCell>, ReadFail>),
-) -> BatchEnd {
-    let mut strikes = 0;
-    for (tag, path) in jobs {
-        if cancel.load(Ordering::Relaxed) {
-            return BatchEnd::Cancelled;
-        }
-        let r = src.read(&path, names);
-        if r == Err(ReadFail::Timeout) {
-            strikes += 1;
-            on_result(tag, r);
-            if strikes >= STRIKES {
-                return BatchEnd::Stalled;
-            }
-        } else {
-            strikes = 0;
-            on_result(tag, r);
-        }
-    }
-    BatchEnd::Finished
-}
+/// A batch: reads one file after another from any [`PropSource`] (shared with the other systems).
+pub use leaf_common::propcols::{BatchEnd, STRIKES, read_batch};
 
 // ------------------------------------------------------------------ the queue behind a list's rows
 
@@ -569,6 +495,7 @@ fn run_queue(src: Arc<dyn PropSource>, sink: Arc<dyn Fn(Done) + Send + Sync>, sh
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
 
     fn names(items: &[&str]) -> Vec<Arc<str>> {

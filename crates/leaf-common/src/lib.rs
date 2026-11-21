@@ -12,6 +12,7 @@ pub mod engine_guard;
 pub mod fastcopy;
 pub mod fileops;
 pub mod listing;
+pub mod propcols;
 pub mod recycle;
 pub mod thumbs;
 
@@ -22,6 +23,7 @@ pub mod elf;
 pub mod hash;
 pub mod kit;
 pub mod ownfolder;
+pub mod photo;
 pub mod portable;
 pub mod tree_watch;
 pub mod watch;
