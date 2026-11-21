@@ -364,6 +364,7 @@ impl ThumbPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// A JPEG with a red top-left corner, turned clockwise via its EXIF tag: the shell
     /// thumbnail must show the red corner at the top right (it came out upside down once).

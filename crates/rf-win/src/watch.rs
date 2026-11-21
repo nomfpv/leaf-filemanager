@@ -6,6 +6,8 @@ pub use leaf_common::watch::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
