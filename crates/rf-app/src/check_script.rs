@@ -230,6 +230,7 @@ impl Workspace {
                     "youractions" => Page::YourActions,
                     "tags" => Page::Tags,
                     "hosts" => Page::Hosts,
+        "vpn" => Page::Vpn,
                     "preview" => Page::Look,
                     "search" => Page::Search,
                     "nearby" => Page::Nearby,

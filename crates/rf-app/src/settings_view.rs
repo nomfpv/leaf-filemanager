@@ -32,6 +32,7 @@ pub enum Page {
     YourActions,
     Tags,
     Hosts,
+    Vpn,
     Look,
     Nearby,
     Search,
@@ -44,7 +45,7 @@ pub enum Page {
     About,
 }
 
-const PAGES: [(Page, L, &str); 19] = [
+const PAGES: [(Page, L, &str); 20] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -54,6 +55,7 @@ const PAGES: [(Page, L, &str); 19] = [
     (Page::YourActions, L::Zap, "Your actions"),
     (Page::Tags, L::Tag, "Tags"),
     (Page::Hosts, L::Server, "Hosts"),
+    (Page::Vpn, L::ShieldCheck, "VPN"),
     (Page::Look, L::Eye, "Preview"),
     (Page::Search, L::Search, "HyperSearch"),
     (Page::Nearby, L::Send, "Nearby"),
@@ -170,7 +172,7 @@ fn found_mark(title: &str, p: &Palette, row: Div) -> Div {
     )
 }
 
-fn collecting() -> bool {
+pub(crate) fn collecting() -> bool {
     COLLECT.with(|c| c.borrow().is_some())
 }
 
@@ -219,6 +221,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::YourActions => crate::custom_actions_page::page(p, cx),
         Page::Tags => tags(p, cx),
         Page::Hosts => crate::hosts_ui::page(p, cx),
+        Page::Vpn => crate::vpn_page::page(p, s, cx),
         Page::Look => look(p, s, cx),
         Page::Nearby => crate::nearby::page(p, s, cx),
         Page::Search => quick_search_cards(p, s, cx),

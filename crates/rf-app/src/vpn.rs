@@ -72,6 +72,10 @@ pub fn relays() -> Vec<Relay> {
     with_ui(|u| u.relays.clone())
 }
 
+pub fn clear_message() {
+    set_message(None);
+}
+
 fn set_message(m: Option<String>) {
     with_ui(|u| u.message = m);
     ui_changed();

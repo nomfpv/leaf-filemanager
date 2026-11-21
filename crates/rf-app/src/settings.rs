@@ -1463,7 +1463,10 @@ pub fn apply_component_theme(cx: &mut App) {
 
 /// Mutates the global settings, applies side effects, saves in the background and refreshes windows.
 pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
+    let before = cx.global::<Settings>().clone();
     cx.update_global::<Settings, _>(|s, _| f(s));
+    // (the VPN's kill switch, DNS choice and place apply to the running tunnel)
+    crate::vpn::settings_changed(&before, cx);
     let s = cx.global::<Settings>().clone();
     s.apply_side_effects();
     apply_component_theme(cx);

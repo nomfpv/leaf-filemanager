@@ -85,6 +85,7 @@ mod space_check;
 mod download_schedule;
 mod downloads;
 mod vpn;
+mod vpn_page;
 mod transfer_view;
 mod tags;
 mod terminal;
