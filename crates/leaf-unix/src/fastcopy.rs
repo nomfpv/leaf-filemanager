@@ -111,7 +111,8 @@ fn is_cut(e: &io::Error) -> bool {
 }
 
 /// The temporary name beside `dst` that a file is written to (`.name.<tag>.rfpart`; the tag is the journal's, the same when the
-/// job is resumed, so the part is found again). A name too long for that is replaced by a hash of it.
+/// job is resumed, so the part is found again). A name too long for that is replaced by a hash of it (FNV-1a, 64 bits: fixed, so a
+/// part from before an app update is found again).
 fn part_name(dst: &Path, tag: &str) -> PathBuf {
     use std::os::unix::ffi::OsStrExt;
     let name = dst.file_name().unwrap_or_default();
@@ -119,10 +120,8 @@ fn part_name(dst: &Path, tag: &str) -> PathBuf {
     if name.as_bytes().len() + tag.len() + 9 <= 255 {
         n.push(name);
     } else {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        name.as_bytes().hash(&mut h);
-        n.push(format!("{:016x}", h.finish()));
+        let h = name.as_bytes().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3));
+        n.push(format!("{h:016x}"));
     }
     n.push(format!(".{tag}.rfpart"));
     dst.with_file_name(n)
