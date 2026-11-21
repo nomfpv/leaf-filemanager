@@ -106,6 +106,7 @@ mod recycle_view;
 mod registry;
 mod rename_exec;
 mod rename_presets;
+mod review_view;
 mod rtl;
 mod theme;
 mod thumb_cache;

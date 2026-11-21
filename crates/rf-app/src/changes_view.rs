@@ -64,6 +64,8 @@ enum Phase {
 enum Mode {
     Changes,
     Checkpoints,
+    /// Review mode (`review_view`): offered only with the agent layer on.
+    Review,
 }
 
 /// The restore that was asked for: its checkpoint, what would change, and the tick for files added since.
@@ -105,6 +107,9 @@ pub struct ChangesView {
     tab: WeakEntity<crate::folder_view::FolderView>,
     mode: Mode,
     cps: Cps,
+    /// The Review side, made the first time it is shown (it needs a window), and its status line.
+    review: Option<Entity<crate::review_view::ReviewView>>,
+    review_status: String,
     root: Option<PathBuf>,
     phase: Phase,
     items: Vec<Item>,
@@ -133,11 +138,19 @@ fn meta_of(p: &Path) -> (u64, i64) {
 
 impl ChangesView {
     pub fn new(dir: PathBuf, tab: WeakEntity<crate::folder_view::FolderView>, cx: &mut Context<Self>) -> Self {
-        let mode = if crate::checkpoint_ui::take_want(&dir) { Mode::Checkpoints } else { Mode::Changes };
+        let mode = if crate::checkpoint_ui::take_want(&dir) {
+            Mode::Checkpoints
+        } else if crate::review_view::take_want(&dir) && crate::review_view::enabled(cx) {
+            Mode::Review
+        } else {
+            Mode::Changes
+        };
         let mut this = Self {
             tab,
             mode,
             cps: Cps::default(),
+            review: None,
+            review_status: String::new(),
             dir,
             root: None,
             phase: Phase::Loading,
@@ -172,6 +185,9 @@ impl ChangesView {
 
     /// The status line while this page is the tab's: "7 changes: 3 changed, 2 new, 1 deleted, 1 renamed".
     pub fn status_text(&self) -> String {
+        if self.mode == Mode::Review {
+            return self.review_status.clone();
+        }
         if self.mode == Mode::Checkpoints {
             return match self.cps.list.len() {
                 0 => String::new(),
@@ -194,6 +210,11 @@ impl ChangesView {
 
     /// Asks git again, off the UI thread; the list is replaced when the answer comes.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.mode == Mode::Review
+            && let Some(r) = &self.review
+        {
+            r.update(cx, |r, cx| r.refresh(cx));
+        }
         let dir = self.dir.clone();
         let work = cx.background_spawn(async move {
             let root = gitread::repo_root(&dir)?;
@@ -370,11 +391,37 @@ impl Render for ChangesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::for_window(window);
         let on_cps = self.mode == Mode::Checkpoints;
+        let ai = crate::review_view::enabled(cx);
+        if self.mode == Mode::Review && !ai {
+            // (the agent layer was turned off while the page was open)
+            self.mode = Mode::Changes;
+            self.arrange();
+        }
+        let on_review = self.mode == Mode::Review;
         let switch = h_flex()
             .gap_0p5()
             .flex_shrink_0()
-            .child(seg("changes-mode-changes", t!("Changes"), !on_cps, &p).on_click(cx.listener(|v, _, _, cx| v.show_changes(cx))))
-            .child(seg("changes-mode-checkpoints", t!("Checkpoints"), on_cps, &p).on_click(cx.listener(|v, _, _, cx| v.show_checkpoints(cx))));
+            .child(seg("changes-mode-changes", t!("Changes"), self.mode == Mode::Changes, &p).on_click(cx.listener(|v, _, _, cx| v.show_changes(cx))))
+            .child(seg("changes-mode-checkpoints", t!("Checkpoints"), on_cps, &p).on_click(cx.listener(|v, _, _, cx| v.show_checkpoints(cx))))
+            .when(ai, |d| d.child(seg("changes-mode-review", t!("Review"), on_review, &p).on_click(cx.listener(|v, _, _, cx| v.show_review(cx)))));
+        if on_review {
+            let r = match &self.review {
+                Some(r) => r.clone(),
+                None => {
+                    let dir = self.dir.clone();
+                    let r = cx.new(|cx| crate::review_view::ReviewView::new(dir, window, cx));
+                    cx.observe(&r, |v, r, cx| {
+                        v.review_status = r.read(cx).status_text();
+                        cx.notify();
+                    })
+                    .detach();
+                    r.update(cx, |r, cx| r.focus(window, cx));
+                    self.review = Some(r.clone());
+                    r
+                }
+            };
+            return r.update(cx, |r, cx| r.render_page(switch, &p, cx));
+        }
         if on_cps {
             return self.render_checkpoints(switch, &p, cx);
         }
@@ -536,6 +583,29 @@ impl ChangesView {
             }
         }
         self.load_checkpoints(cx);
+        cx.notify();
+    }
+
+    /// The Review side (only with the agent layer on); it reads everything again when shown.
+    pub fn show_review(&mut self, cx: &mut Context<Self>) {
+        if !crate::review_view::enabled(cx) {
+            return;
+        }
+        if self.mode != Mode::Review {
+            self.mode = Mode::Review;
+            crate::diff_view::forget_hints();
+            if self.selected.take().is_some() {
+                cx.emit(ChangesEvent::Selected(None));
+            }
+            if let Some(pv) = self.cps.preview.as_mut()
+                && pv.selected.take().is_some()
+            {
+                cx.emit(ChangesEvent::Selected(None));
+            }
+            if let Some(r) = &self.review {
+                r.update(cx, |r, cx| r.refresh(cx));
+            }
+        }
         cx.notify();
     }
 

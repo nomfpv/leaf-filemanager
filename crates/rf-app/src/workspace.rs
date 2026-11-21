@@ -6189,6 +6189,19 @@ impl Render for Workspace {
                     None => crate::prompt::notice(t!("Checkpoints"), t!("Checkpoints are kept for folders on this computer. Open one first.").to_string(), window, cx),
                 }
             }))
+            .on_action(cx.listener(|this, _: &ReviewChanges, window, cx| {
+                if !crate::review_view::enabled(cx) {
+                    crate::prompt::notice(t!("Review changes"), t!("Review changes is part of the agent layer, which is off. Turn it on in Settings, Developer.").to_string(), window, cx);
+                    return;
+                }
+                let v = this.active_tab().clone();
+                // a folder of a repository, or any folder on this computer (compared with its checkpoints)
+                let dir = { let r = v.read(cx); r.current_dir().filter(|d| leaf_dev::gitignore::repo_root(d).is_some()).or_else(|| r.checkpoint_dir()) };
+                match dir {
+                    Some(d) => crate::review_view::show(d, v.downgrade(), cx),
+                    None => crate::prompt::notice(t!("Review changes"), t!("Review changes looks at a folder on this computer. Open one first.").to_string(), window, cx),
+                }
+            }))
             .on_action(cx.listener(|this, _: &ShowAgents, _, cx| {
                 this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::Agents)));
             }))

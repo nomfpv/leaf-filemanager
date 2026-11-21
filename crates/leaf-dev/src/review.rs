@@ -273,6 +273,12 @@ pub fn untracked(path: &Path) -> Option<RDiff> {
     Some(d)
 }
 
+/// The bytes of a file as git holds it: `spec` is `HEAD:path` or `:path` (the index). At most 32 MiB; `None` when it is not there.
+pub fn blob(root: &Path, spec: &str) -> Option<Vec<u8>> {
+    let (raw, cut) = gitread::run(root, &["show", "--no-textconv", spec], gitread::TIMEOUT, 32 * 1024 * 1024)?;
+    (!cut).then_some(raw)
+}
+
 /// Lines added and removed per file: `git diff --numstat` (unstaged) or with `cached` (staged). A binary file counts (0, 0).
 pub fn numstat(root: &Path, cached: bool) -> Option<std::collections::HashMap<String, (u32, u32)>> {
     let mut args = vec!["diff", "--numstat", "-z", "--no-renames", "--no-color"];

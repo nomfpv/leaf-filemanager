@@ -1099,6 +1099,12 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
     Ok(done)
 }
 
+/// A copy checkpoint's own file for `rel` (to show it, e.g. a picture before and after), `None` in a repository or when it has none.
+pub fn saved_file(plan: &Plan, rel: &str) -> Option<PathBuf> {
+    let p = plan.cp_files.as_ref()?.join(name_from_text(rel));
+    p.is_file().then_some(p)
+}
+
 /// Puts ONE file of `plan` back the way its checkpoint has it (the Review page's "Revert"): what is there now goes to `trash` first
 /// (never overwritten), then the checkpoint's content is written beside and renamed in. A file added since only goes to `trash`.
 pub fn restore_one(store: &Store, plan: &Plan, rel: &str, trash: &dyn Fn(&[PathBuf]) -> Result<(), String>) -> Result<(), String> {

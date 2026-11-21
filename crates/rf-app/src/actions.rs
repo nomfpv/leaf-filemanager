@@ -116,6 +116,7 @@ gpui_kit::actions!(
         ToggleHideIgnored,
         FindBuildJunk,
         ShowChanges,
+        ReviewChanges,
         FollowRemoteFile,
         Checkpoint,
         ShowCheckpoints,
