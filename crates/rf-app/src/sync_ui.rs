@@ -642,11 +642,16 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
                 if let Err(e) = job.sides() {
                     return fail(error_text(&e), cx);
                 }
-                if (moved || job.mode != init.mode) && current.is_some() && is_running(&job.id) {
+                let (inc, exc) = (split(&inc_v.read(cx).value()), split(&exc_v.read(cx).value()));
+                let stale = moved || job.mode != init.mode || inc != init.include || exc != init.exclude || f[0] != init.skip_hidden || f[1] != init.gitignore;
+                if stale && current.is_some() && is_running(&job.id) {
                     // the run would write the old state back over the one forgotten here
-                    return fail(t!("This job is running. Wait until its run ends, then change its folders or mode.").to_string(), cx);
+                    return fail(t!("This job is running. Wait until its run ends, then change its folders, mode or filters.").to_string(), cx);
                 }
-                if (moved || job.mode != init.mode) && current.is_some() {
+                if stale && current.is_some() {
+                    // changed filters: the next run may remove what was left out until now, so a scheduled run waits for one
+                    // run by hand (a last run of 0 is "never ran")
+                    job.last_run_ms = 0;
                     // other folders: what the last run saw there means nothing now; another mode: a Backup's state still has files
                     // the left side deleted since, which Two-way would read as "removed on the left" and remove on the right
                     leaf_sync::forget_state(&state_dir(), &job.id);
