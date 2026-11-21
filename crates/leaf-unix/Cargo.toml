@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 leaf-common.workspace = true
+leaf-decode.workspace = true
 rf-core.workspace = true
 # every stub of a function that returns Result answers `anyhow::Result` (rf-win's windows::core::Result becomes anyhow's)
 anyhow.workspace = true

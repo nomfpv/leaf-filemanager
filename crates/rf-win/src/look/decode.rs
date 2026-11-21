@@ -4,7 +4,7 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use image::{AnimationDecoder, DynamicImage, ImageDecoder, RgbaImage};
 
 use crate::thumbs::Bgra;
@@ -275,14 +275,17 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     use windows::core::PCWSTR;
     crate::shell::ensure_com();
     let w = crate::wide::wide(path);
-    unsafe {
-        let f: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
-        let dec = f.CreateDecoderFromFilename(PCWSTR(w.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
-        let frame = dec.GetFrame(0).ok()?;
-        let (mut fw, mut fh) = (0u32, 0u32);
-        frame.GetSize(&mut fw, &mut fh).ok()?;
-        Some((fw, fh))
-    }
+    let wic = unsafe {
+        (|| -> Option<(u32, u32)> {
+            let f: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+            let dec = f.CreateDecoderFromFilename(PCWSTR(w.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
+            let frame = dec.GetFrame(0).ok()?;
+            let (mut fw, mut fh) = (0u32, 0u32);
+            frame.GetSize(&mut fw, &mut fh).ok()?;
+            Some((fw, fh))
+        })()
+    };
+    wic.or_else(|| if crate::picture_fallback::handles(path) { leaf_decode::dimensions(path) } else { None })
 }
 
 /// Resmi tam çözünürlükte (en uzun kenar en çok `max_side`) çözer; sırayla dener.
@@ -316,6 +319,15 @@ pub fn decode_full(path: &Path, max_side: u32) -> anyhow::Result<Decoded> {
         if let Ok(d) = psd(&bytes, max_side) {
             return Ok(d);
         }
+    }
+    if crate::picture_fallback::handles(path) {
+        // JPEG XL / AVIF without a Windows codec
+        let img = leaf_decode::decode(path, max_side).map_err(|e| anyhow!("{}: {e}", ext.to_ascii_uppercase()))?;
+        let (width, height) = img.full;
+        return Ok(Decoded { frames: vec![(crate::picture_fallback::bgra(img), 0)], orientation: 1, exif: Vec::new(), width, height });
+    }
+    if crate::picture_fallback::is_heif(path) && crate::picture_fallback::heif_codec_missing() {
+        bail!(crate::picture_fallback::HEIF_NEEDS_EXTENSION);
     }
     let t = crate::thumbs::get_image(path, max_side.min(1024), crate::thumbs::Kind::Thumbnail)?;
     let (width, height) = (t.width, t.height);

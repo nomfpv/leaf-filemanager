@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys"]
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode"]
 exclude = ["vendor/velopack"]
 
 [workspace.package]
@@ -15,6 +15,7 @@ rf-win = { path = "crates/rf-win" }
 leaf-common = { path = "crates/leaf-common" }
 leaf-unix = { path = "crates/leaf-unix" }
 leaf-sys = { path = "crates/leaf-sys" }
+leaf-decode = { path = "crates/leaf-decode" }
 rf-player = { path = "crates/rf-player" }
 rf-nearby = { path = "crates/rf-nearby" }
 rustdecoder = { path = "crates/rustdecoder" }

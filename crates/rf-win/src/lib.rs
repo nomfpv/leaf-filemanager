@@ -97,6 +97,7 @@ pub mod sta;
 pub mod stayup;
 pub mod removal;
 pub mod pane_picture;
+pub mod picture_fallback;
 pub mod rotate;
 pub mod thumbs;
 pub mod tray;

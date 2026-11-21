@@ -14,6 +14,7 @@ psd = "0.3"
 zip.workspace = true
 roxmltree = "0.20"
 encoding_rs = "0.8"
+leaf-decode.workspace = true
 rf-core.workspace = true
 leaf-common.workspace = true
 anyhow.workspace = true

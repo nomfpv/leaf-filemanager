@@ -269,6 +269,12 @@ impl ImageView {
             Err(e) => {
                 log::warn!("look image {}: {e:#}", self.path.display());
                 self.state = State::Failed(e.to_string());
+                // (a HEIC the system cannot read: the shell's thumbnail was only its generic icon; the reason is shown instead)
+                if leaf_sys::picture_fallback::is_heif(&self.path) && leaf_sys::picture_fallback::heif_known_missing() {
+                    if let Some(t) = self.thumb.take() {
+                        cx.drop_image(t, None);
+                    }
+                }
             }
         }
         cx.notify();
@@ -459,7 +465,7 @@ impl Render for ImageView {
                     .justify_center()
                     .gap_2()
                     .text_color(fg)
-                    .child(t!("This image could not be opened"))
+                    .when(e != leaf_sys::picture_fallback::HEIF_NEEDS_EXTENSION, |d| d.child(t!("This image could not be opened")))
                     .child(div().text_xs().opacity(0.7).child(e.clone())),
             );
         }

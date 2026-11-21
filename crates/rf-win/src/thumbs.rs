@@ -106,9 +106,18 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
     let hbmp = match kind {
         Kind::Icon => unsafe { factory.GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)? },
         Kind::Thumbnail => unsafe {
-            factory
-                .GetImage(sz, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_RESIZETOFIT.0 | SIIGBF_BIGGERSIZEOK.0))
-                .or_else(|_| factory.GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK))?
+            match factory.GetImage(sz, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_RESIZETOFIT.0 | SIIGBF_BIGGERSIZEOK.0)) {
+                Ok(h) => h,
+                Err(_) => {
+                    // no codec for a JPEG XL / AVIF file: our own decoder (nothing runs for any other file)
+                    if crate::picture_fallback::handles(path) {
+                        if let Some(b) = crate::picture_fallback::thumbnail(path, size) {
+                            return Ok(b);
+                        }
+                    }
+                    factory.GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)?
+                }
+            }
         },
     };
     let r = hbitmap_to_bgra(hbmp);
@@ -237,6 +246,22 @@ fn urgent_image(path: &Path, size: u32, kind: Kind) -> Option<Bgra> {
     if matches!(kind, Kind::Thumbnail) && crate::pane_picture::handles(path) {
         if let Ok(b) = crate::pane_picture::decode(path, size) {
             return Some(b);
+        }
+    } else if matches!(kind, Kind::Thumbnail) && crate::picture_fallback::handles(path) {
+        // JPEG XL / AVIF: WIC when its extension is installed, else our own decoder
+        if let Ok(b) = crate::pane_picture::decode(path, size) {
+            return Some(b);
+        }
+        if let Some(b) = crate::picture_fallback::thumbnail(path, size) {
+            return Some(b);
+        }
+    } else if matches!(kind, Kind::Thumbnail) && crate::picture_fallback::is_heif(path) {
+        // HEIC: WIC only; no codec = no picture (the pane says why), not the shell's generic icon
+        if let Ok(b) = crate::pane_picture::decode(path, size) {
+            return Some(b);
+        }
+        if crate::picture_fallback::heif_codec_missing() {
+            return None;
         }
     }
     get_image(path, size, kind).ok()

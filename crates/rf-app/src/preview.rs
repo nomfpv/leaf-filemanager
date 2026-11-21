@@ -165,6 +165,12 @@ impl Preview {
         }
     }
 
+    /// The one quiet line under a HEIC picture's icon when this Windows has no HEIF codec (nothing for any other file).
+    pub(crate) fn heif_note(e: &Entry, p: &Palette) -> Option<AnyElement> {
+        let heif = leaf_decode::is_heif_ext(&e.ext) && leaf_sys::picture_fallback::heif_known_missing();
+        heif.then(|| div().text_sm().text_color(p.text_secondary).child(leaf_sys::picture_fallback::HEIF_NEEDS_EXTENSION).into_any_element())
+    }
+
     fn render_large(&mut self, path: PathBuf, e: Entry, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::for_window(window);
         let cat = icons::category(&e);
@@ -258,9 +264,12 @@ impl Preview {
                 None => div()
                     .size_full()
                     .flex()
+                    .flex_col()
+                    .gap_3()
                     .items_center()
                     .justify_center()
                     .child(Icon::new(icons::icon_for(cat)).size(px(160.)).text_color(theme::kind_color(cat, p.dark)))
+                    .children(Self::heif_note(&e, &p))
                     .into_any_element(),
             }
         };
@@ -966,9 +975,11 @@ impl Render for Preview {
             let thumb = self.thumb_or_hold(&dir, &e, PREVIEW_PX, cx);
             let visual: AnyElement = match thumb {
                 Some(im) => img(im).w_full().map(|i| if fill { i.h_full() } else { i.h(px(220.)) }).object_fit(ObjectFit::Contain).into_any_element(),
-                None => Icon::new(icons::icon_for(cat))
-                    .size(px(96.))
-                    .text_color(theme::kind_color(cat, p.dark))
+                None => v_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(icons::icon_for(cat)).size(px(96.)).text_color(theme::kind_color(cat, p.dark)))
+                    .children(Self::heif_note(&e, &p))
                     .into_any_element(),
             };
             div()

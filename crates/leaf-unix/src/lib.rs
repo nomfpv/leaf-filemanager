@@ -58,6 +58,7 @@ pub mod organize;
 pub mod osver;
 pub mod overlays;
 pub mod pe;
+pub mod picture_fallback;
 pub mod pkgverbs;
 pub mod preview_host;
 pub mod process;

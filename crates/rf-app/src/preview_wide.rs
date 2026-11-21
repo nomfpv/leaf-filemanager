@@ -95,7 +95,12 @@ impl Preview {
             let thumb = self.thumb_or_hold(&dir, &e, PREVIEW_PX, cx);
             let inside: AnyElement = match thumb {
                 Some(im) => img(im).w_full().h_full().object_fit(ObjectFit::Contain).into_any_element(),
-                None => Icon::new(icons::icon_for(cat)).size(px((vh * 0.5).clamp(32., 72.))).text_color(theme::kind_color(cat, p.dark)).into_any_element(),
+                None => v_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(Icon::new(icons::icon_for(cat)).size(px((vh * 0.5).clamp(32., 72.))).text_color(theme::kind_color(cat, p.dark)))
+                    .children(Self::heif_note(&e, &p).filter(|_| vh >= 110.))
+                    .into_any_element(),
             };
             div()
                 .w(px(vw))
