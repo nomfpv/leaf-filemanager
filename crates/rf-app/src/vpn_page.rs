@@ -1,6 +1,6 @@
 //! Settings > VPN: the Mullvad account (sign in / out, days left), connect / disconnect, the place (country and city, with
-//! search), the fastest server, connect when leaf starts, the kill switch, downloads through the VPN and Mullvad's DNS
-//! blocking. Built from the settings page's own cards and switches.
+//! search), the fastest server, connect when leaf starts, the kill switch, downloads through the VPN, the SOCKS proxy for other
+//! programs and Mullvad's DNS blocking. Built from the settings page's own cards and switches.
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::*;
@@ -151,6 +151,71 @@ pub fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         sw("vpn-kill", p, s.vpn_kill_switch, |s, v| s.vpn_kill_switch = v),
     ));
     v.push(card(p, L::Power, t!("Connect when leaf starts"), None, sw("vpn-on-start", p, s.vpn_connect_on_start, |s, v| s.vpn_connect_on_start = v)));
+
+    // ---------------------------------------------------------------- other programs
+    v.push(section(p, t!("Other programs")));
+    let proxy = crate::vpn::proxy_view();
+    let proxy_desc = match (s.vpn_socks, proxy.port, proxy.problem.as_deref()) {
+        (false, ..) => t!("Off. When it is on, a browser or another program set to leaf's SOCKS5 proxy goes through the VPN. The leaf extension's \"Browse through Mullvad\" sets it in the browser.").to_string(),
+        (true, _, Some(why)) => why.to_string(),
+        (true, None, None) => t!("Starting…").to_string(),
+        (true, Some(port), None) => {
+            let mut d = t!("SOCKS5 proxy at 127.0.0.1:{port}. In a program's network settings choose SOCKS5 with this address and \"proxy DNS\" (names are then looked up through the VPN). While the VPN is not connected, every connection through it is refused, never made directly.").replace("{port}", &port.to_string());
+            if port != s.vpn_socks_port {
+                d.push_str(&format!(" {}", t!("(Port {n} was in use, so leaf took a free one.)").replace("{n}", &s.vpn_socks_port.to_string())));
+            }
+            d
+        }
+    };
+    v.push(card(p, L::Network, t!("Let other programs use the VPN"), Some(&proxy_desc), sw("vpn-socks", p, s.vpn_socks, |s, v| s.vpn_socks = v)));
+    if s.vpn_socks {
+        if let Some(port) = proxy.port {
+            v.push(card(
+                p,
+                L::Copy,
+                t!("Address"),
+                Some(&format!("127.0.0.1:{port}")),
+                button("vpn-socks-copy", p, t!("Copy"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("127.0.0.1:{port}")))),
+            ));
+        }
+        let port_now = s.vpn_socks_port;
+        v.push(card(
+            p,
+            L::Network,
+            t!("Port"),
+            Some(&port_now.to_string()),
+            button("vpn-socks-port", p, t!("Edit"), move |window, cx| {
+                crate::prompt::show(
+                    t!("Proxy port"),
+                    Some(t!("The port on 127.0.0.1 the proxy listens on (1080 is the usual one). When it is in use, leaf takes a free one and shows it here.").to_string()),
+                    Some((port_now.to_string(), leaf_vpn::socks::DEFAULT_PORT.to_string())),
+                    vec![
+                        crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |value, _, cx| {
+                            let port: u16 = value.unwrap_or_default().trim().parse().ok().filter(|p| *p > 0).ok_or_else(|| t!("The port is a number from 1 to 65535").to_string())?;
+                            settings::update(cx, move |s| s.vpn_socks_port = port);
+                            Ok(())
+                        }),
+                        crate::prompt::Button::cancel(),
+                    ],
+                    window,
+                    cx,
+                );
+            }),
+        ));
+        v.push(card(
+            p,
+            L::Lock,
+            t!("Ask for a password"),
+            Some(t!("Other users and programs on this PC then cannot use the proxy. Chromium browsers (Chrome, Edge, Brave) cannot give a SOCKS password: turn this off to browse through Mullvad there.")),
+            sw("vpn-socks-password", p, s.vpn_socks_password, |s, v| s.vpn_socks_password = v),
+        ));
+        if s.vpn_socks_password
+            && let Some(pass) = proxy.password.as_ref()
+        {
+            let line = t!("User name {user}, password {password}").replace("{user}", leaf_vpn::socks::USER).replace("{password}", pass.as_str());
+            v.push(card(p, L::KeyRound, t!("Proxy sign-in"), Some(&line), button("vpn-socks-renew", p, t!("New password"), |_, cx| crate::vpn::new_proxy_password(cx))));
+        }
+    }
 
     // ---------------------------------------------------------------- DNS
     v.push(section(p, t!("DNS blocking")));

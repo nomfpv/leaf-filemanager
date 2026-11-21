@@ -145,6 +145,10 @@ pub fn init(cx: &mut App) {
         }
         refresh_account(cx, connect_now);
     }
+    // (the proxy for other programs refuses everything until the tunnel is up)
+    if cx.global::<Settings>().vpn_socks && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
+        apply_proxy(cx);
+    }
     cx.spawn(async move |cx| {
         let (mut seen_vpn, mut seen_ui) = (leaf_vpn::changes(), UI_CHANGES.load(Ordering::Acquire));
         loop {
@@ -421,10 +425,136 @@ pub fn settings_changed(before: &Settings, cx: &mut App) {
     {
         t.set_dns(dns_of(s).resolver());
     }
+    let proxy = (before.vpn_socks, before.vpn_socks_port, before.vpn_socks_password) != (s.vpn_socks, s.vpn_socks_port, s.vpn_socks_password);
     let moved = place_of(before) != place_of(s);
+    if proxy {
+        apply_proxy(cx);
+    }
     if moved && !matches!(leaf_vpn::state(), leaf_vpn::State::Off | leaf_vpn::State::Failed(_)) {
         connect(cx);
     }
+}
+
+// ------------------------------------------------------------------------------------------------ other programs (SOCKS)
+
+/// The keyring entry of the proxy's password (the user name is always `leaf_vpn::socks::USER`).
+const SOCKS_PASSWORD: &str = "socks-password";
+
+/// What the page and the browser extension are told about the proxy. No `Debug`: the password is in it.
+#[derive(Clone, Default)]
+pub struct ProxyView {
+    /// The port it listens on, while it runs.
+    pub port: Option<u16>,
+    /// The password it asks for (shown on the page, handed to the leaf extension).
+    pub password: Option<zeroize::Zeroizing<String>>,
+    /// Why it does not run (leaf's words, the details after a line break).
+    pub problem: Option<String>,
+}
+
+static PROXY: Mutex<Option<ProxyView>> = Mutex::new(None);
+/// Each start or stop: a start that finishes after a newer one is thrown away.
+static PROXY_GEN: AtomicU64 = AtomicU64::new(0);
+/// Held while the proxy is started or stopped (the keyring is read before it).
+static PROXY_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn proxy_view() -> ProxyView {
+    PROXY.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default()
+}
+
+fn set_proxy_view(v: ProxyView) {
+    *PROXY.lock().unwrap_or_else(|e| e.into_inner()) = Some(v);
+    ui_changed();
+}
+
+/// The proxy's sign-in from the keyring; a new one is made and kept there the first time (or when `renew`).
+fn socks_login(v: &Vault, renew: bool) -> Result<leaf_vpn::socks::Credentials, String> {
+    if let leaf_remote::Keyring::Missing(why) = v.state() {
+        return Err(format!("{}\n{why}", t!("The proxy's password is kept in the system keyring, and it cannot be used. Turn the password off, or set up the keyring.")));
+    }
+    let id = SecretId::vpn(SOCKS_PASSWORD);
+    if !renew {
+        match v.try_get(&id) {
+            Ok(Some(s)) if !s.as_str().is_empty() => {
+                return Ok(leaf_vpn::socks::Credentials { user: leaf_vpn::socks::USER.to_string(), password: zeroize::Zeroizing::new(s.as_str().to_string()) });
+            }
+            Ok(_) => {}
+            Err(why) => return Err(format!("{}\n{why}", t!("The system keyring cannot be read (it may be locked), so the proxy's password is not known. Unlock it, then turn the proxy off and on."))),
+        }
+    }
+    let c = leaf_vpn::socks::Credentials::generate();
+    v.keep(&id, &Secret::new(c.password.to_string())).map_err(|e| format!("{}\n{e}", t!("The proxy's password could not be kept in the system keyring")))?;
+    Ok(c)
+}
+
+/// Starts, restarts or stops the proxy as the settings say ("Let other programs use the VPN", its port and password).
+pub fn apply_proxy(cx: &mut App) {
+    proxy_with(cx, false);
+}
+
+/// "New password": the proxy gets a new one (programs that had the old one must be given the new one).
+pub fn new_proxy_password(cx: &mut App) {
+    proxy_with(cx, true);
+}
+
+fn proxy_with(cx: &mut App, renew: bool) {
+    let s = cx.global::<Settings>();
+    let (on, port, password) = (s.vpn_socks, s.vpn_socks_port, s.vpn_socks_password);
+    let generation = PROXY_GEN.fetch_add(1, Ordering::AcqRel) + 1;
+    if !on {
+        let _g = PROXY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        leaf_vpn::socks::stop();
+        set_proxy_view(ProxyView::default());
+        return;
+    }
+    let work = cx.background_executor().spawn(async move {
+        let login = if password { Some(socks_login(&vault(), renew)?) } else { None };
+        let shown = login.as_ref().map(|c| c.password.clone());
+        let _g = PROXY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if PROXY_GEN.load(Ordering::Acquire) != generation {
+            return Ok(None);
+        }
+        match leaf_vpn::socks::start(port, login) {
+            Ok(p) => Ok(Some(ProxyView { port: Some(p), password: shown, problem: None })),
+            Err(e) => {
+                // (a proxy started before stays down: the page says why)
+                leaf_vpn::socks::stop();
+                Err(format!("{}\n{e}", t!("The proxy for other programs could not be started")))
+            }
+        }
+    });
+    cx.spawn(async move |_| {
+        let view = match work.await {
+            Ok(Some(v)) => v,
+            Ok(None) => return,
+            Err(why) => ProxyView { problem: Some(why), ..ProxyView::default() },
+        };
+        if PROXY_GEN.load(Ordering::Acquire) == generation {
+            set_proxy_view(view);
+        }
+    })
+    .detach();
+}
+
+/// What the leaf extension is told (its "Browse through Mullvad"): the VPN's state and exit country, and the proxy's address
+/// and its own sign-in when it runs. Nothing else (no account, no key).
+pub fn browser_state() -> serde_json::Value {
+    let (state, country) = match leaf_vpn::state() {
+        leaf_vpn::State::Off => ("off", None),
+        leaf_vpn::State::Connecting { .. } => ("connecting", None),
+        leaf_vpn::State::On { country, .. } if leaf_vpn::tunnel().is_some() => ("on", Some(country)),
+        leaf_vpn::State::On { .. } => ("connecting", None),
+        leaf_vpn::State::Failed(_) => ("failed", None),
+    };
+    let p = proxy_view();
+    let proxy = p.port.map(|port| {
+        serde_json::json!({
+            "host": "127.0.0.1",
+            "port": port,
+            "user": p.password.as_ref().map(|_| leaf_vpn::socks::USER),
+            "password": p.password.as_ref().map(|s| s.as_str()),
+        })
+    });
+    serde_json::json!({ "v": 1, "state": state, "country": country, "proxy": proxy })
 }
 
 // ------------------------------------------------------------------------------------------------ what uses it

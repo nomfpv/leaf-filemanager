@@ -5,6 +5,9 @@
 //!
 //! Browser to host: `{"v":1,"type":"download","url":..,"referrer":..,"size":..,"headers":{..}}` or `{"v":1,"type":"ping"}`.
 //! Host to browser: `{"v":1,"ok":true}`, or `{"v":1,"ok":false,"why":"not-running|leaving|refused|too-large|bad-message|failed"}`.
+//! `{"v":1,"type":"vpn"}` ("Browse through Mullvad") is answered `{"v":1,"ok":true,"vpn":{"state":"off|connecting|on|failed",
+//! "country":..,"proxy":{"host","port","user","password"}|null}}`: leaf's VPN state and its SOCKS proxy (with the proxy's own
+//! sign-in only, nothing of the account); leaf is not started for it.
 //! The extension cancels the browser's own download only on `ok:true`.
 //!
 //! The message may carry the browser's cookies and sign-in header: nothing here writes it anywhere but to leaf's pipe (no log, no
@@ -172,6 +175,17 @@ fn handle(frame: &[u8]) -> Value {
             Ok(()) => answer(true, ""),
             Err(e) => answer(false, why_of(&e)),
         },
+        // "Browse through Mullvad": the VPN's state and leaf's proxy address; never starts leaf (no leaf, no VPN)
+        "vpn" => {
+            let line = format!("{PREFIX}{}", json!({ "v": 1, "type": "vpn" }));
+            match leaf_sys::handover::ask(&line, Duration::from_secs(5)) {
+                Ok(lines) => match lines.first().and_then(|l| serde_json::from_str::<Value>(l).ok()) {
+                    Some(vpn) => json!({ "v": 1, "ok": true, "vpn": vpn }),
+                    None => answer(false, "failed"),
+                },
+                Err(e) => answer(false, why_of(&e)),
+            }
+        }
         "download" => {
             let url = msg.get("url").and_then(Value::as_str).unwrap_or("").trim().to_ascii_lowercase();
             if !(url.starts_with("http://") || url.starts_with("https://")) {

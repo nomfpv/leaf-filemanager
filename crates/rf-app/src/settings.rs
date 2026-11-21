@@ -788,6 +788,13 @@ pub struct Settings {
     pub vpn_block_adult: bool,
     pub vpn_block_gambling: bool,
     pub vpn_block_social: bool,
+    /// "Let other programs use the VPN": a SOCKS5 proxy on 127.0.0.1 into the tunnel (the browser's "Browse through Mullvad").
+    pub vpn_socks: bool,
+    /// The port asked for (a free one is taken when it is in use; the page shows which).
+    pub vpn_socks_port: u16,
+    /// The proxy asks for a user name and password (the password is in the system keyring, never here). On by default on a Linux
+    /// PC with several user accounts.
+    pub vpn_socks_password: bool,
     /// Downloads the browser starts are taken over by leaf (through the leaf extension and `leaf-nmhost`).
     pub capture_browser: bool,
     /// Below this many MB (when the browser knows the size) the browser keeps the download.
@@ -1061,6 +1068,9 @@ impl Default for Settings {
             vpn_block_adult: false,
             vpn_block_gambling: false,
             vpn_block_social: false,
+            vpn_socks: false,
+            vpn_socks_port: leaf_vpn::socks::DEFAULT_PORT,
+            vpn_socks_password: leaf_vpn::socks::password_by_default(),
             capture_browser: true,
             capture_min_mb: 1,
             transfer_progress: TransferProgress::StatusBar,

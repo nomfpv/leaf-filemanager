@@ -105,12 +105,23 @@ fn check(msg: Msg, min_bytes: u64) -> Result<Capture, Refused> {
     Ok(Capture { url, headers })
 }
 
-/// Acts on a request (the text after [`PREFIX`]) and answers it: `ok` when leaf took the download over.
-pub fn handle(req: String, ack: leaf_sys::handover::Ack, cx: &mut App) {
+/// Acts on a request (the text after [`PREFIX`]) and answers it: `ok` when leaf took the download over. A `vpn` request is
+/// answered with one line of data first (see [`crate::vpn::browser_state`]).
+// (`reply` takes `&mut self` on Linux)
+#[allow(unused_mut)]
+pub fn handle(req: String, mut ack: leaf_sys::handover::Ack, cx: &mut App) {
     let msg = serde_json::from_str::<Msg>(&req);
     drop(req);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     LAST_HEARD.store(now, Ordering::Relaxed);
+    // "Browse through Mullvad": the VPN's state and the proxy's address, as one line of data
+    if matches!(&msg, Ok(m) if m.kind == "vpn") {
+        ack.reply(&crate::vpn::browser_state().to_string());
+        if ack.done() {
+            crate::last_window::settle(cx);
+        }
+        return;
+    }
     let s = cx.global::<Settings>();
     let (on, min_bytes) = (s.capture_browser, u64::from(s.capture_min_mb) << 20);
     let taken = match msg {
