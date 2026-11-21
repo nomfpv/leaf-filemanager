@@ -146,13 +146,25 @@ impl Workspace {
                 let names: Vec<String> = arg.split('|').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
                 self.active_tab().clone().update(cx, |v, cx| v.select_when_listed(names, cx));
             }
-            "run" => match crate::registry::by_id(arg) {
+            "run" => match crate::registry::by_id(arg).or_else(|| crate::registry::all().find(|c| c.id == arg)) {
                 Some(spec) => window.dispatch_action((spec.action)(), cx),
                 None => return false,
             },
             "goto" => {
                 let loc = if arg.eq_ignore_ascii_case("home") { rf_core::Location::Home } else { super::parse_launch(arg).0 };
                 self.navigate(loc, window, cx);
+            }
+            // `tag <name>`: toggles the tag (one of the defined ones, by name) on the selected items; `gototag <name>`: the tag's page
+            "tag" | "gototag" => {
+                let id = cx.global::<crate::tags::Tags>().0.defs.iter().find(|d| d.name.eq_ignore_ascii_case(arg)).map(|d| d.id);
+                let Some(id) = id else { return false };
+                if cmd == "gototag" {
+                    self.navigate(rf_core::Location::Tag(id), window, cx);
+                } else {
+                    let paths = self.active_tab().read(cx).selection_paths();
+                    crate::tags::update(cx, |t| t.toggle(&paths, id));
+                    cx.notify();
+                }
             }
             "usage" => self.navigate(rf_core::Location::DiskUsage(std::path::PathBuf::from(arg)), window, cx),
             // the Recycle Bin page: `bin restore` restores what is selected there (select with `run SelectAll`)

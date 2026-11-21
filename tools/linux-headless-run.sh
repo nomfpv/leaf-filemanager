@@ -2,6 +2,7 @@
 # usage: run.sh [seconds]   (as neo)  headless leaf in a private kwin --virtual
 # env: VW VH (screen size), BIN (leaf binary), DEMO (folder copied in as the shown folder), OPEN (name inside it to start with),
 #      SETTINGS (a settings.toml for the throwaway config), LEAF_RUST_LOG, LEAF_WLDEBUG, LEAF_TRACE_START
+#      ACTIONS (an actions.toml for the throwaway config; $BASE in it is the temp folder),
 #      SCRIPT (a LEAF_CHECK_SCRIPT file, see tools/TESTING.md: $FOLDER, $OTHER (an empty second folder), $DATA (the private
 #      XDG_DATA_HOME, its Trash is the throwaway trash) and $BASE are replaced by the temp paths), SHOTS (where the `shot` lines'
 #      pictures go, default run1/shots; with SCRIPT the one picture after 8 s is not taken, the script ends leaf with `quit`; then
@@ -13,6 +14,7 @@ mkdir -p $BASE/{rt,cfg,data,cache,home,folder,other} && chmod 700 $BASE $BASE/rt
 for i in a b c; do echo hi > $BASE/folder/$i.txt; done; mkdir $BASE/folder/sub
 [ -n "$DEMO" ] && { rm -rf $BASE/folder; cp -r "$DEMO" $BASE/folder; }
 [ -n "$SETTINGS" ] && cp "$SETTINGS" $BASE/cfg/settings.toml
+[ -n "$ACTIONS" ] && sed "s|\$BASE|$BASE|g" "$ACTIONS" > $BASE/cfg/actions.toml
 SHOTS=${SHOTS:-$ROOT/shots}
 if [ -n "$SCRIPT" ]; then
   mkdir -p "$SHOTS"; rm -f "$SHOTS"/*.png

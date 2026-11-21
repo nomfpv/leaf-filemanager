@@ -47,6 +47,7 @@ when unset; code in `crates/rf-app/src/check_script.rs`). One line per step, `#`
 - `goto <path|home>`, `usage <path>` (the storage usage view), `pane left|right` (dual pane), `bin restore` (the Recycle Bin
   page: restores the selected rows; select them with `run SelectAll`), `bulk apply` (the open bulk rename dialog: its Rename button),
   `settings <general|appearance|layout|files|filetypes|actions|tags|preview|search|nearby|advanced|speed|organizer|features|about>`
+- `tag <name>` (toggles that tag on the selection), `gototag <name>` (the tag's page)
 - `shot <name>`: prints `LEAF_SHOT <name>` on stdout; if `LEAF_CHECK_SHOTDIR` is set it waits (15 s at most) for
   `<dir>/<name>.png` to appear, else 1.5 s. The wrapper takes the picture.
 - `quit`: leaves (after running operations)
