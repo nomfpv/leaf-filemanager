@@ -423,6 +423,17 @@ fn is_default_preview_height(h: &f32) -> bool {
     *h == rf_core::previewpane::BOTTOM_DEFAULT_H
 }
 
+/// What happens when the download queue is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WhenDone {
+    #[default]
+    Nothing,
+    Close,
+    Sleep,
+    Shutdown,
+}
+
 /// A download category: the subfolder of the download folder and the file extensions (no dot) that go into it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DownloadCategory {
@@ -688,6 +699,15 @@ pub struct Settings {
     pub download_sort: bool,
     /// The subfolders and the extensions that go into each.
     pub download_categories: Vec<DownloadCategory>,
+    /// The download queue only runs in a time window (the schedule below).
+    pub download_schedule: bool,
+    /// The window: start and stop as minutes after midnight (a stop before the start runs past midnight), and the weekdays it starts
+    /// on (bit 0 Monday .. bit 6 Sunday).
+    pub download_schedule_start: u16,
+    pub download_schedule_stop: u16,
+    pub download_schedule_days: u8,
+    /// What leaf does when the queue is done.
+    pub download_when_done: WhenDone,
     /// Downloads the browser starts are taken over by leaf (through the leaf extension and `leaf-nmhost`).
     pub capture_browser: bool,
     /// Below this many MB (when the browser knows the size) the browser keeps the download.
@@ -933,6 +953,11 @@ impl Default for Settings {
             download_per_host: 32,
             download_folder: String::new(),
             download_sort: false,
+            download_schedule: false,
+            download_schedule_start: 22 * 60,
+            download_schedule_stop: 6 * 60,
+            download_schedule_days: 0x7f,
+            download_when_done: WhenDone::Nothing,
             download_categories: DownloadCategory::defaults(),
             capture_browser: true,
             capture_min_mb: 1,

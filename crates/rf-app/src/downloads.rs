@@ -245,6 +245,8 @@ struct Live {
     limit: Arc<AtomicU64>,
     /// The user set this download's own limit from its card: the setting no longer changes it.
     own_limit: Arc<AtomicBool>,
+    /// The schedule paused it (it is not a pause of the user's: it is not saved as one, and the window opening resumes it).
+    by_schedule: bool,
 }
 
 static LIVE: Mutex<Vec<Live>> = Mutex::new(Vec::new());
@@ -267,7 +269,7 @@ pub fn persist_soon() {
         let mut st = store();
         for s in &mut st.active {
             if let Some(l) = live.iter().find(|l| l.key == s.key) {
-                s.paused = l.paused.load(Ordering::Relaxed);
+                s.paused = l.paused.load(Ordering::Relaxed) && !l.by_schedule;
             }
         }
         st.clone()
@@ -279,6 +281,28 @@ pub fn persist_soon() {
             }
             snapshot.save(&path);
         });
+    }
+}
+
+/// The downloads that run, wait or are paused.
+pub fn live_count() -> usize {
+    LIVE.lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+/// The queue's schedule opens (`true`) or closes: closed, waiting downloads keep waiting and the running ones are paused; open again,
+/// the ones the schedule paused go on.
+pub fn schedule_gate(open: bool) {
+    dl::queue::set_open(open);
+    for l in LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
+        if open {
+            if l.by_schedule {
+                l.paused.store(false, Ordering::Relaxed);
+                l.by_schedule = false;
+            }
+        } else if !l.paused.load(Ordering::Relaxed) {
+            l.paused.store(true, Ordering::Relaxed);
+            l.by_schedule = true;
+        }
     }
 }
 
@@ -362,6 +386,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
             }
             persist_soon();
             if ok {
+                crate::download_schedule::note_finished();
                 if let Some(p) = v.first() {
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     crate::status_center::set_result(cx, id, Some(format!("{} {name}", t!("Downloaded"))), None);
@@ -383,7 +408,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
             }
         })
     };
-    let live = Live { key, paused: Arc::default(), limit: Arc::new(AtomicU64::new(settings.1)), own_limit: Arc::default() };
+    let live = Live { key, paused: Arc::default(), limit: Arc::new(AtomicU64::new(settings.1)), own_limit: Arc::default(), by_schedule: false };
     let (limit, own_limit) = (live.limit.clone(), live.own_limit.clone());
     LIVE.lock().unwrap_or_else(|e| e.into_inner()).push(live);
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_req, key, settings, (&limit, &got), &fail_flag), Some(on_done));
@@ -437,7 +462,10 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
             return Ok(false);
         }
     }
-    let Some(_turn) = dl::queue::wait_turn(parallel, &tr.cancel, |place| (tr.on_progress)(0, 0, Some(format!("{} ({place})", t!("Waiting for the downloads before it"))))) else {
+    let Some(_turn) = dl::queue::wait_turn(parallel, &tr.cancel, |place| {
+        let text = if dl::queue::is_open() { format!("{} ({place})", t!("Waiting for the downloads before it")) } else { t!("Waiting for the scheduled time").to_string() };
+        (tr.on_progress)(0, 0, Some(text))
+    }) else {
         return Ok(false);
     };
     // a browser download whose sign-in was not kept over a restart: the server would refuse it, or send a login page

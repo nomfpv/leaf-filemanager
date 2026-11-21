@@ -3230,6 +3230,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             sw("download-sort", p, s.download_sort, |s, v| s.download_sort = v),
         ),
         download_categories_card(p, s),
+        download_schedule_card(p, s),
         card(
             p,
             L::Globe,
@@ -3938,6 +3939,75 @@ fn download_categories_card(p: &Palette, s: &Settings) -> AnyElement {
                     .child(button("download-category-add", p, t!("Add"), move |window, cx| edit(None, window, cx)))
                     .into_any_element(),
             ),
+        ))
+        .into_any_element()
+}
+
+/// The queue's schedule: switch, start, stop, weekdays and what happens when the queue is done.
+fn download_schedule_card(p: &Palette, s: &Settings) -> AnyElement {
+    use crate::settings::WhenDone;
+    let times = |current: u16| -> Vec<(u16, String)> {
+        let mut v: Vec<(u16, String)> = (0..48u16).map(|i| (i * 30, format!("{:02}:{:02}", i / 2, i % 2 * 30))).collect();
+        if !v.iter().any(|(m, _)| *m == current) {
+            v.push((current, format!("{:02}:{:02}", current / 60, current % 60)));
+        }
+        v
+    };
+    let names = [t!("Mon"), t!("Tue"), t!("Wed"), t!("Thu"), t!("Fri"), t!("Sat"), t!("Sun")];
+    let days = h_flex().gap_1().children(names.into_iter().enumerate().map(|(i, name)| {
+        let on = s.download_schedule_days >> i & 1 == 1;
+        div()
+            .id(("download-day", i))
+            .h(px(32.))
+            .px_3()
+            .flex()
+            .items_center()
+            .rounded(theme::RADIUS_SM)
+            .border_1()
+            .border_color(p.border)
+            .text_sm()
+            .cursor_pointer()
+            .when(on, |d| d.bg(p.accent).text_color(p.accent_text))
+            .when(!on, |d| d.bg(p.hover).hover(|s| s.bg(p.pressed)))
+            .child(name)
+            .on_click(move |_, _, cx| settings::update(cx, move |s| s.download_schedule_days ^= 1 << i))
+            .into_any_element()
+    }));
+    let when_options: Vec<(WhenDone, String)> = [
+        (WhenDone::Nothing, t!("Nothing")),
+        (WhenDone::Close, t!("Close leaf")),
+        (WhenDone::Sleep, t!("Put this PC to sleep")),
+        (WhenDone::Shutdown, t!("Shut this PC down")),
+    ]
+    .into_iter()
+    .filter(|(w, _)| crate::download_schedule::available(*w))
+    .map(|(w, l)| (w, l.to_string()))
+    .collect();
+    shell(p)
+        .child(card_body(
+            p,
+            L::Clock,
+            t!("Run the download queue at set times").into(),
+            Some(t!("Outside the window downloads wait, and running ones pause until it opens again.").into()),
+            Some(sw("download-schedule", p, s.download_schedule, |s, v| s.download_schedule = v)),
+        ))
+        .when(s.download_schedule, |d| {
+            d.child(card_body(p, L::Clock, t!("Start at").into(), None, Some(dropdown("download-start", p, s.download_schedule_start, times(s.download_schedule_start), |s, v| s.download_schedule_start = v))))
+                .child(card_body(
+                    p,
+                    L::Clock,
+                    t!("Stop at").into(),
+                    Some(t!("A time before the start is after midnight.").into()),
+                    Some(dropdown("download-stop", p, s.download_schedule_stop, times(s.download_schedule_stop), |s, v| s.download_schedule_stop = v)),
+                ))
+                .child(card_body(p, L::Calendar, t!("On these days").into(), Some(t!("The days the window starts on.").into()), Some(days.into_any_element())))
+        })
+        .child(card_body(
+            p,
+            L::Download,
+            t!("When the downloads are done").into(),
+            Some(t!("Sleep and shut down give a 60 second notice you can cancel.").into()),
+            Some(dropdown("download-when-done", p, s.download_when_done, when_options, |s, v| s.download_when_done = v)),
         ))
         .into_any_element()
 }

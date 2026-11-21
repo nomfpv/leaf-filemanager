@@ -87,6 +87,7 @@ pub mod shortcut;
 pub mod signature;
 pub mod single_instance;
 pub mod sound;
+pub mod power;
 pub mod sta;
 pub mod syncroots;
 pub mod sysparams;
