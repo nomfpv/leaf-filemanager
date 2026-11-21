@@ -133,5 +133,72 @@ fn main() {
     std::thread::sleep(Duration::from_secs(40));
     get("https get after idle");
     drop(tunnel);
+
+    // the SOCKS proxy for other programs: the exit check through it, with the name looked up by the proxy (remote DNS)
+    let t = Instant::now();
+    match leaf_vpn::socks::start(0, None) {
+        Ok(port) => {
+            let r = rt.block_on(exit_through_socks(port));
+            match r {
+                Ok((ip, mullvad)) => println!("socks: ok exit {ip} Mullvad exit {} ({} ms)", if mullvad { "yes" } else { "no" }, t.elapsed().as_millis()),
+                Err(why) => println!("socks: FAILED {why} ({} ms)", t.elapsed().as_millis()),
+            }
+            // the tunnel goes down: a new connection through the proxy must be refused, never made directly
+            leaf_vpn::disconnect();
+            let t = Instant::now();
+            let r = rt.block_on(socks_connect(port, "am.i.mullvad.net", 443));
+            match r {
+                Err(SocksError::Refused(code)) => println!("socks after tunnel down: ok refused (reply {code}) ({} ms)", t.elapsed().as_millis()),
+                Err(SocksError::Other(why)) => println!("socks after tunnel down: FAILED {why} ({} ms)", t.elapsed().as_millis()),
+                Ok(_) => println!("socks after tunnel down: FAILED the connection was made ({} ms)", t.elapsed().as_millis()),
+            }
+            leaf_vpn::socks::stop();
+        }
+        Err(e) => println!("socks: FAILED the proxy did not start ({e}) ({} ms)", t.elapsed().as_millis()),
+    }
     drop(guard);
+}
+
+enum SocksError {
+    /// The proxy answered with this reply code.
+    Refused(u8),
+    Other(String),
+}
+
+/// A plain SOCKS5 client: no sign-in, CONNECT to `name:port` with the name given to the proxy (it looks it up).
+async fn socks_connect(proxy: u16, name: &str, port: u16) -> Result<tokio::net::TcpStream, SocksError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let io = |e: std::io::Error| SocksError::Other(e.to_string());
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", proxy)).await.map_err(io)?;
+    s.write_all(&[5, 1, 0]).await.map_err(io)?;
+    let mut b = [0u8; 2];
+    s.read_exact(&mut b).await.map_err(io)?;
+    if b != [5, 0] {
+        return Err(SocksError::Other(format!("the proxy did not take the greeting ({b:?})")));
+    }
+    let mut req = vec![5, 1, 0, 3, name.len() as u8];
+    req.extend_from_slice(name.as_bytes());
+    req.extend_from_slice(&port.to_be_bytes());
+    s.write_all(&req).await.map_err(io)?;
+    let mut rep = [0u8; 10];
+    s.read_exact(&mut rep).await.map_err(io)?;
+    if rep[1] != 0 {
+        return Err(SocksError::Refused(rep[1]));
+    }
+    Ok(s)
+}
+
+/// `https://am.i.mullvad.net/json` through the proxy: the exit address and Mullvad's word whether it is one of its exits.
+async fn exit_through_socks(proxy: u16) -> Result<(String, bool), String> {
+    let s = tokio::time::timeout(Duration::from_secs(30), socks_connect(proxy, "am.i.mullvad.net", 443)).await.map_err(|_| "no answer in time".to_string())?.map_err(|e| match e {
+        SocksError::Refused(c) => format!("the proxy refused (reply {c})"),
+        SocksError::Other(why) => why,
+    })?;
+    let (status, body) = leaf_vpn::https_get_over(s, "am.i.mullvad.net", "/json").await?;
+    if status != 200 {
+        return Err(format!("HTTP {status}"));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| "the answer could not be read".to_string())?;
+    let ip = v.get("ip").and_then(|i| i.as_str()).unwrap_or("?").to_string();
+    Ok((ip, v.get("mullvad_exit_ip").and_then(|m| m.as_bool()) == Some(true)))
 }

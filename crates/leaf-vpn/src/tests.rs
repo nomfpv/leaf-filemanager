@@ -126,6 +126,174 @@ fn the_bridge_serves_implicit_ftps_connection_and_only_its_own_caller() {
     assert!(matches!(stray.read(&mut buf), Ok(0) | Err(_)), "the stray connection was not served");
 }
 
+/// A SOCKS5 client: greeting (with a user name and password when given), CONNECT to `name:port`. The open stream, or the
+/// refusal: the reply code, `0xF1` for a refused sign-in, `0xFF` for no acceptable method.
+fn socks_ask(proxy: u16, login: Option<(&str, &str)>, name: &str, port: u16) -> Result<std::net::TcpStream, u8> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", proxy)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let method = if login.is_some() { 2 } else { 0 };
+    s.write_all(&[5, 1, method]).unwrap();
+    let mut b = [0u8; 2];
+    s.read_exact(&mut b).map_err(|_| 0xFFu8)?;
+    if b[1] != method {
+        return Err(0xFF);
+    }
+    if let Some((u, p)) = login {
+        let mut m = vec![1, u.len() as u8];
+        m.extend_from_slice(u.as_bytes());
+        m.push(p.len() as u8);
+        m.extend_from_slice(p.as_bytes());
+        s.write_all(&m).unwrap();
+        s.read_exact(&mut b).map_err(|_| 0xF1u8)?;
+        if b[1] != 0 {
+            // (and the proxy closes the connection)
+            let mut rest = [0u8; 1];
+            assert!(matches!(s.read(&mut rest), Ok(0) | Err(_)), "the connection stays open after a refused sign-in");
+            return Err(0xF1);
+        }
+    }
+    let mut req = vec![5, 1, 0];
+    match name.parse::<Ipv4Addr>() {
+        Ok(ip) => {
+            req.push(1);
+            req.extend_from_slice(&ip.octets());
+        }
+        Err(_) => {
+            req.extend_from_slice(&[3, name.len() as u8]);
+            req.extend_from_slice(name.as_bytes());
+        }
+    }
+    req.extend_from_slice(&port.to_be_bytes());
+    s.write_all(&req).unwrap();
+    let mut rep = [0u8; 10];
+    s.read_exact(&mut rep).map_err(|_| 0xFEu8)?;
+    if rep[1] != 0 { Err(rep[1]) } else { Ok(s) }
+}
+
+/// An echo server that counts the connections it got.
+fn counted_echo() -> (u16, Arc<AtomicU64>) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let n = Arc::new(AtomicU64::new(0));
+    let seen = n.clone();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            seen.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut r = s.try_clone().unwrap();
+                let mut w = s;
+                let _ = std::io::copy(&mut r, &mut w);
+            });
+        }
+    });
+    (port, n)
+}
+
+/// A stand-in for the tunnel: its resolver knows only the names given (and notes each one asked), its connections are plain
+/// local ones (the echo server), counted.
+struct FakeTunnel {
+    up: bool,
+    names: Names,
+    asked: Mutex<Vec<String>>,
+    dialed: AtomicU64,
+}
+
+type Names = Vec<(&'static str, Ipv4Addr)>;
+
+impl socks::Upstream for FakeTunnel {
+    fn ready(&self) -> bool {
+        self.up
+    }
+    fn resolve<'a>(&'a self, name: &'a str) -> BoxFuture<'a, io::Result<Vec<Ipv4Addr>>> {
+        Box::pin(async move {
+            self.asked.lock().unwrap().push(name.to_string());
+            Ok(self.names.iter().filter(|(n, _)| *n == name).map(|(_, ip)| *ip).collect())
+        })
+    }
+    fn connect(&self, ip: Ipv4Addr, port: u16) -> BoxFuture<'_, io::Result<Box<dyn socks::Duplex>>> {
+        Box::pin(async move {
+            self.dialed.fetch_add(1, Ordering::SeqCst);
+            let s = tokio::net::TcpStream::connect((ip, port)).await?;
+            Ok(Box::new(s) as Box<dyn socks::Duplex>)
+        })
+    }
+}
+
+fn fake(up: bool, names: Names) -> Arc<FakeTunnel> {
+    Arc::new(FakeTunnel { up, names, asked: Mutex::new(Vec::new()), dialed: AtomicU64::new(0) })
+}
+
+#[test]
+fn socks_connect_while_the_tunnel_is_down_is_refused_and_nothing_is_dialed_directly() {
+    test_runtime();
+    let (echo_port, accepted) = counted_echo();
+    // the real proxy (leaf's tunnel): no tunnel in this test, the kill switch off (its default): still refused, by address and by name
+    let port = socks::start(0, None).unwrap();
+    assert_eq!(socks::port(), Some(port));
+    assert_eq!(socks_ask(port, None, "127.0.0.1", echo_port).unwrap_err(), 0x02);
+    assert_eq!(socks_ask(port, None, "localhost", echo_port).unwrap_err(), 0x02);
+    // connecting (the state while a tunnel comes up or comes back): the same
+    hold();
+    assert_eq!(socks_ask(port, None, "127.0.0.1", echo_port).unwrap_err(), 0x02);
+    disconnect();
+    socks::stop();
+    assert_eq!(socks::port(), None);
+    // a tunnel that is down: nothing looked up, nothing opened
+    let up = fake(false, vec![("files.leaf-test.invalid", Ipv4Addr::LOCALHOST)]);
+    let (port, _stop) = socks::launch(0, None, up.clone()).unwrap();
+    assert_eq!(socks_ask(port, None, "files.leaf-test.invalid", echo_port).unwrap_err(), 0x02);
+    assert!(up.asked.lock().unwrap().is_empty());
+    assert_eq!(up.dialed.load(Ordering::SeqCst), 0);
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "a connection reached the server directly");
+}
+
+#[test]
+fn socks_names_are_looked_up_through_the_tunnel_never_by_the_system() {
+    test_runtime();
+    let (echo_port, accepted) = counted_echo();
+    // `.invalid` is never answered by any real resolver (RFC 6761): the connection can only work when the name went to the
+    // tunnel's resolver, which knows it
+    let up = fake(true, vec![("files.leaf-test.invalid", Ipv4Addr::LOCALHOST)]);
+    let (port, _stop) = socks::launch(0, None, up.clone()).unwrap();
+    let s = socks_ask(port, None, "files.leaf-test.invalid", echo_port).unwrap();
+    assert_eq!(round_trip(s), b"leaf");
+    assert_eq!(*up.asked.lock().unwrap(), vec!["files.leaf-test.invalid".to_string()]);
+    assert_eq!(up.dialed.load(Ordering::SeqCst), 1);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    // a name the tunnel's resolver does not know: unreachable, not asked anywhere else
+    assert_eq!(socks_ask(port, None, "other.leaf-test.invalid", echo_port).unwrap_err(), 0x04);
+    assert_eq!(up.dialed.load(Ordering::SeqCst), 1);
+    // UDP ASSOCIATE is refused
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.write_all(&[5, 1, 0, 5, 3, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+    let mut b = [0u8; 12];
+    s.read_exact(&mut b).unwrap();
+    assert_eq!(b[3], 0x07);
+}
+
+#[test]
+fn socks_wrong_proxy_password_is_refused() {
+    test_runtime();
+    let (echo_port, accepted) = counted_echo();
+    let login = socks::Credentials::generate();
+    assert_eq!(login.password.len(), 24);
+    assert!(!format!("{login:?}").contains(login.password.as_str()));
+    let up = fake(true, vec![]);
+    let (port, _stop) = socks::launch(0, Some(login.clone()), up.clone()).unwrap();
+    // a wrong password, a wrong user, no password at all: refused, nothing opened
+    assert_eq!(socks_ask(port, Some((socks::USER, "not-the-password")), "127.0.0.1", echo_port).unwrap_err(), 0xF1);
+    assert_eq!(socks_ask(port, Some(("someone", login.password.as_str())), "127.0.0.1", echo_port).unwrap_err(), 0xF1);
+    assert_eq!(socks_ask(port, None, "127.0.0.1", echo_port).unwrap_err(), 0xFF);
+    assert_eq!(up.dialed.load(Ordering::SeqCst), 0);
+    assert_eq!(accepted.load(Ordering::SeqCst), 0);
+    // the right one works
+    let s = socks_ask(port, Some((socks::USER, login.password.as_str())), "127.0.0.1", echo_port).unwrap();
+    assert_eq!(round_trip(s), b"leaf");
+}
+
 #[test]
 fn a_pooled_direct_connection_is_not_reused_once_the_host_is_set_to_vpn() {
     // made while the host was not ticked: direct, and reusable while it stays so

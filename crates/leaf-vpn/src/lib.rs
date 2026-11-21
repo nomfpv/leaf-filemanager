@@ -1,4 +1,4 @@
-﻿//! leaf's VPN: only leaf's own connections (downloads, SFTP/FTP hosts that are set to use it) go through a WireGuard tunnel
+//! leaf's VPN: only leaf's own connections (downloads, SFTP/FTP hosts that are set to use it) go through a WireGuard tunnel
 //! that lives inside leaf. Nothing on the PC changes: no adapter, no driver, no admin rights, no other program's traffic.
 //!
 //! - [`Provider`] is the seam: it says which server to use and with which key ([`mullvad::Mullvad`] first; a plain WireGuard
@@ -8,12 +8,15 @@
 //! - [`dial`] (async) and [`dial_blocking`] are the only ways leaf's connections reach it: LAN addresses go direct, the
 //!   rest through the tunnel when it is up; when it is down they go direct, unless the kill switch is on: then they are
 //!   refused ([`is_blocked`] tells that error apart, so a transfer can wait instead of going out directly).
+//! - [`socks`]: "Let other programs use the VPN", a SOCKS5 proxy on 127.0.0.1 into the tunnel (the browser's "Browse through
+//!   Mullvad"); it refuses everything while the tunnel is not up, never direct.
 //! - The tunnel runs on leaf-remote's tokio runtime, given to [`init`]; nothing starts before the first use.
 
 pub mod account;
 mod http;
 pub mod mullvad;
 pub mod route;
+pub mod socks;
 pub mod tunnel;
 
 use std::future::Future;
@@ -503,6 +506,13 @@ pub async fn https_get(tunnel: &Tunnel, host: &str, path: &str) -> Result<(u16, 
     let s = tunnel.connect(ip, 443, Duration::from_secs(15)).await.map_err(|e| format!("connect: {e}"))?;
     let a = http::request(s, host, "GET", path, None, None, Duration::from_secs(30)).await?;
     Ok((a.status, a.body.len()))
+}
+
+/// One HTTPS GET of `host` `path` over a stream that is already open (for checks: the self-test through the SOCKS proxy). The
+/// status and the body (small answers only).
+pub async fn https_get_over<S: AsyncRead + AsyncWrite + Unpin>(stream: S, host: &str, path: &str) -> Result<(u16, Vec<u8>), String> {
+    let a = http::request(stream, host, "GET", path, None, None, Duration::from_secs(30)).await?;
+    Ok((a.status, a.body))
 }
 
 /// How long a bridge waits for its one connection.
