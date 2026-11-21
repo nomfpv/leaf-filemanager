@@ -518,6 +518,9 @@ fn ask_limit(limit: Arc<AtomicU64>, own: Arc<AtomicBool>, cx: &mut App) {
     });
 }
 
+/// Connections of one download through leaf's VPN at most.
+const VPN_SEGMENTS: usize = 8;
+
 /// The kill switch holds this download's connections: it waits (as paused, with the reason on its card) until the VPN is
 /// connected or the kill switch is turned off. `false`: it was cancelled meanwhile.
 fn wait_for_vpn(tr: &Tracker, host: &str) -> bool {
@@ -579,6 +582,9 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categorie
     let host = host_of(&req.url);
     if through_vpn {
         opts.dialer = Some(Arc::new(crate::vpn::DownloadDialer));
+        // (all of them share one UDP socket and one thread inside the tunnel: more than this only adds losses)
+        opts.segments = opts.segments.min(VPN_SEGMENTS);
+        opts.max_segments = opts.max_segments.min(VPN_SEGMENTS);
         if !wait_for_vpn(tr, &host) {
             return Ok(false);
         }

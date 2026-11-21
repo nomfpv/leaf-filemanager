@@ -35,6 +35,10 @@ const MTU: usize = 1380;
 /// Per TCP stream (a download segment fills a window of this).
 const RX_BUF: usize = 512 << 10;
 const TX_BUF: usize = 128 << 10;
+/// The tunnel's UDP socket buffers.
+const UDP_BUF: usize = 4 << 20;
+/// Datagrams taken in one turn of the driver before the stack runs.
+const DRAIN: usize = 256;
 /// How long the first handshake may take (more right after a sign-in: see [`Tunnel::start`]).
 pub const HANDSHAKE_WAIT: Duration = Duration::from_secs(10);
 /// With nothing coming in for this long, a ping goes to the server's side of the tunnel (10.64.0.1). It is data, so it also
@@ -315,6 +319,10 @@ impl Tunnel {
         let bind: SocketAddr = if cfg.endpoint.is_ipv4() { "0.0.0.0:0".parse().unwrap() } else { "[::]:0".parse().unwrap() };
         let udp = UdpSocket::bind(bind).await.map_err(TunnelError::Socket)?;
         udp.connect(cfg.endpoint).await.map_err(TunnelError::Socket)?;
+        // (the OS default is 64 KB on Windows: a burst of the windows of many connections would be dropped there)
+        let sock = socket2::SockRef::from(&udp);
+        let _ = sock.set_recv_buffer_size(UDP_BUF);
+        let _ = sock.set_send_buffer_size(UDP_BUF);
         let mut seed = [0u8; 8];
         rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut seed);
         let seed = u64::from_le_bytes(seed);
@@ -544,6 +552,17 @@ async fn drive(shared: Arc<Shared>, udp: UdpSocket, mut tunn: Tunn, me: Ipv4Addr
                     let mut to_stack = Vec::new();
                     if take_datagram(&mut tunn, &udp, &inb[..len], &mut out, &mut to_stack).await {
                         live.on_rx(Instant::now());
+                    }
+                    // the rest that is waiting, in the same turn (one datagram per turn falls behind a fast download)
+                    for _ in 0..DRAIN {
+                        match udp.try_recv(&mut inb) {
+                            Ok(len) => {
+                                if take_datagram(&mut tunn, &udp, &inb[..len], &mut out, &mut to_stack).await {
+                                    live.on_rx(Instant::now());
+                                }
+                            }
+                            Err(_) => break,
+                        }
                     }
                     if !to_stack.is_empty() {
                         shared.lock().dev.rx.extend(to_stack);
