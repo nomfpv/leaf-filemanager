@@ -124,13 +124,12 @@ impl Login {
         }
     }
 
-    /// The saved password of this share: the hinted user's, else any user's.
+    /// The saved password of this share: the named user's when a user is named (never another user's: a host saved for bob
+    /// does not log in as alice), else any user's.
     fn saved(&self) -> Option<(SecretId, Secret)> {
         if let Some(u) = &self.hint {
             let id = SecretId::share(u, &self.host, &self.share);
-            if let Some(s) = self.vault.get(&id) {
-                return Some((id, s));
-            }
+            return self.vault.get(&id).map(|s| (id, s));
         }
         let ids = self.vault.list().ok()?;
         ids.into_iter()
@@ -141,9 +140,23 @@ impl Login {
 
 // ------------------------------------------------------------------------------------------------ the system's side
 
+/// The user names the addresses opened this run named for a share (`smb://bob@nas/photos`: `nas`, `photos` → `bob`), so its
+/// login starts with that user (the dialog's box, and the password saved for that user, never another user's).
+fn user_hints() -> &'static std::sync::Mutex<std::collections::HashMap<(String, String), String>> {
+    static H: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String), String>>> = std::sync::OnceLock::new();
+    H.get_or_init(Default::default)
+}
+
+/// The user name an address named for `\\host\share` this run (else for another share of that server).
+fn user_hint(host: &str, share: &str) -> Option<String> {
+    let (host, share) = (host.to_ascii_lowercase(), share.to_ascii_lowercase());
+    let h = user_hints().lock().unwrap_or_else(|e| e.into_inner());
+    h.get(&(host.clone(), share)).or_else(|| h.iter().find(|((hh, _), _)| *hh == host).map(|(_, u)| u)).cloned()
+}
+
 /// `smb://[user@]host/share/dir` as the Windows path `\\host\share\dir` (`\\host` for an address without a share: its list of
-/// shares). `None` for text that is no `smb://` address. Reads the text only. (The address's user name is not part of a UNC
-/// path; the login dialog asks for it.)
+/// shares). `None` for text that is no `smb://` address. The address's user name is not part of a UNC path: it is kept for
+/// the share's login (see [`user_hints`]).
 pub fn unc_of(text: &str) -> Option<std::path::PathBuf> {
     let t = text.trim().trim_matches('"');
     if !t.get(..6).is_some_and(|s| s.eq_ignore_ascii_case("smb://")) {
@@ -152,6 +165,10 @@ pub fn unc_of(text: &str) -> Option<std::path::PathBuf> {
     let v = crate::VPath::parse(t).ok()?;
     if v.host().is_empty() {
         return None;
+    }
+    if let Some(u) = v.user().filter(|u| !u.is_empty()) {
+        let share = v.path().trim_matches('/').split('/').next().filter(|s| !s.is_empty()).unwrap_or("IPC$");
+        user_hints().lock().unwrap_or_else(|e| e.into_inner()).insert((v.host().to_ascii_lowercase(), share.to_ascii_lowercase()), u.to_string());
     }
     let rest = v.path().trim_matches('/').replace('/', "\\");
     Some(if rest.is_empty() { format!(r"\\{}", v.host()) } else { format!(r"\\{}\{rest}", v.host()) }.into())
@@ -192,7 +209,8 @@ pub fn wants_login(path: &std::path::Path, err: &std::io::Error) -> bool {
 pub fn log_in_unc(path: &std::path::Path) -> Result<(), FsError> {
     let (host, share) = unc_share(path).ok_or(FsError::Unsupported)?;
     let remote = format!(r"\\{host}\{share}");
-    Login::new(&host, &share, None).log_in(&mut |user, secret| match leaf_sys::network::connect_share(&remote, user, secret.as_str(), secret.wants_remember()) {
+    let hint = user_hint(&host, &share);
+    Login::new(&host, &share, hint.as_deref()).log_in(&mut |user, secret| match leaf_sys::network::connect_share(&remote, user, secret.as_str(), secret.wants_remember()) {
         Ok(()) => Tried::Worked,
         Err(e) if leaf_sys::network::is_bad_password(&e) => Tried::Wrong,
         Err(e) if leaf_sys::network::is_login_refused(&e) => Tried::Denied,
