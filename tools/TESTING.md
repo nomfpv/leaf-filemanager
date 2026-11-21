@@ -1,0 +1,40 @@
+# Testing leaf without disturbing the owner
+
+Start the app for a check with three environment variables, so it uses a throwaway config,
+runs next to the owner's own copy and never shows up on his screen:
+
+```powershell
+$cfg = Join-Path $env:TEMP "leaf-check-cfg"
+New-Item -ItemType Directory -Force $cfg | Out-Null
+$env:LEAF_CONFIG_DIR = $cfg      # throwaway settings, never the real ones
+$env:LEAF_MULTI_INSTANCE = "1"   # own instance, no hand-over to a running copy
+$env:LEAF_OFFSCREEN = "1"        # window parked right of every monitor, no focus, no taskbar button
+$p = Start-Process target\release\leaf.exe -ArgumentList "C:\some\folder" -PassThru
+```
+
+In this mode the window is still shown and rendered (not minimised, not hidden), it is just
+outside the virtual screen. Saved window placement is neither read nor written.
+
+Capture it (works off-screen; `CopyFromScreen` does not):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\capture-window.ps1 -ProcessId $p.Id -Out $env:TEMP\check.png
+```
+
+Exit 0 = PNG written, 1 = no window, 2 = blank picture. Read the PNG to check the result.
+
+Close only what you started, with the window's own close, never by process name:
+
+```powershell
+[void]$p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Stop-Process -Id $p.Id }
+```
+
+`openbench` (`crates/rf-win/examples/openbench.rs`) already runs the app this way; set
+`OPENBENCH_ON_SCREEN=1` for an on-screen run.
+
+## Still checked on screen (with the owner's agreement)
+
+- Glass / Mica backdrop look (an off-screen window is not composed like a visible one).
+- Drag and drop.
+- Focus and keyboard behaviour (what takes the focus, tab order, shortcuts, the tray).
+- The official end-of-phase benchmark (`OPENBENCH_ON_SCREEN=1`, or the Speed test in Settings).
