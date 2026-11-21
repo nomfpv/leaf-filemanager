@@ -1,6 +1,6 @@
 //! The picture fallback for formats the system has no codec for (see rf-win's module of the same name). On Linux the pictures are
-//! always decoded in this process, so `handles` is the JPEG XL / AVIF test and `thumbnail` the plain decode. Linux has no HEIF
-//! extension to ask for: nothing is ever reported missing here (HEIC is not decoded at all, patents).
+//! always decoded in this process, so `handles` is the test for a format `leaf-decode` reads (JPEG XL, AVIF, HEIC, PSD, RAW) and
+//! `thumbnail` the plain decode. Linux has no HEIF extension to ask for: nothing is ever reported missing here.
 
 use std::path::Path;
 
@@ -12,7 +12,7 @@ fn ext(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
-/// A JPEG XL or AVIF file: decoded by `leaf-decode`.
+/// A file `leaf-decode` reads.
 pub fn handles(path: &Path) -> bool {
     leaf_decode::handles_ext(&ext(path))
 }

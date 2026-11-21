@@ -249,7 +249,7 @@ struct Preview {
     exif: Vec<(String, String)>,
 }
 
-fn exif_rows(raw: &[u8]) -> (Option<u8>, Vec<(String, String)>) {
+pub(crate) fn exif_rows(raw: &[u8]) -> (Option<u8>, Vec<(String, String)>) {
     let Ok(ex) = exif::Reader::new().read_raw(raw.to_vec()) else { return (None, Vec::new()) };
     let o = ex.get_field(exif::Tag::Orientation, exif::In::PRIMARY).and_then(|f| f.value.get_uint(0)).filter(|v| (1..=8).contains(v)).map(|v| v as u8);
     let rows = ex

@@ -3,11 +3,12 @@
 //! picture) and camera RAW files (the JPEG the camera embedded).
 //!
 //! Nothing here runs, allocates or initialises until `decode` or `dimensions` is called for a file.
-//! HEIC is not here on purpose (patents and licences): the platform's own codec decides.
+//! HEIC (`heifer`, pure Rust) is a fallback: Windows asks its own codec first, and Linux has none.
 
 use std::path::Path;
 
 mod avif;
+mod heic;
 mod jxl;
 mod psd;
 mod raw;
@@ -30,7 +31,7 @@ const MAX_FILE: u64 = 400 * 1024 * 1024;
 
 /// Whether this extension (any case, no dot) is a format decoded here.
 pub fn handles_ext(ext: &str) -> bool {
-    ext.eq_ignore_ascii_case("jxl") || ext.eq_ignore_ascii_case("avif") || is_psd_ext(ext) || is_raw_ext(ext)
+    ext.eq_ignore_ascii_case("jxl") || ext.eq_ignore_ascii_case("avif") || is_psd_ext(ext) || is_raw_ext(ext) || is_heif_ext(ext)
 }
 
 fn is_psd_ext(ext: &str) -> bool {
@@ -42,7 +43,7 @@ pub fn is_raw_ext(ext: &str) -> bool {
     raw::EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
 
-/// Whether this extension (any case, no dot) is HEIC / HEIF: not decoded here, only the system's own codec reads it.
+/// Whether this extension (any case, no dot) is HEIC / HEIF.
 pub fn is_heif_ext(ext: &str) -> bool {
     ["heic", "heif", "hif"].iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
@@ -85,6 +86,7 @@ pub fn decode_bytes(bytes: &[u8], ext: &str, max_side: u32) -> anyhow::Result<Rg
         "jxl" => jxl::decode(bytes, max_side),
         "avif" => avif::decode(bytes, max_side),
         "psd" | "psb" => psd::decode(bytes, max_side),
+        "heic" | "heif" | "hif" => heic::decode(bytes, max_side),
         e if is_raw_ext(e) => raw::decode_bytes(bytes, max_side),
         _ => anyhow::bail!("not a picture format decoded here"),
     }
@@ -98,6 +100,9 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     }
     if is_psd_ext(&ext) {
         return psd::dimensions(path);
+    }
+    if is_heif_ext(&ext) {
+        return heic::dimensions(&std::fs::read(path).ok().filter(|b| b.len() as u64 <= MAX_FILE)?);
     }
     if std::fs::metadata(path).ok()?.len() > MAX_FILE {
         return None;

@@ -1,6 +1,6 @@
 //! Linux backend of rf_win::thumbs. Status: REAL for pictures (SVG, video frames and a PDF's first page when ffmpegthumbnailer / ffmpeg / pdftoppm exist), type icons from the system icon theme (`crate::icontheme`)
 //!
-//! A picture file (by extension: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, QOI, EXR, HDR, DDS, PNM, JPEG XL, AVIF, PSD, RAW) gets a
+//! A picture file (by extension: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, QOI, EXR, HDR, DDS, PNM, JPEG XL, AVIF, HEIC, PSD, RAW) gets a
 //! thumbnail from [`crate::look::decode`] at the asked size. A `Kind::Icon` request gets the system icon theme's picture for the file's type. Everything else answers `None` / `Err` (the caller
 //! draws its generic icon). The pool is the same shape as Windows': newest request first on worker threads, a small
 //! lane of its own for the urgent picture (preview pane, Quick Look), a bounded backlog whose oldest are answered `dropped`.
@@ -18,7 +18,7 @@ pub fn keep_gdiplus_alive() {
 }
 
 const PICTURE_EXTS: &[&str] = &[
-    "png", "apng", "jpg", "jpeg", "jpe", "jfif", "gif", "webp", "bmp", "dib", "ico", "tif", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm", "pbm", "pgm", "ppm", "pam", "avif", "jxl", "psd", "psb", "arw", "cr2", "cr3", "crw", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f",
+    "png", "apng", "jpg", "jpeg", "jpe", "jfif", "gif", "webp", "bmp", "dib", "ico", "tif", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm", "pbm", "pgm", "ppm", "pam", "avif", "jxl", "heic", "heif", "hif", "psd", "psb", "arw", "cr2", "cr3", "crw", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f",
 ];
 
 fn is_picture(path: &Path) -> bool {

@@ -11,7 +11,7 @@ are MIT, Copyright (c) 2026 Ozer Guzel and the leaf authors; they appear in the 
 
 | Licence | Crates |
 |---|---|
-| MIT License (MIT) | 578 |
+| MIT License (MIT) | 581 |
 | Apache License 2.0 (Apache-2.0) | 39 |
 | Unicode License v3 (Unicode-3.0) | 25 |
 | ISC License (ISC) | 23 |
@@ -10997,6 +10997,9 @@ Used by:
 - [chrono 0.4.45](https://github.com/chronotope/chrono)
 - [delegate 0.13.5](https://github.com/kobzol/rust-delegate)
 - [granit-parser 1.3.0](https://github.com/bourumir-wyngs/granit-parser)
+- [heifer-hevc-dec 0.5.1](https://github.com/HarpeLm/Heifer)
+- [heifer-isobmff 0.5.1](https://github.com/HarpeLm/Heifer)
+- [heifer 0.5.1](https://github.com/HarpeLm/Heifer)
 - [libm 0.2.16](https://github.com/rust-lang/compiler-builtins)
 - [lyon 1.0.19](https://github.com/nical/lyon)
 - [lyon_algorithms 1.0.22](https://github.com/nical/lyon)
