@@ -11,16 +11,16 @@ are MIT, Copyright (c) 2026 Ozer Guzel and the leaf authors; they appear in the 
 
 | Licence | Crates |
 |---|---|
-| MIT License (MIT) | 487 |
+| MIT License (MIT) | 512 |
 | Apache License 2.0 (Apache-2.0) | 34 |
 | Unicode License v3 (Unicode-3.0) | 25 |
 | ISC License (ISC) | 23 |
-| BSD 3-Clause "New" or "Revised" License (BSD-3-Clause) | 14 |
+| BSD 3-Clause "New" or "Revised" License (BSD-3-Clause) | 16 |
 | Mozilla Public License 2.0 (MPL-2.0) | 14 |
-| BSD 2-Clause "Simplified" License (BSD-2-Clause) | 6 |
+| BSD 2-Clause "Simplified" License (BSD-2-Clause) | 9 |
+| Creative Commons Zero v1.0 Universal (CC0-1.0) | 3 |
 | zlib License (Zlib) | 3 |
 | BSD Zero Clause License (0BSD) | 2 |
-| Creative Commons Zero v1.0 Universal (CC0-1.0) | 2 |
 | Community Data License Agreement Permissive 2.0 (CDLA-Permissive-2.0) | 1 |
 | bzip2 and libbzip2 License v1.0.6 (bzip2-1.0.6) | 1 |
 
@@ -2179,6 +2179,133 @@ fn size_of_usize() {
 ### BSD 2-Clause "Simplified" License (BSD-2-Clause)
 
 Used by:
+- [rav1d 1.1.0](https://github.com/memorysafety/rav1d)
+
+<details><summary>Licence text</summary>
+
+```text
+; Copyright © 2018, VideoLAN and dav1d authors
+; Copyright © 2018, Two Orioles, LLC
+; All rights reserved.
+;
+; Redistribution and use in source and binary forms, with or without
+; modification, are permitted provided that the following conditions are met:
+;
+; 1. Redistributions of source code must retain the above copyright notice, this
+;    list of conditions and the following disclaimer.
+;
+; 2. Redistributions in binary form must reproduce the above copyright notice,
+;    this list of conditions and the following disclaimer in the documentation
+;    and/or other materials provided with the distribution.
+;
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+; ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+; WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+; DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+; ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+; (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+; ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+%include "config.asm"
+%include "ext/x86/x86inc.asm"
+
+SECTION .text
+
+cglobal cpu_cpuid, 0, 5, 0, regs, leaf, subleaf
+    mov        r4, regsmp
+    mov       eax, leafm
+    mov       ecx, subleafm
+%if ARCH_X86_64
+    mov        r5, rbx
+%endif
+    cpuid
+    mov  [r4+4*0], eax
+    mov  [r4+4*1], ebx
+    mov  [r4+4*2], edx
+    mov  [r4+4*3], ecx
+%if ARCH_X86_64
+    mov       rbx, r5
+%endif
+    RET
+
+cglobal cpu_xgetbv, 0, 0, 0, xcr
+    movifnidn ecx, xcrm
+    xgetbv
+%if ARCH_X86_64
+    shl       rdx, 32
+    or        rax, rdx
+%endif
+    RET
+
+```
+
+</details>
+
+### BSD 2-Clause "Simplified" License (BSD-2-Clause)
+
+Used by:
+- [rav1d 1.1.0](https://github.com/memorysafety/rav1d)
+
+<details><summary>Licence text</summary>
+
+```text
+; Copyright © 2019-2022, VideoLAN and dav1d authors
+; Copyright © 2019-2022, Two Orioles, LLC
+; All rights reserved.
+;
+; Redistribution and use in source and binary forms, with or without
+; modification, are permitted provided that the following conditions are met:
+;
+; 1. Redistributions of source code must retain the above copyright notice, this
+;    list of conditions and the following disclaimer.
+;
+; 2. Redistributions in binary form must reproduce the above copyright notice,
+;    this list of conditions and the following disclaimer in the documentation
+;    and/or other materials provided with the distribution.
+;
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+; ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+; WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+; DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+; ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+; (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+; ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+struc FGData
+    .seed:                      resd 1
+    .num_y_points:              resd 1
+    .y_points:                  resb 14 * 2
+    .chroma_scaling_from_luma:  resd 1
+    .num_uv_points:             resd 2
+    .uv_points:                 resb 2 * 10 * 2
+    .scaling_shift:             resd 1
+    .ar_coeff_lag:              resd 1
+    .ar_coeffs_y:               resb 24
+    .ar_coeffs_uv:              resb 2 * 28 ; includes padding
+    .ar_coeff_shift:            resq 1
+    .grain_scale_shift:         resd 1
+    .uv_mult:                   resd 2
+    .uv_luma_mult:              resd 2
+    .uv_offset:                 resd 2
+    .overlap_flag:              resd 1
+    .clip_to_restricted_range:  resd 1
+endstruc
+
+cextern gaussian_sequence
+
+```
+
+</details>
+
+### BSD 2-Clause "Simplified" License (BSD-2-Clause)
+
+Used by:
 - [arrayref 0.3.9](https://github.com/droundy/arrayref)
 
 <details><summary>Licence text</summary>
@@ -2282,6 +2409,43 @@ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
 LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
 OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 SUCH DAMAGE.
+
+```
+
+</details>
+
+### BSD 2-Clause "Simplified" License (BSD-2-Clause)
+
+Used by:
+- [rav1d 1.1.0](https://github.com/memorysafety/rav1d)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright © 2018-2019, VideoLAN and dav1d authors
+Copyright © 2023-2024, VideoLAN, dav1d authors, and Internet Security Research Group
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ```
 
@@ -2487,6 +2651,31 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
 
 Used by:
+- [alloc-no-stdlib 2.0.4](https://github.com/dropbox/rust-alloc-no-stdlib)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright (c) 2016 Dropbox, Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+```
+
+</details>
+
+### BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
+
+Used by:
 - [subtle 2.6.1](https://github.com/dalek-cryptography/subtle)
 
 <details><summary>Licence text</summary>
@@ -2608,6 +2797,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
 
 Used by:
+- [alloc-stdlib 0.2.4](https://github.com/dropbox/rust-alloc-no-stdlib)
 - [exr 1.74.2](https://github.com/johannesvollmer/exrs)
 - [sha1_smol 1.0.1](https://github.com/mitsuhiko/sha1-smol)
 
@@ -2895,6 +3085,140 @@ For these and/or other purposes and motivations, and without any expectation of 
      c. Affirmer disclaims responsibility for clearing rights of other persons that may apply to the Work or any use thereof, including without limitation any person's Copyright and Related Rights in the Work. Further, Affirmer disclaims responsibility for obtaining any necessary consents, permissions or other rights required for any use of the Work.
 
      d. Affirmer understands and acknowledges that Creative Commons is not a party to this document and has no duty or obligation with respect to this CC0 or use of the Work. 
+```
+
+</details>
+
+### Creative Commons Zero v1.0 Universal (CC0-1.0)
+
+Used by:
+- [to_method 1.1.0](https://github.com/whentze/to_method)
+
+<details><summary>Licence text</summary>
+
+```text
+Creative Commons Legal Code
+
+CC0 1.0 Universal
+
+    CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE
+    LEGAL SERVICES. DISTRIBUTION OF THIS DOCUMENT DOES NOT CREATE AN
+    ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS
+    INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES
+    REGARDING THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS
+    PROVIDED HEREUNDER, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM
+    THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS PROVIDED
+    HEREUNDER.
+
+Statement of Purpose
+
+The laws of most jurisdictions throughout the world automatically confer
+exclusive Copyright and Related Rights (defined below) upon the creator
+and subsequent owner(s) (each and all, an "owner") of an original work of
+authorship and/or a database (each, a "Work").
+
+Certain owners wish to permanently relinquish those rights to a Work for
+the purpose of contributing to a commons of creative, cultural and
+scientific works ("Commons") that the public can reliably and without fear
+of later claims of infringement build upon, modify, incorporate in other
+works, reuse and redistribute as freely as possible in any form whatsoever
+and for any purposes, including without limitation commercial purposes.
+These owners may contribute to the Commons to promote the ideal of a free
+culture and the further production of creative, cultural and scientific
+works, or to gain reputation or greater distribution for their Work in
+part through the use and efforts of others.
+
+For these and/or other purposes and motivations, and without any
+expectation of additional consideration or compensation, the person
+associating CC0 with a Work (the "Affirmer"), to the extent that he or she
+is an owner of Copyright and Related Rights in the Work, voluntarily
+elects to apply CC0 to the Work and publicly distribute the Work under its
+terms, with knowledge of his or her Copyright and Related Rights in the
+Work and the meaning and intended legal effect of CC0 on those rights.
+
+1. Copyright and Related Rights. A Work made available under CC0 may be
+protected by copyright and related or neighboring rights ("Copyright and
+Related Rights"). Copyright and Related Rights include, but are not
+limited to, the following:
+
+  i. the right to reproduce, adapt, distribute, perform, display,
+     communicate, and translate a Work;
+ ii. moral rights retained by the original author(s) and/or performer(s);
+iii. publicity and privacy rights pertaining to a person's image or
+     likeness depicted in a Work;
+ iv. rights protecting against unfair competition in regards to a Work,
+     subject to the limitations in paragraph 4(a), below;
+  v. rights protecting the extraction, dissemination, use and reuse of data
+     in a Work;
+ vi. database rights (such as those arising under Directive 96/9/EC of the
+     European Parliament and of the Council of 11 March 1996 on the legal
+     protection of databases, and under any national implementation
+     thereof, including any amended or successor version of such
+     directive); and
+vii. other similar, equivalent or corresponding rights throughout the
+     world based on applicable law or treaty, and any national
+     implementations thereof.
+
+2. Waiver. To the greatest extent permitted by, but not in contravention
+of, applicable law, Affirmer hereby overtly, fully, permanently,
+irrevocably and unconditionally waives, abandons, and surrenders all of
+Affirmer's Copyright and Related Rights and associated claims and causes
+of action, whether now known or unknown (including existing as well as
+future claims and causes of action), in the Work (i) in all territories
+worldwide, (ii) for the maximum duration provided by applicable law or
+treaty (including future time extensions), (iii) in any current or future
+medium and for any number of copies, and (iv) for any purpose whatsoever,
+including without limitation commercial, advertising or promotional
+purposes (the "Waiver"). Affirmer makes the Waiver for the benefit of each
+member of the public at large and to the detriment of Affirmer's heirs and
+successors, fully intending that such Waiver shall not be subject to
+revocation, rescission, cancellation, termination, or any other legal or
+equitable action to disrupt the quiet enjoyment of the Work by the public
+as contemplated by Affirmer's express Statement of Purpose.
+
+3. Public License Fallback. Should any part of the Waiver for any reason
+be judged legally invalid or ineffective under applicable law, then the
+Waiver shall be preserved to the maximum extent permitted taking into
+account Affirmer's express Statement of Purpose. In addition, to the
+extent the Waiver is so judged Affirmer hereby grants to each affected
+person a royalty-free, non transferable, non sublicensable, non exclusive,
+irrevocable and unconditional license to exercise Affirmer's Copyright and
+Related Rights in the Work (i) in all territories worldwide, (ii) for the
+maximum duration provided by applicable law or treaty (including future
+time extensions), (iii) in any current or future medium and for any number
+of copies, and (iv) for any purpose whatsoever, including without
+limitation commercial, advertising or promotional purposes (the
+"License"). The License shall be deemed effective as of the date CC0 was
+applied by Affirmer to the Work. Should any part of the License for any
+reason be judged legally invalid or ineffective under applicable law, such
+partial invalidity or ineffectiveness shall not invalidate the remainder
+of the License, and in such case Affirmer hereby affirms that he or she
+will not (i) exercise any of his or her remaining Copyright and Related
+Rights in the Work or (ii) assert any associated claims and causes of
+action with respect to the Work, in either case contrary to Affirmer's
+express Statement of Purpose.
+
+4. Limitations and Disclaimers.
+
+ a. No trademark or patent rights held by Affirmer are waived, abandoned,
+    surrendered, licensed or otherwise affected by this document.
+ b. Affirmer offers the Work as-is and makes no representations or
+    warranties of any kind concerning the Work, express, implied,
+    statutory or otherwise, including without limitation warranties of
+    title, merchantability, fitness for a particular purpose, non
+    infringement, or the absence of latent or other defects, accuracy, or
+    the present or absence of errors, whether or not discoverable, all to
+    the greatest extent permissible under applicable law.
+ c. Affirmer disclaims responsibility for clearing rights of other persons
+    that may apply to the Work or any use thereof, including without
+    limitation any person's Copyright and Related Rights in the Work.
+    Further, Affirmer disclaims responsibility for obtaining any necessary
+    consents, permissions or other rights required for any use of the
+    Work.
+ d. Affirmer understands and acknowledges that Creative Commons is not a
+    party to this document and has no duty or obligation with respect to
+    this CC0 or use of the Work.
+
 ```
 
 </details>
@@ -5473,6 +5797,82 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
+- [assert_matches 1.5.0](https://github.com/murarth/assert_matches)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright (c) 2016 Murarth
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
+- [atomig 0.4.3](https://github.com/LukasKalbertodt/atomig/)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright (c) 2016 Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ```
 
@@ -8230,7 +8630,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ### MIT License (MIT)
 
 Used by:
+- [zerocopy-derive 0.7.35](https://github.com/google/zerocopy)
 - [zerocopy-derive 0.8.63](https://github.com/google/zerocopy)
+- [zerocopy 0.7.35](https://github.com/google/zerocopy)
 - [zerocopy 0.8.63](https://github.com/google/zerocopy)
 
 <details><summary>Licence text</summary>
@@ -8733,7 +9135,9 @@ SOFTWARE.
 ### MIT License (MIT)
 
 Used by:
+- [strum 0.26.3](https://github.com/Peternator7/strum)
 - [strum 0.28.0](https://github.com/Peternator7/strum)
+- [strum_macros 0.26.4](https://github.com/Peternator7/strum)
 - [strum_macros 0.28.0](https://github.com/Peternator7/strum)
 
 <details><summary>Licence text</summary>
@@ -9278,6 +9682,9 @@ Used by:
 - filmcraft-time 0.8.0
 - filmcraft-vp8 0.8.0
 - filmcraft-vp9 0.8.0
+- leaf-common 0.9.4
+- leaf-decode 0.9.4
+- leaf-sys 0.9.4
 - rf-app 0.9.4
 - rf-archive 0.9.4
 - rf-core 0.9.4
@@ -9289,6 +9696,8 @@ Used by:
 - [accesskit 0.24.1](https://github.com/AccessKit/accesskit)
 - [accesskit_consumer 0.38.0](https://github.com/AccessKit/accesskit)
 - [accesskit_windows 0.34.0](https://github.com/AccessKit/accesskit)
+- [atomig-macro 0.4.0](https://github.com/LukasKalbertodt/atomig/)
+- [brotli-decompressor 5.0.3](https://github.com/dropbox/rust-brotli-decompressor)
 - [chrono 0.4.45](https://github.com/chronotope/chrono)
 - [granit-parser 1.3.0](https://github.com/bourumir-wyngs/granit-parser)
 - [libm 0.2.16](https://github.com/rust-lang/compiler-builtins)
@@ -9816,6 +10225,19 @@ Used by:
 - [hashify 0.3.2](https://github.com/stalwartlabs/hashify)
 - [inventory 0.3.25](https://github.com/dtolnay/inventory)
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
+- [jxl-bitstream 1.1.0](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-coding 1.0.1](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-color 0.11.0](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-frame 0.13.3](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-grid 0.6.2](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-image 0.13.0](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-jbr 0.2.1](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-modular 0.11.3](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-oxide-common 1.0.0](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-oxide 0.12.6](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-render 0.12.4](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-threadpool 1.0.0](https://github.com/tirr-c/jxl-oxide.git)
+- [jxl-vardct 0.11.1](https://github.com/tirr-c/jxl-oxide.git)
 - [lazy_static 1.5.1](https://github.com/rust-lang-nursery/lazy-static.rs)
 - [mail-parser 1.0.1](https://github.com/stalwartlabs/mail-parser)
 - [once_cell 1.21.4](https://github.com/matklad/once_cell)
@@ -9856,6 +10278,7 @@ Used by:
 - [utf-8 0.7.6](https://github.com/SimonSapin/rust-utf8)
 - [utf8-zero 0.8.1](https://github.com/algesten/utf8-zero)
 - [waker-fn 1.2.0](https://github.com/smol-rs/waker-fn)
+- [zerocopy 0.7.35](https://github.com/google/zerocopy)
 - [zmij 1.0.23](https://github.com/dtolnay/zmij)
 
 <details><summary>Licence text</summary>
