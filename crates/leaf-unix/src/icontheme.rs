@@ -317,7 +317,7 @@ fn load(path: &Path, size: u32) -> Option<Bgra> {
     Some(Bgra { width, height, data })
 }
 
-fn render_svg(bytes: &[u8], size: u32) -> Option<image::RgbaImage> {
+pub(crate) fn render_svg(bytes: &[u8], size: u32) -> Option<image::RgbaImage> {
     use resvg::{tiny_skia, usvg};
     let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
     let s = tree.size();

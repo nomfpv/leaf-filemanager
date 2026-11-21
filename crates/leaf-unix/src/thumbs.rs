@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::thumbs. Status: REAL for pictures, type icons from the system icon theme (`crate::icontheme`)
+//! Linux backend of rf_win::thumbs. Status: REAL for pictures (SVG, video frames and a PDF's first page when ffmpegthumbnailer / ffmpeg / pdftoppm exist), type icons from the system icon theme (`crate::icontheme`)
 //!
 //! A picture file (by extension: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, QOI, EXR, HDR, DDS, PNM, JPEG XL, AVIF) gets a
 //! thumbnail from [`crate::look::decode`] at the asked size. A `Kind::Icon` request gets the system icon theme's picture for the file's type. Everything else answers `None` / `Err` (the caller
@@ -29,10 +29,93 @@ fn is_picture(path: &Path) -> bool {
 /// not decode.
 fn picture(path: &Path, size: u32) -> Option<Bgra> {
     if !is_picture(path) {
-        return None;
+        return other_picture(path, size);
     }
     let d = crate::look::decode::decode_full(path, size.max(1)).ok()?;
     d.frames.into_iter().next().map(|(b, _)| b)
+}
+
+const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "ogv", "3gp"];
+
+fn has_ext(path: &Path, list: &[&str]) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| list.iter().any(|p| e.eq_ignore_ascii_case(p)))
+}
+
+/// Runs `prog` with `args` (never a shell) and returns its standard output, at most `limit` bytes; `None` when the program is
+/// not installed, fails, prints nothing, or takes longer than `secs` (it is then killed).
+fn capture(prog: &str, args: &[&std::ffi::OsStr], secs: u64, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut out = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = out.by_ref().take(limit).read_to_end(&mut v);
+        let _ = tx.send(v);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(v) => {
+            let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+            (ok && !v.is_empty()).then_some(v)
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+    }
+}
+
+fn png_to_bgra(png: &[u8], size: u32) -> Option<Bgra> {
+    let mut img = image::load_from_memory(png).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    if w.max(h) > size {
+        let f = size as f32 / w.max(h) as f32;
+        img = image::imageops::resize(&img, ((w as f32 * f).round() as u32).max(1), ((h as f32 * f).round() as u32).max(1), image::imageops::FilterType::Triangle);
+    }
+    let (width, height) = img.dimensions();
+    let mut data = img.into_raw();
+    for px in data.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    Some(Bgra { width, height, data })
+}
+
+/// SVG through resvg, a video's frame through `ffmpegthumbnailer` else `ffmpeg`, a PDF's first page through `pdftoppm`; each
+/// tool only when it is installed. Anything else, or a tool that is missing: `None`.
+fn other_picture(path: &Path, size: u32) -> Option<Bgra> {
+    use std::ffi::OsStr;
+    let sz = size.max(1).to_string();
+    if has_ext(path, &["svg", "svgz"]) {
+        let bytes = std::fs::read(path).ok()?;
+        let rgba = crate::icontheme::render_svg(&bytes, size)?;
+        let (width, height) = rgba.dimensions();
+        let mut data = rgba.into_raw();
+        for px in data.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        return Some(Bgra { width, height, data });
+    }
+    if has_ext(path, VIDEO_EXTS) {
+        let p = path.as_os_str();
+        let png = capture("ffmpegthumbnailer", &[OsStr::new("-i"), p, OsStr::new("-o"), OsStr::new("-"), OsStr::new("-s"), OsStr::new(&sz), OsStr::new("-c"), OsStr::new("png")], 15, 16 << 20)
+            .or_else(|| {
+                let vf = format!("thumbnail,scale={sz}:{sz}:force_original_aspect_ratio=decrease");
+                capture(
+                    "ffmpeg",
+                    &[OsStr::new("-v"), OsStr::new("error"), OsStr::new("-i"), p, OsStr::new("-vf"), OsStr::new(&vf), OsStr::new("-frames:v"), OsStr::new("1"), OsStr::new("-f"), OsStr::new("image2pipe"), OsStr::new("-vcodec"), OsStr::new("png"), OsStr::new("-")],
+                    15,
+                    16 << 20,
+                )
+            })?;
+        return png_to_bgra(&png, size);
+    }
+    if has_ext(path, &["pdf"]) {
+        let png = capture("pdftoppm", &[OsStr::new("-png"), OsStr::new("-f"), OsStr::new("1"), OsStr::new("-l"), OsStr::new("1"), OsStr::new("-singlefile"), OsStr::new("-scale-to"), OsStr::new(&sz), path.as_os_str(), OsStr::new("-")], 15, 32 << 20)?;
+        return png_to_bgra(&png, size);
+    }
+    None
 }
 
 /// A thumbnail for a picture file; `Kind::Icon` is the system theme's icon of the file's type; any other file is an `Err`.
