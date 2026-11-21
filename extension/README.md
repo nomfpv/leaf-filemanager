@@ -57,8 +57,14 @@ message, and starting it again from the browser carries on from the part already
 
 The toolbar button's popup has **Browse through Mullvad**: the browser's proxy is set to leaf's SOCKS5 proxy on 127.0.0.1 (in leaf:
 Settings > VPN > Let other programs use the VPN), so pages go through leaf's Mullvad VPN and names are looked up through it (Chromium:
-`chrome.proxy` fixed_servers socks5; Firefox: `proxy.settings` with `proxyDNS: true`, or per request through `proxy.onRequest` when the
-add-on is not allowed in private windows or leaf's proxy asks for a password). Addresses of this PC and the local network stay direct.
+`chrome.proxy` fixed_servers socks5; Firefox: `proxy.settings` with `proxyDNS: true`, or per request through `proxy.onRequest` when
+leaf's proxy asks for a password). Addresses of this PC and the local network stay direct.
+
+Firefox: the switch turns on only when the add-on is allowed in private windows (about:addons > leaf browser capture > Run in Private
+Windows > Allow), so private windows go through Mullvad too. With leaf's proxy password the proxy can only be given per request, and
+then Firefox's own sites (addons.mozilla.org, accounts.firefox.com, ...) and its background requests do not go through Mullvad; the
+popup says so. After a Firefox restart the per-request proxy is set up from storage before the first request, without the password
+until leaf answers (leaf refuses meanwhile: pages fail, never direct).
 While it is on, WebRTC is kept to the proxy (`webRTCIPHandlingPolicy` = `disable_non_proxied_udp`) so it does not show the real
 address; turning it off puts the browser's own settings back.
 

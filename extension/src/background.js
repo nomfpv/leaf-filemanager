@@ -177,7 +177,7 @@ const VPN_EVERY_MIN = 0.5;
 // the browser's own network and local names never go to the proxy
 const BYPASS_CHROMIUM = ["<local>", "localhost", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "[::1]", "*.local"];
 const BYPASS_FIREFOX = "localhost, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, [::1], .local";
-const VPN_DEFAULTS = { mullvad: false, mullvadProxy: null, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" };
+const VPN_DEFAULTS = { mullvad: false, mullvadProxy: null, mullvadPerRequest: false, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" };
 const badge = api.action ?? api.browserAction;
 
 // Firefox, when the proxy setting cannot be used (a password, or the add-on is not allowed in private windows): the proxy is
@@ -221,11 +221,29 @@ function isLocalHost(host) {
   return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
 }
 
-function onProxyRequest(info) {
-  // (nothing returned: the browser's own setting applies)
+// Firefox per request (leaf's proxy asks for a password): what to answer for one request; nothing returned: the browser's own
+// setting applies
+function perRequestAnswer(info) {
   if (!perRequest) return undefined;
   if (isLocalHost(hostOf(info.url))) return { type: "direct" };
   return perRequest;
+}
+
+// (after a restart of Firefox or of the background page, the per-request proxy is rebuilt from storage before any request is
+// answered: without the password, which only leaf gives, so leaf refuses until it has answered: pages fail, never direct)
+const armed = vpnConfig().then((cfg) => {
+  if (IS_FIREFOX && cfg.mullvad && cfg.mullvadPerRequest && cfg.mullvadProxy && !perRequest) {
+    const p = cfg.mullvadProxy;
+    perRequest = { type: "socks", host: p.host, port: p.port, username: p.user ?? undefined, password: undefined, proxyDNS: true };
+  }
+});
+let armedDone = false;
+armed.then(() => {
+  armedDone = true;
+});
+
+function onProxyRequest(info) {
+  return armedDone ? perRequestAnswer(info) : armed.then(() => perRequestAnswer(info));
 }
 
 if (IS_FIREFOX && api.proxy?.onRequest) {
@@ -244,16 +262,18 @@ async function controllable() {
 async function setProxy(p) {
   livePassword = p.password ?? null;
   if (IS_FIREFOX) {
+    // (the proxy setting covers private windows, Firefox's own sites and its background requests; it needs the add-on allowed in
+    // private windows, checked before; a failure here is a refusal, never a weaker fallback)
     if (!p.user) {
-      try {
-        await api.proxy.settings.set({ value: { proxyType: "manual", socks: `${p.host}:${p.port}`, socksVersion: 5, proxyDNS: true, passthrough: BYPASS_FIREFOX } });
-        perRequest = null;
-        return;
-      } catch {
-        // not allowed in private windows: per request instead
-      }
+      await api.proxy.settings.set({ value: { proxyType: "manual", socks: `${p.host}:${p.port}`, socksVersion: 5, proxyDNS: true, passthrough: BYPASS_FIREFOX } });
+      perRequest = null;
+      await api.storage.local.set({ mullvadPerRequest: false });
+      return;
     }
-    perRequest = { type: "socks", host: p.host, port: p.port, username: p.user ?? undefined, password: p.password ?? undefined, proxyDNS: true };
+    // a password can only be given per request: private windows are covered with the access checked before; Firefox's own sites
+    // (addons.mozilla.org, accounts.firefox.com, ...) and its background requests are not shown to the listener (the popup says so)
+    perRequest = { type: "socks", host: p.host, port: p.port, username: p.user, password: p.password ?? undefined, proxyDNS: true };
+    await api.storage.local.set({ mullvadPerRequest: true });
     return;
   }
   // (Chromium's socks5 sends the names to the proxy: remote DNS)
@@ -284,6 +304,19 @@ function notify(message) {
   quietly(api.notifications?.create("leaf-vpn", { type: "basic", iconUrl: api.runtime.getURL("icons/leaf-128.png"), title: "leaf", message }));
 }
 
+// Firefox: private windows go through Mullvad only when the add-on may run there (else the proxy setting cannot be set, and per
+// request they would not be covered)
+const PRIVATE = "First allow this add-on in private windows: about:addons > leaf browser capture > Run in Private Windows > Allow. Then turn it on again.";
+
+async function privateAllowed() {
+  if (!IS_FIREFOX) return true;
+  try {
+    return await api.extension.isAllowedIncognitoAccess();
+  } catch {
+    return false;
+  }
+}
+
 // the reason Browse through Mullvad cannot be turned on now, or null
 function cannotUse(vpn) {
   if (!vpn) return "leaf cannot be reached. Start leaf, connect its VPN, then try again.";
@@ -298,6 +331,7 @@ async function mullvadOn() {
   const why = cannotUse(vpn);
   if (why) return { ok: false, why };
   if (!(await controllable())) return { ok: false, why: "Another extension controls this browser's proxy setting. Turn that one off first." };
+  if (!(await privateAllowed())) return { ok: false, why: PRIVATE };
   try {
     await setProxy(vpn.proxy);
   } catch (e) {
@@ -314,7 +348,7 @@ async function mullvadOn() {
 async function mullvadOff() {
   await clearProxy();
   await webRtcThroughProxy(false);
-  await api.storage.local.set({ mullvad: false, mullvadProxy: null, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" });
+  await api.storage.local.set({ mullvad: false, mullvadProxy: null, mullvadPerRequest: false, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" });
   await quietly(api.alarms.clear(VPN_ALARM));
   showBadge("", "leaf");
 }
@@ -340,7 +374,7 @@ async function checkVpn() {
   if (!vpn) return hold("leaf is not running or did not answer");
   if (!vpn.proxy) return hold("leaf's proxy for other programs is turned off");
   // a new port or password in leaf (or Firefox restarted and the per-request proxy is gone): set again
-  if (!sameProxy(vpn.proxy, cfg.mullvadProxy) || (IS_FIREFOX && cfg.mullvadProxy?.user && !perRequest)) {
+  if (!sameProxy(vpn.proxy, cfg.mullvadProxy)) {
     try {
       await setProxy(vpn.proxy);
       await api.storage.local.set({ mullvadProxy: kept(vpn.proxy) });
@@ -348,6 +382,7 @@ async function checkVpn() {
       return hold("the browser did not take leaf's new proxy address");
     }
   }
+  if (!(await privateAllowed())) return hold("this add-on is no longer allowed in private windows, so they would not go through Mullvad");
   if (!IS_FIREFOX && vpn.proxy.user) return hold("leaf's proxy asks for a password, which this browser cannot give");
   if (vpn.state === "off" || vpn.state === "failed") return hold("leaf's VPN is not connected");
   if (vpn.state === "connecting") return hold("leaf's VPN is connecting");
@@ -386,7 +421,7 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
         (async () => {
           const cfg = await vpnConfig();
           const vpn = await vpnState();
-          return { ok: true, on: cfg.mullvad, note: cfg.mullvadNote, vpn, why: cfg.mullvad ? null : cannotUse(vpn) };
+          return { ok: true, on: cfg.mullvad, note: cfg.mullvadNote, perRequest: IS_FIREFOX && cfg.mullvad && cfg.mullvadPerRequest, vpn, why: cfg.mullvad ? null : cannotUse(vpn) };
         })(),
       );
     default:

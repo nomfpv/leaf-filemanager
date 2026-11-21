@@ -10,6 +10,7 @@ const offRow = document.getElementById("offRow");
 const off = document.getElementById("off");
 const state = document.getElementById("state");
 const note = document.getElementById("note");
+const info = document.getElementById("info");
 
 function ask(type) {
   return api.runtime.sendMessage({ type }).catch(() => null);
@@ -34,6 +35,8 @@ function show(r, problem) {
   state.textContent = text;
   state.className = good ? "ok" : "bad";
   note.textContent = problem || r?.note || (!on && r?.why) || "";
+  // (Firefox with leaf's proxy password: the proxy is given per request, which Firefox does not offer for everything)
+  info.textContent = r?.perRequest ? "Firefox's own sites (addons.mozilla.org, accounts.firefox.com) and its background requests do not go through Mullvad while leaf's proxy asks for a password." : "";
 }
 
 async function refresh(problem) {

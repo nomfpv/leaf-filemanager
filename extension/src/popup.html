@@ -15,7 +15,7 @@
   #state { margin: 6px 0 0; }
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
-  #note { margin: 6px 0 0; color: var(--muted); }
+  #note, #info { margin: 6px 0 0; color: var(--muted); }
   a { color: inherit; }
   p.foot { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); }
 </style>
@@ -26,6 +26,7 @@
 <div class="row" id="offRow" hidden><button id="off">Turn off (browse without VPN)</button></div>
 <div id="state">Asking leaf…</div>
 <div id="note"></div>
+<div id="info"></div>
 <p class="foot"><a href="#" id="options">Download capture options</a></p>
 <script src="popup.js"></script>
 </body>
