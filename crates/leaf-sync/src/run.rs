@@ -264,28 +264,34 @@ impl Runner<'_, '_> {
             Err(e) => return Err(err_text("the target could not be read", &e)),
         };
         let part = names::vchild(&parent, &part_name(name)).map_err(|w| format!("the name cannot be used ({w})"))?;
+        // where the old file went (the Trash or .leaf-sync-trash), for a failure after that: the target is gone or bad then
+        let mut kept: Option<String> = None;
         let r = self.write_part(to_right, &src, &part, src_info).and_then(|_| {
             let (_, to) = self.sides(to_right);
             if to.fs.caps().set_times && src_info.mtime_ms > 0 {
                 to.fs.set_meta(&part, &MetaChange { modified_ms: Some(src_info.mtime_ms), mode: None }).map_err(|e| err_text("the time could not be set", &e))?;
             }
             if exists && keep_old {
-                self.trash(!to_right, &target, to_rel).map_err(|e| format!("the old file could not be kept: {e}"))?;
+                kept = Some(self.trash(!to_right, &target, to_rel).map_err(|e| format!("the old file could not be kept: {e}"))?);
             }
             let (_, to) = self.sides(to_right);
             to.fs.rename(&part, &target, exists && !keep_old).map_err(|e| err_text("the copy could not take its name", &e))
         });
+        let where_old = |e: String| match &kept {
+            Some(w) => format!("{e}; the old file is in {w}"),
+            None => e,
+        };
         let (from, to) = self.sides(to_right);
         if let Err(e) = r {
             let _ = to.fs.remove(&part, false);
-            return Err(e);
+            return Err(where_old(e));
         }
         if verify {
             let no = || false;
             match (hash(from.fs, &src, &no), hash(to.fs, &target, &no)) {
                 (Ok(a), Ok(b)) if a == b => self.report.verified += 1,
-                (Ok(_), Ok(_)) => return Err("the copy does not match the original (checked by hash)".into()),
-                (Err(e), _) | (_, Err(e)) => return Err(err_text("the copy could not be checked", &e)),
+                (Ok(_), Ok(_)) => return Err(where_old("the copy does not match the original (checked by hash)".into())),
+                (Err(e), _) | (_, Err(e)) => return Err(where_old(err_text("the copy could not be checked", &e))),
             }
         }
         let (from, to) = self.sides(to_right);
