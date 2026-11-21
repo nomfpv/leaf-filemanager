@@ -337,6 +337,7 @@ mod tests {
     fn the_functions_of_a_click_do_not_touch_the_disk() {
         let folder_view = include_str!("folder_view.rs");
         let workspace = include_str!("workspace.rs");
+        let home = include_str!("home/mod.rs");
         let heads: [(&str, &str, &str); 14] = [
             ("folder_view", folder_view, "pub fn navigate(&mut self, to: Location"),
             ("folder_view", folder_view, "pub fn back(&mut self"),
@@ -347,7 +348,7 @@ mod tests {
             ("folder_view", folder_view, "fn apply_folder_layout(&mut self"),
             ("folder_view", folder_view, "pub fn tab_icon(&self"),
             ("folder_view", folder_view, "pub fn title(&self"),
-            ("folder_view", folder_view, "fn render_home(&mut self"),
+            ("home", home, "pub fn render(v: &mut FolderView"),
             ("workspace", workspace, "    fn navigate(&mut self, loc: Location"),
             ("workspace", workspace, "fn render_breadcrumb(&mut self"),
             ("workspace", workspace, "fn breadcrumbs(path: &Path)"),
@@ -358,6 +359,9 @@ mod tests {
             let bad = offenders(&body);
             assert!(bad.is_empty(), "{file}: `{}` asks the disk on the UI thread with {bad:?}", head.trim());
         }
+        // every Home widget draws from what is in memory
+        let widgets = include_str!("home/widgets.rs");
+        assert!(offenders(widgets).is_empty(), "home/widgets.rs asks the disk on the UI thread with {:?}", offenders(widgets));
         // the sidebar's item is a multi-line signature
         let item = body_of(workspace, "    fn sidebar_item(\n");
         assert!(offenders(&item).is_empty(), "workspace: sidebar_item asks the disk on the UI thread with {:?}", offenders(&item));

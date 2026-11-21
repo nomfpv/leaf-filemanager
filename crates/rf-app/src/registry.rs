@@ -249,6 +249,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(GoForward, Navigation, "Forward", "Goes forward again after going back.", ArrowRight, [w("alt-right")], keywords: &["history"]),
     c!(GoUp, Navigation, "Up one level", "Opens the folder this one is in.", ArrowUp, [w("alt-up")], keywords: &["parent"]),
     c!(GoHome, Navigation, "Home", "Opens the Home page.", House, [w("alt-home")]),
+    c!(CustomizeHome, View, "Customize Home", "Opens Home with buttons to add, remove, resize and reorder its widgets.", LayoutGrid, [], keywords: &["dashboard", "widgets", "edit layout"], since: "0.9.5"),
+    c!(ResetHome, View, "Reset Home", "Puts the Home page back to its default widgets.", RotateCcw, [], keywords: &["dashboard", "widgets", "default"], since: "0.9.5"),
     c!(GoSettings, App, "Settings", "Opens leaf's settings.", Settings, [w("ctrl-,")], keywords: &["options", "preferences"]),
     c!(ShowFeatures, App, "What leaf can do", "Lists every command with what it does and its shortcut.", Sparkles, [], keywords: &["features", "commands", "help", "shortcuts"], since: "0.9.4"),
     c!(GoRecycleBin, Navigation, "Recycle Bin", "Opens the Recycle Bin.", Trash, [], keywords: &["trash", "deleted"]),

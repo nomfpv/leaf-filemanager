@@ -100,6 +100,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 
 | Command | What it does | Shortcut |
 |---|---|---|
+| Customize Home | Opens Home with buttons to add, remove, resize and reorder its widgets. |  |
+| Reset Home | Puts the Home page back to its default widgets. |  |
 | Show/hide hidden items | Shows or hides hidden files and folders. | `Ctrl+H` |
 | Details view | Shows the folder as a list with columns. | `Ctrl+Shift+1` |
 | Grid view | Shows the folder as large icons. | `Ctrl+Shift+2` |

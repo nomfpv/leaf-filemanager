@@ -107,6 +107,8 @@ gpui_kit::actions!(
         OpenTerminalAdmin,
         OrganizeFolder,
         ShowFeatures,
+        CustomizeHome,
+        ResetHome,
     ]
 );
 

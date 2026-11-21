@@ -29,6 +29,7 @@ mod i18n;
 mod folder_history;
 mod full_path;
 mod folder_view;
+mod home;
 mod icons;
 mod keymap_editor;
 mod last_window;
@@ -606,6 +607,7 @@ pub fn main() {
         actions::bind(cx);
         actions::bind_user(cx);
         features_page::init(cx);
+        home::init(cx);
         keymap_editor::init(cx);
         if let Some(page) = &settings_arg {
             settings_view::open_page(

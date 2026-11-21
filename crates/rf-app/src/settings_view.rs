@@ -1847,30 +1847,24 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         },
         cx,
     ));
-    let home_hidden = s.home_hidden.clone();
+    let home_on: Vec<&'static str> = crate::home::layout(s).iter().map(|&(i, _)| crate::home::WIDGETS[i].id).collect();
     v.push(expander(
         "home-sections",
         p,
         L::House,
-        t!("Home page sections"),
-        None,
+        t!("Home page widgets"),
+        Some(t!("Sizes and order: Customize on the Home page")),
         None,
         move || {
-            const SECTIONS: [(&str, &str, &str); 6] = [
-                ("quick", "hm-quick", "Quick access"),
-                ("drives", "hm-drives", "Drives"),
-                ("devices", "hm-devices", "Devices"),
-                ("network", "hm-network", "Network locations"),
-                ("tags", "hm-tags", "Tags"),
-                ("recent", "hm-recent", "Recent"),
-            ];
-            SECTIONS
+            let mut rows: Vec<AnyElement> = crate::home::WIDGETS
                 .iter()
-                .map(|&(key, id, label)| {
-                    let on = !home_hidden.iter().any(|h| h == key);
-                    sub(&pp, crate::i18n::t(label), None, switch(id, &pp, on, move |_, cx| settings::update(cx, |s| show_home_section(s, key, !on))))
+                .map(|w| {
+                    let (id, on) = (w.id, home_on.contains(&w.id));
+                    sub(&pp, crate::i18n::t(w.title), None, switch(SharedString::from(format!("hm-{id}")), &pp, on, move |_, cx| settings::update(cx, |s| crate::home::set_shown(s, id, !on))))
                 })
-                .collect()
+                .collect();
+            rows.push(sub(&pp, t!("Default widgets"), None, button("home-reset-settings", &pp, t!("Reset"), |_, cx| settings::update(cx, crate::home::reset))));
+            rows
         },
         cx,
     ));
@@ -3224,13 +3218,6 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     ]
 }
 
-/// Shows or hides a section of the Home page (`Settings::home_hidden`).
-fn show_home_section(s: &mut Settings, key: &str, show: bool) {
-    s.home_hidden.retain(|h| h != key);
-    if !show {
-        s.home_hidden.push(key.to_string());
-    }
-}
 
 /// Shows or hides a sidebar section (`Settings::sidebar_hidden`).
 fn show_section(s: &mut Settings, key: &str, show: bool) {

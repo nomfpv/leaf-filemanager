@@ -443,7 +443,7 @@ pub struct FolderView {
     pub(crate) lens_owner: bool,
     /// (library file, default save folder) of the library being shown (paste/new item target).
     pub(crate) library_save: Option<(PathBuf, PathBuf)>,
-    places: Entity<Places>,
+    pub(crate) places: Entity<Places>,
     pub(crate) images: Entity<ImageCache>,
     pub view_mode: ViewMode,
     grid_cols: usize,
@@ -469,7 +469,7 @@ pub struct FolderView {
     auto_cols: auto_cols::AutoCols,
     auto_key: Option<auto_cols::Key>,
     pub(crate) grid_style: GridStyle,
-    content_width: Pixels,
+    pub(crate) content_width: Pixels,
     pub(crate) entries: Vec<Entry>,
     /// Search mode only: parent folder of each entry (aligned with `entries`).
     parents: Vec<Arc<std::path::Path>>,
@@ -542,7 +542,9 @@ pub struct FolderView {
     /// Begin inline rename on the next render (needs a Window).
     pending_rename: bool,
     /// A recent item of the Home page pressed with the left button, and where: moved far enough, it is dragged out (`drag_paths_out`).
-    home_press: Option<(PathBuf, Point<Pixels>)>,
+    pub(crate) home_press: Option<(PathBuf, Point<Pixels>)>,
+    /// The Home page is in Customize mode (its widgets show size, move and remove buttons).
+    pub(crate) home_edit: bool,
     /// Ctrl and the wheel turned so far toward the next size step (a touchpad turns in small pixel steps).
     zoom_acc: f32,
     /// The mouse went down on an item's name (set by the name label, read by the row).
@@ -747,6 +749,7 @@ impl FolderView {
             reselect_many: check_select(),
             pending_rename: false,
             home_press: None,
+            home_edit: false,
             zoom_acc: 0.0,
             name_hit: false,
             slow_click: None,
@@ -856,6 +859,7 @@ impl FolderView {
         if to == Location::RecycleBin {
             self.recycle = None; // fresh listing each visit
         }
+        self.home_edit = false;
         self.history.navigate(to);
         self.filter.query.clear();
         self.load(cx);
@@ -4882,297 +4886,11 @@ impl FolderView {
             )
             .into_any_element()
     }
-
-    fn render_home(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let places = self.places.read(cx);
-        let pinned = places.pinned.clone();
-        let drives = places.drives.clone();
-        let devices = places.devices.clone();
-        let network = places.network.clone();
-        let (hidden, cleared) = {
-            let s = cx.global::<crate::settings::Settings>();
-            (s.home_hidden.clone(), s.recent_cleared_ms)
-        };
-        let shown = |k: &str| !hidden.iter().any(|h| h == k);
-        let recent: Vec<places::Recent> = places.recent.iter().filter(|r| r.used_ms > cleared).cloned().collect();
-        // every tag with how many items carry it
-        let tags: Vec<(u32, String, u32, usize)> = {
-            let store = &cx.global::<crate::tags::Tags>().0;
-            store.defs.iter().map(|d| (d.id, d.name.clone(), d.color, store.paths_with(d.id).len())).collect()
-        };
-        let card = |id: ElementId| {
-            v_flex()
-                .id(id)
-                .p_3()
-                .gap_2()
-                .min_w_0()
-                .rounded(theme::RADIUS)
-                .bg(p.tile_bg)
-                .border_1()
-                .border_color(p.border)
-                .cursor_pointer()
-                .hover(|s| s.bg(p.tile_hover))
-        };
-        let section = |title: &'static str| div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(title);
-
-        // equal-width columns: a card alone on the last row is as wide as the others
-        let avail = f32::from(self.content_width) - 48.; // p_6 on both sides
-        let mut pinned_grid = div().grid().grid_cols(tile_cols(avail, 140., 220., 12.)).gap_3();
-        for (i, f) in pinned.into_iter().enumerate() {
-            let path = f.path.clone();
-            pinned_grid = pinned_grid.child(
-                card(("pin", i).into())
-                    .child(Icon::new(f.icon).size(px(28.)).text_color(p.accent))
-                    .child(div().text_sm().child(crate::i18n::td(&f.title)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Path(path.clone()), cx))),
-            );
-        }
-
-        let mut drive_grid = div().grid().grid_cols(tile_cols(avail, 240., 340., 12.)).gap_3();
-        for (i, d) in drives.into_iter().enumerate() {
-            let root = d.root.clone();
-            let usage_root = d.root.clone();
-            let frac = d.used_fraction();
-            let bar_color = if frac > 0.9 { p.danger } else { p.accent };
-            drive_grid = drive_grid.child(
-                card(("drive", i).into())
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .child(Icon::new(places::drive_icon(&d)).size(px(28.)).text_color(p.text_secondary))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_1()
-                                    .child(div().text_sm().child(crate::places::drive_name(&d)))
-                                    .child(
-                                        div()
-                                            .h(px(6.))
-                                            .w_full()
-                                            .rounded_full()
-                                            .bg(p.pressed)
-                                            .child(div().h_full().rounded_full().bg(bar_color).w(relative(frac))),
-                                    )
-                                    .child(div().text_xs().text_color(p.text_secondary).child(if d.total > 0 {
-                                        format!("{} {} / {}", format::size(d.free), t!("free"), format::size(d.total))
-                                    } else {
-                                        String::new()
-                                    })),
-                            )
-                            // where the space goes, as its own tab (the card itself opens the drive)
-                            .child(
-                                div()
-                                    .id(("drive-usage", i))
-                                    .size(px(28.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(theme::RADIUS_SM)
-                                    .hover(|s| s.bg(p.hover))
-                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Show disk usage")).build(w, cx))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.stop_propagation();
-                                        cx.emit(FolderEvent::OpenInNewTab(Location::DiskUsage(usage_root.clone())))
-                                    }))
-                                    .child(Icon::new(L::ChartPie).size(px(16.)).text_color(p.text_secondary)),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Path(root.clone()), cx))),
-            );
-        }
-
-        // phones and cameras (not drives): none connected = no group at all
-        let has_devices = !devices.is_empty();
-        let mut device_grid = div().grid().grid_cols(tile_cols(avail, 240., 340., 12.)).gap_3();
-        for (i, d) in devices.into_iter().enumerate() {
-            let loc = Location::Shell { parsing: d.parsing.clone(), name: d.name.clone() };
-            device_grid = device_grid.child(
-                card(("device", i).into())
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .child(Icon::new(L::Usb).size(px(28.)).text_color(p.text_secondary))
-                            .child(div().flex_1().min_w_0().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(d.name)),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(loc.clone(), cx))),
-            );
-        }
-
-        let mut tag_grid = div().grid().grid_cols(tile_cols(avail, 140., 220., 12.)).gap_3();
-        let has_tags = !tags.is_empty() && shown("tags");
-        for (id, name, color, count) in tags {
-            tag_grid = tag_grid.child(
-                card(("home-tag", id as usize).into())
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(div().size(px(10.)).flex_shrink_0().rounded_full().bg(crate::tags::color(color)))
-                            .child(div().flex_1().min_w_0().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(crate::i18n::td(&name))),
-                    )
-                    .child(div().text_xs().text_color(p.text_secondary).child(crate::i18n::items(count)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Tag(id), cx))),
-            );
-        }
-
-        let mut network_grid = div().grid().grid_cols(tile_cols(avail, 240., 340., 12.)).gap_3();
-        let has_network = !network.is_empty() && shown("network");
-        for (i, (name, target)) in network.into_iter().enumerate() {
-            let shown_target = target.to_string_lossy().into_owned();
-            network_grid = network_grid.child(
-                card(("home-net", i).into())
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .child(Icon::new(L::Network).size(px(28.)).text_color(p.text_secondary))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(div().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(crate::rtl::display_text(&name)))
-                                    .child(div().text_xs().text_color(p.text_secondary).overflow_hidden().text_ellipsis().whitespace_nowrap().child(shown_target)),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(Location::Path(target.clone()), cx))),
-            );
-        }
-
-        let has_recent = !recent.is_empty() && shown("recent");
-        let has_devices = has_devices && shown("devices");
-        let mut recent_list = v_flex().gap_0p5().max_w(px(900.));
-        for (i, r) in recent.into_iter().enumerate() {
-            let e = rf_core::Entry::new(&r.name, if r.is_dir { rf_core::EntryKind::Dir } else { rf_core::EntryKind::File }, 0, 0, 0, 0);
-            let cat = icons::category(&e);
-            let parent = r.target.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-            let target = r.target.clone();
-            let is_dir = r.is_dir;
-            // folders under their Explorer name (Downloads → İndirilenler)
-            let shown: String = if is_dir { leaf_sys::localized::label_if_known(&target).map_or_else(|| r.name.clone(), |l| l.to_string()) } else { r.name.clone() };
-            recent_list = recent_list.child(
-                h_flex()
-                    .id(("recent", i))
-                    .h(theme::ROW_H)
-                    .px_2()
-                    .gap_3()
-                    .items_center()
-                    .rounded(theme::RADIUS_SM)
-                    .text_sm()
-                    .hover(|s| s.bg(p.hover))
-                    .cursor_pointer()
-                    .child(Icon::new(icons::icon_for(cat)).size(px(16.)).text_color(theme::kind_color(cat, p.dark)))
-                    .child(div().w(px(260.)).flex_shrink_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(shown))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_color(p.text_tertiary)
-                            .child(parent),
-                    )
-                    .child(div().w(px(130.)).flex_shrink_0().text_color(p.text_secondary).child(format::datetime(r.used_ms)))
-                    // dragged out like a row of the list (the owner: "son kullanılanlarda ... drag drop ta olmuyor")
-                    .on_mouse_down(MouseButton::Left, {
-                        let target = target.clone();
-                        cx.listener(move |this, ev: &MouseDownEvent, _, _| this.home_press = Some((target.clone(), ev.position)))
-                    })
-                    .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, _| {
-                        let Some((path, at)) = this.home_press.as_ref() else { return };
-                        if ev.pressed_button != Some(MouseButton::Left) {
-                            this.home_press = None;
-                            return;
-                        }
-                        let (dx, dy) = (f32::from(ev.position.x - at.x), f32::from(ev.position.y - at.y));
-                        if dx * dx + dy * dy > 36.0 {
-                            let path = path.clone();
-                            this.home_press = None;
-                            crate::ops::drag_paths_out(vec![path]);
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.home_press = None;
-                        if is_dir {
-                            this.navigate(Location::Path(target.clone()), cx);
-                        } else {
-                            open_in_background(target.clone(), cx);
-                        }
-                    })),
-            );
-        }
-
-        // the Home page measures its own width (the list's probe isn't drawn here)
-        let this = cx.entity();
-        let width_probe = canvas(
-            move |bounds, window, cx| {
-                let changed = this.update(cx, |v, cx| {
-                    let changed = v.content_width != bounds.size.width;
-                    if changed {
-                        v.content_width = bounds.size.width;
-                        cx.notify();
-                    }
-                    changed
-                });
-                if changed {
-                    window.request_animation_frame();
-                }
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
-        div()
-            .id("home")
-            .size_full()
-            .relative()
-            .overflow_y_scroll()
-            .child(width_probe)
-            .child(
-                v_flex()
-                    .p_6()
-                    .gap_4()
-                    .when(shown("quick"), |d| d.child(section(t!("Quick access"))).child(pinned_grid).child(div().h_2()))
-                    .when(shown("drives"), |d| d.child(section(t!("Drives"))).child(drive_grid))
-                    .when(has_devices, |d| d.child(div().h_2()).child(section(t!("Devices"))).child(device_grid))
-                    .when(has_network, |d| d.child(div().h_2()).child(section(t!("Network locations"))).child(network_grid))
-                    .when(has_tags, |d| d.child(div().h_2()).child(section(t!("Tags"))).child(tag_grid))
-                    .when(has_recent, |d| {
-                        d.child(div().h_2())
-                            .child(
-                                h_flex().max_w(px(900.)).justify_between().items_center().child(section(t!("Recent"))).child(
-                                    div()
-                                        .id("recent-clear")
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded(theme::RADIUS_SM)
-                                        .text_xs()
-                                        .text_color(p.text_secondary)
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(p.hover).text_color(p.text))
-                                        .tooltip(|w, cx| {
-                                            gpui_kit::component::tooltip::Tooltip::new(t!("Empties this list; Windows' own list of recent items is left alone")).build(w, cx)
-                                        })
-                                        .child(t!("Clear"))
-                                        .on_click(cx.listener(|_, _, _, cx| {
-                                            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
-                                            crate::settings::update(cx, |s| s.recent_cleared_ms = now);
-                                            cx.notify();
-                                        })),
-                                ),
-                            )
-                            .child(recent_list)
-                    }),
-            )
-            .into_any_element()
-    }
 }
 
 /// Columns for a row of equal cards: as many as fit at `min` width, but enough that none is
 /// wider than `max` (all columns share the width evenly).
-fn tile_cols(avail: f32, min: f32, max: f32, gap: f32) -> u16 {
+pub(crate) fn tile_cols(avail: f32, min: f32, max: f32, gap: f32) -> u16 {
     let fit = ((avail + gap) / (min + gap)).floor().max(1.);
     let need = ((avail + gap) / (max + gap)).ceil().max(1.);
     need.min(fit) as u16
@@ -5546,7 +5264,7 @@ impl Render for FolderView {
             self.refresh_auto_cols(window, cx);
         }
         let content = match self.location() {
-            Location::Home => self.render_home(&p, cx),
+            Location::Home => crate::home::render(self, &p, cx),
             Location::Settings => crate::settings_view::render(&p, window, cx, self.lens_owner, &self.settings_scroll),
             Location::DiskUsage(root) => {
                 let root = root.clone();

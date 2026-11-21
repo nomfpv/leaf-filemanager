@@ -5243,6 +5243,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &GoForward, _, cx| this.with_tab(cx, |v, cx| v.forward(cx))))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| this.with_tab(cx, |v, cx| v.up(cx))))
             .on_action(cx.listener(|this, _: &GoHome, window, cx| this.navigate(Location::Home, window, cx)))
+            .on_action(cx.listener(|this, _: &CustomizeHome, window, cx| {
+                this.navigate(Location::Home, window, cx);
+                this.with_tab(cx, |v, cx| {
+                    v.home_edit = true;
+                    cx.notify();
+                });
+            }))
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.with_tab(cx, |v, cx| v.refresh(cx))))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.with_tab(cx, |v, cx| v.toggle_hidden(cx))))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_new_tab(window, cx)))

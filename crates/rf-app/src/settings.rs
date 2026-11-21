@@ -394,9 +394,12 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// Sidebar sections the user turned off ("drives", "cloud", "libraries", "network", "tags").
     pub sidebar_hidden: Vec<String>,
-    /// Sections of the Home page that are hidden: "quick", "drives", "devices", "tags",
-    /// "network", "recent".
+    /// Before the Home page had widgets: its sections that were hidden ("quick", "drives", "devices", "tags", "network", "recent").
+    /// Read once into `home_layout` and emptied (`home::migrate`).
     pub home_hidden: Vec<String>,
+    /// The Home page's widgets in order, with their sizes; not written: the default set (`home::DEFAULT`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home_layout: Option<Vec<crate::home::Slot>>,
     /// "Clear" on Home's recent items: only items used after this moment are listed (Windows'
     /// own list of recent items is left alone).
     pub recent_cleared_ms: i64,
@@ -684,6 +687,7 @@ impl Default for Settings {
             sidebar_width: 232.,
             sidebar_hidden: Vec::new(),
             home_hidden: Vec::new(),
+            home_layout: None,
             recent_cleared_ms: 0,
             search_history: Vec::new(),
             // (the mockups' bar: Share, Properties and the filter are in the menus and the search field; Settings brings them back)
@@ -971,6 +975,8 @@ impl Settings {
             }
             self.adaptive_offered = true;
         }
+        // the Home page's old hide list becomes its widget layout
+        crate::home::migrate(self);
     }
 
     /// Field by field: a value this version doesn't understand (a newer build's theme, a
