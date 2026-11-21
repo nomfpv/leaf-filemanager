@@ -19,6 +19,7 @@ mod ctx_menu;
 mod menu_model;
 mod basket;
 mod brain_view;
+mod mockup_demo;
 mod context_copy;
 mod custom_actions;
 mod custom_actions_page;

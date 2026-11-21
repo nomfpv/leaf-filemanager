@@ -198,6 +198,14 @@ impl Places {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        // LEAF_MOCKUP_DEMO: the mockup's places only (no drive, no cloud folder, nothing of this PC)
+        if crate::mockup_demo::on() {
+            self.pinned = crate::mockup_demo::pinned();
+            self.loaded = true;
+            self.extras_loaded = true;
+            cx.notify();
+            return;
+        }
         let user_pins = cx.try_global::<crate::settings::Settings>().and_then(|s| s.pinned.clone());
         // Two pieces of work, so that the sidebar does not wait for the slow one. The recent items ask the disk about the place each
         // one names (a stat each), and so do the cloud entries (OneDrive, Dropbox, Google Drive...); a place that has to wake up first

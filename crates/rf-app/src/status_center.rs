@@ -284,7 +284,8 @@ impl Ops {
     /// The operations as the strip and the cards see them, oldest first: the running ones, the
     /// ones that ended lately and the failures nobody has looked at.
     pub(crate) fn views(&self) -> Vec<OpView> {
-        self.ops
+        let mut v: Vec<OpView> = self
+            .ops
             .iter()
             .filter(|o| match &o.phase {
                 OpPhase::Running => true,
@@ -292,7 +293,31 @@ impl Ops {
                 _ => o.ended.is_some_and(|e| e.elapsed() < Duration::from_secs(10)),
             })
             .map(OpState::view)
-            .collect()
+            .collect();
+        // LEAF_MOCKUP_DEMO: the mockup's running copy (in the status line only, no card)
+        if crate::mockup_demo::on() {
+            let (words, frac, speed, eta) = crate::mockup_demo::COPY;
+            v.push(OpView {
+                id: u64::MAX,
+                words: words.into(),
+                title: words.into(),
+                current: None,
+                phase: OpPhase::Running,
+                frac: Some(frac),
+                bytes: None,
+                pace: Pace { speed: Some(speed), eta_secs: Some(eta) },
+                bars: Vec::new(),
+                paused: false,
+                question: None,
+                stage: Stage::Hidden,
+                collapsed: false,
+                open_dest: None,
+                can_undo: false,
+                action: None,
+                brief: xfer::Brief { running: true, noticed: true, asking: false, failed: false, dismissed: false },
+            });
+        }
+        v
     }
 
     // The state changes below take no window or context so they can be tested; the methods after
@@ -543,6 +568,11 @@ pub fn start_with_id(
     on_done: Option<OnDone>,
 ) -> u64 {
     let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return 0 };
+    // the mockup demo shows made-up folders: nothing is done to files while it runs
+    if crate::mockup_demo::on() {
+        log::warn!("LEAF_MOCKUP_DEMO: operation \"{title}\" not started");
+        return 0;
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
     let bytes = Arc::new(ByteProgress::default());

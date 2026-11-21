@@ -9,10 +9,17 @@ pub struct Tags(pub TagStore);
 impl Global for Tags {}
 
 fn path() -> Option<PathBuf> {
+    // (the mockup demo's tags are never written)
+    if crate::mockup_demo::on() {
+        return None;
+    }
     crate::settings::app_dir().map(|d| d.join("tags.json"))
 }
 
 pub fn load() -> Tags {
+    if crate::mockup_demo::on() {
+        return Tags(crate::mockup_demo::tags());
+    }
     Tags(path().map(|p| TagStore::load(&p)).unwrap_or_default())
 }
 

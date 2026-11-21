@@ -724,6 +724,10 @@ impl FolderView {
         self.set_renaming(None, None);
         // the list has the keyboard again from here on: a dialog opened below gives it back to the list when it closes
         window.focus(&self.focus, cx);
+        // (the mockup demo's folders are made up: nothing is renamed)
+        if crate::mockup_demo::on() {
+            return;
+        }
         // Explorer's rule, said up front instead of a shell error after the fact
         const INVALID: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
         if new_name.contains(INVALID) || new_name.ends_with('.') {

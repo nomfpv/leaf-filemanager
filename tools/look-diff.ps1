@@ -1,14 +1,17 @@
 # Compares a mockup render with an app capture of the same size, region by region.
-#   look-diff.ps1 -Mockup m.png -App a.png [-Diff d.png] [-Side s.png] [-Tolerance 40]
+#   look-diff.ps1 -Mockup m.png -App a.png [-Diff d.png] [-Side s.png] [-Tolerance 40] [-Mask "x,y,w,h;..."]
 # Writes a difference image (grey = same, red = differs by more than the tolerance, the sum of the three channel differences),
 # a side-by-side picture (mockup left, app right) and prints the share of differing pixels per region. Regions are the Canopy
-# layout at 1280x800 (scaled to other sizes by width and height); -Regions "name=x,y,w,h;..." replaces them.
+# layout at 1280x800 (scaled to other sizes by width and height); -Regions "name=x,y,w,h;..." replaces them. -Mask leaves
+# rectangles out of every count (in the picture's own pixels; default: the mockup-only buttons in its title bar, "Show context
+# menu" to the accent dot, which are no app features); -Mask "" counts everything.
 param(
     [Parameter(Mandatory = $true)][string]$Mockup,
     [Parameter(Mandatory = $true)][string]$App,
     [string]$Diff = "",
     [string]$Side = "",
     [int]$Tolerance = 40,
+    [string]$Mask = "auto",
     [string]$Regions = "tabs=0,0,1280,58;address=8,60,1264,46;typebar=8,106,1264,26;sidebar=8,142,236,606;toolbar=252,142,1020,48;left pane=252,198,506,550;right pane=766,198,506,550;status=8,756,1264,38"
 )
 $ErrorActionPreference = "Stop"
@@ -35,10 +38,14 @@ public static class LookDiff {
         }
         return mask;
     }
+    public static void Leave(byte[] mask, int w, int h, int rx, int ry, int rw, int rh) {
+        for (int y = Math.Max(0, ry); y < Math.Min(h, ry + rh); y++)
+            for (int x = Math.Max(0, rx); x < Math.Min(w, rx + rw); x++) mask[y * w + x] = 2;
+    }
     public static double Share(byte[] mask, int w, int h, int rx, int ry, int rw, int rh) {
         long n = 0, on = 0;
         for (int y = Math.Max(0, ry); y < Math.Min(h, ry + rh); y++)
-            for (int x = Math.Max(0, rx); x < Math.Min(w, rx + rw); x++) { n++; on += mask[y * w + x]; }
+            for (int x = Math.Max(0, rx); x < Math.Min(w, rx + rw); x++) { byte m = mask[y * w + x]; if (m == 2) continue; n++; on += m; }
         return n == 0 ? 0 : 100.0 * on / n;
     }
 }
@@ -53,7 +60,12 @@ $g = [System.Drawing.Graphics]::FromImage($a); $g.InterpolationMode = "HighQuali
 $mm = New-Object System.Drawing.Bitmap($w, $h)
 $g = [System.Drawing.Graphics]::FromImage($mm); $g.DrawImage($m, 0, 0, $w, $h); $g.Dispose()
 $d = New-Object System.Drawing.Bitmap($w, $h)
-$mask = [LookDiff]::Mask($mm, $a, $Tolerance, $d)
+$bits = [LookDiff]::Mask($mm, $a, $Tolerance, $d)
+# the mockup's own controls (its title bar's demo buttons and theme switches) are right of the "+" and left of the window buttons
+if ($Mask -eq "auto") { $Mask = "{0},0,{1},58" -f [int]($w - 565), 425 }
+if ($Mask -ne "") {
+    foreach ($r in $Mask.Split(";")) { $q = $r.Split(",") | ForEach-Object { [int]$_ }; [LookDiff]::Leave($bits, $w, $h, $q[0], $q[1], $q[2], $q[3]) }
+}
 if ($Diff -ne "") { $d.Save($Diff, [System.Drawing.Imaging.ImageFormat]::Png) }
 if ($Side -ne "") {
     $s = New-Object System.Drawing.Bitmap(($w * 2 + 16), $h)
@@ -69,8 +81,8 @@ foreach ($r in $Regions.Split(";")) {
     $q = $v.Split(",") | ForEach-Object { [double]$_ }
     # (regions right of the sidebar stretch with the width; heights with the height)
     $rx = [int]($q[0] * $sx); $ry = [int]($q[1] * $sy); $rw = [int]($q[2] * $sx); $rh = [int]($q[3] * $sy)
-    $share = [LookDiff]::Share($mask, $w, $h, $rx, $ry, $rw, $rh)
+    $share = [LookDiff]::Share($bits, $w, $h, $rx, $ry, $rw, $rh)
     "{0,-12} {1,6:N1} %" -f $name, $share
     $total += $share; $n++
 }
-"{0,-12} {1,6:N1} %" -f "whole", ([LookDiff]::Share($mask, $w, $h, 0, 0, $w, $h))
+"{0,-12} {1,6:N1} %" -f "whole", ([LookDiff]::Share($bits, $w, $h, 0, 0, $w, $h))

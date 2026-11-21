@@ -206,6 +206,8 @@ pub struct Workspace {
     tab_scrolled_to: Option<usize>,
     /// Tab being opened with an animation: (its view, a serial so each opening animates anew).
     tab_anim: Option<(Entity<FolderView>, u64)>,
+    /// LEAF_MOCKUP_DEMO: 0 nothing done, 1 tabs open, 2 panes dressed (`demo_setup`).
+    demo_stage: u8,
     tab_anim_serial: u64,
     /// Files dragged over an inactive tab: (tab, serial). Held still there, the tab opens.
     drag_hover_tab: Option<(usize, u64)>,
@@ -944,6 +946,7 @@ impl Workspace {
             tab_scroll: ScrollHandle::new(),
             tab_scrolled_to: None,
             tab_anim: None,
+            demo_stage: 0,
             tab_anim_serial: 0,
             drag_hover_tab: None,
             sidebar_ext_drag: false,
@@ -1057,6 +1060,38 @@ impl Workspace {
         self.tabs[ix].left.update(cx, |v, _| v.dual = true);
         self.tabs[ix].right = Some(view);
         self.tabs[ix].right_active = active;
+    }
+
+    /// LEAF_MOCKUP_DEMO: opens the mockup's three tabs (the first split, its right pane a grid of the holiday pictures), then
+    /// dresses the panes once they are listed. Called on every frame while the demo runs; does its work once.
+    fn demo_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::mockup_demo as demo;
+        if self.demo_stage == 0 {
+            self.demo_stage = 1;
+            let at = |s: &str| Location::Path(PathBuf::from(s));
+            self.tabs[0].left.update(cx, |v, cx| v.navigate(at(demo::LEAF_SITE), cx));
+            self.open_second_pane(0, at(demo::HOLIDAY), false, window, cx);
+            if let Some(r) = self.tabs[0].right.clone() {
+                r.update(cx, |v, cx| v.set_view_mode(crate::folder_view::ViewMode::Grid, cx));
+            }
+            self.open_tab(at(demo::DOCUMENTS), window, cx);
+            self.open_tab(at(demo::NAS), window, cx);
+            self.tab_anim = None;
+            self.activate(0, window, cx);
+            crate::cut_marks::set(&[Path::new(demo::LEAF_SITE).join(demo::CUT)]);
+        }
+        if self.demo_stage == 1 {
+            let left = self.tabs[0].left.clone();
+            let Some(right) = self.tabs[0].right.clone() else { return };
+            let l = left.update(cx, |v, cx| v.demo_dress(&demo::SELECTED_LEFT, Some(demo::SELECTED_LEFT[1]), Some(demo::RENAMING), window, cx));
+            let r = l && right.update(cx, |v, cx| v.demo_dress(&demo::SELECTED_RIGHT, Some(demo::SELECTED_RIGHT[0]), None, window, cx));
+            if r {
+                self.demo_stage = 2;
+            } else {
+                // (asked again on the next frames until both panes are listed)
+                cx.on_next_frame(window, |_, _, cx| cx.notify());
+            }
+        }
     }
 
     fn active_tab(&self) -> &Entity<FolderView> {
@@ -2421,6 +2456,8 @@ impl Workspace {
             let title = crate::full_path::tab_text(v.location(), &name, tab_full, ((room_w - TAB_CHROME_W - if tab_terminal { TAB_TERMINAL_W } else { 0. }) / 7.6).max(8.) as usize);
             let tab_tip = crate::full_path::path_text(v.location()).unwrap_or_else(|| name.clone());
             let icon = v.tab_icon();
+            // a tab whose folder is still being listed shows a spinner ring in place of its icon (the mockups' busy tab)
+            let busy = v.busy();
             let tab_dir = v.location().path().map(Path::to_path_buf);
             let term_dir = tab_terminal.then(|| tab_terminal_dir(v.location())).flatten();
             let tab_w = if fit_names {
@@ -2473,8 +2510,27 @@ impl Workspace {
                     })
                     .when(!active, |d| d.text_color(p.text_secondary).hover(|s| s.bg(p.hover)))
                     // Index: the tab's number (Ctrl+1..9) in a small box in place of its icon, the box in the accent on the tab in front
-                    .when(!(p.numbered_tabs && i < 9), |d| {
+                    .when(!(p.numbered_tabs && i < 9) && !busy, |d| {
                         d.child(Icon::new(icon).size(px(14.)).flex_shrink_0().text_color(if active { p.accent } else { p.text_secondary }))
+                    })
+                    .when(!(p.numbered_tabs && i < 9) && busy, |d| {
+                        d.child(
+                            div()
+                                .size(px(16.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .relative()
+                                        .size(px(12.))
+                                        .rounded_full()
+                                        .border(px(1.5))
+                                        .border_color(p.border_strong)
+                                        .child(div().absolute().top(px(-1.5)).left(px(-1.5)).size(px(12.)).rounded_full().border_t(px(1.5)).border_color(p.accent)),
+                                ),
+                        )
                     })
                     .when(p.numbered_tabs && i < 9, |d| {
                         d.child(
@@ -4334,6 +4390,21 @@ impl Workspace {
                 col = col.child(self.sidebar_item(("sb-host-bm", i * 1000 + j).into(), L::Bookmark, p.text_secondary, name, loc, active, None, p, cx));
             }
         }
+        // LEAF_MOCKUP_DEMO: the mockup's two hosts (one offline), with their second line and state dot
+        let demo = crate::mockup_demo::on() && !rail;
+        let state_dot = |on: bool, color: Hsla| {
+            div().size(px(6.)).mr(px(4.)).flex_shrink_0().rounded_full().when(on, |d| d.bg(color)).when(!on, |d| d.border(px(1.5)).border_color(p.text_tertiary))
+        };
+        let second_line = |text: &'static str| {
+            div().text_size(px(p.fs_xs)).line_height(px(p.fs_xs + 3.)).text_color(p.text_tertiary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(text).into_any_element()
+        };
+        if demo {
+            col = col.child(header(t!("Hosts")).child(div().flex_1()).child(Icon::new(L::Plus).size(px(12.)).mr(px(4.)).text_color(p.text_tertiary)));
+            for (i, (name, line, online)) in crate::mockup_demo::HOSTS.into_iter().enumerate() {
+                let item = self.sidebar_item(("sb-demo-host", i).into(), L::Server, p.text_secondary, name.to_string(), Location::Home, false, Some(second_line(line)), p, cx);
+                col = col.child(item.child(state_dot(online, p.success)));
+            }
+        }
         // The tags are known at once, the pins and drives above them a moment later: drawn before those, the coloured tag rows stood
         // at the top of the sidebar for the first 90 ms of a cold start and then jumped down (seen frame by frame: a user's report of
         // a red and blue flash when a folder is opened with the app closed). They wait for the places.
@@ -4359,6 +4430,14 @@ impl Workspace {
             );
             col = col.child(item.when(n > 0 && !rail, |d| d.child(div().flex_shrink_0().text_size(px(p.fs_xs)).text_color(p.text_tertiary).child(n.to_string()))));
         }
+        // (LEAF_MOCKUP_DEMO: the mockup's lanes, under the tags)
+        if demo {
+            col = col.child(header(t!("Lanes")));
+            for (i, (name, line, working)) in crate::mockup_demo::LANES.into_iter().enumerate() {
+                let item = self.sidebar_item(("sb-demo-lane", i).into(), L::GitBranch, p.text_secondary, name.to_string(), Location::Home, false, Some(second_line(line)), p, cx);
+                col = col.child(item.child(state_dot(working, p.accent)));
+            }
+        }
         let settings = self.sidebar_item(
             "sb-settings".into(),
             L::Settings,
@@ -4375,8 +4454,8 @@ impl Workspace {
             .w(px(if self.sidebar_rail { RAIL_W } else { self.sidebar_w }))
             .h_full()
             .child(col)
-            .child(div().mx_2().h(px(1.)).bg(p.divider))
-            .child(div().px_2().py_1().child(settings))
+            // (the mockup's sidebar ends with its sections)
+            .when(!demo, |d| d.child(div().mx_2().h(px(1.)).bg(p.divider)).child(div().px_2().py_1().child(settings)))
     }
 
     /// The free bytes on the volume `path` is on, and its root: read in the background, at most every 20 seconds per volume.
@@ -4413,6 +4492,9 @@ impl Workspace {
 
     /// The Recycle Bin's item count for the sidebar, asked of the shell in the background at most every 15 seconds.
     fn recycle_items(&mut self, cx: &mut Context<Self>) -> Option<u64> {
+        if crate::mockup_demo::on() {
+            return Some(0);
+        }
         let now = std::time::Instant::now();
         let epoch = crate::recycle_view::bin_epoch();
         let changed = std::mem::replace(&mut self.recycle_epoch, epoch) != epoch;
@@ -4490,7 +4572,7 @@ impl Workspace {
             (d.total > 0).then(|| (d.free, d.root.clone()))
         });
         // (a drive the sidebar does not list, or the list not read yet: asked of the volume itself, off the UI thread)
-        let free = listed.or_else(|| here.as_ref().and_then(|path| self.free_space(path, cx))).map(|(bytes, root)| {
+        let free = here.as_ref().and_then(|path| crate::mockup_demo::free_space(path)).or(listed).or_else(|| here.as_ref().and_then(|path| self.free_space(path, cx))).map(|(bytes, root)| {
             format!("{} {} {}", format::size(bytes), t!("free on"), root.to_string_lossy().trim_end_matches('\\'))
         });
         let tab = self.active_tab().read(cx);
@@ -4997,7 +5079,8 @@ fn breadcrumbs(path: &Path) -> Vec<(String, Location)> {
             continue;
         }
         // (the cache only: this runs while drawing; FolderView::warm_labels fills it from a worker)
-        let label = match leaf_sys::localized::label_if_known(&acc) {
+        // (the mockup demo's made-up folders keep their English names)
+        let label = match leaf_sys::localized::label_if_known(&acc).filter(|_| !crate::mockup_demo::on()) {
             Some(l) => l.to_string(),
             None => rf_core::history::redact_credentials(comp.as_os_str().to_string_lossy().trim_end_matches('\\')),
         };
@@ -5370,6 +5453,10 @@ impl Render for Workspace {
             if !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) && !self.tabs.is_empty() {
                 self.open_tab(Location::Duplicates(vec![PathBuf::from(dir)]), window, cx);
             }
+        }
+        // LEAF_MOCKUP_DEMO: the mockup's tabs, panes, selection, cut row and rename box
+        if crate::mockup_demo::on() && !self.tabs.is_empty() {
+            self.demo_setup(window, cx);
         }
         self.compare_sync(cx);
         let compare_bar = match (&self.compare, self.tabs.get(self.active)) {

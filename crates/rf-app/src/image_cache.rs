@@ -400,6 +400,10 @@ impl ImageCache {
     }
 
     fn thumbnail_as(&mut self, dir: &Path, e: &Entry, size: u32, urgent: bool, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
+        // (LEAF_MOCKUP_DEMO: the mockup's painted photos)
+        if let Some(img) = crate::mockup_demo::thumbnail(&dir.join(&*e.name), size) {
+            return Some(img);
+        }
         // a folder at a large size shows what is in it, as Explorer's do (issue 158): the shell draws that picture (the folder with its
         // first pictures in it); a folder it has none for gets the folder icon back (`leaf_sys::thumbs`)
         // (not a folder with an icon of its own, nor one inside an archive or on FTP, which the shell cannot open)

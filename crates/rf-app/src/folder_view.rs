@@ -2000,6 +2000,21 @@ impl FolderView {
                                 None => format!("{e:#}"),
                             }),
                     },
+                    // (LEAF_MOCKUP_DEMO: the mockup's made-up folders, from memory)
+                    None if crate::mockup_demo::list(&path).is_some() => match crate::mockup_demo::list(&path) {
+                        Some(crate::mockup_demo::Listing::Entries(es)) => {
+                            let n = es.len();
+                            all.extend(es.iter().cloned());
+                            let _ = tx2.unbounded_send(Msg::Batch(es));
+                            Ok(n)
+                        }
+                        _ => {
+                            while !cancel.load(Ordering::Relaxed) {
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                            }
+                            Ok(0)
+                        }
+                    },
                     None => leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |mut b| {
                         rf_core::tssource::mark_ts_sources(&path, &mut b);
                         all.extend(b.iter().cloned());
@@ -3909,6 +3924,9 @@ impl FolderView {
         if p.to_string_lossy().starts_with(r"\\") {
             return None;
         }
+        if let Some(n) = crate::mockup_demo::child_count(&p) {
+            return Some(Some(n));
+        }
         if let Some(n) = self.child_counts.get(&p) {
             // (u32::MAX: the folder could not be read)
             return (*n != Some(u32::MAX)).then_some(*n);
@@ -3936,6 +3954,9 @@ impl FolderView {
     fn video_length(&mut self, p: PathBuf, cx: &mut Context<Self>) -> Option<SharedString> {
         if let Some(v) = self.video_lengths.get(&p) {
             return v.clone();
+        }
+        if let Some(len) = crate::mockup_demo::video_length(&p) {
+            return Some(len.into());
         }
         self.video_lengths.insert(p.clone(), None);
         cx.spawn(async move |this, cx| {
@@ -4117,6 +4138,40 @@ impl FolderView {
     ) {
         self.renaming = r;
         self._rename_sub = sub;
+    }
+
+    /// Still listing after a moment (the tab shows a spinner in place of its icon).
+    pub(crate) fn busy(&self) -> bool {
+        self.loading && self.load_started.elapsed() >= std::time::Duration::from_millis(400)
+    }
+
+    /// LEAF_MOCKUP_DEMO: the mockup's selection, cursor and rename box (a box that renames nothing), once the folder is listed.
+    /// False while it is not listed yet.
+    pub(crate) fn demo_dress(&mut self, select: &[&str], cursor: Option<&str>, rename: Option<(&str, &str)>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.loading || self.entries.is_empty() {
+            return false;
+        }
+        let vi_of = |v: &Self, n: &str| v.visible.iter().position(|&i| &*v.entries[i as usize].name == n);
+        self.selected.clear();
+        for n in select {
+            if let Some(vi) = vi_of(self, n) {
+                let ei = self.visible[vi];
+                self.selected.insert(ei);
+            }
+        }
+        if let Some(c) = cursor.and_then(|n| vi_of(self, n)) {
+            self.cursor = Some(c);
+            self.anchor = Some(c);
+        }
+        if let Some((name, value)) = rename
+            && let Some(vi) = vi_of(self, name)
+        {
+            let ei = self.visible[vi];
+            let input = cx.new(|cx| gpui_kit::component::input::InputState::new(window, cx).default_value(value.to_string()));
+            self.set_renaming(Some((ei, input)), None);
+        }
+        cx.notify();
+        true
     }
 
     /// Select these names (in the current folder) as soon as they're listed: a paste or a copy
