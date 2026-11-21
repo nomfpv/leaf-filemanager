@@ -855,22 +855,14 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         Some(t!("Which commands appear in the menu")),
         None,
         move || {
-            type Set = fn(&mut Settings, bool);
-            let rows: [(&str, bool, Set); 10] = [
-                (t!("Open in new tab"), m.open_in_new_tab, |s, v| s.menu.open_in_new_tab = v),
-                (t!("Open in new window"), m.open_in_new_window, |s, v| s.menu.open_in_new_window = v),
-                (t!("Copy item path"), m.copy_path, |s, v| s.menu.copy_path = v),
-                (t!("Create shortcut"), m.create_shortcut, |s, v| s.menu.create_shortcut = v),
-                (t!("Pin to sidebar"), m.pin, |s, v| s.menu.pin = v),
-                (t!("Compress / Extract"), m.compress, |s, v| s.menu.compress = v),
-                (t!("Tags"), m.tags, |s, v| s.menu.tags = v),
-                (t!("Add to shelf"), m.shelf, |s, v| s.menu.shelf = v),
-                (t!("Open in terminal"), m.terminal, |s, v| s.menu.terminal = v),
-                (t!("Send to"), m.send_to, |s, v| s.menu.send_to = v),
-            ];
-            rows.into_iter()
+            // (one switch for each name the rows of the menu give, `menu_model::switches`: a new row with a switch shows up here)
+            crate::menu_model::switches()
+                .into_iter()
                 .enumerate()
-                .map(|(i, (label, on, set))| sub(&pp, label, None, switch(("ctx-sw", i), &pp, on, move |_, cx| settings::update(cx, |s| set(s, !on)))))
+                .map(|(i, sw)| {
+                    let on = m.get(sw.key);
+                    sub(&pp, crate::i18n::t(sw.label), None, switch(("ctx-sw", i), &pp, on, move |_, cx| settings::update(cx, |s| s.menu.set(sw.key, !on))))
+                })
                 .collect()
         },
         cx,
