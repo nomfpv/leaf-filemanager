@@ -1081,3 +1081,34 @@ fn empty_removes_only_inside_leaf_trash() {
     // an empty (absent) trash: nothing to do
     trash::empty(&fs, &home, &|| false).unwrap();
 }
+
+/// A password saved in the keyring goes only to a host key known_hosts has: a key trusted once (on this run, any key the
+/// user accepts at the unknown-key question) gets the question, not the saved password; once the key is known, it is used.
+#[test]
+fn a_saved_password_is_not_sent_to_a_key_trusted_once() {
+    use crate::secrets::{MemoryStore, SecretId, Vault};
+    let tmp = Temp::new("saved-unknown");
+    let served = Temp::new("saved-unknown-served");
+    let password = format!("pw-{}-saved-unknown", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let store = Arc::new(MemoryStore::default());
+    let id = SecretId::password("sftp", USER, "127.0.0.1", server.port);
+    store.saved.lock().unwrap().insert(id.clone(), password.clone());
+    let mut cfg = config(&tmp.0);
+    cfg.vault = Vault::new(store.clone());
+
+    // the key is not in known_hosts: trusted once, and the password is asked although one is saved
+    let ans = Answers::with(&[HostKeyAnswer::TrustOnce], &[Some(&password)]);
+    let fs = SftpFs::new(cfg.clone(), ans.clone());
+    assert!(fs.stat(&server.addr("/")).unwrap().is_dir());
+    assert_eq!(ans.asked(), [format!("host key [127.0.0.1]:{}", server.port), format!("password {USER}@127.0.0.1 retry=false")]);
+    assert_eq!(store.saved.lock().unwrap().get(&id), Some(&password), "the saved one stays");
+
+    // known_hosts has the key now: the saved password is used without a question
+    let line = crate::known_hosts::line_for("127.0.0.1", server.port, server.host_key.public_key()).unwrap();
+    std::fs::write(tmp.0.join("known_hosts"), format!("{line}\n")).unwrap();
+    let ans = Answers::with(&[], &[]);
+    let fs = SftpFs::new(cfg, ans.clone());
+    fs.stat(&server.addr("/")).unwrap();
+    assert!(ans.asked().is_empty(), "{:?}", ans.asked());
+}

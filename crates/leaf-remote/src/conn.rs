@@ -304,8 +304,9 @@ pub(crate) struct Client {
     prompter: Arc<dyn Prompter>,
     shared: Arc<Shared>,
     refusal: Refusal,
-    /// The fingerprint of the key this connection was accepted with (the login binds a remembered password to it).
-    accepted: Arc<Mutex<Option<String>>>,
+    /// The key this connection was accepted with: its fingerprint (the login binds a password kept in memory to it), and
+    /// whether known_hosts has it (only then is a password saved in the keyring sent without asking).
+    accepted: Arc<Mutex<Option<(String, bool)>>>,
     /// Set while the host-key dialog is open (the handshake's time limit waits).
     asking: Arc<AtomicBool>,
 }
@@ -324,14 +325,14 @@ impl client::Handler for Client {
             *lock(&self.refusal) = Some(e);
             Ok(false)
         };
-        let accept = || {
+        let accept = |known: bool| {
             lock(&self.shared.seen).insert(name.clone(), fp.clone());
-            *lock(&self.accepted) = Some(fp.clone());
+            *lock(&self.accepted) = Some((fp.clone(), known));
             Ok(true)
         };
         match known_hosts::check(&self.files, &self.host, self.port, &key) {
             // the file has this very key (it wins over what this run saw: the user may have fixed the file)
-            Verdict::Known => accept(),
+            Verdict::Known => accept(true),
             Verdict::Changed { file, line } => {
                 log::warn!("remote: the host key of {name} CHANGED (now {fp}); refused");
                 refuse(FsError::Other(format!(
@@ -373,7 +374,7 @@ impl client::Handler for Client {
                     )));
                 }
                 if lock(&self.shared.trusted_once).contains(&(name.clone(), fp.clone())) {
-                    return accept();
+                    return accept(false);
                 }
                 let q = HostKeyQuestion { host: name.clone(), key_type: known_hosts::key_type(&key), fingerprint: fp.clone() };
                 self.asking.store(true, Ordering::Relaxed);
@@ -390,11 +391,11 @@ impl client::Handler for Client {
                             None => log::warn!("remote: no known_hosts file to write to (trusted for this run only)"),
                         }
                         lock(&self.shared.trusted_once).insert((name.clone(), fp.clone()));
-                        accept()
+                        accept(false)
                     }
                     HostKeyAnswer::TrustOnce => {
                         lock(&self.shared.trusted_once).insert((name.clone(), fp.clone()));
-                        accept()
+                        accept(false)
                     }
                     HostKeyAnswer::Cancel => refuse(FsError::Cancelled),
                 }
@@ -424,7 +425,7 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         .map_err(offline)?;
     let _ = tcp.set_nodelay(true);
     let refusal: Refusal = Arc::default();
-    let accepted: Arc<Mutex<Option<String>>> = Arc::default();
+    let accepted: Arc<Mutex<Option<(String, bool)>>> = Arc::default();
     let asking: Arc<AtomicBool> = Arc::default();
     let mut files: Vec<PathBuf> = cfg.known_hosts.iter().cloned().collect();
     files.extend(cfg.extra_known_hosts.iter().cloned());
@@ -452,8 +453,8 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
     let handshake = paused_timeout(cfg.op_timeout, &asking, client::connect_stream(ssh_cfg, tcp, handler));
     let mut handle = handshake.await.ok_or_else(|| offline("the server did not finish the handshake in time"))?.map_err(why)?;
     // (connect_stream returns only after the key exchange, which called check_server_key)
-    let host_fp = lock(&accepted).clone().ok_or_else(|| offline("the server's key was not checked"))?;
-    login(&mut handle, cfg, prompter, shared, t, &host_fp).await.map_err(|e| lock(&refusal).take().unwrap_or(e))?;
+    let (host_fp, host_known) = lock(&accepted).clone().ok_or_else(|| offline("the server's key was not checked"))?;
+    login(&mut handle, cfg, prompter, shared, t, &host_fp, host_known).await.map_err(|e| lock(&refusal).take().unwrap_or(e))?;
     let ch = step(cfg.op_timeout, handle.channel_open_session()).await?;
     step(cfg.op_timeout, ch.request_subsystem(true, "sftp")).await?;
     let sftp = RawSftpSession::new(ch.into_stream());
@@ -518,7 +519,8 @@ fn allows(methods: &Option<MethodSet>, m: MethodKind) -> bool {
 
 /// Logs in: the agent, the key files, then a password (or the server's own questions). Errors are `Auth` (refused),
 /// `Cancelled` (the user said no), `Offline` (the line broke).
-async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>, t: &Target, host_fp: &str) -> Result<(), FsError> {
+/// `host_known`: known_hosts has the key the server showed (a key trusted in this run only gets no saved password).
+async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared>, t: &Target, host_fp: &str, host_known: bool) -> Result<(), FsError> {
     let user = t.user.as_str();
     let account = format!("{user}@{}", t.host);
     // "none" tells which methods the server takes
@@ -580,8 +582,8 @@ async fn login(h: &mut client::Handle<Client>, cfg: &Config, prompter: &Arc<dyn 
         for _ in 0..3 {
             // a password in memory only goes to the host key it was typed for
             let cached = lock(&shared.passwords).get(&t.key).filter(|(fp, _)| fp == host_fp).map(|(_, p)| p.clone());
-            // (a saved one: the host key was checked against known_hosts before this)
-            let known = if retry { None } else { cached.or_else(|| cfg.vault.get(&id)) };
+            // a saved one only to a host key known_hosts has (not to one trusted once, whatever key that was)
+            let known = if retry { None } else { cached.or_else(|| host_known.then(|| cfg.vault.get(&id)).flatten()) };
             let pw = match known {
                 Some(p) => p,
                 None => {
