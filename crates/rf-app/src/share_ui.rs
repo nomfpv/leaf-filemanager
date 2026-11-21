@@ -273,7 +273,7 @@ fn invite_dialog(id: String, window: &mut Window, cx: &mut App) {
             t!("The port is added by itself:"),
             svc.port()
         )),
-        Some((guess, "10.0.0.2".into())),
+        Some((guess, "192.0.2.10".into())),
         vec![make, Button::cancel()],
         window,
         cx,
@@ -376,7 +376,7 @@ fn set_address(s: &ShareInfo, window: &mut Window, cx: &mut App) {
     let ok = Button::new(t!("Save"), Kind::Primary, move |text, _, cx| {
         let text = text.unwrap_or_default().trim().to_string();
         if text.is_empty() || text.contains(char::is_whitespace) {
-            return Err(t!("Type an address like 10.0.0.2:53318").into());
+            return Err(t!("Type an address like 192.0.2.10:53318").into());
         }
         if let Some(svc) = service(cx) {
             svc.set_address(&id, &text);
@@ -386,8 +386,8 @@ fn set_address(s: &ShareInfo, window: &mut Window, cx: &mut App) {
     });
     crate::prompt::show(
         t!("The other PC's address"),
-        Some(t!("Where this PC reaches your friend's: host or address and port, like 10.0.0.2:53318. Change it when their address changed.").to_string()),
-        Some((s.address.clone(), "10.0.0.2:53318".into())),
+        Some(t!("Where this PC reaches your friend's: host or address and port, like 192.0.2.10:53318. Change it when their address changed.").to_string()),
+        Some((s.address.clone(), "192.0.2.10:53318".into())),
         vec![ok, Button::cancel()],
         window,
         cx,
