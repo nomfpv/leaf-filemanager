@@ -800,7 +800,7 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
     match store {
         Store::Git { root, git_dir, empty_tree, .. } => {
             let (now, cp) = (plan.now_tree.as_deref()?, plan.cp_tree.as_deref()?);
-            let raw = run(with_args(store_git(root, git_dir, empty_tree, false), &["diff", "--no-color", "--no-ext-diff", "--no-renames", &u, now, cp, "--", rel]), &[0], LONG).ok()?;
+            let raw = run(with_args(store_git(root, git_dir, empty_tree, false), &["--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "--no-renames", &u, now, cp, "--", rel]), &[0], LONG).ok()?;
             Some(parse(raw))
         }
         Store::Copy { folder, .. } => {
