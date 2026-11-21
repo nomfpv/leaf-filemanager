@@ -4259,6 +4259,10 @@ impl Workspace {
         };
         let mut left = h_flex().gap_2().items_center();
         let mut busy = false;
+        // the duplicate finder and build junk pages have no folder listing: their own counts instead
+        if let Some(text) = tab.page_status(cx) {
+            left = left.child(text);
+        }
         // the free space of the drive the folder is on ("214 GB free on C:")
         let here = tab.location().path().map(Path::to_path_buf);
         let listed = here.as_ref().and_then(|path| {

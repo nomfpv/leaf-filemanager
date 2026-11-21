@@ -3869,6 +3869,16 @@ impl FolderView {
         self.dups.clone()
     }
 
+    /// What the status line says on the duplicate finder and build junk pages (empty: nothing yet).
+    pub(crate) fn page_status(&self, cx: &App) -> Option<String> {
+        let text = match self.location() {
+            Location::Duplicates(_) => self.dups.as_ref()?.read(cx).status_text(),
+            Location::BuildJunk(_) => self.junk.as_ref()?.read(cx).status_text(),
+            _ => return None,
+        };
+        (!text.is_empty()).then_some(text)
+    }
+
     pub(crate) fn set_reselect(&mut self, name: String) {
         self.reselect = Some(name);
     }
@@ -5494,6 +5504,8 @@ impl Render for FolderView {
                             }
                         })
                         .detach();
+                        // (its ticks are in the status line)
+                        cx.observe(&dv, |_, _, cx| cx.notify()).detach();
                         self.dups = Some(dv.clone());
                         dv
                     }
@@ -5515,6 +5527,7 @@ impl Render for FolderView {
                             }
                         })
                         .detach();
+                        cx.observe(&jv, |_, _, cx| cx.notify()).detach();
                         self.junk = Some(jv.clone());
                         jv
                     }

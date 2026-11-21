@@ -97,6 +97,16 @@ impl JunkView {
         this
     }
 
+    /// The status line while this page is the tab's: "7 folders · 2 ticked (1.3 GB)".
+    pub fn status_text(&self) -> String {
+        if self.items.is_empty() {
+            return String::new();
+        }
+        let (nt, bytes, all) = self.ticked_total();
+        let sz = if all { format::size(bytes) } else { format!("{}+", format::size(bytes)) };
+        format!("{} {} · {} {} ({})", self.items.len(), t!("folders"), nt, t!("ticked"), sz)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
