@@ -231,13 +231,6 @@ light = "#2b53c4"
 light_text = "#ffffff"
 
 [[accents]]
-name = "Magenta"
-dark = "#e383c5"
-dark_text = "#300a22"
-light = "#9c2a77"
-light_text = "#ffffff"
-
-[[accents]]
 name = "Teal"
 dark = "#4cc5bb"
 dark_text = "#03201d"
