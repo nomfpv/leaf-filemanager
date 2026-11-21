@@ -884,10 +884,16 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
         Store::Copy { folder, .. } => {
             let mine = folder.join(name_from_text(rel));
             let theirs = plan.cp_files.as_ref()?.join(name_from_text(rel));
+            // (the first MiB; a longer file's diff is marked cut, so nothing is reverted from half of it)
             let read = |p: &Path| {
                 let mut b = Vec::new();
                 std::fs::File::open(p).ok()?.take(1024 * 1024).read_to_end(&mut b).ok()?;
-                Some(b)
+                let cut = std::fs::metadata(p).ok()?.len() > b.len() as u64;
+                Some((b, cut))
+            };
+            let mark = |mut d: FileDiff, cut: bool| {
+                d.truncated |= cut;
+                d
             };
             match (mine.is_file(), theirs.is_file()) {
                 (true, true) => {
@@ -898,8 +904,8 @@ pub fn diff(store: &Store, plan: &Plan, rel: &str, context: u32) -> Option<FileD
                     no_window(&mut c);
                     Some(parse(run(c, &[0, 1], LONG).ok()?))
                 }
-                (false, true) => Some(gitread::all_added(&read(&theirs)?, gitread::MAX_LINES)),
-                (true, false) => Some(all_removed(&read(&mine)?)),
+                (false, true) => read(&theirs).map(|(b, cut)| mark(gitread::all_added(&b, gitread::MAX_LINES), cut)),
+                (true, false) => read(&mine).map(|(b, cut)| mark(all_removed(&b), cut)),
                 (false, false) => Some(FileDiff::default()),
             }
         }
