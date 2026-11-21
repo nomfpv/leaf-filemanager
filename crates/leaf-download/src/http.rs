@@ -154,6 +154,15 @@ pub fn map_err(e: ureq::Error) -> Error {
     }
 }
 
+/// The challenge a 401 carries, with the server that sent it (`at`).
+fn challenge_of(resp: &ureq::http::Response<ureq::Body>, at: &str) -> Option<Challenge> {
+    let lines: Vec<String> = resp.headers().get_all("www-authenticate").iter().filter_map(|v| v.to_str().ok()).map(str::to_string).collect();
+    Challenge::parse(&lines).map(|mut c| {
+        c.origin = origin_of(at);
+        c
+    })
+}
+
 /// One request for the size, the range support and the validators: a range of the first byte, so a server that ignores ranges is
 /// told apart from one that honours them.
 pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe, Error> {
@@ -161,9 +170,15 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
     let mut send = headers.clone();
     let mut at = url.to_string();
     let mut hops = 0;
+    let mut stale = 0;
     let resp = loop {
         let resp = with_headers(agent.get(&at), &send, &at).header("Range", "bytes=0-0").call().map_err(map_err)?;
         let s = resp.status().as_u16();
+        // a Digest nonce that has only expired: the new one is taken and the request made again
+        if s == 401 && stale < 2 && send.web_auth().zip(challenge_of(&resp, &at)).is_some_and(|(a, c)| a.renew(&c)) {
+            stale += 1;
+            continue;
+        }
         // (only with headers of the caller's own: otherwise the agent followed the redirects itself)
         if headers.is_empty() || !matches!(s, 301 | 302 | 303 | 307 | 308) {
             break resp;
@@ -197,13 +212,7 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
         416 => {
             p.len = header(&resp, "content-range").as_deref().and_then(total_of).or(Some(0));
         }
-        401 => {
-            let lines: Vec<String> = resp.headers().get_all("www-authenticate").iter().filter_map(|v| v.to_str().ok()).map(str::to_string).collect();
-            return Err(Challenge::parse(&lines).map_or(Error::Http(401), |mut c| {
-                c.origin = origin_of(&p.uri);
-                Error::Auth(c)
-            }));
-        }
+        401 => return Err(challenge_of(&resp, &p.uri).map_or(Error::Http(401), Error::Auth)),
         s if retriable_status(s) => return Err(status_error(s)),
         s => return Err(Error::Http(s)),
     }
@@ -214,15 +223,29 @@ pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe,
 /// The body of `bytes=start-(end-1)` of `uri`, or of the whole thing (`whole`). `Err(Changed)` when the server no longer has what
 /// the probe saw.
 pub fn open_range(agent: &ureq::Agent, uri: &str, start: u64, end: u64, whole: bool, p: &Probe) -> Result<Box<dyn Read + Send>, Error> {
-    let mut req = with_headers(agent.get(uri), &p.send, uri);
-    if !whole {
-        req = req.header("Range", format!("bytes={start}-{}", end - 1));
-        // (a file that changed meanwhile answers with the whole new file: the validator turns that into a 200)
-        if let Some(v) = p.etag.as_deref().filter(|e| !e.starts_with("W/")).or(p.last_modified.as_deref()) {
-            req = req.header("If-Range", v);
+    let mut stale = 0;
+    let resp = loop {
+        let mut req = with_headers(agent.get(uri), &p.send, uri);
+        if !whole {
+            req = req.header("Range", format!("bytes={start}-{}", end - 1));
+            // (a file that changed meanwhile answers with the whole new file: the validator turns that into a 200)
+            if let Some(v) = p.etag.as_deref().filter(|e| !e.starts_with("W/")).or(p.last_modified.as_deref()) {
+                req = req.header("If-Range", v);
+            }
         }
-    }
-    let resp = req.call().map_err(map_err)?;
+        let resp = req.call().map_err(map_err)?;
+        if resp.status().as_u16() == 401 {
+            let ch = challenge_of(&resp, uri);
+            // (a Digest nonce lives a few minutes: the server says "stale" and the same sign-in is good with the new one; anything
+            // else is asked again)
+            if stale < 2 && p.send.web_auth().zip(ch.as_ref()).is_some_and(|(a, c)| a.renew(c)) {
+                stale += 1;
+                continue;
+            }
+            return Err(ch.map_or(Error::Http(401), Error::Auth));
+        }
+        break resp;
+    };
     let status = resp.status().as_u16();
     match status {
         206 if !whole => {
