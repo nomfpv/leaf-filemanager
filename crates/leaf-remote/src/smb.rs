@@ -147,6 +147,25 @@ fn user_hints() -> &'static std::sync::Mutex<std::collections::HashMap<(String, 
     H.get_or_init(Default::default)
 }
 
+/// The servers the user opened in leaf itself this run (typed in the address bar, a host or a network place clicked), as
+/// against a link, a shortcut or the command line: a login asked for any other server carries a caution line.
+fn opened_here() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// The user opened this UNC path in leaf itself (see [`opened_here`]); anything else is ignored.
+pub fn mark_opened_here(path: &std::path::Path) {
+    if let Some((host, _)) = unc_share(path) {
+        opened_here().lock().unwrap_or_else(|e| e.into_inner()).insert(host.to_ascii_lowercase());
+    }
+}
+
+/// Whether the user opened a place of this server in leaf itself this run.
+pub fn was_opened_here(host: &str) -> bool {
+    opened_here().lock().unwrap_or_else(|e| e.into_inner()).contains(&host.to_ascii_lowercase())
+}
+
 /// The user name an address named for `\\host\share` this run (else for another share of that server).
 fn user_hint(host: &str, share: &str) -> Option<String> {
     let (host, share) = (host.to_ascii_lowercase(), share.to_ascii_lowercase());

@@ -62,6 +62,7 @@ pub fn location(h: &Host) -> Option<Location> {
         && h.scheme.eq_ignore_ascii_case("smb")
         && let Some(unc) = leaf_remote::smb::unc_of(&h.address())
     {
+        leaf_remote::smb::mark_opened_here(&unc);
         return Some(Location::Path(unc));
     }
     let v = VPath::parse(&h.address()).ok()?;

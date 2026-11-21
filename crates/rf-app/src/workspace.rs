@@ -5288,11 +5288,18 @@ fn parse_location(text: &str) -> Option<Location> {
     // `mem://demo/`, `sftp://...`, `ftp://...`: a place behind the virtual filesystem; schemes it has no backend for stay paths
     // as before. An address with a password in it opens nothing (it would land in the history as a path).
     if let Some(remote) = crate::remote::parse_typed(t) {
+        // (typed: a server the user named, so its login dialog needs no caution line)
+        match &remote {
+            Location::Path(p) => leaf_remote::smb::mark_opened_here(p),
+            Location::Remote(v) if v.scheme() == "smb" => leaf_remote::smb::mark_opened_here(Path::new(&format!(r"\\{}", v.host()))),
+            _ => {}
+        }
         return Some(remote);
     }
     if crate::remote::refused_address(t).is_some() {
         return None;
     }
+    leaf_remote::smb::mark_opened_here(Path::new(t));
     // Environment variables like %USERPROFILE%
     let expanded = expand_env(t);
     let mut p = PathBuf::from(&expanded);

@@ -98,6 +98,8 @@ pub fn parse_typed(text: &str) -> Option<Location> {
 
 /// The place of a Network entry: a mounted `smb://` or `nfs://` share keeps its address, any other target is a folder.
 pub fn network_place(target: PathBuf) -> Location {
+    // (a network place clicked in leaf: its server's login needs no caution line)
+    leaf_remote::smb::mark_opened_here(&target);
     target.to_str().and_then(parse_typed).unwrap_or(Location::Path(target))
 }
 
@@ -456,7 +458,13 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                 SecretQuestion::Login { place, retry, keyring, .. } => {
                     let first = if retry { t!("Wrong user name or password. Try again.") } else { t!("The share asks for a user name and password.") };
                     let (checks, line) = tick(&keyring);
-                    crate::prompt::show_login(format!("{} {place}", t!("Log in to")), Some(format!("{first}\n\n{line}")), user, t!("Password").to_string(), checks, buttons, window, cx);
+                    // the server named in the title; a server neither in the Hosts list nor opened in leaf itself (a link, a
+                    // shortcut, the command line, a saved tab) gets a caution line first
+                    let host = place.trim_start_matches('\\').split('\\').next().unwrap_or_default().to_string();
+                    let known = leaf_remote::smb::was_opened_here(&host) || crate::hosts_ui::all(cx).iter().any(|h| h.scheme.eq_ignore_ascii_case("smb") && h.host.eq_ignore_ascii_case(&host));
+                    let caution = if known { String::new() } else { format!("{}\n\n", t!("This server asked for a login. Only continue if you know it.")) };
+                    let message = format!("{caution}{} {place}\n{first}\n\n{line}", t!("Share:"));
+                    crate::prompt::show_login(format!("{} {host}", t!("Log in to")), Some(message), user, t!("Password").to_string(), checks, buttons, window, cx);
                 }
             }
         }
