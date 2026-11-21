@@ -21,6 +21,7 @@ mod ftp;
 #[cfg(test)]
 mod ftp_tests;
 pub mod hostkind;
+mod http;
 pub mod known_hosts;
 mod prompt;
 pub mod rclone;
@@ -29,6 +30,9 @@ pub mod server_copy;
 mod sftp;
 pub mod smb;
 pub mod trash;
+mod webdav;
+#[cfg(test)]
+mod webdav_tests;
 #[cfg(test)]
 mod tests;
 
@@ -40,6 +44,7 @@ pub use ftp::{FtpFs, QUIET_LOG_TARGETS, TRUSTED_CERTS_FILE, is_quiet};
 pub use prompt::{CertQuestion, HostKeyAnswer, HostKeyQuestion, Keyring, NoPrompter, Prompter, Secret, SecretQuestion};
 pub use secrets::{SecretId, SecretStore, Vault};
 pub use sftp::SftpFs;
+pub use webdav::WebDavFs;
 
 fn setup() -> &'static Mutex<Option<(Config, Arc<dyn Prompter>)>> {
     static S: OnceLock<Mutex<Option<(Config, Arc<dyn Prompter>)>>> = OnceLock::new();
@@ -76,12 +81,31 @@ fn ftp_backend() -> Arc<FtpFs> {
     .clone()
 }
 
-/// Serves `sftp://`, `ftp://` and `ftps://` from now on. Nothing connects here; the backend is made on its first use.
+fn the_dav() -> &'static Mutex<Option<Arc<WebDavFs>>> {
+    static F: OnceLock<Mutex<Option<Arc<WebDavFs>>>> = OnceLock::new();
+    F.get_or_init(|| Mutex::new(None))
+}
+
+/// The one `WebDavFs` (both `dav://` and `davs://`; the scheme of each address decides the TLS), made on first use.
+fn dav_backend() -> Arc<WebDavFs> {
+    let mut f = the_dav().lock().unwrap_or_else(|e| e.into_inner());
+    f.get_or_insert_with(|| {
+        let (cfg, p) = setup().lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| (Config::for_user(None), Arc::new(NoPrompter)));
+        Arc::new(WebDavFs::new(cfg, p))
+    })
+    .clone()
+}
+
+/// Serves `sftp://`, `ftp://`, `ftps://`, `dav://` and `davs://` from now on. Nothing connects here; the backend is made on its
+/// first use.
 pub fn register(cfg: Config, prompter: Arc<dyn Prompter>) {
     *setup().lock().unwrap_or_else(|e| e.into_inner()) = Some((cfg, prompter));
     leaf_vfs::register("sftp", || sftp_backend() as Arc<dyn leaf_vfs::Fs>);
     leaf_vfs::register("ftp", || ftp_backend() as Arc<dyn leaf_vfs::Fs>);
     leaf_vfs::register("ftps", || ftp_backend() as Arc<dyn leaf_vfs::Fs>);
+    // WebDAV (X9): `dav://user@host/path` over http, `davs://` over https
+    leaf_vfs::register("dav", || dav_backend() as Arc<dyn leaf_vfs::Fs>);
+    leaf_vfs::register("davs", || dav_backend() as Arc<dyn leaf_vfs::Fs>);
     // `docker://local/` and `docker://user@host/`: the containers and their mounts, read-only (nothing runs until opened)
     leaf_vfs::register("docker", || Arc::new(docker::DockerFs) as Arc<dyn leaf_vfs::Fs>);
     // `smb://host/share` and `nfs://host/export` on Linux: mounted through gio, read through the gvfs folder
@@ -116,6 +140,7 @@ pub fn forget_saved(id: &SecretId) -> Result<(), String> {
         SecretId::Password { scheme, host, port, .. } => match scheme.as_str() {
             "sftp" => sftp_backend().forget_passwords(host, *port),
             "ftp" | "ftps" => ftp_backend().forget_passwords(host, *port),
+            "dav" | "davs" => dav_backend().forget_passwords(host, *port),
             _ => {}
         },
         SecretId::Passphrase { fingerprint, .. } => sftp_backend().forget_key(fingerprint),
@@ -146,6 +171,7 @@ pub fn is_connected(v: &VPath) -> bool {
     match v.scheme() {
         "sftp" => sftp_backend().target_connected(v),
         "ftp" | "ftps" => ftp_backend().target_connected(v),
+        "dav" | "davs" => dav_backend().target_connected(v),
         _ => false,
     }
 }
@@ -194,6 +220,14 @@ pub fn copy_on_server(
     paused: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<(), FsError> {
+    // a WebDAV server copies by itself too (`COPY`; no progress: it is one request)
+    if matches!(from.scheme(), "dav" | "davs") && from.scheme() == to.scheme() {
+        let r = dav_backend().copy_on_server(from, to, replace);
+        if r.is_ok() {
+            progress(0);
+        }
+        return r;
+    }
     if from.scheme() != "sftp" || to.scheme() != "sftp" || from.authority() != to.authority() {
         return Err(FsError::Unsupported);
     }

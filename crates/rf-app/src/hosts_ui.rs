@@ -100,6 +100,8 @@ pub fn subtitle(h: &Host) -> String {
 
 const EXAMPLE: &str = "name = sftp://user@example.com:22/folder key=~/.ssh/id_ed25519 jump=bastion";
 const FTP_EXAMPLE: &str = "nas = ftps://user@nas.local/share";
+/// (a WebDAV server: `davs://` is https, `dav://` is not encrypted)
+const DAV_EXAMPLE: &str = "cloud = davs://user@example.com/remote.php/dav/files/user";
 /// (a Windows share: `smb://server` lists its shares; the password is asked when the share wants one)
 const SMB_EXAMPLE: &str = "files = smb://nas.local/photos";
 
@@ -113,10 +115,10 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
     let old_name = old.map(|h| h.name);
     let title = if old_name.is_some() { t!("Edit host") } else { t!("Add a host") };
     let message = format!(
-        "{}\n{EXAMPLE}\n{FTP_EXAMPLE}\n{SMB_EXAMPLE}\n{}\n{}",
+        "{}\n{EXAMPLE}\n{FTP_EXAMPLE}\n{DAV_EXAMPLE}\n{SMB_EXAMPLE}\n{}\n{}",
         t!("One line: a name, =, the address, and if needed the key file and a jump host."),
         t!("Passwords are never saved in this list."),
-        t!("ftp:// is not encrypted (the password crosses the network as it is); use ftps:// where the server has it.")
+        t!("ftp:// and dav:// are not encrypted (the password crosses the network as it is); use ftps:// and davs:// where the server has it.")
     );
     // the kind of machine: "Guess" (from the name and port when it is saved), else one of the kinds; an edited host starts on its own
     let selected = Rc::new(std::cell::Cell::new(old_kind.map_or(0, |k| 1 + HostKind::ALL.iter().position(|x| *x == k).unwrap_or(0))));
@@ -197,7 +199,7 @@ fn import(window: &mut Window, cx: &mut App) {
 pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let hosts = all(cx);
     let mut v = vec![
-        card(p, L::Plus, t!("Add a host"), Some(t!("A server you reach over SFTP, FTPS or FTP: its address, user, port, start folder, key file and jump host. No passwords are kept here.")), button("hosts-add", p, t!("Add"), |w, cx| edit_dialog(None, w, cx))),
+        card(p, L::Plus, t!("Add a host"), Some(t!("A server you reach over SFTP, FTPS, FTP or WebDAV: its address, user, port, start folder, key file and jump host. No passwords are kept here.")), button("hosts-add", p, t!("Add"), |w, cx| edit_dialog(None, w, cx))),
         card(
             p,
             L::Download,
@@ -220,7 +222,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                 change(cx, move |hs| hs.hosts.retain(|o| o.name != name));
             }))
             // B7: deletes into leaf's trash on the server, or permanent (per host)
-            .when(matches!(h.scheme.as_str(), "sftp" | "ftp" | "ftps"), |d| {
+            .when(matches!(h.scheme.as_str(), "sftp" | "ftp" | "ftps" | "dav" | "davs"), |d| {
                 let name = h.name.clone();
                 let label = if h.no_trash { t!("Server trash: off") } else { t!("Server trash: on") };
                 d.child(button(("host-trash", i), p, label, move |_, cx| {
@@ -408,7 +410,13 @@ fn probe_way(h: &Host, tunnel_up: bool) -> ProbeWay {
 fn probe_host(h: &Host) -> Probe {
     use std::net::ToSocketAddrs;
     let scheme = h.scheme.to_ascii_lowercase();
-    let port = h.port.unwrap_or(if scheme.starts_with("ftp") { 21 } else if scheme == "smb" { 445 } else { 22 });
+    let port = h.port.unwrap_or(match scheme.as_str() {
+        "ftp" | "ftps" => 21,
+        "smb" => 445,
+        "dav" => 80,
+        "davs" => 443,
+        _ => 22,
+    });
     let started = std::time::Instant::now();
     let limit = std::time::Duration::from_secs(2);
     let online = match probe_way(h, leaf_vpn::tunnel().is_some()) {

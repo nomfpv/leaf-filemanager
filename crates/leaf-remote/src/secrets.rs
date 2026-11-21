@@ -101,7 +101,7 @@ impl SecretId {
             return Some(SecretId::web(scheme, host, port, realm)).filter(|id| matches!(scheme, "http" | "https") && !host.is_empty() && id.account() == account);
         }
         let (scheme, rest) = account.split_once("://")?;
-        if !matches!(scheme, "sftp" | "ftp" | "ftps" | "proxy") {
+        if !matches!(scheme, "sftp" | "ftp" | "ftps" | "dav" | "davs" | "proxy") {
             return None;
         }
         let (user, server) = rest.rsplit_once('@')?;
@@ -125,7 +125,11 @@ impl SecretId {
     /// Whether this is a password for a host of `scheme` (`ftp` and `ftps` count as one) on `host`, at `port` when given
     /// (any port otherwise), of `user` when given.
     pub fn is_for(&self, scheme: &str, host: &str, port: Option<u16>, user: Option<&str>) -> bool {
-        let family = |s: &str| if s.eq_ignore_ascii_case("ftps") { "ftp".to_string() } else { s.to_ascii_lowercase() };
+        let family = |s: &str| match s.to_ascii_lowercase().as_str() {
+            "ftps" => "ftp".to_string(),
+            "davs" => "dav".to_string(),
+            other => other.to_string(),
+        };
         match self {
             SecretId::Password { scheme: s, user: u, host: h, port: p } => {
                 family(s) == family(scheme) && h.eq_ignore_ascii_case(host) && port.is_none_or(|w| w == *p) && user.is_none_or(|w| w == u)

@@ -121,8 +121,7 @@ pub struct WebAuth {
 }
 
 impl WebAuth {
-    pub fn new(challenge: &Challenge, user: &str, password: &str) -> WebAuth {
-        WebAuth { user: user.to_string(), password: password.to_string(), origin: challenge.origin.clone(), challenge: std::sync::Mutex::new(challenge.clone()), nc: AtomicU32::new(0) }
+    pub fn new(challenge: &Challenge, user: &str, password: &str) -> WebAuth {        WebAuth { user: user.to_string(), password: password.to_string(), origin: challenge.origin.clone(), challenge: std::sync::Mutex::new(challenge.clone()), nc: AtomicU32::new(0) }
     }
 
     /// The server this sign-in is for: it is sent there and nowhere else.
@@ -132,7 +131,7 @@ impl WebAuth {
 
     /// The server said the Digest nonce is stale: the new one (from its new challenge) is used from now on, by every connection.
     /// `false` when that challenge is not a stale Digest one of the same realm.
-    pub(crate) fn renew(&self, fresh: &Challenge) -> bool {
+    pub fn renew(&self, fresh: &Challenge) -> bool {
         let mut ch = self.challenge.lock().unwrap_or_else(|e| e.into_inner());
         if !fresh.is_stale() || fresh.scheme != AuthScheme::Digest || fresh.realm != ch.realm || ch.digest.is_none() {
             return false;
@@ -144,6 +143,12 @@ impl WebAuth {
 
     /// The `Authorization` header's value for a GET of `uri` (an absolute address).
     pub(crate) fn header(&self, uri: &str) -> String {
+        self.header_for("GET", uri)
+    }
+
+    /// The `Authorization` header's value for a request with `method` (`GET`, `PROPFIND`, `PUT`...) to `uri` (an absolute address):
+    /// the Digest response covers the method, so every method of a WebDAV session asks for its own.
+    pub fn header_for(&self, method: &str, uri: &str) -> String {
         let ch = self.challenge.lock().unwrap_or_else(|e| e.into_inner()).clone();
         match &ch.digest {
             None => format!("Basic {}", base64(format!("{}:{}", self.user, self.password).as_bytes())),
@@ -159,7 +164,7 @@ impl WebAuth {
                 };
                 let realm = &ch.realm;
                 let ha1 = hash(format!("{}:{realm}:{}", self.user, self.password));
-                let ha2 = hash(format!("GET:{target}"));
+                let ha2 = hash(format!("{method}:{target}"));
                 let nc = self.nc.fetch_add(1, Ordering::Relaxed) + 1;
                 let nonce = &d.nonce;
                 let mut out = format!("Digest username=\"{}\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"{target}\"", self.user.replace('\\', "\\\\").replace('"', "\\\""));

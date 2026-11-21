@@ -417,7 +417,7 @@ fn addr(s: &Server, path: &str) -> VPath {
 
 // -------------------------------------------------------------------------------- the log, as the app keeps it
 
-static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+pub(crate) static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 struct Capture;
 
@@ -434,7 +434,7 @@ impl log::Log for Capture {
     fn flush(&self) {}
 }
 
-fn capture_log() {
+pub(crate) fn capture_log() {
     static ON: OnceLock<()> = OnceLock::new();
     ON.get_or_init(|| {
         if log::set_logger(&Capture).is_ok() {

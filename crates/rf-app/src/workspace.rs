@@ -2928,7 +2928,7 @@ impl Workspace {
             let f = c.clone();
             items.push(Item::action(t!("Forget saved password"), MenuIcon::Lucide(L::Lock), move |_: &mut Window, cx: &mut App| crate::hosts_ui::forget_for(&f, cx)));
         }
-        if matches!(v.scheme(), "sftp" | "ftp" | "ftps") {
+        if matches!(v.scheme(), "sftp" | "ftp" | "ftps" | "dav" | "davs") {
             items.push(Item::Separator);
             let d = c.clone();
             items.push(Item::action(t!("Forget saved password"), MenuIcon::Lucide(L::Lock), move |_: &mut Window, cx: &mut App| crate::hosts_ui::forget_for(&c, cx)));

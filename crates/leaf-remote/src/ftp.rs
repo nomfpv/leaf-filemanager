@@ -31,7 +31,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -44,10 +43,10 @@ use crate::conn::Config;
 use crate::prompt::{CertQuestion, HostKeyAnswer, Prompter, Secret, SecretQuestion};
 use crate::secrets::SecretId;
 
-/// Log targets that write secrets at their most detailed level (suppaftp logs the `PASS` line at trace). The app drops every
-/// record of these (and of their modules) above `warn`, whatever `RUST_LOG` says: see [`is_quiet`]. (Nothing up to `debug`
-/// carries a secret either: the test checks that.)
-pub const QUIET_LOG_TARGETS: &[&str] = &["suppaftp"];
+/// Log targets that write secrets at their most detailed level (suppaftp logs the `PASS` line at trace; the HTTP client's
+/// requests carry the `Authorization` header of a WebDAV sign-in). The app drops every record of these (and of their modules)
+/// above `warn`, whatever `RUST_LOG` says: see [`is_quiet`]. (Nothing up to `debug` carries a secret either: the tests check that.)
+pub const QUIET_LOG_TARGETS: &[&str] = &["suppaftp", "ureq", "ureq_proto"];
 
 /// Whether a log record must be dropped, whatever the filter says: above `warn` from a target in [`QUIET_LOG_TARGETS`] or a
 /// module of one (`suppaftp::sync_ftp::control`). A filter like `RUST_LOG=suppaftp::sync_ftp::control=trace` cannot turn it
@@ -593,66 +592,88 @@ impl Inner {
 
     // -------------------------------------------------------------------------------------------- certificates
 
-    fn trusted_file(&self) -> Option<PathBuf> {
-        self.cfg.config_dir.as_ref().map(|d| d.join(TRUSTED_CERTS_FILE))
-    }
-
-    /// The fingerprints trusted for this server: remembered in the file, and trusted once in this run.
     fn trusted(&self, t: &Target) -> Vec<String> {
-        let name = t.cert_name();
-        let mut v: Vec<String> = self
-            .trusted_file()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|text| {
-                text.lines()
-                    .filter_map(|l| l.split_once(' '))
-                    .filter(|(h, _)| h.eq_ignore_ascii_case(&name))
-                    .map(|(_, fp)| fp.trim().to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        v.extend(lock(&self.shared.trusted_once).iter().filter(|(h, _)| *h == name).map(|(_, fp)| fp.clone()));
-        v
+        trusted_certs(&self.cfg, &self.shared.trusted_once, &t.cert_name())
     }
 
     fn cert_check(&self, t: &Target) -> Result<Arc<CertCheck>, FsError> {
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let system = rustls_platform_verifier::Verifier::new(provider.clone()).map_err(|e| FsError::Other(format!("The system's certificates cannot be read ({e})")))?;
-        Ok(Arc::new(CertCheck { system: Arc::new(system), provider, trusted: self.trusted(t), refusal: Mutex::new(None) }))
+        new_cert_check(self.trusted(t))
     }
 
     fn ask_certificate(&self, t: &Target, check: &CertCheck, fp: String, why: String) -> Result<(), FsError> {
-        let changed = !check.trusted.is_empty();
-        let q = CertQuestion { host: t.cert_name(), fingerprint: fp.clone(), reason: why, trusted_before: check.trusted.clone() };
-        log::info!("ftp: the certificate of {} is not trusted by the system{}; asking", q.host, if changed { " and not the one trusted before" } else { "" });
-        let name = t.cert_name();
-        match crate::prompt::ask_certificate_blocking(&*self.prompter, q) {
-            HostKeyAnswer::TrustAndRemember => {
-                // a new certificate replaces the ones trusted for this server before (in the file and in this run)
-                if let Some(p) = self.trusted_file() {
-                    let kept: String = std::fs::read_to_string(&p)
-                        .unwrap_or_default()
-                        .lines()
-                        .filter(|l| !l.split_once(' ').is_some_and(|(h, _)| h.eq_ignore_ascii_case(&name)))
-                        .map(|l| format!("{l}\n"))
-                        .collect();
-                    if let Err(e) = std::fs::write(&p, format!("{kept}{name} {fp}\n")) {
-                        log::warn!("ftp: could not write {}: {e} (trusted for this run only)", p.display());
-                    }
+        ask_cert(&self.cfg, &*self.prompter, &self.shared.trusted_once, &t.cert_name(), check, fp, why, "ftp")
+    }
+}
+
+/// The fingerprints trusted for the server `name` (`host:port`): remembered in the file (beside hosts.toml), and trusted once in
+/// this run (`once`). Shared by FTPS and WebDAV over https.
+pub(crate) fn trusted_certs(cfg: &Config, once: &Mutex<HashSet<(String, String)>>, name: &str) -> Vec<String> {
+    let mut v: Vec<String> = cfg
+        .config_dir
+        .as_ref()
+        .map(|d| d.join(TRUSTED_CERTS_FILE))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|text| {
+            text.lines()
+                .filter_map(|l| l.split_once(' '))
+                .filter(|(h, _)| h.eq_ignore_ascii_case(name))
+                .map(|(_, fp)| fp.trim().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.extend(lock(once).iter().filter(|(h, _)| h == name).map(|(_, fp)| fp.clone()));
+    v
+}
+
+/// The system's certificate check with the fingerprints in `trusted` as the only way past a refusal.
+pub(crate) fn new_cert_check(trusted: Vec<String>) -> Result<Arc<CertCheck>, FsError> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let system = rustls_platform_verifier::Verifier::new(provider.clone()).map_err(|e| FsError::Other(format!("The system's certificates cannot be read ({e})")))?;
+    Ok(Arc::new(CertCheck { system: Arc::new(system), provider, trusted, refusal: Mutex::new(None) }))
+}
+
+/// Asks the user about a certificate the system does not trust (`check` is the refused connection's, `fp` and `why` what it
+/// recorded). `Ok`: the answer was "trust"; the caller connects again with a new check. Never accepts without an answer.
+pub(crate) fn ask_cert(
+    cfg: &Config,
+    prompter: &dyn Prompter,
+    once: &Mutex<HashSet<(String, String)>>,
+    name: &str,
+    check: &CertCheck,
+    fp: String,
+    why: String,
+    tag: &str,
+) -> Result<(), FsError> {
+    let changed = !check.trusted.is_empty();
+    let q = CertQuestion { host: name.to_string(), fingerprint: fp.clone(), reason: why, trusted_before: check.trusted.clone() };
+    log::info!("{tag}: the certificate of {} is not trusted by the system{}; asking", q.host, if changed { " and not the one trusted before" } else { "" });
+    let file = cfg.config_dir.as_ref().map(|d| d.join(TRUSTED_CERTS_FILE));
+    match crate::prompt::ask_certificate_blocking(prompter, q) {
+        HostKeyAnswer::TrustAndRemember => {
+            // a new certificate replaces the ones trusted for this server before (in the file and in this run)
+            if let Some(p) = file {
+                let kept: String = std::fs::read_to_string(&p)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|l| !l.split_once(' ').is_some_and(|(h, _)| h.eq_ignore_ascii_case(name)))
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+                if let Err(e) = std::fs::write(&p, format!("{kept}{name} {fp}\n")) {
+                    log::warn!("{tag}: could not write {}: {e} (trusted for this run only)", p.display());
                 }
-                let mut once = lock(&self.shared.trusted_once);
-                once.retain(|(h, _)| *h != name);
-                once.insert((name, fp));
-                Ok(())
             }
-            // (never for a certificate that replaces a trusted one: the dialog does not offer it)
-            HostKeyAnswer::TrustOnce if changed => Err(FsError::Cancelled),
-            HostKeyAnswer::TrustOnce => {
-                lock(&self.shared.trusted_once).insert((t.cert_name(), fp));
-                Ok(())
-            }
-            HostKeyAnswer::Cancel => Err(FsError::Cancelled),
+            let mut once = lock(once);
+            once.retain(|(h, _)| h != name);
+            once.insert((name.to_string(), fp));
+            Ok(())
         }
+        // (never for a certificate that replaces a trusted one: the dialog does not offer it)
+        HostKeyAnswer::TrustOnce if changed => Err(FsError::Cancelled),
+        HostKeyAnswer::TrustOnce => {
+            lock(once).insert((name.to_string(), fp));
+            Ok(())
+        }
+        HostKeyAnswer::Cancel => Err(FsError::Cancelled),
     }
 }
 
@@ -771,15 +792,15 @@ impl<T> FtpResultExt<T> for Result<T, FtpError> {
 
 /// The system's certificate check, with the fingerprints the user trusted for this server as the only way past a refusal.
 #[derive(Debug)]
-struct CertCheck {
+pub(crate) struct CertCheck {
     system: Arc<rustls_platform_verifier::Verifier>,
     provider: Arc<rustls::crypto::CryptoProvider>,
-    trusted: Vec<String>,
+    pub(crate) trusted: Vec<String>,
     /// The fingerprint and the reason of the last refusal (asked about after the connect failed).
-    refusal: Mutex<Option<(String, String)>>,
+    pub(crate) refusal: Mutex<Option<(String, String)>>,
 }
 
-fn tls_config(check: Arc<CertCheck>) -> Result<rustls::ClientConfig, FsError> {
+pub(crate) fn tls_config(check: Arc<CertCheck>) -> Result<rustls::ClientConfig, FsError> {
     let provider = check.provider.clone();
     let c = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -1123,7 +1144,7 @@ fn child(dir: &str, name: &str) -> String {
 }
 
 /// A hidden name beside `name` that nothing else uses: `.name.<tag>-<n>` (no secret in it: the process id, a counter, the time).
-fn side_name(name: &str, tag: &str) -> String {
+pub(crate) fn side_name(name: &str, tag: &str) -> String {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
@@ -1139,7 +1160,7 @@ fn side_name(name: &str, tag: &str) -> String {
 }
 
 /// The generic copy's temporary name (`.name.<n>.leaf-part`): such a file is written in place.
-fn is_part_name(name: &str) -> bool {
+pub(crate) fn is_part_name(name: &str) -> bool {
     name.starts_with('.') && name.ends_with(".leaf-part")
 }
 

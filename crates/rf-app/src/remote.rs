@@ -443,7 +443,7 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                 }
                 SecretQuestion::Password { account, retry, unencrypted, keyring } => {
                     let first = if retry { t!("Wrong password. Try again.") } else { t!("The server asks for a password.") };
-                    let plain = if unencrypted { format!("\n{}", t!("Not encrypted: plain FTP sends the password and the files as they are. Use ftps:// where the server has it.")) } else { String::new() };
+                    let plain = if unencrypted { format!("\n{}", t!("Not encrypted: the password and the files cross the network as they are. Use ftps:// or davs:// where the server has it.")) } else { String::new() };
                     let (checks, line) = tick(&keyring);
                     crate::prompt::show_secret_with(format!("{} {account}", t!("Password for")), Some(format!("{first}{plain}\n\n{line}")), t!("Password").to_string(), checks, buttons, window, cx);
                 }
@@ -456,12 +456,20 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                     }
                 }
                 SecretQuestion::Login { place, retry, keyring, .. } => {
-                    let first = if retry { t!("Wrong user name or password. Try again.") } else { t!("The share asks for a user name and password.") };
+                    let share = place.starts_with('\\');
+                    let first = if retry { t!("Wrong user name or password. Try again.") } else if share { t!("The share asks for a user name and password.") } else { t!("The server asks for a user name and password.") };
                     let (checks, line) = tick(&keyring);
                     // the server named in the title; a server neither in the Hosts list nor opened in leaf itself (a link, a
                     // shortcut, the command line, a saved tab) gets a caution line first
                     let host = place.trim_start_matches('\\').split('\\').next().unwrap_or_default().to_string();
-                    let known = leaf_remote::smb::was_opened_here(&host) || crate::hosts_ui::all(cx).iter().any(|h| h.scheme.eq_ignore_ascii_case("smb") && h.host.eq_ignore_ascii_case(&host));
+                    let known = if share {
+                        leaf_remote::smb::was_opened_here(&host) || crate::hosts_ui::all(cx).iter().any(|h| h.scheme.eq_ignore_ascii_case("smb") && h.host.eq_ignore_ascii_case(&host))
+                    } else {
+                        // (a WebDAV server: `host` or `host:port`)
+                        let name = host.rsplit_once('@').map_or(host.as_str(), |(_, h)| h);
+                        let name = name.rsplit_once(':').filter(|(_, p)| p.bytes().all(|b| b.is_ascii_digit())).map_or(name, |(h, _)| h);
+                        crate::hosts_ui::all(cx).iter().any(|h| h.host.eq_ignore_ascii_case(name))
+                    };
                     let caution = if known { String::new() } else { format!("{}\n\n", t!("This server asked for a login. Only continue if you know it.")) };
                     let message = format!("{caution}{} {place}\n{first}\n\n{line}", t!("Share:"));
                     crate::prompt::show_login(format!("{} {host}", t!("Log in to")), Some(message), user, t!("Password").to_string(), checks, buttons, window, cx);
@@ -534,7 +542,7 @@ fn fetch(v: &VPath, max: u64, cancelled: &dyn Fn() -> bool, progress: &mut dyn F
         }
     }
     make_cache_dir(&local)?;
-    let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(if v.scheme().starts_with("ftp") { 21 } else { 22 })));
+    let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(default_port(v.scheme()))));
     leaf_vfs::copy::fetch_file(&*fs, v, &local, max, Some(&from), cancelled, progress)?;
     if let Ok(lm) = std::fs::metadata(&local) {
         let mut perm = lm.permissions();
@@ -542,6 +550,16 @@ fn fetch(v: &VPath, max: u64, cancelled: &dyn Fn() -> bool, progress: &mut dyn F
         let _ = std::fs::set_permissions(&local, perm);
     }
     Ok(local)
+}
+
+/// The port an address without one uses.
+fn default_port(scheme: &str) -> u16 {
+    match scheme {
+        "ftp" | "ftps" => 21,
+        "dav" => 80,
+        "davs" => 443,
+        _ => 22,
+    }
 }
 
 fn anyhow_of(e: FsError) -> anyhow::Error {
@@ -860,7 +878,7 @@ fn download_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
             (tr.on_progress)(total_files.max(1) as u32, done, cur);
         };
         // every file that arrives carries the download mark (SmartScreen, Office's Protected View)
-        let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(if v.scheme().starts_with("ftp") { 21 } else { 22 })));
+        let from = format!("{}://{}/", v.scheme(), leaf_remote::known_hosts::host_name(v.host(), v.port().unwrap_or(default_port(v.scheme()))));
         let mut mark = |part: &VPath| {
             if let Err(e) = leaf_sys::fileinfo::mark_downloaded(&LocalFs::native(part), &from) {
                 log::debug!("download: no download mark: {e}");
@@ -977,7 +995,7 @@ const VERIFY_MIN: u64 = 64 << 20;
 /// Whether the place of `v` can be written to (uploads, new folders, renames, deletes). `sftp://`, `ftp://` and `ftps://`
 /// only: the writes of other backends (rclone) have not been reviewed, so leaf does not offer them.
 pub fn writable(v: &VPath) -> bool {
-    matches!(v.scheme(), "sftp" | "ftp" | "ftps") && leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
+    matches!(v.scheme(), "sftp" | "ftp" | "ftps" | "dav" | "davs") && leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
 }
 
 /// A server's address as people read it in a title (`host:/path`, no user, never a secret: addresses carry none).
@@ -1130,7 +1148,7 @@ fn transfer_work(tr: &leaf_sys::fileops::Tracker, items: &[(VPath, bool)], dest:
             continue;
         }
         // within one SFTP server the server copies (H6); `Unsupported`: it cannot, so the bytes go through this PC as before
-        if same_server(v) && v.scheme() == "sftp" {
+        if same_server(v) && matches!(v.scheme(), "sftp" | "dav" | "davs") {
             let (files, bytes) = each.get(i).copied().unwrap_or_default();
             let here = Some(format!("{} {}", t!("Copied on the server:"), v.name()));
             (tr.on_progress)(total_files.max(1) as u32, base_files.min(u32::MAX as u64) as u32, here);
@@ -1330,7 +1348,7 @@ pub fn rename(cx: &mut App, from: VPath, name: String, view: WeakEntity<crate::f
 /// Whether deletes on the server of `v` go into leaf's trash there (B7): SFTP and FTP hosts, unless the saved host has it
 /// turned off (`trash=off`).
 fn trash_on(v: &VPath, cx: &mut App) -> bool {
-    matches!(v.scheme(), "sftp" | "ftp" | "ftps") && !crate::hosts_ui::all(cx).iter().any(|h| h.no_trash && h.is_server_of(v))
+    matches!(v.scheme(), "sftp" | "ftp" | "ftps" | "dav" | "davs") && !crate::hosts_ui::all(cx).iter().any(|h| h.no_trash && h.is_server_of(v))
 }
 
 /// Deletes items on a server. Into leaf's trash on that server (`.leaf-trash` in the login folder; Ctrl+Z puts them back)

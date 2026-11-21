@@ -1,6 +1,6 @@
 [package]
 name = "leaf-remote"
-description = "leaf: places on other machines (SFTP over russh, FTP/FTPS over suppaftp) behind the leaf-vfs interface"
+description = "leaf: places on other machines (SFTP over russh, FTP/FTPS over suppaftp, WebDAV) behind the leaf-vfs interface"
 version.workspace = true
 edition.workspace = true
 license = "MIT"
@@ -33,6 +33,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # FTPS certificates are checked against the system's store (Windows: CryptoAPI)
 rustls-platform-verifier = "0.7"
 sha2.workspace = true
+# WebDAV (X9): leaf's own small HTTP/1.1 client (`http.rs`; the HTTP libraries in the tree refuse PROPFIND, MKCOL, MOVE and COPY) on
+# rustls with the FTPS certificate check, an XML reader for the server's answers, and leaf-download's Digest sign-in
+quick-xml = "0.42"
+leaf-download.workspace = true
 # saved passwords and passphrases (W1b): the system's keyring behind leaf's own seam (`secrets.rs`)
 keyring-core = "1"
 
