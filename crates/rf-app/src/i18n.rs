@@ -51,6 +51,6 @@ mod tests {
         assert_eq!(items(1), "1 item");
         assert_eq!(items(3), "3 items");
         assert_eq!(pct(53.), "53%");
-        assert_eq!(rf_core::format::size(1536), "1.50 KB");
+        assert_eq!(rf_core::format::size(1536), "1.5 KB");
     }
 }

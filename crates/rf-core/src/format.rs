@@ -22,8 +22,8 @@ fn local(dt: &chrono::DateTime<Local>) -> String {
 /// How dates are shown (Settings → General → Date format).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateStyle {
-    /// Recent times as "5 dakika önce", older ones as a short date.
-    Relative,
+    /// "Today, 10:05", "Yesterday, 18:02", older ones "18 Nov 2026".
+    Calendar,
     /// The system's short date and time (Windows' regional format), "05.11.2026 13:45" where there is none.
     Local,
     /// ISO 8601 "2026-11-05 13:45"
@@ -36,7 +36,7 @@ pub fn set_date_style(s: DateStyle) {
 
 fn date_style() -> DateStyle {
     match DATE_STYLE.load(Ordering::Relaxed) {
-        0 => DateStyle::Relative,
+        0 => DateStyle::Calendar,
         1 => DateStyle::Local,
         _ => DateStyle::Universal,
     }
@@ -47,14 +47,14 @@ pub fn set_decimal_sizes(on: bool) {
     DECIMAL.store(on, Ordering::Relaxed);
 }
 
-/// "0 bytes", "512 bytes", "1.20 KB", "34.5 MB", "1.02 GB".
+/// "0 B", "512 B", "1.2 KB", "34.5 MB", "412 MB" (the mockups' way: one decimal under 100, none above).
 pub fn size(bytes: u64) -> String {
     size_with(bytes, DECIMAL.load(Ordering::Relaxed))
 }
 
 fn size_with(bytes: u64, decimal: bool) -> String {
     let base: f64 = if decimal { 1000.0 } else { 1024.0 };
-    let units: [&str; 6] = ["bytes", "KB", "MB", "GB", "TB", "PB"];
+    let units: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if (bytes as f64) < base {
         return format!("{bytes} {}", units[0]);
     }
@@ -64,13 +64,7 @@ fn size_with(bytes: u64, decimal: bool) -> String {
         v /= base;
         u += 1;
     }
-    let s = if v >= 100.0 {
-        format!("{v:.0}")
-    } else if v >= 10.0 {
-        format!("{v:.1}")
-    } else {
-        format!("{v:.2}")
-    };
+    let s = if v >= 100.0 { format!("{v:.0}") } else { format!("{v:.1}") };
     format!("{s} {}", units[u])
 }
 
@@ -93,17 +87,18 @@ fn datetime_with(ms: i64, style: DateStyle, now: i64) -> String {
     match style {
         DateStyle::Universal => dt.format("%Y-%m-%d %H:%M").to_string(),
         DateStyle::Local => local(&dt),
-        DateStyle::Relative => {
-            let secs = (now - ms) / 1000;
-            let (n, unit) = match secs {
-                s if s < 0 => return local(&dt),
-                s if s < 45 => return "just now".to_string(),
-                s if s < 3600 => (((s + 30) / 60).max(1), "min ago"),
-                s if s < 86_400 => (s / 3600, "h ago"),
-                s if s < 7 * 86_400 => (s / 86_400, "d ago"),
+        DateStyle::Calendar => {
+            // "Today, 10:05", "Yesterday, 18:02", else "18 Nov 2026" (the mockups' one format)
+            let today = match Local.timestamp_millis_opt(if now > 0 { now } else { Local::now().timestamp_millis() }) {
+                chrono::LocalResult::Single(n) => n.date_naive(),
                 _ => return local(&dt),
             };
-            format!("{n} {unit}")
+            let days = (today - dt.date_naive()).num_days();
+            match days {
+                0 => format!("Today, {}", dt.format("%H:%M")),
+                1 => format!("Yesterday, {}", dt.format("%H:%M")),
+                _ => dt.format("%-d %b %Y").to_string(),
+            }
         }
     }
 }
@@ -122,25 +117,24 @@ mod tests {
 
     #[test]
     fn sizes() {
-        assert_eq!(size(0), "0 bytes");
-        assert_eq!(size(1023), "1023 bytes");
-        assert_eq!(size(1024), "1.00 KB");
-        assert_eq!(size(1536), "1.50 KB");
+        assert_eq!(size(0), "0 B");
+        assert_eq!(size(1023), "1023 B");
+        assert_eq!(size(1024), "1.0 KB");
+        assert_eq!(size(1536), "1.5 KB");
         assert_eq!(size(10 * 1024 * 1024 + 1), "10.0 MB");
         assert_eq!(size(500 * 1024 * 1024 * 1024), "500 GB");
     }
 
     #[test]
-    fn relative_and_formats() {
-        let now = 1_800_000_000_000i64;
-        assert_eq!(datetime_with(now - 10_000, DateStyle::Relative, now), "just now");
-        assert_eq!(datetime_with(now - 5 * 60_000, DateStyle::Relative, now), "5 min ago");
-        assert_eq!(datetime_with(now - 3 * 3_600_000, DateStyle::Relative, now), "3 h ago");
-        assert_eq!(datetime_with(now - 2 * 86_400_000, DateStyle::Relative, now), "2 d ago");
-        assert!(datetime_with(now - 30 * 86_400_000, DateStyle::Relative, now).contains('.'));
+    fn calendar_and_formats() {
+        // noon local time, so that an hour back is still today
+        let now = Local.with_ymd_and_hms(2026, 11, 18, 12, 0, 0).unwrap().timestamp_millis();
+        assert_eq!(datetime_with(now - 3_600_000, DateStyle::Calendar, now), "Today, 11:00");
+        assert_eq!(datetime_with(now - 86_400_000, DateStyle::Calendar, now), "Yesterday, 12:00");
+        assert_eq!(datetime_with(now - 8 * 86_400_000, DateStyle::Calendar, now), "10 Nov 2026");
         assert_eq!(datetime_with(now, DateStyle::Universal, now).len(), 16);
-        assert_eq!(size_with(1500, true), "1.50 KB");
-        assert_eq!(size_with(1500, false), "1.46 KB");
+        assert_eq!(size_with(1500, true), "1.5 KB");
+        assert_eq!(size_with(1500, false), "1.5 KB");
     }
 
     #[test]
