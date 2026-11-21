@@ -1772,7 +1772,16 @@ impl FolderView {
             std::thread::Builder::new()
                 .name("rf-shares".into())
                 .spawn(move || {
-                    let r = leaf_sys::network::shares(&server).map(|list| {
+                    // a server that wants a login before it lists its shares (Windows): `\\host\IPC$`, then once more
+                    let r = match leaf_sys::network::shares(&server) {
+                        Err(e) => match crate::remote::unc_login(&path, &e) {
+                            Some(Ok(())) => leaf_sys::network::shares(&server),
+                            Some(Err(msg)) => Err(std::io::Error::other(msg)),
+                            None => Err(e),
+                        },
+                        ok => ok,
+                    };
+                    let r = r.map(|list| {
                         let es: Vec<Entry> = list
                             .iter()
                             .map(|s| Entry::new(&s.name, rf_core::EntryKind::Dir, 0, 0, 0, 0x10))
@@ -2017,12 +2026,22 @@ impl FolderView {
                             Ok(0)
                         }
                     },
-                    None => leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |mut b| {
-                        rf_core::tssource::mark_ts_sources(&path, &mut b);
-                        all.extend(b.iter().cloned());
-                        let _ = tx2.unbounded_send(Msg::Batch(b));
-                    })
-                    .map_err(|e| e.to_string()),
+                    None => {
+                        let mut list = || {
+                            leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |mut b| {
+                                rf_core::tssource::mark_ts_sources(&path, &mut b);
+                                all.extend(b.iter().cloned());
+                                let _ = tx2.unbounded_send(Msg::Batch(b));
+                            })
+                        };
+                        let r = list();
+                        // a `\\host\share` that wants a login (Windows): leaf's dialog or the saved password, then once more
+                        match r.as_ref().err().and_then(crate::remote::list_error_io).and_then(|io| crate::remote::unc_login(&path, &io)) {
+                            Some(Ok(())) => list().map_err(|e| e.to_string()),
+                            Some(Err(msg)) => Err(msg),
+                            None => r.map_err(|e| e.to_string()),
+                        }
+                    }
                 };
                 // (a sort by tag or path is made from ranks the view makes after the listing: a by-name view
                 // made here would be thrown away)

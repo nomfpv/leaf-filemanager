@@ -61,6 +61,8 @@ pub struct DialogView {
     message: Option<SharedString>,
     error: Option<SharedString>,
     input: Option<Entity<InputState>>,
+    /// A user name box above the (password) text box: a share's login. What it holds is put in the cell before a button runs.
+    user: Option<(Entity<InputState>, Rc<std::cell::RefCell<String>>)>,
     choices: Vec<Choice>,
     checks: Vec<Check>,
     /// A message made again at every draw (it reads what the check boxes say): Copy as context's counts.
@@ -75,6 +77,7 @@ pub struct DialogView {
     snap_ix: Option<usize>,
     snap_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     _sub: Option<Subscription>,
+    _user_sub: Option<Subscription>,
 }
 
 struct Host(Option<(AnyWindowHandle, Entity<DialogView>, Option<FocusHandle>)>);
@@ -156,6 +159,49 @@ pub fn show_secret_with(title: impl Into<SharedString>, message: Option<String>,
     show_inner(title, message, Some((String::new(), placeholder)), true, Vec::new(), checks, buttons, window, cx)
 }
 
+/// A login (a share's user name and password): `show_secret_with` with a user name box above the password box, filled with
+/// `user` (the name the box held is in `user` again when a button runs). The keyboard starts in the user box when it is empty,
+/// else in the password box; Enter and Tab in the user box go on to the password box.
+#[allow(clippy::too_many_arguments)]
+pub fn show_login(
+    title: impl Into<SharedString>,
+    message: Option<String>,
+    user: Rc<std::cell::RefCell<String>>,
+    placeholder: String,
+    checks: Vec<Check>,
+    buttons: Vec<Button>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    show_inner(title, message, Some((String::new(), placeholder)), true, Vec::new(), checks, buttons, window, cx);
+    let Some(v) = current(window, cx) else { return };
+    let initial = user.borrow().clone();
+    let empty = initial.is_empty();
+    let box_ = cx.new(|cx| {
+        let mut s = InputState::new(window, cx).placeholder(crate::t!("User name (DOMAIN\\name)"));
+        s.set_value(initial, window, cx);
+        s
+    });
+    let sub = window.subscribe(&box_, cx, {
+        let v = v.downgrade();
+        move |_, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev
+                && let Some(v) = v.upgrade()
+                && let Some(i) = v.read(cx).input.clone()
+            {
+                i.update(cx, |s, cx| s.focus(window, cx));
+            }
+        }
+    });
+    v.update(cx, |d, _| {
+        d.user = Some((box_.clone(), user));
+        d._user_sub = Some(sub);
+    });
+    if empty {
+        box_.update(cx, |s, cx| s.focus(window, cx));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn show_inner(
     title: impl Into<SharedString>,
@@ -196,6 +242,7 @@ fn show_inner(
             message: message.map(Into::into),
             error: None,
             input,
+            user: None,
             choices,
             checks,
             live: None,
@@ -205,6 +252,7 @@ fn show_inner(
             snap_ix,
             snap_at: Rc::new(Cell::new(None)),
             _sub: sub,
+            _user_sub: None,
         }
     });
     // Windows' "Snap To" (Mouse settings: "Automatically move pointer to the default button in a dialog box", issue 148): its own
@@ -260,6 +308,9 @@ impl DialogView {
 
     fn press(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(b) = self.buttons.get(ix) else { return };
+        if let Some((i, cell)) = &self.user {
+            *cell.borrow_mut() = i.read(cx).value().to_string();
+        }
         let (run, value) = (b.run.clone(), self.value(cx));
         match run(value, window, cx) {
             Ok(()) => close(window, cx),
@@ -275,6 +326,15 @@ impl DialogView {
     fn step(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
         let n = self.buttons.len();
         if n == 0 {
+            return;
+        }
+        // (a login: Tab in the user name box goes on to the password box)
+        if step > 0
+            && let Some((u, _)) = &self.user
+            && u.read(cx).focus_handle(cx).is_focused(window)
+            && let Some(i) = self.input.clone()
+        {
+            i.update(cx, |s, cx| s.focus(window, cx));
             return;
         }
         self.keyed = Some(next_button(self.keyed, step, n));
@@ -423,7 +483,8 @@ impl Render for DialogView {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 // (the text box keeps its own keys while it has the keyboard)
-                let in_box = this.input.as_ref().is_some_and(|i| i.read(cx).focus_handle(cx).is_focused(window));
+                let in_box = this.input.as_ref().is_some_and(|i| i.read(cx).focus_handle(cx).is_focused(window))
+                    || this.user.as_ref().is_some_and(|(u, _)| u.read(cx).focus_handle(cx).is_focused(window));
                 match ev.keystroke.key.as_str() {
                     "escape" => {
                         close(window, cx);
@@ -465,6 +526,18 @@ impl Render for DialogView {
                             .gap_3()
                             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(self.title.clone()))
                             .children(self.message.clone().or_else(|| self.live.as_ref().map(|f| SharedString::from(f()))).map(|m| div().text_sm().text_color(p.text_secondary).child(m)))
+                            .children(self.user.as_ref().map(|(u, _)| {
+                                div()
+                                    .h(px(34.))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .rounded(theme::RADIUS_SM)
+                                    .bg(p.content_bg)
+                                    .border_1()
+                                    .border_color(p.border)
+                                    .child(Input::new(u).appearance(false))
+                            }))
                             .children(self.input.as_ref().map(|i| {
                                 div()
                                     .h(px(34.))

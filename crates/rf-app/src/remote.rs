@@ -85,6 +85,13 @@ pub fn parse_typed(text: &str) -> Option<Location> {
     if !VPath::looks_like(t) {
         return None;
     }
+    // Windows: `smb://host/share/dir` is the folder `\\host\share\dir` (the system's own SMB; a login is asked when the share
+    // wants one). Linux keeps the address: gio mounts it.
+    if cfg!(windows)
+        && let Some(unc) = leaf_remote::smb::unc_of(t)
+    {
+        return Some(Location::Path(unc));
+    }
     let v = VPath::parse(t).ok()?;
     usable(v.scheme()).then_some(Location::Remote(v))
 }
@@ -92,6 +99,41 @@ pub fn parse_typed(text: &str) -> Option<Location> {
 /// The place of a Network entry: a mounted `smb://` or `nfs://` share keeps its address, any other target is a folder.
 pub fn network_place(target: PathBuf) -> Location {
     target.to_str().and_then(parse_typed).unwrap_or(Location::Path(target))
+}
+
+/// Where a remote address opens: `smb://host/share` is the folder `\\host\share` on Windows; any other stays a remote place.
+pub fn place_of(v: VPath) -> Location {
+    if cfg!(windows)
+        && v.scheme() == "smb"
+        && let Some(unc) = leaf_remote::smb::unc_of(&v.to_string())
+    {
+        return Location::Path(unc);
+    }
+    Location::Remote(v)
+}
+
+/// The system error of a failed folder listing, for [`unc_login`].
+pub fn list_error_io(e: &leaf_sys::listing::ListError) -> Option<std::io::Error> {
+    use leaf_sys::listing::ListError as E;
+    match e {
+        E::AccessDenied => Some(std::io::Error::from_raw_os_error(5)),
+        E::Os(n) => Some(std::io::Error::from_raw_os_error(*n as i32)),
+        _ => None,
+    }
+}
+
+/// Windows: the listing of a `\\host\share` folder (or of `\\host`'s shares) failed because the share wants a login. Logs in
+/// (the password saved for it, else leaf's dialog; blocks, so a worker thread only) and says whether to list again: `Ok`,
+/// list again; `Err(text)`, the pane's message. `None`: not a login error, the listing's own error stands.
+pub fn unc_login(path: &Path, err: &std::io::Error) -> Option<Result<(), String>> {
+    if !leaf_remote::smb::wants_login(path, err) {
+        return None;
+    }
+    Some(match leaf_remote::smb::log_in_unc(path) {
+        Ok(()) => Ok(()),
+        Err(FsError::Cancelled) => Err(t!("This share asks for a user name and password").to_string()),
+        Err(e) => Err(crate::i18n::td(&e.to_string())),
+    })
 }
 
 /// "Disconnect" of a mounted network place (`gio mount -u`), off the UI thread; a refusal or a missing `gio` is told in a dialog.
@@ -123,7 +165,8 @@ pub fn refused_address(text: &str) -> Option<String> {
     }
     let scheme = t.split_once("://").map_or("", |(s, _)| s).to_ascii_lowercase();
     // (other schemes, `https://` and the like, go on as before: an address command may hand them on)
-    if !usable(&scheme) {
+    // (Windows opens `smb://` as a `\\host\share` folder: its faults are told too)
+    if !usable(&scheme) && !(cfg!(windows) && scheme == "smb") {
         return None;
     }
     match VPath::parse(t) {
@@ -351,12 +394,20 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
             let reply: Once<Option<Secret>> = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));
             // "Remember" (off by default): the secret goes to the system's keyring once the server took it
             let remember = std::rc::Rc::new(std::cell::Cell::new(false));
+            // a share's login: the user name box's text (filled with the name known, if any)
+            let user = std::rc::Rc::new(std::cell::RefCell::new(match &q {
+                SecretQuestion::Login { user, .. } => user.clone(),
+                _ => String::new(),
+            }));
+            let is_login = matches!(q, SecretQuestion::Login { .. });
             let ok = {
                 let reply = reply.clone();
                 let remember = remember.clone();
+                let user = user.clone();
                 move |text: Option<String>, _: &mut Window, _: &mut App| {
                     if let Some(r) = reply.take() {
-                        r(Some(Secret::new(text.unwrap_or_default()).remembered(remember.get())));
+                        let s = Secret::new(text.unwrap_or_default()).remembered(remember.get());
+                        r(Some(if is_login { s.with_user(user.borrow().trim().to_string()) } else { s }));
                     }
                     Ok(())
                 }
@@ -396,6 +447,11 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
                     } else {
                         crate::prompt::show_secret(title, Some(format!("{prompt}\n\n{kept}")), String::new(), buttons, window, cx);
                     }
+                }
+                SecretQuestion::Login { place, retry, keyring, .. } => {
+                    let first = if retry { t!("Wrong user name or password. Try again.") } else { t!("The share asks for a user name and password.") };
+                    let (checks, line) = tick(&keyring);
+                    crate::prompt::show_login(format!("{} {place}", t!("Log in to")), Some(format!("{first}\n\n{line}")), user, t!("Password").to_string(), checks, buttons, window, cx);
                 }
             }
         }

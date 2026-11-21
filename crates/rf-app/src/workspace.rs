@@ -2899,12 +2899,12 @@ impl Workspace {
             Item::action(t!("Open"), MenuIcon::Lucide(L::SquareArrowOutUpRight), {
                 let me = me.clone();
                 move |w: &mut Window, cx: &mut App| {
-                    let loc = Location::Remote(a.clone());
+                    let loc = crate::remote::place_of(a.clone());
                     let _ = me.update(cx, |ws, cx| ws.navigate(loc, w, cx));
                 }
             }),
             Item::action(t!("Open in new tab"), MenuIcon::Lucide(L::SquarePlus), move |w: &mut Window, cx: &mut App| {
-                let loc = Location::Remote(b.clone());
+                let loc = crate::remote::place_of(b.clone());
                 let _ = me.update(cx, |ws, cx| ws.open_tab(loc, w, cx));
             }),
             Item::action(t!("Copy address"), MenuIcon::Lucide(L::ClipboardCopy), {
@@ -2912,6 +2912,14 @@ impl Workspace {
                 move |_: &mut Window, cx: &mut App| cx.write_to_clipboard(ClipboardItem::new_string(s.clone()))
             }),
         ];
+        if v.scheme() == "smb" {
+            // the system's session with the server (Windows) or the mount (Linux), and the passwords saved for its shares
+            let d = c.clone();
+            items.push(Item::Separator);
+            items.push(Item::action(t!("Disconnect"), MenuIcon::Lucide(L::Unplug), move |_: &mut Window, cx: &mut App| crate::remote::disconnect(&d, cx)));
+            let f = c.clone();
+            items.push(Item::action(t!("Forget saved password"), MenuIcon::Lucide(L::Lock), move |_: &mut Window, cx: &mut App| crate::hosts_ui::forget_for(&f, cx)));
+        }
         if matches!(v.scheme(), "sftp" | "ftp" | "ftps") {
             items.push(Item::Separator);
             let d = c.clone();
@@ -4159,6 +4167,11 @@ impl Workspace {
         let net_share = match &target3 {
             Location::Remote(v) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-net") => Some((v.clone(), false)),
             Location::Remote(v) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-host") => Some((v.clone(), true)),
+            // an SMB host on Windows opens as `\\host\share`: its menu is the host's (Disconnect), not a folder's
+            Location::Path(p) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-host") => leaf_remote::smb::unc_share(p).and_then(|(h, s)| {
+                let a = if s.eq_ignore_ascii_case("ipc$") { format!("smb://{h}") } else { format!("smb://{h}/{s}") };
+                rf_core::vpath::VPath::parse(&a).ok().map(|v| (v, true))
+            }),
             _ => None,
         };
         let tag_dot = target3.path().filter(|p| p.parent().is_some()).and_then(|p| crate::tags::first_color(p, cx));
@@ -4235,7 +4248,7 @@ impl Workspace {
             })
 
             .on_click(cx.listener(move |this, _, window, cx| this.navigate(target.clone(), window, cx)))
-            .when_some(target3.path().map(Path::to_path_buf), |d, path| {
+            .when_some(target3.path().map(Path::to_path_buf).filter(|_| net_share.is_none()), |d, path| {
                 d.on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {

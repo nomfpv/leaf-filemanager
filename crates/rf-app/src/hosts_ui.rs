@@ -57,6 +57,13 @@ fn change(cx: &mut App, f: impl FnOnce(&mut Hosts)) {
 /// Where opening the host goes: its start folder as a remote place; an SFTP or FTP host without one opens in the folder the
 /// server logs the user into (`/~`).
 pub fn location(h: &Host) -> Option<Location> {
+    // an SMB host on Windows: `\\host\share` (or `\\host`, its list of shares) through the system's own SMB
+    if cfg!(windows)
+        && h.scheme.eq_ignore_ascii_case("smb")
+        && let Some(unc) = leaf_remote::smb::unc_of(&h.address())
+    {
+        return Some(Location::Path(unc));
+    }
     let v = VPath::parse(&h.address()).ok()?;
     let login_folder = ["sftp", "ftp", "ftps"].iter().any(|s| h.scheme.eq_ignore_ascii_case(s));
     let v = if h.start_path.is_none() && login_folder { v.with_path("/~") } else { v };
@@ -89,6 +96,8 @@ pub fn subtitle(h: &Host) -> String {
 
 const EXAMPLE: &str = "name = sftp://user@example.com:22/folder key=~/.ssh/id_ed25519 jump=bastion";
 const FTP_EXAMPLE: &str = "nas = ftps://user@nas.local/share";
+/// (a Windows share: `smb://server` lists its shares; the password is asked when the share wants one)
+const SMB_EXAMPLE: &str = "files = smb://nas.local/photos";
 
 /// The add / edit dialog: one line (`Host::to_line`). `old`: the name of the host being edited.
 fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
@@ -98,7 +107,7 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
     let old_name = old.map(|h| h.name);
     let title = if old_name.is_some() { t!("Edit host") } else { t!("Add a host") };
     let message = format!(
-        "{}\n{EXAMPLE}\n{FTP_EXAMPLE}\n{}\n{}",
+        "{}\n{EXAMPLE}\n{FTP_EXAMPLE}\n{SMB_EXAMPLE}\n{}\n{}",
         t!("One line: a name, =, the address, and if needed the key file and a jump host."),
         t!("Passwords are never saved in this list."),
         t!("ftp:// is not encrypted (the password crosses the network as it is); use ftps:// where the server has it.")
@@ -201,6 +210,15 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                             o.no_trash = !o.no_trash;
                         }
                     });
+                }))
+            })
+            // an SMB host: ends the system's session with the server (Windows) or lets go of the mount (Linux), never forced
+            .when(h.scheme.eq_ignore_ascii_case("smb"), |d| {
+                let address = h.address();
+                d.child(button(("host-disconnect", i), p, t!("Disconnect"), move |_, cx| {
+                    if let Ok(v) = VPath::parse(&address) {
+                        crate::remote::disconnect(&v, cx);
+                    }
                 }))
             })
             .into_any_element();
@@ -347,7 +365,8 @@ const PROBE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn probe_host(h: &Host) -> Probe {
     use std::net::ToSocketAddrs;
-    let port = h.port.unwrap_or(if h.scheme.to_ascii_lowercase().starts_with("ftp") { 21 } else { 22 });
+    let scheme = h.scheme.to_ascii_lowercase();
+    let port = h.port.unwrap_or(if scheme.starts_with("ftp") { 21 } else if scheme == "smb" { 445 } else { 22 });
     let started = std::time::Instant::now();
     let online = (h.host.as_str(), port)
         .to_socket_addrs()
