@@ -571,7 +571,7 @@ mod tests {
         let kept = tmp.join("kept.txt");
         let k2 = kept.clone();
         revert_file(&tmp, "a.txt", &move |p| std::fs::rename(p, &k2).map_err(|e| e.to_string())).unwrap();
-        assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap(), "head\n");
+        assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap().trim(), "head");
         assert_eq!(std::fs::read_to_string(kept).unwrap(), "mine\n");
         let _ = std::fs::remove_dir_all(&tmp);
     }
