@@ -1,6 +1,8 @@
 //! Folder-open timing with leaf's own method, for any app.
 //! `openbench <rf|other|explorer> <exe> <folder> <runs>`
 //!
+//! leaf runs off-screen by default (LEAF_OFFSCREEN=1; OPENBENCH_ON_SCREEN=1 for the on-screen run).
+//!
 //! The launched window would take the keyboard focus from whatever the owner is doing. A watcher
 //! thread (off with OPENBENCH_NO_FOCUS_GUARD=1) gives the focus back to the window that had it (only when the window that took it
 //! belongs to the benchmarked exe), and the tool prints whether the focus stayed.
@@ -60,15 +62,17 @@ fn main() {
         "rf" => {
             let cfg = std::env::temp_dir().join("leaf-openbench-cfg");
             let _ = std::fs::create_dir_all(&cfg);
-            App {
-                kind: AppKind::Leaf,
-                exe: PathBuf::from(exe),
-                env: vec![
-                    ("LEAF_MULTI_INSTANCE".into(), "1".into()),
-                    ("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
-                    ("LEAF_MUTE".into(), "1".into()),
-                ],
+            let mut env = vec![
+                ("LEAF_MULTI_INSTANCE".into(), "1".into()),
+                ("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
+                ("LEAF_MUTE".into(), "1".into()),
+            ];
+            // off-screen by default: the window is parked outside every monitor (OPENBENCH_ON_SCREEN=1
+            // measures it on screen, as the official per-phase run does)
+            if std::env::var_os("OPENBENCH_ON_SCREEN").is_none() {
+                env.push(("LEAF_OFFSCREEN".into(), "1".into()));
             }
+            App { kind: AppKind::Leaf, exe: PathBuf::from(exe), env }
         }
         "explorer" => detect().into_iter().find(|x| x.kind == AppKind::Explorer).unwrap(),
         _ => App { kind: AppKind::FilePilot, exe: PathBuf::from(exe), env: Vec::new() },
