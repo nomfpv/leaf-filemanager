@@ -68,8 +68,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 |---|---|---|
 | New folder | Makes a new folder here and lets you name it. | `Ctrl+Shift+N` |
 | New text document | Makes a new empty text file here. |  |
-| Send to device | Sends the selected items to a device nearby: a phone or computer running LocalSend, or another leaf. With several devices in reach, the right-click menu (Send with Nearby) lets you pick; this sends to the one used last, or to the only one found. |  |
 | Download here | Downloads a web address (http or https) into this folder: several connections at once, resumed after a cut line or a restart, shown in the Status Center with pause and cancel. An address on the clipboard is already in the box. From a terminal: leaf download <address> [folder]. |  |
+| Send to device | Sends the selected items to a device nearby: a phone or computer running LocalSend, or another leaf. With several devices in reach, the right-click menu (Send with Nearby) lets you pick; this sends to the one used last, or to the only one found. |  |
 | Add to shelf | Puts the selected items on the shelf to drop them somewhere else later. | `Ctrl+Shift+S` |
 | Add to basket | Puts the selected items in this project's context basket, a named set of files to hand to an assistant later. |  |
 | Remove from basket | Takes the selected items out of this project's context basket. |  |
@@ -159,6 +159,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Show changes | Lists every changed, new, deleted and renamed file of the git repository this folder is in, grouped by folder, with the difference of each in the preview pane. It only reads, apart from "Revert this file" on a row, which asks first and keeps your version in the Trash. |  |
 | Checkpoint | Saves how this folder is now, to put it back later with one restore. In a git repository it is a hidden snapshot inside the repository (your files, the index, the branch and the stash stay as they are; ignored files are left out); elsewhere a copy in leaf's data folder, with its size shown first. |  |
 | Checkpoints | Lists the checkpoints of this folder (or of its git repository) with their time, note and size; each can be restored after a look at what it would change, and the restore can be taken back. |  |
+| Sync jobs | Lists the saved sync and backup jobs (Mirror, Backup, Two-way; between folders on this computer or with a server) with their last run; each can be previewed row by row, run in the Status Center, edited or deleted. Removed and replaced files go to the Trash, on a server into .leaf-sync-trash. |  |
+| Sync with | Starts a sync job from this folder (or the selected folder), with the other pane's folder as the right side: choose Mirror, Backup or Two-way and the filters, then preview what it would do before anything is copied. |  |
 | Docker containers | Lists the Docker containers (running or stopped) as folders; a container lists its bind mounts and volumes, which open as the folders they stand for. In a folder on an sftp:// host it asks that host. It only reads. |  |
 | Worktrees | Lists the worktrees of the git repository this folder is in, by branch, to jump to one. It only reads. |  |
 | New worktree | Adds a second working folder to the git repository this folder is in, on a new branch from the current head or on an existing branch, and opens it in a new tab. Nothing that exists is changed. |  |
