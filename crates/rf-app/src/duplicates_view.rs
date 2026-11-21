@@ -219,6 +219,16 @@ impl DuplicatesView {
         (n, bytes)
     }
 
+    /// The status line: "5 files in 2 groups · 3 ticked (21.1 KB)"; nothing while searching or when there are no groups.
+    pub(crate) fn status_text(&self) -> Option<String> {
+        if !matches!(self.phase, Phase::Done) || self.groups.is_empty() {
+            return None;
+        }
+        let (files, ngroups, _) = totals(&self.groups);
+        let (nt, tbytes) = self.ticked_total();
+        Some(format!("{} {} {} {} · {} {} ({})", files, t!("files in"), ngroups, t!("groups"), nt, t!("ticked"), format::size(tbytes)))
+    }
+
     fn keep_menu(&mut self, group: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let me = cx.entity().downgrade();
         let folders: Vec<PathBuf> = match group {
@@ -470,7 +480,6 @@ impl DuplicatesView {
                     .gap_2()
                     .items_center()
                     .flex_shrink_0()
-                    .mt_1()
                     .rounded(theme::RADIUS_SM)
                     .bg(p.pressed)
                     .child(Icon::new(L::Files).size(px(14.)).text_color(p.text_secondary))

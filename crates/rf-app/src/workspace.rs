@@ -4270,6 +4270,10 @@ impl Workspace {
         });
         let tab = self.active_tab().read(cx);
         let dot = || div().size(px(3.)).rounded_full().bg(p.text_tertiary).flex_shrink_0();
+        // the duplicate finder's page: what it found and what is ticked
+        if let Some(text) = tab.dups_view().and_then(|dv| dv.read(cx).status_text()) {
+            left = left.child(text);
+        }
         if in_folder {
             // "3 of 19 selected · 48.5 MB · 214 GB free on C:", or "19 items · 214 GB free on C:" (the mockups' status line)
             if sel > 0 {

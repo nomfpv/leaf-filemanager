@@ -116,6 +116,7 @@ fn test_label(t: OpenTest) -> &'static str {
 fn app_label(k: AppKind) -> &'static str {
     match k {
         AppKind::Leaf => "leaf",
+        AppKind::Explorer if !cfg!(windows) => t!("The system's file manager"),
         AppKind::Explorer => t!("File Explorer"),
         AppKind::Files => "Files",
         AppKind::FilePilot => "File Pilot",
@@ -545,9 +546,10 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
         };
         rows.push((label.to_string(), format!("leaf {} · {windows_name} {}", ms(a), ms(b)), verdict, usage));
     };
-    versus(t!("Copying: 10,000 small files"), &e.copy_small, "Windows");
-    versus(t!("Copying: one 1 GB file"), &e.copy_big, "Windows");
-    versus(t!("Extracting a ZIP: 10,000 files"), &e.unzip, "Windows");
+    let theirs = if cfg!(windows) { "Windows" } else { t!("the system") };
+    versus(t!("Copying: 10,000 small files"), &e.copy_small, theirs);
+    versus(t!("Copying: one 1 GB file"), &e.copy_big, theirs);
+    versus(t!("Extracting a ZIP: 10,000 files"), &e.unzip, theirs);
     if let Some(s) = e.search_ms {
         let rate = e.search_entries as f64 / (s / 1000.0).max(0.001);
         let usage = cost((e.search_cpu_ms, e.search_mb), None);
@@ -580,7 +582,7 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
     }
     Some(
         shell(p)
-            .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("leaf's engines and Windows'"))))
+            .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(if cfg!(windows) { t!("leaf's engines and Windows'") } else { t!("leaf's engines and the system's") })))
             .child(list)
             .into_any_element(),
     )

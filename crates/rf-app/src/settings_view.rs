@@ -2753,9 +2753,10 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 p,
                 l.look_backdrop,
                 vec![
-                    (LookBackdrop::Mica, "Mica".into()),
-                    (LookBackdrop::Acrylic, "Acrylic".into()),
-                    (LookBackdrop::Tabbed, t!("Mica (tabbed)").into()),
+                    // (Mica and Acrylic are Windows' names)
+                    (LookBackdrop::Mica, if cfg!(windows) { "Mica".into() } else { t!("Frosted").into() }),
+                    (LookBackdrop::Acrylic, if cfg!(windows) { "Acrylic".into() } else { t!("Blurred").into() }),
+                    (LookBackdrop::Tabbed, if cfg!(windows) { t!("Mica (tabbed)").into() } else { t!("Frosted (tabbed)").into() }),
                     (LookBackdrop::None, t!("Solid color").into()),
                 ],
                 |s, v| s.look_backdrop = v,
@@ -3422,8 +3423,9 @@ fn index_exclusions(p: &Palette, s: &Settings) -> AnyElement {
                         .min_w_0()
                         .child(div().text_sm().child(t!("Folders left out of the index")))
                         .child(div().text_xs().text_color(p.text_secondary).child(format!(
-                            "{} {defaults}, Windows. {}",
+                            "{} {defaults}{}. {}",
                             t!("Always:"),
+                            if cfg!(windows) { ", Windows" } else { "" },
                             t!("Searching inside these folders walks the disk. You can also right-click a folder and choose \"Leave out of the search index\".")
                         ))),
                 )
