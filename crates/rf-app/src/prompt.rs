@@ -52,6 +52,8 @@ pub struct Check {
     pub label: SharedString,
     pub note: SharedString,
     pub on: Rc<std::cell::Cell<bool>>,
+    /// Off: drawn greyed and cannot be ticked (the message says why).
+    pub enabled: bool,
 }
 
 pub struct DialogView {
@@ -146,7 +148,12 @@ pub fn show_live(title: impl Into<SharedString>, live: Rc<dyn Fn() -> String>, c
 
 /// A dialog whose text box hides what is typed (passwords).
 pub fn show_secret(title: impl Into<SharedString>, message: Option<String>, placeholder: String, buttons: Vec<Button>, window: &mut Window, cx: &mut App) {
-    show_inner(title, message, Some((String::new(), placeholder)), true, Vec::new(), Vec::new(), buttons, window, cx)
+    show_secret_with(title, message, placeholder, Vec::new(), buttons, window, cx)
+}
+
+/// `show_secret` with check boxes under the text box ("Remember").
+pub fn show_secret_with(title: impl Into<SharedString>, message: Option<String>, placeholder: String, checks: Vec<Check>, buttons: Vec<Button>, window: &mut Window, cx: &mut App) {
+    show_inner(title, message, Some((String::new(), placeholder)), true, Vec::new(), checks, buttons, window, cx)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -292,6 +299,7 @@ impl DialogView {
         for (i, c) in self.checks.iter().enumerate() {
             let on = c.on.get();
             let cell = c.on.clone();
+            let enabled = c.enabled;
             let mark = div()
                 .size(px(16.))
                 .flex_shrink_0()
@@ -307,14 +315,16 @@ impl DialogView {
                     .gap_2()
                     .items_center()
                     .flex_shrink_0()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(p.hover))
+                    .when(!enabled, |d| d.opacity(0.5))
+                    .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(p.hover)))
                     .child(mark)
                     .child(div().flex_1().min_w_0().truncate().text_sm().child(c.label.clone()))
                     .child(div().flex_shrink_0().text_xs().text_color(p.text_secondary).child(c.note.clone()))
                     .on_click(cx.listener(move |_, _, _, cx| {
-                        cell.set(!cell.get());
-                        cx.notify();
+                        if enabled {
+                            cell.set(!cell.get());
+                            cx.notify();
+                        }
                     })),
             );
         }

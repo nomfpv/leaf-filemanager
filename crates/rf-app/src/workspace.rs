@@ -2880,6 +2880,35 @@ impl Workspace {
         crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
     }
 
+    /// Right-click on a saved host in the sidebar: open it, copy its address, forget its saved password.
+    fn host_menu(&mut self, v: rf_core::vpath::VPath, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::fluent_menu::{Item, Menu, MenuIcon};
+        let me = cx.entity().downgrade();
+        let (a, b, c) = (v.clone(), v.clone(), v.clone());
+        let mut items = vec![
+            Item::action(t!("Open"), MenuIcon::Lucide(L::SquareArrowOutUpRight), {
+                let me = me.clone();
+                move |w: &mut Window, cx: &mut App| {
+                    let loc = Location::Remote(a.clone());
+                    let _ = me.update(cx, |ws, cx| ws.navigate(loc, w, cx));
+                }
+            }),
+            Item::action(t!("Open in new tab"), MenuIcon::Lucide(L::SquarePlus), move |w: &mut Window, cx: &mut App| {
+                let loc = Location::Remote(b.clone());
+                let _ = me.update(cx, |ws, cx| ws.open_tab(loc, w, cx));
+            }),
+            Item::action(t!("Copy address"), MenuIcon::Lucide(L::ClipboardCopy), {
+                let s = v.to_string();
+                move |_: &mut Window, cx: &mut App| cx.write_to_clipboard(ClipboardItem::new_string(s.clone()))
+            }),
+        ];
+        if matches!(v.scheme(), "sftp" | "ftp" | "ftps") {
+            items.push(Item::Separator);
+            items.push(Item::action(t!("Forget saved password"), MenuIcon::Lucide(L::Lock), move |_: &mut Window, cx: &mut App| crate::hosts_ui::forget_for(&c, cx)));
+        }
+        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+    }
+
     /// Right-click on a sidebar folder/drive: the Explorer menu (eject, properties, format…)
     /// plus open in new tab/window and pin/unpin.
     fn sidebar_menu(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -4114,9 +4143,10 @@ impl Workspace {
         });
         let is_wt = matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-wt");
         let two_lines = extra.is_some();
-        // a mounted share of the Network list: its own menu (Disconnect)
+        // a mounted share of the Network list: its own menu (Disconnect); a saved host: its own menu (Forget saved password...)
         let net_share = match &target3 {
-            Location::Remote(v) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-net") => Some(v.clone()),
+            Location::Remote(v) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-net") => Some((v.clone(), false)),
+            Location::Remote(v) if matches!(&wt_id, ElementId::NamedInteger(n, _) if &**n == "sb-host") => Some((v.clone(), true)),
             _ => None,
         };
         let tag_dot = target3.path().filter(|p| p.parent().is_some()).and_then(|p| crate::tags::first_color(p, cx));
@@ -4206,12 +4236,16 @@ impl Workspace {
                     }),
                 )
             })
-            .when_some(net_share, |d, v| {
+            .when_some(net_share, |d, (v, host)| {
                 d.on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.net_menu(v.clone(), window, cx);
+                        if host {
+                            this.host_menu(v.clone(), window, cx);
+                        } else {
+                            this.net_menu(v.clone(), window, cx);
+                        }
                     }),
                 )
             })

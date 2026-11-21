@@ -64,11 +64,11 @@ fn show_result(prepared: Prepared, window: &mut Window, cx: &mut App) {
     let prepared = Rc::new(prepared);
     let (tree, lines, anyway) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
     let mut checks = vec![
-        Check { label: tx("Tree of the files").into(), note: "".into(), on: tree.clone() },
-        Check { label: tx("Line numbers").into(), note: "".into(), on: lines.clone() },
+        Check { label: tx("Tree of the files").into(), note: "".into(), on: tree.clone(), enabled: true },
+        Check { label: tx("Line numbers").into(), note: "".into(), on: lines.clone(), enabled: true },
     ];
     if prepared.has_flagged() {
-        checks.push(Check { label: tx("Include files that may hold a secret anyway").into(), note: "".into(), on: anyway.clone() });
+        checks.push(Check { label: tx("Include files that may hold a secret anyway").into(), note: "".into(), on: anyway.clone(), enabled: true });
     }
     // the text is made again only when a switch changed
     let cache: Rc<RefCell<Option<((bool, bool, bool), Rc<Built>)>>> = Rc::new(RefCell::new(None));

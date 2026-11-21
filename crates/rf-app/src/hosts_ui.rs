@@ -182,14 +182,120 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         }
         v.push(card(p, L::Server, &h.name, Some(&desc), controls));
     }
+    v.extend(saved_section(p, cx));
     v.push(
         v_flex()
             .pt_3()
             .child(div().text_xs().text_color(p.text_tertiary).child(t!(
-                "SFTP servers are checked against ~/.ssh/known_hosts: a new one is asked about, one whose key changed is refused. Logging in tries your SSH agent, the key file, then asks for a password; passphrases and passwords stay in memory until leaf closes. An FTPS certificate this PC does not trust is asked about; one you trust is kept by its fingerprint. Plain FTP is not encrypted."
+                "SFTP servers are checked against ~/.ssh/known_hosts: a new one is asked about, one whose key changed is refused. Logging in tries your SSH agent, the key file, then asks for a password; passphrases and passwords stay in memory until leaf closes, or in the system's keyring when you tick Remember. An FTPS certificate this PC does not trust is asked about; one you trust is kept by its fingerprint. Plain FTP is not encrypted."
             )))
             .into_any_element(),
     );
+    v
+}
+
+// ------------------------------------------------------------------------------------------------ saved passwords (keyring)
+
+/// What the keyring holds for leaf (ids only, never a secret), read on a worker; `None` until the first read is back.
+static SAVED: std::sync::Mutex<Option<(u64, Result<Vec<leaf_remote::SecretId>, String>)>> = std::sync::Mutex::new(None);
+static READING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The list as last read, while nothing was saved or deleted since.
+fn saved_now() -> Option<Result<Vec<leaf_remote::SecretId>, String>> {
+    let g = SAVED.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().filter(|(at, _)| *at == leaf_remote::secrets::changes()).map(|(_, r)| r.clone())
+}
+
+/// Reads the list again from the keyring (off the UI thread), then redraws.
+fn reload_saved(cx: &mut App) {
+    if READING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    let work = cx.background_executor().spawn(async { (leaf_remote::secrets::changes(), leaf_remote::saved_secrets()) });
+    cx.spawn(async move |cx| {
+        let r = work.await;
+        *SAVED.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+        READING.store(false, std::sync::atomic::Ordering::Release);
+        cx.update(|cx| cx.refresh_windows());
+    })
+    .detach();
+}
+
+/// Deletes these saved secrets from the keyring (and the passwords from this run's memory); a failure is told in a dialog.
+fn forget(ids: Vec<leaf_remote::SecretId>, cx: &mut App) {
+    let work = cx.background_executor().spawn(async move { ids.iter().filter_map(|id| leaf_remote::forget_saved(id).err()).collect::<Vec<String>>() });
+    cx.spawn(async move |cx| {
+        let errors = work.await;
+        cx.update(|cx| {
+            reload_saved(cx);
+            if let Some(e) = errors.first() {
+                notice_anywhere(t!("Saved passwords"), format!("{}\n\n{}", t!("A saved password could not be deleted."), crate::i18n::td(e)), cx);
+            }
+        });
+    })
+    .detach();
+}
+
+fn notice_anywhere(title: &'static str, text: String, cx: &mut App) {
+    if let Some(w) = cx.active_window().or_else(|| cx.windows().first().copied()) {
+        let _ = w.update(cx, |_, window, cx| crate::prompt::notice(title, text, window, cx));
+    }
+}
+
+/// "Forget saved password" on a host's menu: every password saved for that server (its scheme, server, port and user), read
+/// from the keyring on a worker; says what was done.
+pub fn forget_for(v: &VPath, cx: &mut App) {
+    let (scheme, host, port, user) = (v.scheme().to_string(), v.host().to_string(), v.port(), v.user().map(str::to_string));
+    let work = cx.background_executor().spawn(async move {
+        let ids: Vec<_> = leaf_remote::saved_secrets()?.into_iter().filter(|id| id.is_for(&scheme, &host, port, user.as_deref())).collect();
+        let n = ids.len();
+        for id in &ids {
+            leaf_remote::forget_saved(id)?;
+        }
+        Ok::<usize, String>(n)
+    });
+    cx.spawn(async move |cx| {
+        let r = work.await;
+        cx.update(|cx| {
+            reload_saved(cx);
+            let text = match r {
+                Ok(0) => t!("No password is saved for this host.").to_string(),
+                Ok(_) => t!("The saved password was deleted from the keyring. leaf asks for it at the next connection.").to_string(),
+                Err(e) => format!("{}\n\n{}", t!("A saved password could not be deleted."), crate::i18n::td(&e)),
+            };
+            notice_anywhere(t!("Forget saved password"), text, cx);
+        });
+    })
+    .detach();
+}
+
+/// Settings > Hosts > "Saved passwords": the servers (and key files) whose secret is in the keyring, by name only, with
+/// Forget and Forget all.
+fn saved_section(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
+    let mut v = vec![section(p, t!("Saved passwords"))];
+    let quiet = |text: String| div().text_sm().text_color(p.text_secondary).child(text).into_any_element();
+    match saved_now() {
+        None => {
+            reload_saved(cx);
+            v.push(quiet(t!("Reading the keyring…").to_string()));
+        }
+        Some(Err(why)) => v.push(quiet(crate::i18n::td(&why))),
+        Some(Ok(ids)) if ids.is_empty() => v.push(quiet(t!("No passwords saved. Tick Remember in the password dialog to save one in the system's keyring.").to_string())),
+        Some(Ok(ids)) => {
+            let all = ids.clone();
+            v.push(card(
+                p,
+                L::Lock,
+                t!("Forget all"),
+                Some(t!("Deletes every password and passphrase leaf saved in the system's keyring.")),
+                button("saved-forget-all", p, t!("Forget all"), move |_, cx| forget(all.clone(), cx)),
+            ));
+            for (i, id) in ids.into_iter().enumerate() {
+                let label = id.label();
+                v.push(card(p, L::Lock, &label, None, button(("saved-forget", i), p, t!("Forget"), move |_, cx| forget(vec![id.clone()], cx))));
+            }
+        }
+    }
     v
 }
 

@@ -199,7 +199,10 @@ impl Prompter for UiPrompter {
 pub fn register() {
     let (tx, rx) = mpsc::unbounded();
     *ASKS.lock().unwrap_or_else(|e| e.into_inner()) = Some(rx);
-    leaf_remote::register(leaf_remote::Config::for_user(crate::settings::app_dir()), Arc::new(UiPrompter(tx)));
+    let mut cfg = leaf_remote::Config::for_user(crate::settings::app_dir());
+    // passwords and passphrases the user ticks "Remember" for: the system's keyring (opened on first use)
+    cfg.vault = leaf_remote::Vault::system();
+    leaf_remote::register(cfg, Arc::new(UiPrompter(tx)));
 }
 
 /// Shows the connections' questions as dialogs, one at a time, in the main window in front.
@@ -343,11 +346,14 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
         }
         Ask::Secret(q, reply) => {
             let reply: Once<Option<Secret>> = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));
+            // "Remember" (off by default): the secret goes to the system's keyring once the server took it
+            let remember = std::rc::Rc::new(std::cell::Cell::new(false));
             let ok = {
                 let reply = reply.clone();
+                let remember = remember.clone();
                 move |text: Option<String>, _: &mut Window, _: &mut App| {
                     if let Some(r) = reply.take() {
-                        r(Some(Secret::new(text.unwrap_or_default())));
+                        r(Some(Secret::new(text.unwrap_or_default()).remembered(remember.get())));
                     }
                     Ok(())
                 }
@@ -360,15 +366,25 @@ fn show(a: Ask, window: &mut Window, cx: &mut App) {
             };
             let buttons = vec![Button::new(t!("OK"), Kind::Primary, ok), Button::new(t!("Cancel"), Kind::Normal, cancel)];
             let kept = t!("Kept in memory until leaf closes; never saved.");
+            // the tick, and the line under the message: where a remembered secret goes, or why it cannot be remembered here
+            let tick = |keyring: &leaf_remote::Keyring| {
+                let (enabled, line) = match keyring {
+                    leaf_remote::Keyring::Ready => (true, t!("Kept in memory until leaf closes. Tick Remember to keep it in the system's keyring; leaf deletes it there when the server refuses it.").to_string()),
+                    leaf_remote::Keyring::Missing(why) => (false, format!("{kept}\n{}", crate::i18n::td(why))),
+                };
+                (vec![crate::prompt::Check { label: t!("Remember").into(), note: "".into(), on: remember.clone(), enabled }], line)
+            };
             match q {
-                SecretQuestion::Passphrase { key_file, retry } => {
+                SecretQuestion::Passphrase { key_file, retry, keyring } => {
                     let first = if retry { t!("Wrong passphrase. Try again.") } else { t!("This key file is locked with a passphrase.") };
-                    crate::prompt::show_secret(t!("Key passphrase"), Some(format!("{first}\n{key_file}\n\n{kept}")), t!("Passphrase").to_string(), buttons, window, cx);
+                    let (checks, line) = tick(&keyring);
+                    crate::prompt::show_secret_with(t!("Key passphrase"), Some(format!("{first}\n{key_file}\n\n{line}")), t!("Passphrase").to_string(), checks, buttons, window, cx);
                 }
-                SecretQuestion::Password { account, retry, unencrypted } => {
+                SecretQuestion::Password { account, retry, unencrypted, keyring } => {
                     let first = if retry { t!("Wrong password. Try again.") } else { t!("The server asks for a password.") };
                     let plain = if unencrypted { format!("\n{}", t!("Not encrypted: plain FTP sends the password and the files as they are. Use ftps:// where the server has it.")) } else { String::new() };
-                    crate::prompt::show_secret(format!("{} {account}", t!("Password for")), Some(format!("{first}{plain}\n\n{kept}")), t!("Password").to_string(), buttons, window, cx);
+                    let (checks, line) = tick(&keyring);
+                    crate::prompt::show_secret_with(format!("{} {account}", t!("Password for")), Some(format!("{first}{plain}\n\n{line}")), t!("Password").to_string(), checks, buttons, window, cx);
                 }
                 SecretQuestion::Server { account, prompt, echo } => {
                     let title = format!("{account} {}", t!("asks"));
