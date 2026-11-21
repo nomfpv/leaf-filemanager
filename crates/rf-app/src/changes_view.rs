@@ -93,7 +93,10 @@ struct Cps {
     busy: Option<SharedString>,
     last: Option<Last>,
     hover: Option<usize>,
+    /// Listing and the preview's comparison.
     _task: Option<Task<()>>,
+    /// The restore (its own slot: a Refresh must never drop the task that reports it).
+    _restore: Option<Task<()>>,
 }
 
 pub struct ChangesView {
@@ -553,6 +556,10 @@ impl ChangesView {
 
     /// Finds the store (once) and lists its checkpoints, off the UI thread.
     fn load_checkpoints(&mut self, cx: &mut Context<Self>) {
+        // (a restore lists again when it is done)
+        if self.cps.busy.is_some() {
+            return;
+        }
         let (dir, store) = (self.dir.clone(), self.cps.store.clone());
         let work = cx.background_spawn(async move {
             let store = match store {
@@ -581,6 +588,9 @@ impl ChangesView {
 
     /// "Restore…": what the restore would do, worked out off the UI thread; each file's difference goes to the preview pane.
     fn open_preview(&mut self, i: usize, cx: &mut Context<Self>) {
+        if self.cps.busy.is_some() {
+            return;
+        }
         let (Some(store), Some(cp)) = (self.cps.store.clone(), self.cps.list.get(i).cloned()) else { return };
         self.cps.preview = Some(Preview { cp: cp.clone(), plan: None, error: None, remove_added: false, selected: None });
         let s2 = store.clone();
@@ -653,7 +663,7 @@ impl ChangesView {
             }
             done
         });
-        self.cps._task = Some(cx.spawn(async move |this, cx| {
+        self.cps._restore = Some(cx.spawn(async move |this, cx| {
             let done = work.await;
             let _ = this.update(cx, |v, cx| {
                 v.cps.busy = None;
