@@ -140,16 +140,16 @@ pub(crate) struct Inner {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     pairings: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     pub(crate) live: Mutex<HashMap<String, Live>>,
+    /// The service was stopped (a retry of the listener ends).
+    stopped: AtomicBool,
+    /// A retry of the listener runs (the port was taken: by the service stopping before a restart, or another program).
+    retrying: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub struct ShareService {
-    inner: Arc<Inner>,
-    rt: Mutex<Option<tokio::runtime::Runtime>>,
-}
 /// A folder as the system resolves it (the part that exists; the rest added as it is), lower-cased on Windows, whose names are
 /// not case-sensitive: two spellings of one folder give the same key.
 fn path_key(p: &Path) -> PathBuf {
@@ -185,6 +185,10 @@ fn overlap(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
 
+pub struct ShareService {
+    inner: Arc<Inner>,
+    rt: Mutex<Option<tokio::runtime::Runtime>>,
+}
 
 impl ShareService {
     /// Reads the shares and starts what they need (the listener only when there is one).
@@ -208,6 +212,8 @@ impl ShareService {
             sessions: Mutex::new(HashMap::new()),
             pairings: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
+            stopped: AtomicBool::new(false),
+            retrying: AtomicBool::new(false),
         });
         if !ids.is_empty() {
             let _ = inner.ensure_transport();
@@ -443,6 +449,7 @@ impl ShareService {
 
     /// Stops everything (the shares stay saved).
     pub fn stop(&self) {
+        self.inner.stopped.store(true, Ordering::Relaxed);
         for (_, l) in lock(&self.inner.live).drain() {
             l.stop.store(true, Ordering::Relaxed);
             l.wake.notify_one();
@@ -555,9 +562,39 @@ impl Inner {
             Err(e) => {
                 let msg = format!("Shared folders cannot listen on port {} ({e:#}). Pick another port in Settings", self.cfg.port);
                 *lock(&self.problem) = Some(msg.clone());
+                drop(t);
+                self.retry_listening();
                 Err(msg)
             }
         }
+    }
+
+    /// Tries the port again now and then while shares need it (after a restart for a new port or device name, the old service may
+    /// hold it for a moment; another program may let it go).
+    fn retry_listening(self: &Arc<Self>) {
+        if self.retrying.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let inner = self.clone();
+        self.rt.spawn(async move {
+            let mut wait = BACKOFF_FIRST;
+            loop {
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(30));
+                let needed = !lock(&inner.store).shares.is_empty() || !lock(&inner.live).is_empty();
+                if inner.stopped.load(Ordering::Relaxed) || !needed || lock(&inner.transport).is_some() {
+                    break;
+                }
+                if inner.ensure_transport().is_ok() {
+                    for l in lock(&inner.live).values() {
+                        l.wake.notify_one();
+                    }
+                    inner.listener.changed();
+                    break;
+                }
+            }
+            inner.retrying.store(false, Ordering::SeqCst);
+        });
     }
 
     /// Stops listening once no share and no join is left.
