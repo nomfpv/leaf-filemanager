@@ -51,7 +51,7 @@ fn remembered() -> Option<u32> {
 /// was measured with one window only. Every other kind of process (the dock, leaf-look, the Open/Save picker, previews) opens on
 /// the card, as before 0.8.6.
 pub fn before_app(main_window: bool) {
-    gpui_windows::hybrid::set_fast_start(main_window && wanted(remembered()));
+    crate::platform::gpui::hybrid::set_fast_start(main_window && wanted(remembered()));
 }
 
 /// Remembers how long the card's device took, off the interface's thread. Twice: AT ONCE, which is when it is known in a start that
@@ -64,7 +64,7 @@ pub fn remember(cx: &mut gpui_kit::App) {
             if !wait.is_zero() {
                 cx.background_executor().timer(wait).await;
             }
-            let Some(now) = gpui_windows::hybrid::gpu_device_ms() else { continue };
+            let Some(now) = crate::platform::gpui::hybrid::gpu_device_ms() else { continue };
             cx.background_executor()
                 .spawn(async move {
                     if worth_writing(remembered(), now)

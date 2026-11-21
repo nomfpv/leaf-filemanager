@@ -41,6 +41,7 @@ mod organizer;
 mod nav_touch;
 mod ui_stall;
 mod places;
+mod platform;
 mod settings;
 mod settings_merge;
 mod shellless;
@@ -347,8 +348,8 @@ pub fn main() {
     // before any shell icon/thumbnail work: see keep_gdiplus_alive (loader-lock deadlock)
     leaf_sys::thumbs::keep_gdiplus_alive();
     // Logs go to stderr and to leaf.log in the settings folder; override the level with
-    // RUST_LOG. The hybrid renderer (gpui_windows) logs its GPU/CPU switches at info level.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,gpui_windows=info"))
+    // RUST_LOG. The default filter: `platform::LOG_FILTER`.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(platform::LOG_FILTER))
         .target(env_logger::Target::Pipe(Box::new(logfile::Tee::new())))
         .format_timestamp_millis()
         .init();
@@ -580,7 +581,7 @@ pub fn main() {
     }
 
     // a drag of files that live inside the source (a mail's attachment, a browser's image) is dropped as files (see leaf_sys::vfiles)
-    gpui_windows::dnd_hint::set_virtual_reader(leaf_sys::vfiles::drag_paths);
+    crate::platform::gpui::dnd_hint::set_virtual_reader(leaf_sys::vfiles::drag_paths);
     // (the first window on the CPU renderer or on the card: what this machine was like the last time, see `fast_start`)
     fast_start::before_app(!quick_search && !open_look_settings);
     start_mark("before the app");

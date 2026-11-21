@@ -784,10 +784,10 @@ impl Workspace {
 
         // Repaint the status-bar renderer badge when the hybrid renderer switches devices.
         cx.spawn(async move |this, cx| {
-            let mut last = (gpui_windows::hybrid::switch_count(), gpui_windows::hybrid::mode());
+            let mut last = (crate::platform::gpui::hybrid::switch_count(), crate::platform::gpui::hybrid::mode());
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(800)).await;
-                let now = (gpui_windows::hybrid::switch_count(), gpui_windows::hybrid::mode());
+                let now = (crate::platform::gpui::hybrid::switch_count(), crate::platform::gpui::hybrid::mode());
                 if now != last {
                     last = now;
                     if this.update(cx, |_, cx| cx.notify()).is_err() {
@@ -4070,7 +4070,7 @@ mod archiver_drop_tests {
 
 /// Shows which device draws the window (hybrid renderer) and cycles Auto → GPU → CPU on click.
 fn render_backend_badge(p: &Palette) -> impl IntoElement + use<> {
-    use gpui_windows::hybrid::{self, RendererMode};
+    use crate::platform::gpui::hybrid::{self, RendererMode};
     let mode = hybrid::mode();
     let backend = hybrid::current_backend_label();
     let mode_label = match mode {

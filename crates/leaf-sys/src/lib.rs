@@ -16,7 +16,7 @@ pub use leaf_common::{design, docs, elf, hash, ownfolder, portable, tree_watch, 
 // one backend per system
 pub use os::{
     accent, activate, apppkg, apps, bench, cert, clipboard, compat, complete, ctxmenu, datefmt, default_fm, dialogs, diskusage, dnd,
-    drives, editors, encoding, engine_guard, fastcopy, fastdelete, fileactions, fileinfo, fileops, folder_custom, foldersize, ftp, git,
+    drives, editors, encoding, engine_guard, fastcopy, fastdelete, fileactions, fileinfo, fileops, folder_custom, foldersize, ftp, geom, git,
     glass, handover, hotkey, indexer, jumplist, keys, kit, known, libraries, listing, localized, look, nameindex, network, openrules,
     organize, osver, overlays, pe, pkgverbs, preview_host, propcols, props, recycle, recycle_settings, removal, rotate, runcmd, runfind,
     scrollbars, search, security, sendto, settingscat, share, shell, shell_window, shellfolder, shortcut, signature, single_instance,

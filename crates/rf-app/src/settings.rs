@@ -350,8 +350,8 @@ pub enum WebSearch {
 /// setting is Auto: under Auto a card that another program keeps busy (a video render) makes the renderer build a software device and
 /// move the islands to it, which costs seconds of CPU for windows that are a few hundred pixels wide. A user who chose the software
 /// renderer on purpose keeps it.
-pub(crate) fn renderer_mode(pref: RendererPref, dock: bool) -> gpui_windows::hybrid::RendererMode {
-    use gpui_windows::hybrid::RendererMode;
+pub(crate) fn renderer_mode(pref: RendererPref, dock: bool) -> crate::platform::gpui::hybrid::RendererMode {
+    use crate::platform::gpui::hybrid::RendererMode;
     match pref {
         RendererPref::Auto if dock => RendererMode::Gpu,
         RendererPref::Auto => RendererMode::Auto,
@@ -1044,7 +1044,7 @@ impl Settings {
         HG_SURFACE.store(self.hg_surface.min(100), Ordering::Relaxed);
         leaf_sys::glass::set_look(self.hyperglass_look());
         leaf_sys::glass::set_freeze_when_behind(self.hg_freeze_behind);
-        gpui_windows::SMOOTH_SCROLL.store(self.smooth_scroll, Ordering::Relaxed);
+        crate::platform::gpui::SMOOTH_SCROLL.store(self.smooth_scroll, Ordering::Relaxed);
         THEME.store(
             match self.theme {
                 ThemePref::System => 0,
@@ -1056,7 +1056,7 @@ impl Settings {
         );
         // An explicit LEAF_RENDERER env var wins (debugging).
         if std::env::var_os("LEAF_RENDERER").is_none() {
-            gpui_windows::hybrid::set_mode(renderer_mode(self.renderer, crate::background::DOCK_PROCESS.load(Ordering::Relaxed)));
+            crate::platform::gpui::hybrid::set_mode(renderer_mode(self.renderer, crate::background::DOCK_PROCESS.load(Ordering::Relaxed)));
         }
     }
 
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn the_dock_stays_on_the_graphics_card_unless_the_user_chose_the_software_renderer() {
         use super::{RendererPref as P, renderer_mode};
-        use gpui_windows::hybrid::RendererMode as M;
+        use crate::platform::gpui::hybrid::RendererMode as M;
         assert_eq!(renderer_mode(P::Auto, false), M::Auto, "the file manager keeps the automatic switch");
         assert_eq!(renderer_mode(P::Auto, true), M::Gpu, "the dock never builds a software device on its own");
         assert_eq!(renderer_mode(P::Cpu, true), M::Cpu, "a choice made on purpose is kept");

@@ -9,7 +9,7 @@ use gpui_kit::assets::IconName as L;
 use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use gpui_windows::hybrid;
+use crate::platform::gpui::hybrid;
 
 use crate::fluent_menu::{self, Item, Menu, MenuIcon};
 use crate::select_box::{Choice, select_box};
@@ -3329,11 +3329,7 @@ fn index_exclusions(p: &Palette, s: &Settings) -> AnyElement {
                         ))),
                 )
                 .child(button("idx-excl-add", p, t!("Add folder…"), |window, cx| {
-                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                    let owner = match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
-                        Ok(RawWindowHandle::Win32(h)) => windows::Win32::Foundation::HWND(h.hwnd.get() as *mut _),
-                        _ => windows::Win32::Foundation::HWND::default(),
-                    };
+                    let owner = crate::platform::owner_of(window);
                     if let Some(dir) = leaf_sys::dialogs::pick(owner, t!("Folder to leave out of the index"), leaf_sys::dialogs::Pick::Folder) {
                         let d = dir.to_string_lossy().trim_end_matches('\\').to_string();
                         settings::update(cx, |s| {

@@ -109,6 +109,8 @@ pub mod sound;
 pub mod toast_post;
 pub mod tree_watch;
 pub mod wide;
+// what rf-app did with Win32 itself until the Linux seam (A3): each has its twin in leaf-unix
+pub mod geom;
 
 /// Held by tests that measure short times and by tests that load every core (the glass tests draw with the software renderer, which
 /// uses them all), so the two kinds never run at the same moment: with both in one parallel run the keyboard hook's "under one

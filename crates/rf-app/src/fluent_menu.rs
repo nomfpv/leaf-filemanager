@@ -242,7 +242,7 @@ fn show_ex(menu: Menu, pos: Point<Pixels>, liquid: Option<bool>, window: &mut Wi
         let wins: Wins = Default::default();
         view.update(cx, |m, _| m.popup = Some(PopupState { anchor, area, display, wins: wins.clone() }));
         cx.set_global(Host(Some(HostState { main, view: view.clone(), restore: restore.clone(), popup: true, wins })));
-        gpui_windows::KEEP_ACTIVE_LOOK.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::platform::gpui::KEEP_ACTIVE_LOOK.store(true, std::sync::atomic::Ordering::Relaxed);
         if sync_popups(&view, cx) {
             // follow level changes (submenus opening, shell items arriving)
             cx.observe(&view, |view, cx| {
@@ -255,7 +255,7 @@ fn show_ex(menu: Menu, pos: Point<Pixels>, liquid: Option<bool>, window: &mut Wi
             return view;
         }
         log::warn!("menu: popup window failed, drawing in-window");
-        gpui_windows::KEEP_ACTIVE_LOOK.store(false, std::sync::atomic::Ordering::Relaxed);
+        crate::platform::gpui::KEEP_ACTIVE_LOOK.store(false, std::sync::atomic::Ordering::Relaxed);
         view.update(cx, |m, _| m.popup = None);
     }
     window.focus(&view.read(cx).focus.clone(), cx);
@@ -349,7 +349,7 @@ pub fn close(window: &mut Window, cx: &mut App) {
         window.refresh();
         return;
     }
-    gpui_windows::KEEP_ACTIVE_LOOK.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::platform::gpui::KEEP_ACTIVE_LOOK.store(false, std::sync::atomic::Ordering::Relaxed);
     let wins: Vec<AnyWindowHandle> = h.wins.borrow().iter().map(|w| w.0).collect();
     // after the current update: a window can't be removed while it is the one being updated
     cx.defer(move |cx| {

@@ -1186,14 +1186,14 @@ mod tests {
 /// Moving them anyway took the source's own files away, and Windows refused the drop outright before the GPUI fork chose an effect
 /// the source allows: a file dragged from an archive onto the desktop did nothing (2026-11-18).
 pub(crate) fn drop_transfer(sources: &[std::path::PathBuf], dest: &std::path::Path, ctrl: bool, shift: bool) -> leaf_sys::fileops::Transfer {
-    use gpui_windows::dnd_hint;
+    use crate::platform::gpui::dnd_hint;
     let kind = leaf_sys::dnd::default_transfer(sources, dest, ctrl, shift);
     if kind == leaf_sys::fileops::Transfer::Move && dnd_hint::allowed() & dnd_hint::MOVE == 0 { leaf_sys::fileops::Transfer::Copy } else { kind }
 }
 
 pub(crate) fn drop_on_program(program: PathBuf, files: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
-    let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 } || gpui_windows::dnd_hint::allowed() & gpui_windows::dnd_hint::MOVE == 0;
+    let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 } || crate::platform::gpui::dnd_hint::allowed() & crate::platform::gpui::dnd_hint::MOVE == 0;
     let shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 };
     let window = window.window_handle();
     let (tx, rx) = futures::channel::oneshot::channel();

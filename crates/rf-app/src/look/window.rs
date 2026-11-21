@@ -38,13 +38,7 @@ impl BarAway {
     }
 }
 
-pub(crate) fn hwnd_of(window: &Window) -> isize {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
-        Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
-        _ => 0,
-    }
-}
+pub(crate) use crate::platform::hwnd_of;
 
 pub struct LookWindow {
     pub(crate) path: PathBuf,

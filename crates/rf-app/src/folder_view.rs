@@ -5723,7 +5723,7 @@ fn file_drop_target(row: Stateful<Div>, target: PathBuf, is_dir: bool, p: &Palet
             if is_dir {
                 show_drop_effect(ev.drag(cx).paths(), &target);
             } else {
-                gpui_windows::dnd_hint::set(gpui_windows::dnd_hint::COPY);
+                crate::platform::gpui::dnd_hint::set(crate::platform::gpui::dnd_hint::COPY);
             }
         }
     })
@@ -5771,9 +5771,9 @@ mod file_drop_tests {
 pub(crate) fn show_drop_effect(paths: &[PathBuf], dir: &std::path::Path) {
     let t = leaf_sys::dnd::default_transfer(paths, dir, false, false);
     log::debug!("drag over {}: {t:?} ({} item(s), the first {:?})", dir.display(), paths.len(), paths.first());
-    gpui_windows::dnd_hint::set(match t {
-        leaf_sys::fileops::Transfer::Move => gpui_windows::dnd_hint::MOVE,
-        leaf_sys::fileops::Transfer::Copy => gpui_windows::dnd_hint::COPY,
+    crate::platform::gpui::dnd_hint::set(match t {
+        leaf_sys::fileops::Transfer::Move => crate::platform::gpui::dnd_hint::MOVE,
+        leaf_sys::fileops::Transfer::Copy => crate::platform::gpui::dnd_hint::COPY,
     });
 }
 
