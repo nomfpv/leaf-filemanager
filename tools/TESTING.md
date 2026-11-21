@@ -35,6 +35,25 @@ Close only what you started, with the window's own close, never by process name:
 `openbench` (`crates/rf-win/examples/openbench.rs`) already runs the app this way; set
 `OPENBENCH_ON_SCREEN=1` for an on-screen run.
 
+## Scripted drive (`LEAF_CHECK_SCRIPT`)
+
+`LEAF_CHECK_SCRIPT=<file>` runs the file's lines in order on the UI thread once the first folder is listed (off and free
+when unset; code in `crates/rf-app/src/check_script.rs`). One line per step, `#` starts a comment:
+
+- `select a|b|c`: select these names in the focused pane's folder
+- `run <CommandId>`: any id from `registry.rs` (`NewFolder`, `Rename`, ...), dispatched like the key press would be
+- `type <text>`, `key enter|escape|tab|...`: keystrokes into whatever has the focus (a text field, a dialog)
+- `wait <ms>`, `wait-idle` (no file operation running, no folder loading)
+- `goto <path|home>`, `usage <path>` (the storage usage view), `pane left|right` (dual pane), `bin restore` (the Recycle Bin
+  page: restores the selected rows; select them with `run SelectAll`)
+- `shot <name>`: prints `LEAF_SHOT <name>` on stdout; if `LEAF_CHECK_SHOTDIR` is set it waits (15 s at most) for
+  `<dir>/<name>.png` to appear, else 1.5 s. The wrapper takes the picture.
+- `quit`: leaves (after running operations)
+
+An unknown line is logged (`check script: unknown line`) and skipped. On Linux, `tools/linux-headless-run.sh` takes
+`SCRIPT=<file>` and `SHOTS=<dir>` and does the picture part (see its header); `$FOLDER`, `$OTHER`, `$DATA` and `$BASE` in the
+script are replaced by the temp folders it made.
+
 ## Still checked on screen (with the owner's agreement)
 
 - Glass / Mica backdrop look (an off-screen window is not composed like a visible one).

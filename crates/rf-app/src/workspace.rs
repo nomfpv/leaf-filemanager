@@ -27,6 +27,9 @@ mod preview_dock;
 // commands typed into the address field (setting `address_commands`): what the Enter handler does with text that is not a place
 #[path = "address_cmd.rs"]
 mod address_cmd;
+// the scripted test driver (`LEAF_CHECK_SCRIPT`, tools/TESTING.md)
+#[path = "check_script.rs"]
+mod check_script;
 
 /// Payload while a pinned sidebar entry is dragged (reordering).
 #[derive(Clone)]
@@ -705,6 +708,7 @@ impl Workspace {
             })
             .detach();
         }
+        check_script::start(window, cx);
         let places = cx.new(Places::new);
         let images = cx.new(ImageCache::new);
         cx.observe(&images, |_, _, cx| cx.notify()).detach();

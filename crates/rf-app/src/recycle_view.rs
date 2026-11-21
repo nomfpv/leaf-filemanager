@@ -160,7 +160,7 @@ impl RecycleView {
         cx.notify();
     }
 
-    fn restore_selected(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn restore_selected(&mut self, cx: &mut Context<Self>) {
         // (only rows that are shown: the same rule as the deletion's)
         let items: Vec<RecycleItem> = rf_core::recycle_bin::command_targets(&self.order, &self.selected).into_iter().filter_map(|i| self.items.get(i).cloned()).collect();
         if !items.is_empty() {

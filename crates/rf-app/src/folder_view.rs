@@ -3717,6 +3717,11 @@ impl FolderView {
         self.soft_reload(cx);
     }
 
+    /// The Recycle Bin page of this view while it shows one (the scripted test driver restores through it).
+    pub(crate) fn recycle_view(&self) -> Option<Entity<crate::recycle_view::RecycleView>> {
+        self.recycle.clone()
+    }
+
     pub(crate) fn set_reselect(&mut self, name: String) {
         self.reselect = Some(name);
     }
