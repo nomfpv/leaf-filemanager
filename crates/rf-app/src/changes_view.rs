@@ -659,7 +659,7 @@ impl ChangesView {
         let work = cx.background_spawn(async move {
             let done = checkpoint::restore(&store, &cp, remove.as_deref(), &crate::checkpoint_ui::to_trash);
             if let Ok(d) = &done {
-                checkpoint::prune(&store, keep, &[cp.id.as_str(), d.auto.id.as_str()]);
+                crate::checkpoint_ui::prune(&store, keep, &[cp.id.as_str(), d.auto.id.as_str()]);
             }
             done
         });
@@ -674,6 +674,7 @@ impl ChangesView {
                         }
                         v.cps.preview = None;
                         crate::diff_view::forget_hints();
+                        crate::checkpoint_ui::set_undo_point((!undo).then(|| d.auto.id.clone()));
                         v.cps.last = Some(Last { done: Arc::new(d), when_ms, undone: undo });
                         v.cps.error = None;
                     }

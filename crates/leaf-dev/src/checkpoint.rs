@@ -624,10 +624,21 @@ pub fn delete(store: &Store, cp: &Checkpoint) -> Result<(), Error> {
     }
 }
 
-/// Keeps the newest `keep` checkpoints (never fewer than one) and removes the rest, except the ids in `protect`. Returns how many went.
+/// Keeps the newest `keep` of the user's own checkpoints and, apart from them, the newest `keep` automatic ones (never fewer than
+/// one of each), so restores never push out what the user took. The ids in `protect` always stay. Returns how many went.
 pub fn prune(store: &Store, keep: usize, protect: &[&str]) -> usize {
     let Ok(all) = list(store) else { return 0 };
-    all.iter().skip(keep.max(1)).filter(|c| !protect.contains(&c.id.as_str())).filter(|c| delete(store, c).is_ok()).count()
+    let mut gone = 0;
+    for auto in [false, true] {
+        gone += all
+            .iter()
+            .filter(|c| c.auto == auto)
+            .skip(keep.max(1))
+            .filter(|c| !protect.contains(&c.id.as_str()))
+            .filter(|c| delete(store, c).is_ok())
+            .count();
+    }
+    gone
 }
 
 // ---------------------------------------------------------------------------------------------------------------- plan and diff
@@ -1134,6 +1145,23 @@ mod tests {
         let undo = restore(&store, &done.auto, Some(&done.back), &trash).unwrap();
         assert!(trashed.borrow().is_empty(), "{:?} {:?}", trashed.borrow(), undo);
         assert_eq!(std::fs::read(d.join("a.txt")).unwrap(), b"now");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn pruning_keeps_the_users_checkpoints_apart_from_the_automatic_ones() {
+        let d = temp("prune");
+        write(&d, "a.txt", b"x");
+        let store = Store::Copy { folder: d.clone(), base: temp("prune-data").join("checkpoints").join("k") };
+        let mine: Vec<Checkpoint> = (0..3).map(|i| create(&store, &format!("mine {i}"), false, None).unwrap()).collect();
+        let autos: Vec<Checkpoint> = (0..3).map(|_| create(&store, "", true, None).unwrap()).collect();
+        // the oldest automatic one is what "Undo restore" points at
+        assert_eq!(prune(&store, 2, &[autos[0].id.as_str()]), 1);
+        let left: Vec<String> = list(&store).unwrap().into_iter().map(|c| c.id).collect();
+        for want in [&mine[1].id, &mine[2].id, &autos[0].id, &autos[1].id, &autos[2].id] {
+            assert!(left.contains(want), "{want} kept: {left:?}");
+        }
+        assert!(!left.contains(&mine[0].id));
         let _ = std::fs::remove_dir_all(&d);
     }
 

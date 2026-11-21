@@ -26,6 +26,25 @@ pub fn take_want(dir: &Path) -> bool {
     false
 }
 
+/// The automatic checkpoint "Undo restore" points at (the last restore's): pruning never takes it.
+static UNDO_POINT: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_undo_point(id: Option<String>) {
+    if let Ok(mut g) = UNDO_POINT.lock() {
+        *g = id;
+    }
+}
+
+/// [`checkpoint::prune`] that also keeps the undo point.
+pub fn prune(store: &Store, keep: usize, protect: &[&str]) {
+    let undo = UNDO_POINT.lock().ok().and_then(|g| g.clone());
+    let mut all: Vec<&str> = protect.to_vec();
+    if let Some(u) = undo.as_deref() {
+        all.push(u);
+    }
+    checkpoint::prune(store, keep, &all);
+}
+
 /// Where the checkpoints of `dir` are kept (blocks: runs git).
 pub fn store_of(dir: &Path) -> Result<Store, checkpoint::Error> {
     let data = crate::settings::local_data_dir().unwrap_or_else(std::env::temp_dir);
@@ -138,7 +157,7 @@ fn ask(dir: PathBuf, store: Store, est: Option<Result<(u64, u64), checkpoint::Er
         let work = cx.background_spawn(async move {
             let made = checkpoint::create(&store, &note, false, Some(cap));
             if let Ok(cp) = &made {
-                checkpoint::prune(&store, keep_n, &[cp.id.as_str()]);
+                prune(&store, keep_n, &[cp.id.as_str()]);
             }
             made
         });
