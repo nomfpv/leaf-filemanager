@@ -109,8 +109,11 @@ fn err_text(what: &str, e: &FsError) -> String {
     format!("{what} ({e})")
 }
 
+/// What [`parent_of`] says when a folder on the way is missing (and not made).
+const GONE: &str = "it is not there any more (a folder on the way is missing)";
+
 /// Walks from the root to the folder `rel` goes in: every part must be a real folder (a link there would carry the write out of
-/// the job); missing folders are made when `make`. Returns the folder.
+/// the job); missing folders are made when `make`, else the answer is [`GONE`]. Returns the folder.
 fn parent_of(side: &Side, rel: &str, make: bool) -> Result<VPath, String> {
     let mut cur = side.root.clone();
     let parts: Vec<&str> = rel.split('/').collect();
@@ -125,7 +128,7 @@ fn parent_of(side: &Side, rel: &str, make: bool) -> Result<VPath, String> {
                 Err(FsError::Exists) if side.fs.stat(&cur).is_ok_and(|m| m.kind == Kind::Dir) => {}
                 Err(e) => return Err(err_text("the folder could not be made", &e)),
             },
-            Err(FsError::NotFound) => return Ok(cur),
+            Err(FsError::NotFound) => return Err(GONE.into()),
             Err(e) => return Err(err_text("the folder could not be read", &e)),
         }
     }
@@ -360,7 +363,11 @@ impl Runner<'_, '_> {
         let info = if on_left { row.left } else { row.right };
         let info = info.ok_or("there is nothing to remove")?;
         let side = if on_left { &self.left } else { &self.right };
-        let p = checked(side, rel)?;
+        let p = match checked(side, rel) {
+            // its folder is gone already: so is it
+            Err(e) if e == GONE => return Ok(()),
+            r => r?,
+        };
         match side.fs.stat(&p) {
             Ok(m) if m.kind == Kind::Link => return Err("it is a link now; it is left alone".into()),
             Ok(m) if info.dir && m.kind == Kind::Dir => {}
