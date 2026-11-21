@@ -1,0 +1,268 @@
+# The right-click menu as the hand-written ctx_menu.rs built it, one case per context (label, icon, shortcut hint).
+# "-" is a separator, " >" after a label is a submenu. Recorded from the old functions before they were converted
+# (read off the code line by line: the old builders need a live folder view, so they cannot be run in a test).
+# The quick buttons at the top of the menu and the contents of submenus are not part of it.
+
+## background plain
+Layout > | LayoutGrid
+Sort > | ArrowUpDown
+Group by > | ListTree
+Refresh | RotateCw | Ctrl+R
+-
+New > | CirclePlus
+Paste shortcut | ClipboardPaste
+Pin to sidebar | Pin
+Copy path | ClipboardCopy
+Copy as context | FileText
+Show disk usage | ChartPie
+Find duplicates | Copy
+Find build junk | Eraser
+Show hidden items | Eye | Ctrl+H
+Hide git-ignored files | EyeOff
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+Git > | GitBranch
+-
+Show more options > | Ellipsis
+
+## background busy
+Layout > | LayoutGrid
+Sort > | ArrowUpDown
+Group by > | ListTree
+Refresh | RotateCw | Ctrl+R
+-
+Undo: Delete | Undo2 | Ctrl+Z
+Redo: Rename | Redo2 | Ctrl+Y
+New > | CirclePlus
+Paste shortcut | ClipboardPaste
+Pin to sidebar | Pin
+Copy path | ClipboardCopy
+Copy as context | FileText
+Show disk usage | ChartPie
+Find duplicates | Copy
+Find build junk | Eraser
+Show hidden items | Eye | Ctrl+H
+Hide git-ignored files | EyeOff
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+Organize folder | WandSparkles
+Git > | GitBranch
+-
+Your actions > | Zap
+-
+Show more options > | Ellipsis
+
+## background in archive
+Layout > | LayoutGrid
+Sort > | ArrowUpDown
+Group by > | ListTree
+Refresh | RotateCw | Ctrl+R
+-
+New > | CirclePlus
+Pin to sidebar | Pin
+Copy path | ClipboardCopy
+Show hidden items | Eye | Ctrl+H
+Hide git-ignored files | EyeOff
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+-
+Show more options > | Ellipsis
+
+## background search results
+Layout > | LayoutGrid
+Sort > | ArrowUpDown
+Group by > | ListTree
+Refresh | RotateCw | Ctrl+R
+-
+New > | CirclePlus
+Paste shortcut | ClipboardPaste
+Pin to sidebar | Pin
+Copy path | ClipboardCopy
+Copy as context | FileText
+Show hidden items | Eye | Ctrl+H
+Hide git-ignored files | EyeOff
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+-
+Show more options > | Ellipsis
+
+## file plain
+Open | SquareArrowOutUpRight | Enter
+Open with > | LayoutGrid
+Send to > | Send
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+New folder with selection | FolderInput
+-
+Compress > | Archive
+Tags > | Tag
+Add to shelf | Inbox | Ctrl+Shift+S
+-
+Show more options > | Ellipsis
+
+## file picture in search results, dual pane
+Open | SquareArrowOutUpRight | Enter
+Open with > | LayoutGrid
+Send to > | Send
+Open file location | FolderOpen
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+Rotate right | RotateCw
+Rotate left | RotateCcw
+Set as desktop background | Monitor
+-
+Compress > | Archive
+Tags > | Tag
+Add to shelf | Inbox | Ctrl+Shift+S
+Copy to other pane | CopyPlus | Shift+F5
+Move to other pane | MoveRight | Shift+F6
+-
+Show more options > | Ellipsis
+
+## file inside an archive
+Open | SquareArrowOutUpRight | Enter
+Open with > | LayoutGrid
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+-
+-
+Show more options > | Ellipsis
+
+## folder plain
+Open | SquareArrowOutUpRight | Enter
+Open in new tab | SquarePlus
+Open in new window | AppWindow
+Send to > | Send
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+New folder with selection | FolderInput
+Show disk usage | ChartPie
+Find duplicates | Copy
+Find build junk | Eraser
+Pin to sidebar | Pin
+Add alias… | AtSign
+Leave out of the search index | SearchSlash
+Flatten folder | FolderTree
+-
+Compress > | Archive
+Tags > | Tag
+Add to shelf | Inbox | Ctrl+Shift+S
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+-
+Show more options > | Ellipsis
+
+## folder in search results, dual pane, with an alias and your actions
+Open | SquareArrowOutUpRight | Enter
+Open in new tab | SquarePlus
+Open in new window | AppWindow
+Open in other pane | Columns2
+Send to > | Send
+Open file location | FolderOpen
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+Show disk usage | ChartPie
+Find duplicates | Copy
+Find build junk | Eraser
+Pin to sidebar | Pin
+Edit alias (@docs)… | AtSign
+Leave out of the search index | SearchSlash
+-
+Compress > | Archive
+Tags > | Tag
+Add to shelf | Inbox | Ctrl+Shift+S
+Copy to other pane | CopyPlus | Shift+F5
+Move to other pane | MoveRight | Shift+F6
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+-
+Your actions > | Zap
+-
+Show more options > | Ellipsis
+
+## folder inside an archive
+Open | SquareArrowOutUpRight | Enter
+Open in new tab | SquarePlus
+Open in new window | AppWindow
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Pin to sidebar | Pin
+-
+-
+Open in terminal | SquareTerminal | Ctrl+Shift+`
+-
+Show more options > | Ellipsis
+
+## three files
+Open | SquareArrowOutUpRight | Enter
+Open with > | LayoutGrid
+Send to > | Send
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+New folder with selection | FolderInput
+-
+Compress > | Archive
+Tags > | Tag
+Add to shelf | Inbox | Ctrl+Shift+S
+Bulk rename… | PencilLine | F2
+-
+Show more options > | Ellipsis
+
+## two archives, dual pane, copy path and tags switched off
+Open | SquareArrowOutUpRight | Enter
+Open with > | LayoutGrid
+Send to > | Send
+-
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+New folder with selection | FolderInput
+-
+Compress > | Archive
+Extract > | FolderOutput
+Add to shelf | Inbox | Ctrl+Shift+S
+Bulk rename… | PencilLine | F2
+Copy to other pane | CopyPlus | Shift+F5
+Move to other pane | MoveRight | Shift+F6
+-
+Show more options > | Ellipsis
+
+## two fonts in search results
+Open | SquareArrowOutUpRight | Enter
+Open with > | LayoutGrid
+Send to > | Send
+-
+Copy item path | ClipboardCopy | Ctrl+Shift+C
+Copy path as > | ClipboardCopy
+Copy as context | FileText
+Duplicate | CopyPlus | Ctrl+Alt+D
+Create shortcut | Link
+Install font | Type
+-
+Compress > | Archive
+Tags > | Tag
+Add to shelf | Inbox | Ctrl+Shift+S
+-
+Show more options > | Ellipsis
