@@ -132,14 +132,14 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
 /// "Import from OpenSSH config": the hosts of `~/.ssh/config` that are not in the list yet; says what was added and left out.
 fn import(window: &mut Window, cx: &mut App) {
     let Some(path) = rf_core::hosts::ssh_config_path() else { return };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
+    // (with the files its Include lines name)
+    let r = match rf_core::hosts::parse_ssh_config_file(&path) {
+        Ok(r) => r,
         Err(e) => {
             crate::prompt::notice(t!("Import from OpenSSH config"), format!("{}: {e}", path.display()), window, cx);
             return;
         }
     };
-    let r = rf_core::hosts::parse_ssh_config(&text);
     let mut added = 0;
     change(cx, |hs| added = hs.merge(r.hosts));
     let mut msg = format!("{} {added}", t!("Hosts added:"));
@@ -158,7 +158,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::Download,
             t!("Import from OpenSSH config"),
-            Some(t!("Adds the hosts of your ~/.ssh/config (Host, HostName, User, Port, IdentityFile, ProxyJump). Include lines and wildcards are left out.")),
+            Some(t!("Adds the hosts of your ~/.ssh/config and the files its Include lines name (Host, HostName, User, Port, IdentityFile, ProxyJump). Wildcard hosts and Match blocks are left out.")),
             button("hosts-import", p, t!("Import"), import),
         ),
         section(p, t!("Saved hosts")),

@@ -196,6 +196,106 @@ pub fn ssh_config_path() -> Option<PathBuf> {
 /// `Port`, `IdentityFile` and `ProxyJump`. As in OpenSSH the first value given for a keyword wins. `Include`, `Match`
 /// blocks and wildcard or negated patterns are skipped and reported; other keywords are ignored silently.
 pub fn parse_ssh_config(text: &str) -> SshImport {
+    parse_lines(lines_of(text, ""), Vec::new())
+}
+
+/// Reads the OpenSSH client config at `path` (`~/.ssh/config`) with the files its `Include` lines name, read in place as
+/// OpenSSH does: a relative name is under `~/.ssh` (the config's folder), `~` is the home folder, and `*` / `?` in the
+/// file's name take every matching file in name order. Includes inside included files are followed up to 16 deep; a
+/// file that is not there is left out silently (as OpenSSH does), one that cannot be read is reported.
+pub fn parse_ssh_config_file(path: &Path) -> std::io::Result<SshImport> {
+    let text = std::fs::read_to_string(path)?;
+    let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut skipped = Vec::new();
+    let lines = expand_includes(lines_of(&text, ""), &base, 0, &mut skipped);
+    Ok(parse_lines(lines, skipped))
+}
+
+/// One line of a config: where it came from (`""` for the main file, else the included file's name), its number, the text.
+type Line = (String, usize, String);
+
+fn lines_of(text: &str, from: &str) -> Vec<Line> {
+    text.lines().enumerate().map(|(n, l)| (from.to_string(), n + 1, l.to_string())).collect()
+}
+
+fn where_(from: &str, n: usize) -> String {
+    if from.is_empty() { format!("line {n}") } else { format!("{from} line {n}") }
+}
+
+/// The lines with every `Include` replaced by the lines of the files it names.
+fn expand_includes(lines: Vec<Line>, base: &Path, depth: usize, skipped: &mut Vec<String>) -> Vec<Line> {
+    let mut out = Vec::new();
+    for (from, n, line) in lines {
+        let (key, value) = split_keyword(line.trim());
+        if !key.eq_ignore_ascii_case("include") {
+            out.push((from, n, line));
+            continue;
+        }
+        if depth >= 16 {
+            skipped.push(format!("{}: Include {value} (included too deep)", where_(&from, n)));
+            continue;
+        }
+        for pattern in words(value) {
+            for file in include_files(&pattern, base) {
+                let name = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                match std::fs::read_to_string(&file) {
+                    Ok(t) => out.extend(expand_includes(lines_of(&t, &name), base, depth + 1, skipped)),
+                    Err(e) => skipped.push(format!("{}: Include {} ({e})", where_(&from, n), file.display())),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The files an `Include` pattern names (wildcards in the file's name only), sorted.
+fn include_files(pattern: &str, base: &Path) -> Vec<PathBuf> {
+    let p = if let Some(rest) = pattern.strip_prefix("~/").or_else(|| pattern.strip_prefix("~\\")) {
+        match ssh_config_path().and_then(|c| c.parent().and_then(Path::parent).map(Path::to_path_buf)) {
+            Some(home) => home.join(rest),
+            None => return Vec::new(),
+        }
+    } else if Path::new(pattern).is_absolute() {
+        PathBuf::from(pattern)
+    } else {
+        base.join(pattern)
+    };
+    let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { return Vec::new() };
+    if !name.contains(['*', '?']) {
+        return if p.is_file() { vec![p] } else { Vec::new() };
+    }
+    let Some(dir) = p.parent() else { return Vec::new() };
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| rd.filter_map(Result::ok).filter(|e| e.path().is_file() && wildcard(&name, &e.file_name().to_string_lossy())).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// `*` and `?` matching of a whole name.
+fn wildcard(pattern: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
+    let (mut i, mut j, mut star, mut mark) = (0, 0, None, 0);
+    while j < n.len() {
+        if i < p.len() && (p[i] == '?' || p[i] == n[j]) {
+            i += 1;
+            j += 1;
+        } else if i < p.len() && p[i] == '*' {
+            star = Some(i);
+            mark = j;
+            i += 1;
+        } else if let Some(s) = star {
+            i = s + 1;
+            mark += 1;
+            j = mark;
+        } else {
+            return false;
+        }
+    }
+    p[i..].iter().all(|c| *c == '*')
+}
+
+fn parse_lines(lines: Vec<Line>, skipped: Vec<String>) -> SshImport {
     #[derive(Default)]
     struct Block {
         aliases: Vec<String>,
@@ -205,23 +305,23 @@ pub fn parse_ssh_config(text: &str) -> SshImport {
         identity: Option<String>,
         jump: Option<String>,
     }
-    let mut out = SshImport::default();
+    let mut out = SshImport { hosts: Vec::new(), skipped };
     let mut blocks: Vec<Block> = Vec::new();
     // None: before the first Host, or inside a Match block (both not imported)
     let mut cur: Option<usize> = None;
-    for (n, raw) in text.lines().enumerate() {
+    for (from, n, raw) in &lines {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let (key, value) = split_keyword(line);
-        let lineno = n + 1;
+        let lineno = where_(from, *n);
         match key.to_ascii_lowercase().as_str() {
             "host" => {
                 let mut b = Block::default();
                 for pat in words(value) {
                     if pat.contains(['*', '?']) || pat.starts_with('!') {
-                        out.skipped.push(format!("line {lineno}: Host pattern \"{pat}\" (wildcards are not imported)"));
+                        out.skipped.push(format!("{lineno}: Host pattern \"{pat}\" (wildcards are not imported)"));
                     } else {
                         b.aliases.push(pat);
                     }
@@ -230,10 +330,10 @@ pub fn parse_ssh_config(text: &str) -> SshImport {
                 cur = Some(blocks.len() - 1);
             }
             "match" => {
-                out.skipped.push(format!("line {lineno}: Match block (not imported)"));
+                out.skipped.push(format!("{lineno}: Match block (not imported)"));
                 cur = None;
             }
-            "include" => out.skipped.push(format!("line {lineno}: Include {value} (included files are not read)")),
+            "include" => out.skipped.push(format!("{lineno}: Include {value} (included files are not read)")),
             k => {
                 let Some(b) = cur.map(|i| &mut blocks[i]) else { continue };
                 let v = words(value).into_iter().next().unwrap_or_default();
@@ -251,7 +351,7 @@ pub fn parse_ssh_config(text: &str) -> SshImport {
                         Ok(p) if p > 0 => {
                             b.port.get_or_insert(p);
                         }
-                        _ => out.skipped.push(format!("line {lineno}: Port \"{v}\" is not a port number")),
+                        _ => out.skipped.push(format!("{lineno}: Port \"{v}\" is not a port number")),
                     },
                     "identityfile" => {
                         b.identity.get_or_insert(v);
