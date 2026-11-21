@@ -7,9 +7,11 @@
 //! - Nothing at the destination is replaced unless the user chose "Replace" for it through `Tracker.ask`; new items are made with
 //!   `O_EXCL` / `mkdir` / `RENAME_NOREPLACE`. A replace writes a temporary file in the destination folder, fsyncs and checks it, and
 //!   only then renames it over the old file. A file can never replace a folder (or the other way round): such a conflict is skipped.
-//! - A move on the same device is a no-replace rename. A move across devices copies, fsyncs, verifies (at least size and time), and
-//!   only then removes exactly the source files that were verified, and their folders only when empty. A cancelled, failed or partial
-//!   move never costs the source.
+//! - A move on the same device is a no-replace rename. A move across devices copies each file, fsyncs it and the folder holding its
+//!   name, verifies it (at least the size plus the first and last MiB read back), and right then removes that source file, but only
+//!   while its (dev, ino, size, mtime, ctime) still match what was copied; folders go only when empty. Mounts inside the folder are
+//!   not moved. One item seen under two paths (same dev+ino) is never replaced nor removed. A cancelled, failed or partial move never
+//!   costs a source that was not copied.
 //! - Cancel removes the partly written file; what was finished stays.
 
 use std::collections::HashMap;
@@ -316,6 +318,29 @@ fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
     }
 }
 
+/// Compares the first and the last MiB of two files of length `len` (the copy read back: its cached pages are dropped first).
+fn same_ends(a: &Path, b: &Path, len: u64) -> io::Result<bool> {
+    use std::os::unix::fs::FileExt;
+    const SPAN: u64 = 1 << 20;
+    let (fa, fb) = (File::open(a)?, File::open(b)?);
+    // SAFETY: advice on a descriptor we hold; failure only means the cache is used.
+    unsafe { libc::posix_fadvise(fb.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
+    let mut spans = vec![(0, len.min(SPAN))];
+    if len > SPAN {
+        spans.push((len - len.min(SPAN), len.min(SPAN)));
+    }
+    let (mut ba, mut bb) = (vec![0u8; SPAN as usize], vec![0u8; SPAN as usize]);
+    for (at, n) in spans {
+        let n = n as usize;
+        fa.read_exact_at(&mut ba[..n], at)?;
+        fb.read_exact_at(&mut bb[..n], at)?;
+        if ba[..n] != bb[..n] {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn read_full(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
     let mut n = 0;
     while n < buf.len() {
@@ -330,7 +355,8 @@ fn read_full(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 /// Copies one regular file to `dst`, which must not exist. Progress, pause, cancel and limit between chunks; fsync; mode and times
-/// kept; checked as `verify` says (and always for size). On any failure the partly written `dst` is removed.
+/// kept; checked as `verify` says (always the size; Quick adds the first and last MiB read back, Full every byte). On any failure the
+/// partly written `dst` is removed.
 fn copy_file(job: &mut Job, src: &Path, dst: &Path, verify: Verify) -> io::Result<Ident> {
     let from = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(src)?;
     let sm = from.metadata()?;
@@ -380,8 +406,10 @@ fn copy_file(job: &mut Job, src: &Path, dst: &Path, verify: Verify) -> io::Resul
         if dm.len() != sm.len() || copied != sm.len() {
             return Err(io::Error::other("the copy has another size than the original"));
         }
-        if verify == Verify::Quick && dm.mtime() != sm.mtime() {
-            return Err(io::Error::other("the copy has another time than the original"));
+        // Quick here: the size (always checked above) plus the first and the last MiB read back from the disk. (The time is not a
+        // check: it was just set from the original.)
+        if verify == Verify::Quick && !same_ends(src, dst, sm.len())? {
+            return Err(io::Error::other("the copy differs from the original"));
         }
         if verify == Verify::Full && !same_bytes(src, dst)? {
             return Err(io::Error::other("the copy differs from the original"));
@@ -798,6 +826,27 @@ mod tests {
             let t = Arc::new(Tracker::new(Box::new(move |_, done, _| if done > 0 { c.store(true, Ordering::Relaxed) }), cancel));
             let kind = if force { Transfer::Move } else { Transfer::Copy };
             assert!(!run(kind, &[root.join("src")], &dest, t, force).unwrap(), "cancelled");
+            if force {
+                // a move removes each source right after its own copy: every item is whole in exactly one of the two places
+                let one = |rel: &str| {
+                    let (s, d) = (std::fs::symlink_metadata(root.join(rel)).is_ok(), std::fs::symlink_metadata(dest.join(rel)).is_ok());
+                    assert!(s != d, "{rel}: in exactly one place");
+                };
+                one("src/a.bin");
+                one("src/sub/b.txt");
+                one("src/link");
+                if let Ok(b) = std::fs::read(root.join("src/a.bin")) {
+                    assert_eq!(b, vec![7u8; 9 << 20]);
+                }
+                assert_eq!(std::fs::read(root.join("outside/o.txt")).unwrap(), b"o");
+                // put back what went, for the next steps
+                for rel in ["src/sub/b.txt", "src/link"] {
+                    if std::fs::symlink_metadata(root.join(rel)).is_err() {
+                        std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+                        std::fs::rename(dest.join(rel), root.join(rel)).unwrap();
+                    }
+                }
+            }
             intact(&root);
             assert!(std::fs::symlink_metadata(dest.join("src/a.bin")).is_err(), "the partly written file is removed");
             std::fs::remove_dir_all(dest.join("src")).unwrap();
