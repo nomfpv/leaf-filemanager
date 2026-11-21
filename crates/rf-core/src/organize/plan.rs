@@ -424,8 +424,8 @@ mod tests {
     use super::*;
     use crate::organize::rule::{Cmp, Condition, DAY_MS, Join, NameOp};
 
-    const DL: &str = r"C:\Users\Ali\Downloads";
-    const PICS: &str = r"C:\Users\Ali\Pictures";
+    const DL: &str = r"C:\Users\user\Downloads";
+    const PICS: &str = r"C:\Users\user\Pictures";
 
     fn classify(ext: &str) -> FileKind {
         match ext {
@@ -441,10 +441,10 @@ mod tests {
         ProtectedPaths {
             windows: Some(PathBuf::from(r"C:\Windows")),
             program_files: vec![PathBuf::from(r"C:\Program Files")],
-            user_profile: Some(PathBuf::from(r"C:\Users\Ali")),
-            app_data: vec![PathBuf::from(r"C:\Users\Ali\AppData")],
-            app_dirs: vec![PathBuf::from(r"C:\Users\Ali\AppData\Roaming\rustyfiles")],
-            app_files: vec![PathBuf::from(r"C:\Users\Ali\Downloads\rustyfiles.exe")],
+            user_profile: Some(PathBuf::from(r"C:\Users\user")),
+            app_data: vec![PathBuf::from(r"C:\Users\user\AppData")],
+            app_dirs: vec![PathBuf::from(r"C:\Users\user\AppData\Roaming\rustyfiles")],
+            app_files: vec![PathBuf::from(r"C:\Users\user\Downloads\rustyfiles.exe")],
         }
     }
 
@@ -634,12 +634,12 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn a_file_already_in_place_makes_no_step() {
-        let r = rule(1, "r", vec![ext(&["jpg"])], Action::MoveTo { folder: PathBuf::from(r"C:\Users\Ali\Downloads") });
+        let r = rule(1, "r", vec![ext(&["jpg"])], Action::MoveTo { folder: PathBuf::from(r"C:\Users\user\Downloads") });
         let p = run(&[r], &[file(DL, "a.jpg")], &[&format!(r"{DL}\a.jpg")]);
         assert!(p.steps.is_empty() && p.skipped.is_empty());
         assert_eq!(p.in_place, 1);
         // same place spelled differently
-        let r = rule(1, "r", vec![ext(&["jpg"])], Action::MoveTo { folder: PathBuf::from("c:/users/ali/DOWNLOADS/") });
+        let r = rule(1, "r", vec![ext(&["jpg"])], Action::MoveTo { folder: PathBuf::from("c:/users/user/DOWNLOADS/") });
         let p = run(&[r], &[file(DL, "a.jpg")], &[&format!(r"{DL}\a.jpg")]);
         assert!(p.steps.is_empty());
         assert_eq!(p.in_place, 1);
@@ -650,7 +650,7 @@ mod tests {
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn files_outside_the_folder_and_in_subfolders() {
         let r = rule(1, "r", vec![], to_pics());
-        let facts = [file(DL, "a.jpg"), file(&format!(r"{DL}\alt"), "b.jpg"), file(r"C:\Users\Ali\Documents", "c.jpg"), file(r"C:\Users\Ali\Downloads2", "d.jpg")];
+        let facts = [file(DL, "a.jpg"), file(&format!(r"{DL}\alt"), "b.jpg"), file(r"C:\Users\user\Documents", "c.jpg"), file(r"C:\Users\user\Downloads2", "d.jpg")];
         let p = run(std::slice::from_ref(&r), &facts, &[]);
         assert_eq!(moved(&p).len(), 1, "{:?}", moved(&p));
         let mut sub = r;
@@ -672,8 +672,8 @@ mod tests {
         assert_eq!(p.ignored, 4);
         // the app's own folder cannot even be watched
         let mut r = rule(1, "hepsi", vec![], to_pics());
-        r.folder = PathBuf::from(r"C:\Users\Ali\AppData\Roaming\rustyfiles");
-        let p = run(&[r], &[file(r"C:\Users\Ali\AppData\Roaming\rustyfiles", "settings.toml")], &[]);
+        r.folder = PathBuf::from(r"C:\Users\user\AppData\Roaming\rustyfiles");
+        let p = run(&[r], &[file(r"C:\Users\user\AppData\Roaming\rustyfiles", "settings.toml")], &[]);
         assert!(p.steps.is_empty());
         assert!(matches!(p.unusable[0].2, Unusable::Refused(Refusal::AppData)));
     }
@@ -684,11 +684,11 @@ mod tests {
     fn shortcuts_to_the_destination_stay() {
         let r = rule(1, "r", vec![], to_pics());
         let mut link = file(DL, "Resimler.lnk");
-        link.link_target = Some(PathBuf::from(r"C:\Users\Ali\Pictures"));
+        link.link_target = Some(PathBuf::from(r"C:\Users\user\Pictures"));
         let mut inner = file(DL, "Yıl.lnk");
-        inner.link_target = Some(PathBuf::from(r"c:\users\ali\pictures\2024"));
+        inner.link_target = Some(PathBuf::from(r"c:\users\user\pictures\2024"));
         let mut other = file(DL, "Baska.lnk");
-        other.link_target = Some(PathBuf::from(r"C:\Users\Ali\Music"));
+        other.link_target = Some(PathBuf::from(r"C:\Users\user\Music"));
         let p = run(&[r], &[link, inner, other], &[]);
         assert_eq!(moved(&p), [(format!(r"{DL}\Baska.lnk"), format!(r"{PICS}\Baska.lnk"))]);
         assert_eq!(p.ignored, 2);
@@ -918,7 +918,7 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn files_are_not_sent_into_protected_places() {
-        for dest in [r"C:\Windows\Temp", r"C:\Program Files\Foo", r"C:\Users\Ali\AppData\Roaming\Foo", r"C:\Users\Ali\AppData\Roaming\rustyfiles\x"] {
+        for dest in [r"C:\Windows\Temp", r"C:\Program Files\Foo", r"C:\Users\user\AppData\Roaming\Foo", r"C:\Users\user\AppData\Roaming\rustyfiles\x"] {
             let r = rule(1, "r", vec![ext(&["jpg"])], Action::MoveTo { folder: PathBuf::from(dest) });
             let p = run(&[r], &[file(DL, "a.jpg")], &[]);
             assert!(p.steps.is_empty(), "{dest}");

@@ -166,7 +166,7 @@ mod start_apply_tests {
     /// A waiting update is applied when the user opens rustyfiles, and never by a process started behind the user's back.
     #[test]
     fn only_a_start_the_user_means_applies_a_waiting_update() {
-        for open in [None, Some(r"C:\Users\x\Documents"), Some("D:\\"), Some("report.pdf"), Some("--settings=dock"), Some("--settings=speed")] {
+        for open in [None, Some(r"C:\Users\user\Documents"), Some("D:\\"), Some("report.pdf"), Some("--settings=dock"), Some("--settings=speed")] {
             assert!(applies_update_at_start(open), "{open:?}");
         }
         for side in ["--pick", "--dock", "--shell", "--quick-search", "--no-window", "--update-splash", "--bar-preview", "--shell-probe", "--veloapp-updated", "--veloapp-obsolete"] {

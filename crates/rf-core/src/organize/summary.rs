@@ -168,11 +168,11 @@ mod tests {
     fn the_starter_rule_reads_like_the_example() {
         let r = rule(
             vec![Condition::Extension { list: vec!["jpg".into(), ".PNG".into()] }],
-            Action::MoveToTemplate { template: r"C:\Users\Ali\Pictures\{year}\{month}".into() },
+            Action::MoveToTemplate { template: r"C:\Users\user\Pictures\{year}\{month}".into() },
         );
-        let home = PathBuf::from(r"C:\Users\Ali");
+        let home = PathBuf::from(r"C:\Users\user");
         assert_eq!(summary(&r, &id, Some(&home)), r"uzantısı jpg, png olan dosyalar → Pictures\{year}\{month}");
-        assert_eq!(summary(&r, &id, None), r"uzantısı jpg, png olan dosyalar → C:\Users\Ali\Pictures\{year}\{month}");
+        assert_eq!(summary(&r, &id, None), r"uzantısı jpg, png olan dosyalar → C:\Users\user\Pictures\{year}\{month}");
     }
 
     #[test]
@@ -235,10 +235,10 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn paths_outside_the_home_are_shown_whole() {
-        let home = PathBuf::from(r"C:\Users\Ali");
+        let home = PathBuf::from(r"C:\Users\user");
         assert_eq!(show_path(Path::new(r"D:\x"), Some(&home)), r"D:\x");
-        assert_eq!(show_path(Path::new(r"C:\Users\Ali"), Some(&home)), r"C:\Users\Ali");
-        assert_eq!(show_path(Path::new(r"C:\Users\Alice\x"), Some(&home)), r"C:\Users\Alice\x");
-        assert_eq!(show_path(Path::new(r"c:\users\ali\Belgeler"), Some(&home)), r"Belgeler");
+        assert_eq!(show_path(Path::new(r"C:\Users\user"), Some(&home)), r"C:\Users\user");
+        assert_eq!(show_path(Path::new(r"C:\Users\user.old\x"), Some(&home)), r"C:\Users\user.old\x");
+        assert_eq!(show_path(Path::new(r"c:\users\user\Belgeler"), Some(&home)), r"Belgeler");
     }
 }

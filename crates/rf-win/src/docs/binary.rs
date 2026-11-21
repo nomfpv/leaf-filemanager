@@ -590,13 +590,13 @@ mod tests {
         let (first, second) = db.split_at_mut(PAGE);
         leaf(first, 100, &[(1, schema)]);
         // the id column is the row id: stored as NULL in the row
-        leaf(second, 0, &[(7, record(&[(0, vec![]), text("Özer"), (1, vec![90])])), (9, record(&[(0, vec![]), text("a|b"), (2, vec![0xff, 0xfe])]))]);
+        leaf(second, 0, &[(7, record(&[(0, vec![]), text("Zoë"), (1, vec![90])])), (9, record(&[(0, vec![]), text("a|b"), (2, vec![0xff, 0xfe])]))]);
         let p = std::env::temp_dir().join(format!("rf-sqlite-{}.db", std::process::id()));
         std::fs::write(&p, &db).unwrap();
         let md = sqlite(&p, &same).unwrap();
         let _ = std::fs::remove_file(&p);
         assert!(md.starts_with("**SQLite** · 1 tablo · 2 sayfa · 512 bayt/sayfa\n\n## notlar · 2 satır\n\n"), "{md}");
-        assert!(md.contains("| id | ad | puan |\n| --- | --- | --- |\n| 7 | Özer | 90 |\n| 9 | a\\|b | -2 |\n"), "{md}");
+        assert!(md.contains("| id | ad | puan |\n| --- | --- | --- |\n| 7 | Zoë | 90 |\n| 9 | a\\|b | -2 |\n"), "{md}");
     }
 
     #[test]

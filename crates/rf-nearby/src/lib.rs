@@ -36,7 +36,7 @@ const MAX_WAITING_OFFERS: usize = 4;
 /// What the app tells the crate once, at start.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The name other devices show for this one ("Özer's PC").
+    /// The name other devices show for this one ("User's PC").
     pub name: String,
     /// "windows", "macos", "linux": shown by the others with the name.
     pub os: String,

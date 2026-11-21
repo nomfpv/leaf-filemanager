@@ -1265,7 +1265,7 @@ mod tests {
 
     fn tree() -> NavTree {
         let mut t = NavTree::new();
-        t.set_roots(vec![root(r"C:\Users\ali", "ali", RootKind::Profile), root(r"C:\", "Yerel Disk (C:)", RootKind::Fixed), root(r"D:\", "Veri (D:)", RootKind::Fixed)], 0);
+        t.set_roots(vec![root(r"C:\Users\user", "user", RootKind::Profile), root(r"C:\", "Yerel Disk (C:)", RootKind::Fixed), root(r"D:\", "Veri (D:)", RootKind::Fixed)], 0);
         t
     }
 
@@ -1290,9 +1290,9 @@ mod tests {
     fn disk() -> HashMap<String, Vec<DirItem>> {
         let mut d = HashMap::new();
         d.insert(norm(Path::new(r"C:\")), items(&["Users", "Windows", "Program Files"]));
-        d.insert(norm(Path::new(r"C:\Users")), items(&["ali", "Public"]));
-        d.insert(norm(Path::new(r"C:\Users\ali")), items(&["Documents", "Downloads", "dir10", "dir2"]));
-        d.insert(norm(Path::new(r"C:\Users\ali\Documents")), items(&["a", "b"]));
+        d.insert(norm(Path::new(r"C:\Users")), items(&["user", "Public"]));
+        d.insert(norm(Path::new(r"C:\Users\user")), items(&["Documents", "Downloads", "dir10", "dir2"]));
+        d.insert(norm(Path::new(r"C:\Users\user\Documents")), items(&["a", "b"]));
         d.insert(norm(Path::new(r"C:\Windows")), items(&["System32"]));
         d.insert(norm(Path::new(r"D:\")), items(&[]));
         d
@@ -1312,22 +1312,22 @@ mod tests {
 
     #[test]
     fn keys_ignore_case_slashes_prefixes_and_trailing_separators() {
-        assert_eq!(norm(Path::new(r"C:\Users\Ali\")), r"c:\users\ali");
-        assert_eq!(norm(Path::new("C:/Users/Ali")), r"c:\users\ali");
+        assert_eq!(norm(Path::new(r"C:\Users\user\")), r"c:\users\user");
+        assert_eq!(norm(Path::new("C:/Users/user")), r"c:\users\user");
         assert_eq!(norm(Path::new(r"\\?\C:\Users")), r"c:\users");
         assert_eq!(norm(Path::new(r"C:")), r"c:\");
         assert_eq!(norm(Path::new(r"c:\")), r"c:\");
         assert!(is_under(r"c:\", r"c:\users"));
-        assert!(is_under(r"c:\users", r"c:\users\ali"));
+        assert!(is_under(r"c:\users", r"c:\users\user"));
         assert!(!is_under(r"c:\users", r"c:\users2"));
         assert_eq!(child_key(r"c:\", "Users"), r"c:\users");
-        assert_eq!(child_key(r"c:\users", "Ali"), r"c:\users\ali");
+        assert_eq!(child_key(r"c:\users", "User"), r"c:\users\user");
     }
 
     #[test]
     fn roots_come_in_the_given_order_closed() {
         let t = tree();
-        assert_eq!(labels(&t), vec![(0, "ali".to_string()), (0, "Yerel Disk (C:)".to_string()), (0, "Veri (D:)".to_string())]);
+        assert_eq!(labels(&t), vec![(0, "user".to_string()), (0, "Yerel Disk (C:)".to_string()), (0, "Veri (D:)".to_string())]);
         assert!(t.can_expand(t.rows()[1].id), "a folder that was not listed yet shows a chevron");
     }
 
@@ -1438,12 +1438,12 @@ mod tests {
         let mut t = tree();
         let d = disk();
         // the profile folder is a root of its own: the walk goes down that one
-        let todo = t.follow(Some(Path::new(r"C:\Users\ali\Documents\a")), 100, true);
+        let todo = t.follow(Some(Path::new(r"C:\Users\user\Documents\a")), 100, true);
         assert_eq!(todo.len(), 1);
-        assert_eq!(todo[0].path, PathBuf::from(r"C:\Users\ali"));
+        assert_eq!(todo[0].path, PathBuf::from(r"C:\Users\user"));
         let next = answer(&mut t, &todo[0], &d, 100);
         assert_eq!(next.len(), 1, "Documents is the next one to list");
-        assert_eq!(next[0].path, PathBuf::from(r"C:\Users\ali\Documents"));
+        assert_eq!(next[0].path, PathBuf::from(r"C:\Users\user\Documents"));
         assert!(t.take_scroll_target().is_none(), "not there yet");
         let end = answer(&mut t, &next[0], &d, 100);
         assert!(end.is_empty());
@@ -1455,7 +1455,7 @@ mod tests {
         // the drive's own branch was not touched
         assert!(!t.nodes[id_of(&t, r"C:\") as usize].expanded);
         // following a folder in the same branch lists nothing new
-        assert!(t.follow(Some(Path::new(r"C:\Users\ali\Documents\b")), 200, true).is_empty());
+        assert!(t.follow(Some(Path::new(r"C:\Users\user\Documents\b")), 200, true).is_empty());
         assert_eq!(t.marked_row().map(|m| m.1), Some(true));
     }
 
@@ -1476,26 +1476,26 @@ mod tests {
     #[test]
     fn a_branch_the_user_just_closed_stays_closed_and_the_closed_node_carries_the_mark() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents", 1_000);
-        let ali = id_of(&t, r"C:\Users\ali");
-        t.toggle(ali, 2_000); // the user closes it by hand
+        follow_all(&mut t, r"C:\Users\user\Documents", 1_000);
+        let user = id_of(&t, r"C:\Users\user");
+        t.toggle(user, 2_000); // the user closes it by hand
         let before = t.rows().len();
         // 10 s later the open folder changes to something inside the closed branch
-        let reqs = t.follow(Some(Path::new(r"C:\Users\ali\Documents\a")), 12_000, true);
+        let reqs = t.follow(Some(Path::new(r"C:\Users\user\Documents\a")), 12_000, true);
         assert!(reqs.is_empty(), "the walk does not reopen what was just closed");
         assert_eq!(t.rows().len(), before);
         let (row, exact) = t.marked_row().unwrap();
         assert!(!exact);
-        assert_eq!(t.info(&t.rows()[row], 0).label, "ali", "the closed node carries the mark");
+        assert_eq!(t.info(&t.rows()[row], 0).label, "user", "the closed node carries the mark");
         assert!(t.take_scroll_target().is_some_and(|r| r == row));
         // after the grace time the next navigation opens it again, without a new listing of what is known
-        let again = t.follow(Some(Path::new(r"C:\Users\ali\Documents\b")), 2_000 + COLLAPSE_GRACE_MS + 1, true);
-        assert!(again.iter().any(|r| r.path == Path::new(r"C:\Users\ali")), "the branch is listed again quietly when it opens");
-        assert!(t.nodes[ali as usize].expanded);
+        let again = t.follow(Some(Path::new(r"C:\Users\user\Documents\b")), 2_000 + COLLAPSE_GRACE_MS + 1, true);
+        assert!(again.iter().any(|r| r.path == Path::new(r"C:\Users\user")), "the branch is listed again quietly when it opens");
+        assert!(t.nodes[user as usize].expanded);
         // and opening by hand clears the stamp
-        t.toggle(ali, 500_000);
-        t.toggle(ali, 500_001);
-        assert!(t.nodes[ali as usize].user_collapsed_ms.is_none());
+        t.toggle(user, 500_000);
+        t.toggle(user, 500_001);
+        assert!(t.nodes[user as usize].user_collapsed_ms.is_none());
     }
 
     #[test]
@@ -1541,11 +1541,11 @@ mod tests {
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn a_folder_made_removed_or_renamed_inside_an_open_node_shows_up_and_goes() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents\a", 0);
-        let docs = id_of(&t, r"C:\Users\ali\Documents");
+        follow_all(&mut t, r"C:\Users\user\Documents\a", 0);
+        let docs = id_of(&t, r"C:\Users\user\Documents");
         let before: Vec<String> = labels(&t).into_iter().map(|(_, n)| n).collect();
         assert!(before.contains(&"a".to_string()));
-        let parent = Path::new(r"C:\Users\ali");
+        let parent = Path::new(r"C:\Users\user");
         // made
         assert!(t.apply_changes(parent, vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
         assert!(labels(&t).iter().any(|(_, n)| n == "Yeni"));
@@ -1558,7 +1558,7 @@ mod tests {
         assert!(t.apply_changes(parent, vec![Change { name: "documents".into(), item: None }]));
         assert!(!labels(&t).iter().any(|(_, n)| n == "Documents" || n == "a"));
         assert!(!t.live(docs));
-        assert!(!t.index.contains_key(&norm(Path::new(r"C:\Users\ali\Documents"))));
+        assert!(!t.index.contains_key(&norm(Path::new(r"C:\Users\user\Documents"))));
         // a file or an unknown name changes nothing
         assert!(!t.apply_changes(parent, vec![Change { name: "x.txt".into(), item: None }]));
         // a change in a folder that is not open is nobody's business
@@ -1566,24 +1566,24 @@ mod tests {
         // a case-only rename updates the shown name in place
         assert!(t.apply_changes(parent, vec![Change { name: "downloads".into(), item: Some(item("DOWNLOADS")) }]));
         assert!(labels(&t).iter().any(|(_, n)| n == "DOWNLOADS"));
-        assert_eq!(t.path_of(id_of(&t, r"C:\Users\ali\downloads")), Some(Path::new(r"C:\Users\ali\DOWNLOADS")));
+        assert_eq!(t.path_of(id_of(&t, r"C:\Users\user\downloads")), Some(Path::new(r"C:\Users\user\DOWNLOADS")));
     }
 
     #[test]
     fn a_listing_again_keeps_what_was_open_and_drops_what_is_gone() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents\a", 0);
-        let docs = id_of(&t, r"C:\Users\ali\Documents");
-        let req = t.rescan(Path::new(r"C:\Users\ali")).remove(0);
+        follow_all(&mut t, r"C:\Users\user\Documents\a", 0);
+        let docs = id_of(&t, r"C:\Users\user\Documents");
+        let req = t.rescan(Path::new(r"C:\Users\user")).remove(0);
         t.apply_listing(&req, Ok(items(&["documents", "yeni"])), 5);
         assert!(t.live(docs), "same folder, same node");
         assert!(t.nodes[docs as usize].expanded);
         let l: Vec<String> = labels(&t).into_iter().map(|(_, n)| n).collect();
         assert!(l.contains(&"yeni".to_string()) && !l.contains(&"Downloads".to_string()));
         // a change reported while the first listing was on its way is answered by one more listing
-        let n = id_of(&t, r"C:\Users\ali\yeni");
+        let n = id_of(&t, r"C:\Users\user\yeni");
         let r1 = t.toggle(n, 6).remove(0);
-        assert!(!t.apply_changes(Path::new(r"C:\Users\ali\yeni"), vec![Change { name: "k".into(), item: Some(item("k")) }]));
+        assert!(!t.apply_changes(Path::new(r"C:\Users\user\yeni"), vec![Change { name: "k".into(), item: Some(item("k")) }]));
         let more = t.apply_listing(&r1, Ok(items(&[])), 7);
         assert_eq!(more.len(), 1);
     }
@@ -1594,19 +1594,19 @@ mod tests {
     fn only_open_nodes_are_watched_the_open_folders_branch_first_and_never_more_than_the_cap() {
         let mut t = tree();
         assert!(t.watch_set().is_empty(), "nothing open, nothing watched");
-        follow_all(&mut t, r"C:\Users\ali\Documents", 0);
+        follow_all(&mut t, r"C:\Users\user\Documents", 0);
         let set = t.watch_set();
-        assert_eq!(set, [PathBuf::from(r"C:\Users\ali")], "only the profile folder is open (Documents is the open folder, not opened)");
+        assert_eq!(set, [PathBuf::from(r"C:\Users\user")], "only the profile folder is open (Documents is the open folder, not opened)");
         // open Documents too: the newest first
-        let docs = id_of(&t, r"C:\Users\ali\Documents");
+        let docs = id_of(&t, r"C:\Users\user\Documents");
         let rq = t.toggle(docs, 5).remove(0);
         answer(&mut t, &rq, &disk(), 5);
-        assert_eq!(t.watch_set(), [PathBuf::from(r"C:\Users\ali\Documents"), PathBuf::from(r"C:\Users\ali")]);
+        assert_eq!(t.watch_set(), [PathBuf::from(r"C:\Users\user\Documents"), PathBuf::from(r"C:\Users\user")]);
         // a node open under a closed parent is not watched, and is again when the parent opens
-        let ali = id_of(&t, r"C:\Users\ali");
-        t.toggle(ali, 6);
+        let user = id_of(&t, r"C:\Users\user");
+        t.toggle(user, 6);
         assert!(t.watch_set().is_empty());
-        t.toggle(ali, 7);
+        t.toggle(user, 7);
         assert_eq!(t.watch_set().len(), 2);
         // the profile folder (a root) and the same folder under its drive are one watch
         let c = id_of(&t, r"C:\");
@@ -1615,14 +1615,14 @@ mod tests {
         let users = id_of(&t, r"C:\Users");
         let r = t.toggle(users, 9).remove(0);
         answer(&mut t, &r, &disk(), 9);
-        let second_ali = t.index[&norm(Path::new(r"C:\Users\ali"))][1];
+        let second_ali = t.index[&norm(Path::new(r"C:\Users\user"))][1];
         let r = t.toggle(second_ali, 10).remove(0);
         answer(&mut t, &r, &disk(), 10);
         let w = t.watch_set();
-        assert_eq!(w.iter().filter(|p| p.as_path() == Path::new(r"C:\Users\ali")).count(), 1);
-        assert_eq!(w.len(), 4, "C:\\, Users, ali and Documents: {w:?}");
+        assert_eq!(w.iter().filter(|p| p.as_path() == Path::new(r"C:\Users\user")).count(), 1);
+        assert_eq!(w.len(), 4, "C:\\, Users, user and Documents: {w:?}");
         // a change in that folder is applied to both nodes
-        assert!(t.apply_changes(Path::new(r"C:\Users\ali"), vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
+        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
         assert_eq!(labels(&t).iter().filter(|(_, n)| n == "Yeni").count(), 2);
         // the cap
         let mut many = NavTree::new();
@@ -1664,15 +1664,15 @@ mod tests {
     fn with_the_follow_setting_off_the_open_folder_is_marked_only_when_its_row_is_there() {
         let mut t = tree();
         // nothing is open: no listing, no opening, no scrolling
-        assert!(t.follow(Some(Path::new(r"C:\Users\ali\Documents")), 0, false).is_empty());
+        assert!(t.follow(Some(Path::new(r"C:\Users\user\Documents")), 0, false).is_empty());
         assert!(!t.marked_row().unwrap().1, "the closest open folder above carries the mark");
         assert!(t.take_scroll_target().is_none());
         assert_eq!(t.rows().len(), 3);
         // the user opens the branch by hand; the same folder is marked on the next navigation
-        let ali = id_of(&t, r"C:\Users\ali");
-        let r = t.toggle(ali, 1).remove(0);
+        let user = id_of(&t, r"C:\Users\user");
+        let r = t.toggle(user, 1).remove(0);
         answer(&mut t, &r, &disk(), 1);
-        assert!(t.follow(Some(Path::new(r"C:\Users\ali\Documents")), 2, false).is_empty());
+        assert!(t.follow(Some(Path::new(r"C:\Users\user\Documents")), 2, false).is_empty());
         let (row, exact) = t.marked_row().unwrap();
         assert!(exact);
         assert_eq!(t.info(&t.rows()[row], 0).label, "Documents");
@@ -1690,9 +1690,9 @@ mod tests {
         let users = id_of(&t, r"C:\Users");
         let r = t.toggle(users, 1).remove(0);
         answer(&mut t, &r, &disk(), 1);
-        let under_drive = t.index[&norm(Path::new(r"C:\Users\ali"))][1];
+        let under_drive = t.index[&norm(Path::new(r"C:\Users\user"))][1];
         t.select_node(under_drive);
-        assert!(t.is_marked(Path::new(r"c:\users\ali\")));
+        assert!(t.is_marked(Path::new(r"c:\users\user\")));
         assert_eq!(t.selected_id(), Some(under_drive));
         let (row, exact) = t.marked_row().unwrap();
         assert!(exact);
@@ -1814,13 +1814,13 @@ mod tests {
         let mut t = tree();
         follow_all(&mut t, r"C:\Windows", 0);
         let keep = id_of(&t, r"C:\");
-        t.set_roots(vec![root(r"C:\Users\ali", "ali", RootKind::Profile), root(r"C:\", "Yerel Disk (C:)", RootKind::Fixed)], 5);
+        t.set_roots(vec![root(r"C:\Users\user", "user", RootKind::Profile), root(r"C:\", "Yerel Disk (C:)", RootKind::Fixed)], 5);
         assert_eq!(t.root_count(), 2);
         assert!(t.live(keep) && t.nodes[keep as usize].expanded);
         assert!(!labels(&t).iter().any(|(_, n)| n == "Veri (D:)"));
-        t.set_roots(vec![root(r"C:\Users\ali", "ali", RootKind::Profile)], 6);
+        t.set_roots(vec![root(r"C:\Users\user", "user", RootKind::Profile)], 6);
         assert!(!t.live(keep));
-        assert_eq!(labels(&t), vec![(0, "ali".to_string())]);
+        assert_eq!(labels(&t), vec![(0, "user".to_string())]);
     }
 
     #[test]
@@ -1843,12 +1843,12 @@ mod tests {
     #[test]
     fn a_change_that_comes_while_a_quiet_relist_is_on_its_way_is_not_taken_away_again() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents", 0);
-        let ali = id_of(&t, r"C:\Users\ali");
-        t.toggle(ali, 1); // closed by hand
-        let relist = t.toggle(ali, 2).into_iter().find(|r| r.path == Path::new(r"C:\Users\ali")).expect("the node is listed again, quietly");
+        follow_all(&mut t, r"C:\Users\user\Documents", 0);
+        let user = id_of(&t, r"C:\Users\user");
+        t.toggle(user, 1); // closed by hand
+        let relist = t.toggle(user, 2).into_iter().find(|r| r.path == Path::new(r"C:\Users\user")).expect("the node is listed again, quietly");
         // The listing had passed the place where "Yeni" is made before it was made; the watcher reports it and the tree shows it.
-        assert!(t.apply_changes(Path::new(r"C:\Users\ali"), vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
+        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
         assert!(labels(&t).iter().any(|(_, n)| n == "Yeni"));
         // The answer comes without it. It must not leave the tree wrong: one more listing is asked for.
         let more = t.apply_listing(&relist, Ok(items(&["Documents", "Downloads", "dir10", "dir2"])), 3);
@@ -1856,24 +1856,24 @@ mod tests {
         t.apply_listing(&more[0], Ok(items(&["Documents", "Downloads", "dir10", "dir2", "Yeni"])), 4);
         assert!(labels(&t).iter().any(|(_, n)| n == "Yeni"), "the new folder is there");
         // and a listing nobody changed anything during asks for nothing more
-        let quiet = t.rescan(Path::new(r"C:\Users\ali")).remove(0);
+        let quiet = t.rescan(Path::new(r"C:\Users\user")).remove(0);
         assert!(t.apply_listing(&quiet, Ok(items(&["Documents", "Yeni"])), 5).is_empty());
     }
 
     #[test]
     fn reports_that_come_while_a_folder_is_being_listed_ask_for_one_more_listing_not_one_each() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents", 0);
-        let ali = Path::new(r"C:\Users\ali");
-        let first = t.rescan(ali).remove(0);
-        assert!(t.rescan(ali).is_empty(), "one listing at a time");
-        assert!(t.rescan(ali).is_empty());
+        follow_all(&mut t, r"C:\Users\user\Documents", 0);
+        let user = Path::new(r"C:\Users\user");
+        let first = t.rescan(user).remove(0);
+        assert!(t.rescan(user).is_empty(), "one listing at a time");
+        assert!(t.rescan(user).is_empty());
         let more = t.apply_listing(&first, Ok(items(&["Documents"])), 5);
         assert_eq!(more.len(), 1, "one more, for all the reports");
         assert!(t.apply_listing(&more[0], Ok(items(&["Documents"])), 6).is_empty());
         // a failed listing does not start a loop of its own
-        let fail = t.rescan(ali).remove(0);
-        assert!(t.rescan(ali).is_empty());
+        let fail = t.rescan(user).remove(0);
+        assert!(t.rescan(user).is_empty());
         assert!(t.apply_listing(&fail, Err(ListFailure::Other("x".into())), 7).is_empty());
     }
 
@@ -1924,11 +1924,11 @@ mod tests {
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn a_case_only_rename_gives_what_is_open_below_it_the_new_spelling() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents\a", 0);
-        let a = id_of(&t, r"C:\Users\ali\Documents\a");
-        assert!(t.apply_changes(Path::new(r"C:\Users\ali"), vec![Change { name: "documents".into(), item: Some(item("DOCUMENTS")) }]));
-        assert_eq!(t.path_of(a), Some(Path::new(r"C:\Users\ali\DOCUMENTS\a")));
-        assert!(t.nodes[id_of(&t, r"C:\Users\ali\Documents") as usize].expanded, "still open");
+        follow_all(&mut t, r"C:\Users\user\Documents\a", 0);
+        let a = id_of(&t, r"C:\Users\user\Documents\a");
+        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "documents".into(), item: Some(item("DOCUMENTS")) }]));
+        assert_eq!(t.path_of(a), Some(Path::new(r"C:\Users\user\DOCUMENTS\a")));
+        assert!(t.nodes[id_of(&t, r"C:\Users\user\Documents") as usize].expanded, "still open");
         assert!(t.marked_row().unwrap().1, "still the open folder");
     }
 
@@ -1963,7 +1963,7 @@ mod tests {
     #[test]
     fn a_root_that_stays_takes_the_new_label_and_kind() {
         let mut t = tree();
-        t.set_roots(vec![root(r"C:\Users\ali", "ali", RootKind::Profile), root(r"C:\", "Sistem (C:)", RootKind::Removable)], 1);
+        t.set_roots(vec![root(r"C:\Users\user", "user", RootKind::Profile), root(r"C:\", "Sistem (C:)", RootKind::Removable)], 1);
         let rows = t.rows().to_vec();
         assert_eq!(t.info(&rows[1], 1).label, "Sistem (C:)");
         assert_eq!(t.info(&rows[1], 1).root, Some(RootKind::Removable));
@@ -1973,18 +1973,18 @@ mod tests {
     #[test]
     fn the_row_of_a_node_is_found_without_a_scan_and_never_wrongly() {
         let mut t = tree();
-        follow_all(&mut t, r"C:\Users\ali\Documents\a", 0);
+        follow_all(&mut t, r"C:\Users\user\Documents\a", 0);
         for (i, r) in t.rows().to_vec().iter().enumerate() {
             assert_eq!(t.row_index(r.id), Some(i));
         }
         // a node that has no row (closed branch) and a node that was freed have none
-        let b = id_of(&t, r"C:\Users\ali\Documents\b");
-        let docs = id_of(&t, r"C:\Users\ali\Documents");
+        let b = id_of(&t, r"C:\Users\user\Documents\b");
+        let docs = id_of(&t, r"C:\Users\user\Documents");
         assert!(t.row_index(b).is_some());
         t.toggle(docs, 9);
         assert_eq!(t.row_index(b), None);
         t.toggle(docs, 10);
-        t.apply_changes(Path::new(r"C:\Users\ali\Documents"), vec![Change { name: "b".into(), item: None }]);
+        t.apply_changes(Path::new(r"C:\Users\user\Documents"), vec![Change { name: "b".into(), item: None }]);
         assert_eq!(t.row_index(b), None, "freed");
         assert_eq!(t.row_index(10_000), None);
     }

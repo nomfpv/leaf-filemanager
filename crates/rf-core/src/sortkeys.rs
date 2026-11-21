@@ -293,7 +293,7 @@ mod tests {
     fn spellings_of_one_folder_that_differ_in_case_share_a_rank_and_stay_one_block() {
         // Windows paths ignore case: a root typed as c:\users and one returned as C:\Users are one folder,
         // and a different folder that sorts between the two spellings must not split them
-        let folders = [r"C:\Users\Foo", r"C:\Users\Zed", r"c:\users\foo"];
+        let folders = [r"C:\Users\user\Foo", r"C:\Users\user\Zed", r"c:\users\user\foo"];
         assert_eq!(rank_paths(folders), vec![0, 1, 0]);
         let es = vec![file("b.txt", 0), file("a.txt", 0), file("c.txt", 0)];
         let ranks = rank_paths(folders);

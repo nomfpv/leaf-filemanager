@@ -142,7 +142,7 @@ mod tests {
             r"\\wsl.localhost\Ubuntu\home\me\src",
             r"\\wsl$\docker-desktop\mnt",
             r"\\nas\share\photos\2024",
-            r"C:\Users\me\Documents",
+            r"C:\Users\user\Documents",
             r"D:\",
         ] {
             let disk = SlowDisk::new(150);
@@ -263,8 +263,8 @@ mod tests {
 
     #[test]
     fn the_folders_a_breadcrumb_asks_for() {
-        let got = label_paths(Path::new(r"C:\Users\demo"));
-        assert_eq!(got, vec![PathBuf::from("C:"), PathBuf::from(r"C:\Users"), PathBuf::from(r"C:\Users\demo"), PathBuf::from(r"C:\")]);
+        let got = label_paths(Path::new(r"C:\Users\user"));
+        assert_eq!(got, vec![PathBuf::from("C:"), PathBuf::from(r"C:\Users"), PathBuf::from(r"C:\Users\user"), PathBuf::from(r"C:\")]);
         let got = label_paths(Path::new(r"\\wsl.localhost\Ubuntu\home"));
         assert!(got.contains(&PathBuf::from(r"\\wsl.localhost\Ubuntu\home")));
         assert_eq!(label_paths(Path::new("")), Vec::<PathBuf>::new());

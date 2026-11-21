@@ -151,7 +151,7 @@ impl Viewer for EmailViewer {
 mod tests {
     #[test]
     fn parses_a_multipart_mail_with_an_attachment() {
-        let raw = "From: =?UTF-8?Q?=C3=96zer_G=C3=BCzel?= <ozer@example.com>\r\n\
+        let raw = "From: =?UTF-8?Q?Zo=C3=AB_User?= <user@example.com>\r\n\
 To: Ali <ali@example.com>, veli@example.com\r\n\
 Subject: =?UTF-8?B?VGVzdCDDp8O2emfDvA==?=\r\n\
 Date: Sun, 08 Nov 2026 10:30:00 +0300\r\n\
@@ -171,7 +171,7 @@ JVBERi0xLjQK\r\n\
 --b1--\r\n";
         let m = super::parse(raw.as_bytes()).expect("parses");
         assert_eq!(m.subject, "Test çözgü");
-        assert_eq!(m.from, "Özer Güzel <ozer@example.com>");
+        assert_eq!(m.from, "Zoë User <user@example.com>");
         assert_eq!(m.to, "Ali <ali@example.com>, veli@example.com");
         assert!(m.body.starts_with("Merhaba, ekte rapor var."));
         assert_eq!(m.attachments, vec![("rapor.pdf".to_string(), 9)]);

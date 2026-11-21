@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn elevated_terminal_arguments() {
-        assert_eq!(super::terminal_args(Path::new(r"C:\Users\a b")), r#"-d "C:\Users\a b""#);
+        assert_eq!(super::terminal_args(Path::new(r"C:\Users\user\a b")), r#"-d "C:\Users\user\a b""#);
         // a drive root: the backslash must not escape the closing quote
         assert_eq!(super::terminal_args(Path::new(r"D:\")), r#"-d "D:\\""#);
         assert_eq!(super::powershell_args(Path::new(r"C:\it's")), r#"-NoExit -Command "Set-Location -LiteralPath 'C:\it''s'""#);

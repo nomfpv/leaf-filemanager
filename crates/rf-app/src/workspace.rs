@@ -3960,7 +3960,7 @@ pub(crate) fn drop_files(paths: &ExternalPaths, dest: PathBuf, cx: &mut App) {
 /// own folder under TEMP, hard-linked (instant on the same volume, and the file lives on when the archiver deletes its name) or else
 /// copied, and the transfer takes them from there. Anything else is returned as it was: a user's own files are never touched.
 fn hold_archiver_drop(sources: Vec<PathBuf>, temp: &Path) -> Vec<PathBuf> {
-    // (TEMP can be written short, `C:\Users\OZERO~1\...`, by one side and long by the other: both are compared in their long form)
+    // (TEMP can be written short, `C:\Users\USER~1\...`, by one side and long by the other: both are compared in their long form)
     let long = |p: &Path| -> PathBuf {
         std::fs::canonicalize(p).map_or_else(|_| p.to_path_buf(), |c| PathBuf::from(c.to_string_lossy().trim_start_matches(r"\\?\").to_string()))
     };
@@ -4080,7 +4080,7 @@ fn render_backend_badge(p: &Palette) -> impl IntoElement + use<> {
         })
 }
 
-/// "C:\Users\x" → [("C:", C:\), ("Users", C:\Users), ("x", C:\Users\x)]
+/// "C:\Users\user" → [("C:", C:\), ("Users", C:\Users), ("x", C:\Users\user)]
 fn breadcrumbs(path: &Path) -> Vec<(String, Location)> {
     let mut out = Vec::new();
     let mut acc = PathBuf::new();
@@ -4915,12 +4915,12 @@ mod tests {
     #[test]
     fn crumbs() {
         // the names are read on a worker in the app (FolderView::warm_labels); here the same call, first
-        rf_win::localized::warm(crate::nav_touch::label_paths(Path::new(r"C:\Users\demo")));
-        let c = breadcrumbs(Path::new(r"C:\Users\demo"));
+        rf_win::localized::warm(crate::nav_touch::label_paths(Path::new(r"C:\Users\user")));
+        let c = breadcrumbs(Path::new(r"C:\Users\user"));
         let labels: Vec<_> = c.iter().map(|(l, _)| l.as_str()).collect();
         // C:\Users shows Explorer's localized name ("Kullanıcılar" on Turkish Windows)
         let users = rf_win::localized::label_if_known(Path::new(r"C:\Users")).map_or("Users".to_string(), |l| l.to_string());
-        assert_eq!(labels, vec!["C:", users.as_str(), "demo"]);
+        assert_eq!(labels, vec!["C:", users.as_str(), "user"]);
         assert_ne!(users, "");
         assert_eq!(c[0].1, Location::Path(PathBuf::from(r"C:\")));
         assert_eq!(parse_location("d:"), Some(Location::Path(PathBuf::from(r"d:\"))));
@@ -5000,7 +5000,7 @@ mod launch_tests {
             parsing: r"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\?\usb#vid_04e8&pid_6860#r58n#{6ac27878-a6fa-4155-ba85-f98f491d4f33}".into(),
             name: "Galaxy S24".into(),
         };
-        for loc in [Location::Path(PathBuf::from(r"C:\Kullanıcılar\Özer")), Location::RecycleBin, Location::Downloads, phone] {
+        for loc in [Location::Path(PathBuf::from(r"C:\Kullanıcılar\user")), Location::RecycleBin, Location::Downloads, phone] {
             assert_eq!(parse_launch(&super::session_text(&loc)).0, loc);
         }
         // places a session can't keep come back as Home
@@ -5088,10 +5088,10 @@ mod hidden_places_tests {
     #[test]
     fn a_place_hidden_on_its_own_leaves_the_others() {
         let place = |p: &str| Pinned { title: p.into(), path: p.into(), icon: L::Cloud };
-        let all = vec![place(r"C:\Users\u\OneDrive"), place(r"C:\Users\u\Proton Drive"), place(r"\wsl.localhost\Ubuntu")];
-        let shown = visible_places(all.clone(), &[r"c:\users\u\onedrive".into()]);
+        let all = vec![place(r"C:\Users\user\OneDrive"), place(r"C:\Users\user\Proton Drive"), place(r"\wsl.localhost\Ubuntu")];
+        let shown = visible_places(all.clone(), &[r"c:\users\user\onedrive".into()]);
         let paths: Vec<_> = shown.iter().map(|p| p.path.to_string_lossy().into_owned()).collect();
-        assert_eq!(paths, [r"C:\Users\u\Proton Drive", r"\wsl.localhost\Ubuntu"], "the case of a path does not matter");
+        assert_eq!(paths, [r"C:\Users\user\Proton Drive", r"\wsl.localhost\Ubuntu"], "the case of a path does not matter");
         assert_eq!(visible_places(all, &[]).len(), 3);
     }
 }

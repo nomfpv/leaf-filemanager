@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn a_slideshow_or_spotlight_shows_the_picture_windows_reports() {
         for kind in [BackgroundKind::Slideshow, BackgroundKind::Spotlight] {
-            let w = wp(kind, &[Some(r"C:\Users\x\Wallpaper.jpg")]);
+            let w = wp(kind, &[Some(r"C:\Users\user\Wallpaper.jpg")]);
             assert!(matches!(backdrop_for(&w, 0, &|_| true), Backdrop::Picture { .. }), "{kind:?}");
         }
     }

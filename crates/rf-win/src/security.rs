@@ -19,7 +19,7 @@ use crate::wide::{from_wide, wide};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
-    /// What Windows shows in the list: "SYSTEM", "Administrators (PC\\Administrators)", "Ozer (PC\\ozero)", "Authenticated Users"; an unresolvable SID shows as the SID string.
+    /// What Windows shows in the list: "SYSTEM", "Administrators (PC\\Administrators)", "User (PC\\user)", "Authenticated Users"; an unresolvable SID shows as the SID string.
     pub name: String,
     /// The SID as a string ("S-1-5-18").
     pub sid: String,
@@ -69,7 +69,7 @@ unsafe fn wcslen(p: *const u16) -> usize {
 
 /// The way Explorer's list spells a principal. Well-known names stand alone ("SYSTEM", "Everyone");
 /// groups and accounts of this PC or a domain get their domain in brackets, and a local user's
-/// full name (when it has one) comes first: "Ozer (PC\ozero)".
+/// full name (when it has one) comes first: "User (PC\user)".
 unsafe fn display_name(sid: PSID, sid_text: &str) -> String {
     let mut name = vec![0u16; 256];
     let mut domain = vec![0u16; 256];

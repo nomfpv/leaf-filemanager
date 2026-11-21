@@ -341,18 +341,18 @@ mod tests {
     }
 
     fn prot() -> ProtectedPaths {
-        ProtectedPaths { user_profile: Some(PathBuf::from(r"C:\Users\Ali")), windows: Some(PathBuf::from(r"C:\Windows")), ..ProtectedPaths::default() }
+        ProtectedPaths { user_profile: Some(PathBuf::from(r"C:\Users\user")), windows: Some(PathBuf::from(r"C:\Windows")), ..ProtectedPaths::default() }
     }
 
     #[test]
     fn nothing_is_wanted_unless_the_master_switch_and_an_automatic_rule_say_so() {
         let yes = |_: &std::path::Path| true;
-        let rules = vec![rule(1, r"C:\Users\Ali\Downloads", true, false)];
+        let rules = vec![rule(1, r"C:\Users\user\Downloads", true, false)];
         assert!(wanted(&file(false, rules.clone()), &prot(), &yes).is_empty(), "master switch off");
         assert_eq!(wanted(&file(true, rules), &prot(), &yes).len(), 1);
-        assert!(wanted(&file(true, vec![rule(1, r"C:\Users\Ali\Downloads", false, false)]), &prot(), &yes).is_empty(), "no rule runs by itself");
+        assert!(wanted(&file(true, vec![rule(1, r"C:\Users\user\Downloads", false, false)]), &prot(), &yes).is_empty(), "no rule runs by itself");
         assert!(wanted(&file(true, vec![]), &prot(), &yes).is_empty());
-        let mut off = rule(1, r"C:\Users\Ali\Downloads", true, false);
+        let mut off = rule(1, r"C:\Users\user\Downloads", true, false);
         off.enabled = false;
         assert!(wanted(&file(true, vec![off]), &prot(), &yes).is_empty(), "a switched-off rule does not watch");
     }
@@ -362,15 +362,15 @@ mod tests {
         let yes = |_: &std::path::Path| true;
         let f = file(
             true,
-            vec![rule(1, r"C:\", true, false), rule(2, r"C:\Windows\Temp", true, false), rule(3, r"C:\Users\Ali", true, false), rule(4, "Downloads", true, false), rule(5, r"C:\Users\Ali\Desktop", true, false)],
+            vec![rule(1, r"C:\", true, false), rule(2, r"C:\Windows\Temp", true, false), rule(3, r"C:\Users\user", true, false), rule(4, "Downloads", true, false), rule(5, r"C:\Users\user\Desktop", true, false)],
         );
         let w = wanted(&f, &prot(), &yes);
-        assert_eq!(w.iter().map(|w| w.folder.to_string_lossy().into_owned()).collect::<Vec<_>>(), [r"C:\Users\Ali\Desktop"]);
+        assert_eq!(w.iter().map(|w| w.folder.to_string_lossy().into_owned()).collect::<Vec<_>>(), [r"C:\Users\user\Desktop"]);
         // a folder that is not there cannot be watched
         let no = |_: &std::path::Path| false;
         assert!(wanted(&f, &prot(), &no).is_empty());
         // an invalid rule (no destination)
-        let mut bad = rule(1, r"C:\Users\Ali\Downloads", true, false);
+        let mut bad = rule(1, r"C:\Users\user\Downloads", true, false);
         bad.action = Action::MoveTo { folder: PathBuf::new() };
         assert!(wanted(&file(true, vec![bad]), &prot(), &yes).is_empty());
     }
@@ -381,15 +381,15 @@ mod tests {
         let f = file(
             true,
             vec![
-                rule(1, r"C:\Users\Ali\Downloads", true, false),
-                rule(2, r"c:\users\ali\downloads\", true, true),
+                rule(1, r"C:\Users\user\Downloads", true, false),
+                rule(2, r"c:\users\user\downloads\", true, true),
                 rule(3, r"D:\Gelen", true, false),
                 rule(4, r"D:\Gelen", false, true),
             ],
         );
         let w = wanted(&f, &prot(), &yes);
         assert_eq!(w.len(), 2);
-        assert_eq!(w.iter().map(|w| (w.key.as_str(), w.tree)).collect::<Vec<_>>(), [(r"c:\users\ali\downloads", true), (r"d:\gelen", false)]);
+        assert_eq!(w.iter().map(|w| (w.key.as_str(), w.tree)).collect::<Vec<_>>(), [(r"c:\users\user\downloads", true), (r"d:\gelen", false)]);
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
         use rf_core::organize::{Cmp, TimeField};
         let yes = |_: &std::path::Path| true;
         let age = |cmp| Condition::Age { field: TimeField::Modified, cmp, days: 30 };
-        let mut old = rule(1, r"C:\Users\Ali\Downloads", true, false);
+        let mut old = rule(1, r"C:\Users\user\Downloads", true, false);
         old.conditions = vec![age(Cmp::Greater)];
         // files unpacked or copied in keep their old dates: the watcher must not take them for old files
         assert!(wanted(&file(true, vec![old.clone()]), &prot(), &yes).is_empty());

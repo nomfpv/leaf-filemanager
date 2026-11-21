@@ -179,7 +179,7 @@ fn unc_share_root(p: &Path) -> Option<PathBuf> {
     (!server.is_empty() && !share.is_empty() && !share.contains('\\')).then(|| PathBuf::from(format!(r"\\{server}")))
 }
 
-/// "C:\" → "C:", "C:\Users\x" → "x"; on Unix "/" stays "/".
+/// "C:\" → "C:", "C:\Users\user" → "x"; on Unix "/" stays "/".
 pub fn display_name(p: &Path) -> String {
     match p.file_name() {
         Some(n) => redact_credentials(&n.to_string_lossy()),
@@ -458,7 +458,7 @@ mod clean_tests {
     #[test]
     fn clean_paths() {
         let c = |s: &str| clean_path(Path::new(s)).to_string_lossy().replace('\\', "|");
-        assert_eq!(c("C:/Users/x/./y/../z/"), "C:|Users|x|z");
+        assert_eq!(c("C:/Users/user/./y/../z/"), "C:|Users|user|z");
         assert_eq!(c("c:||a||b".replace('|', "\\").as_str()), "C:|a|b");
         assert_eq!(c("d:"), "D:|");
         assert_eq!(c("D:/"), "D:|");
@@ -516,8 +516,8 @@ mod search_ms_tests {
 
     #[test]
     fn search_links_open_a_search() {
-        let l = Location::from_search_ms("search-ms:query=rapor&crumb=location:C%3A%5CUsers%5Cozero");
-        assert_eq!(l, Some(Location::Search { root: PathBuf::from(r"C:\Users\ozero"), query: "rapor".into() }));
+        let l = Location::from_search_ms("search-ms:query=rapor&crumb=location:C%3A%5CUsers%5Cuser");
+        assert_eq!(l, Some(Location::Search { root: PathBuf::from(r"C:\Users\user"), query: "rapor".into() }));
         // plain path, other parameters, a spaced query, the first location wins
         let l = Location::from_search_ms(r#""search-ms:displayname=Ara&crumb=location:D:\İş Klasörü&query=yıl+sonu%20raporu&crumb=location:E:\""#);
         assert_eq!(l, Some(Location::Search { root: PathBuf::from(r"D:\İş Klasörü"), query: "yıl sonu raporu".into() }));
@@ -565,13 +565,13 @@ mod unix_tests {
     fn going_up_on_unix() {
         assert_eq!(Location::Path("/".into()).parent(), Some(Location::Home));
         assert_eq!(Location::Path("/Users".into()).parent(), Some(Location::Path("/".into())));
-        assert_eq!(Location::Path("/Users/ali/Belgeler".into()).parent(), Some(Location::Path("/Users/ali".into())));
+        assert_eq!(Location::Path("/Users/user/Belgeler".into()).parent(), Some(Location::Path("/Users/user".into())));
     }
 
     #[test]
     fn names_on_unix() {
         assert_eq!(display_name(Path::new("/")), "/");
-        assert_eq!(display_name(Path::new("/Users/ali/Öğrenci")), "Öğrenci");
+        assert_eq!(display_name(Path::new("/Users/user/Öğrenci")), "Öğrenci");
         assert_eq!(display_name(Path::new("/Volumes/Yedek/")), "Yedek");
     }
 }

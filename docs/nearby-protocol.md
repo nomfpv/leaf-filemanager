@@ -14,7 +14,7 @@ DNS-SD over mDNS. Every device that is visible registers:
 | key | value |
 |---|---|
 | `id` | device id (see Identity) |
-| `name` | the name to show ("Özer's PC") |
+| `name` | the name to show ("User's PC") |
 | `os` | `windows`, `macos`, `linux` |
 | `proto` | protocol version, `1` |
 | `vis` | `trusted` (lists only for its trusted devices) or `everyone` |

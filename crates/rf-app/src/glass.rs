@@ -573,8 +573,8 @@ mod tests {
     #[test]
     fn keys_follow_the_entry_not_the_place() {
         use rf_core::history::Location;
-        let a = Location::Path("C:\\Users\\a\\Desktop".into());
-        let b = Location::Path("C:\\Users\\a\\Downloads".into());
+        let a = Location::Path("C:\\Users\\user\\Desktop".into());
+        let b = Location::Path("C:\\Users\\user\\Downloads".into());
         assert_eq!(super::key_of(&a), super::key_of(&a.clone()));
         assert_ne!(super::key_of(&a), super::key_of(&b));
         assert_ne!(super::key_of(&Location::Home), super::key_of(&Location::Settings));

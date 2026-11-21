@@ -354,7 +354,7 @@ mod tests {
 
     fn base() -> MemRegistry {
         MemRegistry::new()
-            .cu_string(KEY_DESKTOP, "WallPaper", r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Themes\TranscodedWallpaper")
+            .cu_string(KEY_DESKTOP, "WallPaper", r"C:\Users\user\AppData\Roaming\Microsoft\Windows\Themes\TranscodedWallpaper")
             .cu_string(KEY_DESKTOP, "WallpaperStyle", "10")
             .cu_string(KEY_DESKTOP, "TileWallpaper", "0")
             .cu_string(KEY_COLORS, "Background", "195 0 82")

@@ -69,22 +69,22 @@ fn the_starter_is_the_downloads_to_pictures_example_and_is_not_saved() {
 #[test]
 fn rules_are_grouped_by_folder_whatever_the_spelling() {
     let mut f = RulesFile::default();
-    let mut a = blank_rule(PathBuf::from(r"C:\Users\Ali\Downloads"));
+    let mut a = blank_rule(PathBuf::from(r"C:\Users\user\Downloads"));
     a.name = "a".into();
     f.add(a.clone());
-    a.folder = PathBuf::from(r"c:/users/ali/DOWNLOADS/");
+    a.folder = PathBuf::from(r"c:/users/user/DOWNLOADS/");
     a.name = "b".into();
     f.add(a.clone());
-    a.folder = PathBuf::from(r"C:\Users\Ali\Desktop");
+    a.folder = PathBuf::from(r"C:\Users\user\Desktop");
     a.name = "c".into();
     f.add(a.clone());
-    a.folder = PathBuf::from(r"C:\Users\Ali\Downloads");
+    a.folder = PathBuf::from(r"C:\Users\user\Downloads");
     a.name = "kapalı".into();
     a.enabled = false;
     f.add(a);
-    let names: Vec<String> = rules_of_folder(&f, Path::new(r"C:\USERS\ali\downloads")).into_iter().map(|r| r.name).collect();
+    let names: Vec<String> = rules_of_folder(&f, Path::new(r"C:\USERS\USER\downloads")).into_iter().map(|r| r.name).collect();
     assert_eq!(names, ["a", "b"], "same place spelled differently, switched-off rules left out");
-    assert!(rules_of_folder(&f, Path::new(r"C:\Users\Ali\Documents")).is_empty());
+    assert!(rules_of_folder(&f, Path::new(r"C:\Users\user\Documents")).is_empty());
 }
 
 #[test]

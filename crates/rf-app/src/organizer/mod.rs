@@ -203,7 +203,7 @@ pub fn refusal(protected: &ProtectedPaths, folder: &Path, subfolders: bool) -> O
     protected.refuse(folder, subfolders).or_else(|| {
         let real = std::fs::canonicalize(folder).ok()?;
         // The real path is compared with the protected places as they are written AND as their own real paths: a protected place can
-        // be written in another spelling than the one the system resolves to (a short 8.3 name such as C:\Users\RUNNER~1, which is
+        // be written in another spelling than the one the system resolves to (a short 8.3 name such as C:\Users\USER~1, which is
         // what %TEMP% holds on some machines; a place that is itself reached through a link), and then the two texts never meet.
         protected.refuse(&real, subfolders).or_else(|| real_places(protected).refuse(&real, subfolders))
     })

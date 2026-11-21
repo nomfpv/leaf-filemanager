@@ -193,9 +193,9 @@ mod tests {
         ProtectedPaths {
             windows: Some(PathBuf::from(r"C:\Windows")),
             program_files: vec![PathBuf::from(r"C:\Program Files"), PathBuf::from(r"C:\Program Files (x86)"), PathBuf::from(r"C:\ProgramData")],
-            user_profile: Some(PathBuf::from(r"C:\Users\Özer")),
-            app_data: vec![PathBuf::from(r"C:\Users\Özer\AppData")],
-            app_dirs: vec![PathBuf::from(r"C:\Users\Özer\AppData\Roaming\rustyfiles"), PathBuf::from(r"D:\portable\rustyfiles")],
+            user_profile: Some(PathBuf::from(r"C:\Users\user")),
+            app_data: vec![PathBuf::from(r"C:\Users\user\AppData")],
+            app_dirs: vec![PathBuf::from(r"C:\Users\user\AppData\Roaming\rustyfiles"), PathBuf::from(r"D:\portable\rustyfiles")],
             app_files: vec![PathBuf::from(r"E:\Indirilenler\rustyfiles.exe")],
         }
     }
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn norm_and_inside() {
-        assert_eq!(norm(Path::new(r"\\?\C:\Users\ALİ\")), norm(Path::new("c:/users/ali")));
+        assert_eq!(norm(Path::new(r"\\?\C:\Users\user\DİR\")), norm(Path::new("c:/users/user/dir")));
         assert_eq!(norm(Path::new(r"\\?\UNC\srv\share\x")), norm(Path::new(r"\\srv\share\x")));
         assert_eq!(norm(Path::new(r"C:\")), r"c:\");
         assert!(is_inside(&norm(Path::new(r"C:\a\b")), &norm(Path::new(r"C:\A"))));
@@ -242,31 +242,31 @@ mod tests {
         assert_eq!(r(r"C:\Program Files", false), Some(Refusal::ProgramFiles));
         assert_eq!(r(r"C:\Program Files (x86)\Foo", false), Some(Refusal::ProgramFiles));
         assert_eq!(r(r"C:\ProgramData", false), Some(Refusal::ProgramFiles));
-        assert_eq!(r(r"C:\Users\Özer", false), Some(Refusal::UserProfile));
-        assert_eq!(r(r"c:\users\özer\", false), Some(Refusal::UserProfile));
-        assert_eq!(r(r"C:\Users\Özer\AppData", false), Some(Refusal::AppData));
-        assert_eq!(r(r"C:\Users\Özer\AppData\Local\Temp", false), Some(Refusal::AppData));
-        assert_eq!(r(r"C:\Users\Özer\AppData\Roaming\rustyfiles\jobs", false), Some(Refusal::AppData));
+        assert_eq!(r(r"C:\Users\user", false), Some(Refusal::UserProfile));
+        assert_eq!(r(r"c:\users\user\", false), Some(Refusal::UserProfile));
+        assert_eq!(r(r"C:\Users\user\AppData", false), Some(Refusal::AppData));
+        assert_eq!(r(r"C:\Users\user\AppData\Local\Temp", false), Some(Refusal::AppData));
+        assert_eq!(r(r"C:\Users\user\AppData\Roaming\rustyfiles\jobs", false), Some(Refusal::AppData));
         assert_eq!(r(r"D:\portable\rustyfiles", false), Some(Refusal::AppOwn));
         assert_eq!(r(r"D:\portable\rustyfiles\index", false), Some(Refusal::AppOwn));
         // fine
-        assert_eq!(r(r"C:\Users\Özer\Downloads", false), None);
-        assert_eq!(r(r"C:\Users\Özer\Desktop", true), None);
+        assert_eq!(r(r"C:\Users\user\Downloads", false), None);
+        assert_eq!(r(r"C:\Users\user\Desktop", true), None);
         assert_eq!(r(r"D:\Belgeler", false), None);
         assert_eq!(r(r"D:\portable", false), None);
         // with subfolders a folder that holds a protected place is refused as well
         assert_eq!(r(r"D:\portable", true), Some(Refusal::AppOwn));
         assert_eq!(r(r"C:\Users", true), Some(Refusal::AppData));
         assert_eq!(r(r"C:\Users", false), None);
-        assert_eq!(r(r"C:\Users\Özer", true), Some(Refusal::AppData));
+        assert_eq!(r(r"C:\Users\user", true), Some(Refusal::AppData));
     }
 
     #[test]
     fn the_apps_own_files() {
         let p = prot();
-        assert!(p.is_app_file(Path::new(r"C:\Users\Özer\AppData\Roaming\rustyfiles\settings.toml")));
+        assert!(p.is_app_file(Path::new(r"C:\Users\user\AppData\Roaming\rustyfiles\settings.toml")));
         assert!(p.is_app_file(Path::new(r"d:\PORTABLE\rustyfiles\x.bozuk-1")));
-        assert!(!p.is_app_file(Path::new(r"C:\Users\Özer\Downloads\settings.toml")));
+        assert!(!p.is_app_file(Path::new(r"C:\Users\user\Downloads\settings.toml")));
         assert!(!ProtectedPaths::default().is_app_file(Path::new(r"C:\x")));
     }
 
@@ -288,11 +288,11 @@ mod tests {
         let r = |s: &str| p.refuse_dest(Path::new(s));
         assert_eq!(r(r"C:\Windows\System32"), Some(Refusal::WindowsFolder));
         assert_eq!(r(r"C:\Program Files\Foo"), Some(Refusal::ProgramFiles));
-        assert_eq!(r(r"C:\Users\Özer\AppData\Roaming\Foo"), Some(Refusal::AppData));
+        assert_eq!(r(r"C:\Users\user\AppData\Roaming\Foo"), Some(Refusal::AppData));
         assert_eq!(r(r"D:\portable\rustyfiles\x"), Some(Refusal::AppOwn));
         // the profile folder itself and its ordinary folders are fine places to send files to
-        assert_eq!(r(r"C:\Users\Özer"), None);
-        assert_eq!(r(r"C:\Users\Özer\Pictures\2026"), None);
+        assert_eq!(r(r"C:\Users\user"), None);
+        assert_eq!(r(r"C:\Users\user\Pictures\2026"), None);
         assert_eq!(r(r"D:\Arşiv"), None);
         assert_eq!(r(r"C:\"), None);
     }

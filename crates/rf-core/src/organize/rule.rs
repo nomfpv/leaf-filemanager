@@ -504,7 +504,7 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn templates_are_checked() {
-        assert!(check_template(r"C:\Users\ali\Pictures\{year}\{month}", true).is_ok());
+        assert!(check_template(r"C:\Users\user\Pictures\{year}\{month}", true).is_ok());
         assert!(check_template(r"Sıralı\{kind}", true).is_ok());
         assert_eq!(check_template(r"C:\x\{yıl}", true), Err(RuleProblem::UnknownVariable("yıl".into())));
         assert_eq!(check_template(r"C:\x\..\y", true), Err(RuleProblem::BadTemplate));
@@ -528,9 +528,9 @@ mod tests {
     fn rules_are_validated() {
         let ok = Rule {
             name: "Resimler".into(),
-            folder: PathBuf::from(r"C:\Users\ali\Downloads"),
+            folder: PathBuf::from(r"C:\Users\user\Downloads"),
             conditions: vec![Condition::Extension { list: vec!["jpg".into()] }],
-            action: Action::MoveTo { folder: PathBuf::from(r"C:\Users\ali\Pictures") },
+            action: Action::MoveTo { folder: PathBuf::from(r"C:\Users\user\Pictures") },
             ..Rule::default()
         };
         assert_eq!(ok.validate(), Ok(()));

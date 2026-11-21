@@ -268,7 +268,7 @@ mod tests {
         create(&lnk, &target).unwrap();
         assert!(lnk.exists());
         let info = resolve(&lnk).unwrap();
-        // compare real paths: the temp folder may come as a short 8.3 name (C:\Users\RUNNER~1)
+        // compare real paths: the temp folder may come as a short 8.3 name (C:\Users\USER~1)
         // while the shortcut resolves to the long one
         let same = |a: &std::path::Path, b: &std::path::Path| std::fs::canonicalize(a).unwrap() == std::fs::canonicalize(b).unwrap();
         assert!(same(&info.target, &target), "{:?} vs {:?}", info.target, target);

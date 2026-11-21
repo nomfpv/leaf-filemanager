@@ -179,7 +179,7 @@ mod tests {
     fn an_uninstall_entry_is_an_editor_by_its_name_and_its_program() {
         let entry = |display: &str, icon: &str| from_entry(display, icon).map(|(i, exe)| (name(i), exe));
         // as read off a machine that has it: the IDE is not taken for the editor whose name its own starts with
-        let ide = r"C:\Users\x\AppData\Local\Programs\Antigravity IDE\Antigravity IDE.exe";
+        let ide = r"C:\Users\user\AppData\Local\Programs\Antigravity IDE\Antigravity IDE.exe";
         assert_eq!(entry("Antigravity IDE (User)", ide), Some(("Antigravity IDE", PathBuf::from(ide))));
         assert_eq!(entry("Antigravity (User)", r"C:\P\Antigravity\Antigravity.exe").map(|e| e.0), Some("Antigravity"));
         // an icon as installers write it: quoted, with the icon's number

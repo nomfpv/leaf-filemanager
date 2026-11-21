@@ -210,9 +210,9 @@ mod tests {
 
     #[test]
     fn the_name_beats_the_parents_and_recency_breaks_ties() {
-        let v = [visit(r"C:\Users\me\Downloads\old", 3, 1), visit(r"D:\Downloads", 2, 1), visit(r"E:\x", 1, 1)];
+        let v = [visit(r"C:\Users\user\Downloads\old", 3, 1), visit(r"D:\Downloads", 2, 1), visit(r"E:\x", 1, 1)];
         let r: Vec<_> = rank(&v, "down").into_iter().map(|(_, v)| v.path.to_string_lossy().into_owned()).collect();
-        assert_eq!(r, [r"D:\Downloads", r"C:\Users\me\Downloads\old"]);
+        assert_eq!(r, [r"D:\Downloads", r"C:\Users\user\Downloads\old"]);
         // nothing typed: all of them, most recent first
         let all: Vec<_> = rank(&v, "").into_iter().map(|(_, v)| v.last_ms).collect();
         assert_eq!(all, [3, 2, 1]);

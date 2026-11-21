@@ -168,7 +168,7 @@ mod tests {
     fn sample() -> Rule {
         Rule {
             name: "İndirilenler: resimler".into(),
-            folder: PathBuf::from(r"C:\Users\Ali\Downloads"),
+            folder: PathBuf::from(r"C:\Users\user\Downloads"),
             subfolders: true,
             join: Join::Any,
             conditions: vec![
@@ -178,7 +178,7 @@ mod tests {
                 Condition::Size { cmp: Cmp::Greater, bytes: 5 << 20 },
                 Condition::Age { field: TimeField::Created, cmp: Cmp::Less, days: 14 },
             ],
-            action: Action::MoveToTemplate { template: r"C:\Users\Ali\Pictures\{year}\{month}".into() },
+            action: Action::MoveToTemplate { template: r"C:\Users\user\Pictures\{year}\{month}".into() },
             auto: true,
             ..Rule::default()
         }

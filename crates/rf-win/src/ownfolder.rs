@@ -72,12 +72,12 @@ pub fn leave() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    const EXE: &str = r"C:\Users\x\AppData\Local\rustyfiles\current\rustyfiles.exe";
+    const EXE: &str = r"C:\Users\user\AppData\Local\rustyfiles\current\rustyfiles.exe";
 
     #[test]
     fn the_installation_is_the_folder_above_current() {
-        assert_eq!(install_root(Path::new(EXE)), Some(PathBuf::from(r"C:\Users\x\AppData\Local\rustyfiles")));
-        assert_eq!(install_root(Path::new(r"C:\Users\x\AppData\Local\rustyfiles\CURRENT\directlook.exe")), Some(PathBuf::from(r"C:\Users\x\AppData\Local\rustyfiles")));
+        assert_eq!(install_root(Path::new(EXE)), Some(PathBuf::from(r"C:\Users\user\AppData\Local\rustyfiles")));
+        assert_eq!(install_root(Path::new(r"C:\Users\user\AppData\Local\rustyfiles\CURRENT\directlook.exe")), Some(PathBuf::from(r"C:\Users\user\AppData\Local\rustyfiles")));
         // a portable copy or a build: the program's own folder
         assert_eq!(install_root(Path::new(r"D:\tools\rustyfiles\rustyfiles.exe")), Some(PathBuf::from(r"D:\tools\rustyfiles")));
         assert_eq!(install_root(Path::new(r"C:\dev\rustyfiles\target\release\rustyfiles.exe")), Some(PathBuf::from(r"C:\dev\rustyfiles\target\release")));
@@ -89,21 +89,21 @@ mod tests {
     fn a_process_started_in_its_installation_leaves_and_any_other_stays() {
         let exe = Path::new(EXE);
         // what the shortcut's "Start in" and the updater's restart give
-        assert!(must_leave(exe, Path::new(r"C:\Users\x\AppData\Local\rustyfiles\current")));
-        assert!(must_leave(exe, Path::new(r"C:\Users\x\AppData\Local\rustyfiles\current\")));
-        assert!(must_leave(exe, Path::new(r"\\?\C:\Users\x\AppData\Local\rustyfiles\current")));
-        assert!(must_leave(exe, Path::new(r"c:\users\X\appdata\local\RUSTYFILES\Current")), "cases are not told apart");
-        assert!(must_leave(exe, Path::new(r"C:\Users\x\AppData\Local\rustyfiles")), "the installation itself: an uninstall removes it");
-        assert!(must_leave(exe, Path::new(r"C:/Users/x/AppData/Local/rustyfiles/current")));
+        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles\current")));
+        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles\current\")));
+        assert!(must_leave(exe, Path::new(r"\\?\C:\Users\user\AppData\Local\rustyfiles\current")));
+        assert!(must_leave(exe, Path::new(r"c:\users\USER\appdata\local\RUSTYFILES\Current")), "cases are not told apart");
+        assert!(must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles")), "the installation itself: an uninstall removes it");
+        assert!(must_leave(exe, Path::new(r"C:/Users/user/AppData/Local/rustyfiles/current")));
         // a terminal that starts `rustyfiles .` somewhere else means that folder
-        assert!(!must_leave(exe, Path::new(r"C:\Users\x\Documents")));
-        assert!(!must_leave(exe, Path::new(r"C:\Users\x\AppData\Local")));
-        assert!(!must_leave(exe, Path::new(r"C:\Users\x\AppData\Local\rustyfiles-data")), "a folder that only begins with the same letters");
+        assert!(!must_leave(exe, Path::new(r"C:\Users\user\Documents")));
+        assert!(!must_leave(exe, Path::new(r"C:\Users\user\AppData\Local")));
+        assert!(!must_leave(exe, Path::new(r"C:\Users\user\AppData\Local\rustyfiles-data")), "a folder that only begins with the same letters");
         assert!(!must_leave(exe, Path::new(r"D:\")));
         // the copy of the program that shows the update window runs from the temporary folder
-        let copy = Path::new(r"C:\Users\x\AppData\Local\Temp\rustyfiles-update\rustyfiles-update.exe");
-        assert!(!must_leave(copy, Path::new(r"C:\Users\x\AppData\Local\Temp")));
-        assert!(must_leave(copy, Path::new(r"C:\Users\x\AppData\Local\Temp\rustyfiles-update")));
+        let copy = Path::new(r"C:\Users\user\AppData\Local\Temp\rustyfiles-update\rustyfiles-update.exe");
+        assert!(!must_leave(copy, Path::new(r"C:\Users\user\AppData\Local\Temp")));
+        assert!(must_leave(copy, Path::new(r"C:\Users\user\AppData\Local\Temp\rustyfiles-update")));
     }
 
     #[test]
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn the_way_out_is_the_profile_and_the_temporary_folder_without_one() {
-        assert_eq!(neutral(Some(PathBuf::from(r"C:\Users\x")), PathBuf::from(r"C:\T")), PathBuf::from(r"C:\Users\x"));
+        assert_eq!(neutral(Some(PathBuf::from(r"C:\Users\user")), PathBuf::from(r"C:\T")), PathBuf::from(r"C:\Users\user"));
         assert_eq!(neutral(None, PathBuf::from(r"C:\T")), PathBuf::from(r"C:\T"));
     }
 

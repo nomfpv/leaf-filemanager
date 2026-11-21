@@ -470,7 +470,7 @@ mod tests {
     fn the_tab_search_finds_a_tab_by_its_name_or_place_open_ones_first() {
         use super::{TabEntry, filter_tabs};
         let t = |label: &str, detail: &str, closed: bool, id: usize| TabEntry { label: label.into(), detail: detail.into(), closed, id };
-        let tabs = vec![t("Downloads", "C:/Users/u/Downloads", false, 0), t("Projects", "D:/Work/Projects", false, 1), t("Downloads", "E:/Old/Downloads", true, 0)];
+        let tabs = vec![t("Downloads", "C:/Users/user/Downloads", false, 0), t("Projects", "D:/Work/Projects", false, 1), t("Downloads", "E:/Old/Downloads", true, 0)];
         assert_eq!(filter_tabs(&tabs, ""), vec![Row::Tab(0), Row::Tab(1), Row::Tab(2)], "all, open ones first");
         assert_eq!(filter_tabs(&tabs, "down"), vec![Row::Tab(0), Row::Tab(2)], "the open one before the closed one of the same name");
         assert_eq!(filter_tabs(&tabs, "work"), vec![Row::Tab(1)], "by its place too");
@@ -480,7 +480,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn visits() -> Vec<Visit> {
-        [r"D:\Projeler\rustyfiles", r"C:\Users\me\Downloads", r"C:\Windows"]
+        [r"D:\Projeler\rustyfiles", r"C:\Users\user\Downloads", r"C:\Windows"]
             .iter()
             .enumerate()
             .map(|(i, p)| Visit { path: PathBuf::from(p), last_ms: 10 - i as i64, count: 1 })
@@ -496,7 +496,7 @@ mod tests {
         let (cmds, v) = (commands(), visits());
         let on = PaletteMode::Commands { with_folders: true };
         assert!(folders(&filter(on, &cmds, &v, "")).is_empty(), "nothing typed: the commands as before");
-        assert_eq!(folders(&filter(on, &cmds, &v, "downl")), [r"C:\Users\me\Downloads"]);
+        assert_eq!(folders(&filter(on, &cmds, &v, "downl")), [r"C:\Users\user\Downloads"]);
         assert!(folders(&filter(PaletteMode::Commands { with_folders: false }, &cmds, &v, "downl")).is_empty());
     }
 
@@ -504,7 +504,7 @@ mod tests {
     fn folder_mode_lists_past_folders_only_most_recent_first() {
         let (cmds, v) = (commands(), visits());
         let all = filter(PaletteMode::Folders, &cmds, &v, "");
-        assert_eq!(folders(&all), [r"D:\Projeler\rustyfiles", r"C:\Users\me\Downloads", r"C:\Windows"]);
+        assert_eq!(folders(&all), [r"D:\Projeler\rustyfiles", r"C:\Users\user\Downloads", r"C:\Windows"]);
         assert_eq!(all.len(), 3, "no commands");
         assert_eq!(folders(&filter(PaletteMode::Folders, &cmds, &v, "rusty")), [r"D:\Projeler\rustyfiles"]);
     }

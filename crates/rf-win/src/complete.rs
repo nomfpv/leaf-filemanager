@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// Splits `C:\Users\oz` into (`C:\Users\`, `oz`). `None` when there is no directory part.
+/// Splits `C:\Users\user` into (`C:\Users\`, `user`). `None` when there is no directory part.
 fn split(input: &str) -> Option<(PathBuf, String)> {
     let cut = input.rfind(['\\', '/'])?;
     let (dir, rest) = input.split_at(cut + 1);
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn splits() {
-        assert_eq!(split(r"C:\Users\oz"), Some((PathBuf::from(r"C:\Users\"), "oz".into())));
+        assert_eq!(split(r"C:\Users\user"), Some((PathBuf::from(r"C:\Users\"), "user".into())));
         assert_eq!(split(r"C:\"), Some((PathBuf::from(r"C:\"), "".into())));
         assert_eq!(split("abc"), None);
     }

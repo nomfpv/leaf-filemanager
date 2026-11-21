@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn an_id_has_a_provider_a_user_and_an_account() {
-        assert_eq!(id_parts("ProtonDrive!S-1-5-21-1-2-3-1001!user@proton.me"), ("ProtonDrive", "S-1-5-21-1-2-3-1001", "user@proton.me"));
+        assert_eq!(id_parts("ProtonDrive!S-1-5-21-1-2-3-1001!user@example.com"), ("ProtonDrive", "S-1-5-21-1-2-3-1001", "user@example.com"));
         assert_eq!(id_parts("OneDrive!S-1-5-21-1!Personal"), ("OneDrive", "S-1-5-21-1", "Personal"));
         assert_eq!(id_parts("Odd"), ("Odd", "", ""));
     }

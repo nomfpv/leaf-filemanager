@@ -296,9 +296,9 @@ mod tests {
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn place_command_or_neither() {
         let folder = PathBuf::from(r"D:\Work");
-        let exists = |p: &Path| p == Path::new(r"D:\Work") || p == Path::new(r"D:\Work\cmd") || p == Path::new(r"C:\Users\x");
+        let exists = |p: &Path| p == Path::new(r"D:\Work") || p == Path::new(r"D:\Work\cmd") || p == Path::new(r"C:\Users\user");
         // an existing place wins
-        assert_eq!(decide(r"C:\Users\x", &[PathBuf::from(r"C:\Users\x")], &exists), Intent::Place(PathBuf::from(r"C:\Users\x")));
+        assert_eq!(decide(r"C:\Users\user", &[PathBuf::from(r"C:\Users\user")], &exists), Intent::Place(PathBuf::from(r"C:\Users\user")));
         // the same name in the open folder wins over the program of that name
         assert_eq!(decide("cmd", &[PathBuf::from("cmd"), folder.join("cmd")], &exists), Intent::Place(folder.join("cmd")));
         // no such place: a command

@@ -25,7 +25,7 @@ fn main() {
         .collect();
     // 1 000 tagged items among them, in 7 tags; 500 folders for the path sort
     let tag_ranks: Vec<u32> = (0..N).map(|i| if i % 100 == 0 { (i / 100 % 7) as u32 } else { NO_RANK }).collect();
-    let folders: Vec<String> = (0..N).map(|i| format!(r"C:\Users\x\Projects\folder{:03}\sub{}", i % 500, i % 3)).collect();
+    let folders: Vec<String> = (0..N).map(|i| format!(r"C:\Users\user\Projects\folder{:03}\sub{}", i % 500, i % 3)).collect();
 
     let time = |label: &str, f: &mut dyn FnMut()| {
         let t = Instant::now();
