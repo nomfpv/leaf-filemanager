@@ -1,20 +1,34 @@
-//! Linux backend of rf_win::organize. Status: STUB
+//! Linux backend of rf_win::organize. Status: PARTIAL (facts are real: scan, facts_for_names, facts_for_paths, exists,
+//! folder_problem; the runner is not yet)
 //!
-//! The rules' runner moves and recycles files: a data operation, so no run ever reports success here. Every step comes back as a
-//! failure ("Not available on this system yet") and the progress callback is never called; a scan finds nothing. The plain data
-//! types and their pure methods are rf-win's (`PORTABLE?`: the whole module is a candidate for leaf-common, Phase 2).
+//! Facts (read only, nothing is ever written): one `lstat` per item, links are never followed nor entered, names that are not
+//! UTF-8 are left out (a step for a lossy name could never find its file), only regular files become facts (FIFOs, sockets and
+//! device nodes are not files to organize). Hidden means a leading dot, for files and for the folders a scan goes into. The EXIF
+//! date (`taken_ms`) is not read here, as in rf-win: the caller fills it through the portable code when a step asks for it.
+//!
+//! The runner moves and recycles files: a data operation, so no run ever reports success while it is a stub. Every step comes back
+//! as a failure ("Not available on this system yet") and the progress callback is never called.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use leaf_common::stub;
 use leaf_common::stub::Unsupported;
-use leaf_common::{stub, stub_err};
 use rf_core::organize::safety::ProtectedPaths;
 use rf_core::organize::{FileFact, FileKind, Step};
+use rf_core::{Entry, EntryKind, attrs};
 
+/// Marks a user-facing text (the app translates it), as in rf-win.
+fn tx(s: &'static str) -> &'static str {
+    s
+}
+
+/// A file that changed more recently than this is not touched by an automatic run (rf-win organize.rs:38).
+pub const SETTLE_MS: i64 = 10_000;
 /// At most this many steps in a run the watcher starts (rf-win organize.rs:40).
-const AUTO_CAP: usize = 500;
+pub const AUTO_CAP: usize = 500;
 
 // TYPE-COPY(rf-win organize.rs:44)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,9 +47,21 @@ pub enum Why {
 }
 
 impl Why {
-    // PORTABLE? (rf-win: the translated text of each reason)
+    // (rf-win's texts, word for word: the app's translation table has them)
     pub fn text(self) -> &'static str {
-        stub!("organize::Why::text")
+        match self {
+            Why::Gone => tx("The file is gone"),
+            Why::NotAFile => tx("Not a file"),
+            Why::Hidden => tx("Hidden or system file"),
+            Why::Partial => tx("Still being written (partial download)"),
+            Why::OutsideRoot => tx("Outside the watched folder"),
+            Why::Link => tx("A link (symbolic) file"),
+            Why::InUse => tx("Another app is using it"),
+            Why::TooYoung => tx("Changed a moment ago: waiting a little"),
+            Why::NoRecycleBin => tx("This drive has no Recycle Bin"),
+            Why::BinRefuses => tx("The Recycle Bin is off or too small for this file"),
+            Why::Changed => tx("Changed since it was planned"),
+        }
     }
 
     // PORTABLE? (copied: pure)
@@ -136,7 +162,7 @@ impl Recycler for ShellRecycler {
     }
 
     fn recycle(&self, _paths: &[PathBuf]) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
-        stub_err!("organize::ShellRecycler::recycle")
+        leaf_common::stub_err!("organize::ShellRecycler::recycle")
     }
 }
 
@@ -174,26 +200,118 @@ pub fn redo_moves(rec: &Record) -> UndoReport {
     UndoReport { restored: 0, failed: unavailable("organize::redo_moves", rec.moves.iter().map(|(from, _)| from.clone())) }
 }
 
-/// Request/response: the one answer is the return value (no files); `classify` and `cancelled` are never called.
-pub fn scan(_root: &Path, _subfolders: bool, _classify: fn(&str) -> FileKind, _protected: &ProtectedPaths, _cancelled: &dyn Fn() -> bool) -> Vec<FileFact> {
-    stub!("organize::scan")
+// ---------------------------------------------------------------- facts (read only)
+
+fn time_ms(t: std::io::Result<std::time::SystemTime>) -> i64 {
+    t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64)
 }
 
-pub fn facts_for_names(_dir: &Path, _names: &[String], _classify: fn(&str) -> FileKind) -> Vec<FileFact> {
-    stub!("organize::facts_for_names")
+/// Hidden on Linux: a leading dot (there is no system attribute).
+fn is_hidden_name(name: &str) -> bool {
+    name.starts_with('.')
 }
 
-pub fn facts_for_paths(_paths: &[PathBuf], _classify: fn(&str) -> FileKind) -> Vec<FileFact> {
-    stub!("organize::facts_for_paths")
+/// The fact of a regular file `dir/name` whose own metadata (`lstat`) is `m`. `None` for anything that is not a regular file
+/// (a folder, a link, a FIFO, a socket, a device node).
+fn fact_of(dir: &Path, name: &str, m: &std::fs::Metadata, classify: fn(&str) -> FileKind) -> Option<FileFact> {
+    if !m.file_type().is_file() {
+        return None;
+    }
+    let modified = m.mtime() * 1000 + m.mtime_nsec() / 1_000_000;
+    let created = time_ms(m.created());
+    let a = if is_hidden_name(name) { attrs::HIDDEN } else { 0 };
+    // (Entry gives the extension exactly as a listing has it: lower case)
+    let e = Entry::new(name, EntryKind::File, m.len(), modified, created, a);
+    let path = dir.join(name);
+    let mut f = FileFact::new(path.clone(), m.len(), modified, created, classify(&e.ext));
+    f.hidden = e.is_hidden() || e.is_system();
+    // a `.desktop` link file is the shortcut here: a link to a rule's own destination stays where it is
+    if &*e.ext == "desktop" {
+        f.link_target = crate::shortcut::resolve(&path).ok().map(|i| i.target).filter(|t| !t.as_os_str().is_empty());
+    }
+    Some(f)
 }
 
-/// Why the folder cannot be organized: here always, since nothing can be moved.
-pub fn folder_problem(_root: &Path) -> Option<String> {
-    // STUB(linux): not None (None means "fine, go ahead")
-    stub::hit("organize::folder_problem");
-    Some(Unsupported("organize::folder_problem").to_string())
+/// Every file of `root` (and of the folders below it, with `subfolders`) as facts. Links are neither listed nor entered; hidden
+/// folders and the app's own folders are skipped; at most 24 levels down. `cancelled` is polled between folders and every 4096
+/// entries.
+pub fn scan(root: &Path, subfolders: bool, classify: fn(&str) -> FileKind, protected: &ProtectedPaths, cancelled: &dyn Fn() -> bool) -> Vec<FileFact> {
+    let mut facts = Vec::new();
+    let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
+    'dirs: while let Some((dir, depth)) = stack.pop() {
+        if cancelled() {
+            break;
+        }
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) => {
+                log::debug!("organize scan {}: {e}", dir.display());
+                continue;
+            }
+        };
+        let mut subdirs = Vec::new();
+        for (i, item) in rd.enumerate() {
+            if i % 4096 == 4095 && cancelled() {
+                break 'dirs;
+            }
+            let Ok(item) = item else { break };
+            let raw = item.file_name();
+            // (a name that is not UTF-8 cannot be named again exactly by a step: left alone)
+            let Some(name) = raw.to_str() else { continue };
+            // (DirEntry::metadata is an lstat: a link is seen as a link)
+            let Ok(m) = item.metadata() else { continue };
+            let t = m.file_type();
+            if t.is_dir() {
+                if subfolders && depth < 24 && !is_hidden_name(name) {
+                    subdirs.push(dir.join(name));
+                }
+            } else if let Some(f) = fact_of(&dir, name, &m, classify) {
+                facts.push(f);
+            }
+        }
+        for d in subdirs {
+            if !protected.is_app_file(&d) {
+                stack.push((d, depth + 1));
+            }
+        }
+    }
+    facts
 }
 
-pub fn exists(_p: &Path) -> bool {
-    stub!("organize::exists")
+/// Facts for some names of one folder (what a folder watcher reported): one `lstat` each; names that are gone, folders, links and
+/// special files drop out. The cost does not depend on the folder's size.
+pub fn facts_for_names(dir: &Path, names: &[String], classify: fn(&str) -> FileKind) -> Vec<FileFact> {
+    let mut out = Vec::new();
+    for n in names {
+        if n.is_empty() || n == "." || n == ".." || n.contains(['/', '\0']) {
+            continue;
+        }
+        if let Ok(m) = std::fs::symlink_metadata(dir.join(n))
+            && let Some(f) = fact_of(dir, n, &m, classify)
+        {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// The same for full paths (the watcher of a folder with its subfolders).
+pub fn facts_for_paths(paths: &[PathBuf], classify: fn(&str) -> FileKind) -> Vec<FileFact> {
+    let mut out = Vec::new();
+    for p in paths {
+        let (Some(dir), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else { continue };
+        out.extend(facts_for_names(dir, &[name.to_string()], classify));
+    }
+    out
+}
+
+/// Can the folder be opened to list its files? `None`: yes. Otherwise the reason, from the system (a folder that was renamed, a
+/// drive that is not mounted, no access): a run over such a folder must not pass for "nothing matches".
+pub fn folder_problem(root: &Path) -> Option<String> {
+    std::fs::read_dir(root).err().map(|e| e.to_string())
+}
+
+/// Does something exist at `p` (a file, a folder, a broken link)? Not followed.
+pub fn exists(p: &Path) -> bool {
+    std::fs::symlink_metadata(p).is_ok()
 }
