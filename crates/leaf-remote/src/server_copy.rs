@@ -144,8 +144,8 @@ fn tools() -> &'static Mutex<HashMap<String, Option<Tool>>> {
     T.get_or_init(Mutex::default)
 }
 
-/// The server's tool, asked once per server (`ask` runs `PROBE`). A server that does not answer (exec refused, the sftp-only
-/// account that waits) counts as having none for this run.
+/// The server's tool, asked once per server (`ask` runs `PROBE`). Only a clear answer is kept for this run (the command ended,
+/// with or without an exit code, or the server refused it); a timeout or a broken connection is asked about again next time.
 pub fn tool_of(server: &str, ask: impl FnOnce() -> Result<(String, Option<u32>), FsError>) -> Result<Option<Tool>, FsError> {
     if let Some(t) = tools().lock().unwrap_or_else(|e| e.into_inner()).get(server) {
         return Ok(*t);
@@ -154,6 +154,10 @@ pub fn tool_of(server: &str, ask: impl FnOnce() -> Result<(String, Option<u32>),
         Err(FsError::Cancelled) => return Err(FsError::Cancelled),
         Ok((out, Some(0))) => parse_probe(&out),
         Ok(_) => None,
+        Err(e @ FsError::Offline(_)) => {
+            log::info!("remote: {server} did not answer about its copy tools ({e}); this copy goes through this PC");
+            return Ok(None);
+        }
         Err(e) => {
             log::info!("remote: {server} runs no commands for copies ({e}); copies go through this PC");
             None
@@ -260,6 +264,11 @@ mod tests {
         assert_eq!(parse_rsync_progress("      1,234,567  45%   12.34MB/s    0:00:12\r  2,000,000  70%  1MB/s  0:00:01 (xfr#1)\r"), Some(2_000_000));
         assert_eq!(parse_rsync_progress("rsync: error\n"), None);
         assert_eq!(parse_size("12\t/srv/x\n"), Some(12 * 1024));
+        // a timeout is not remembered as "no tool"; a clear answer is
+        let host = "u@cache-test:22";
+        assert_eq!(tool_of(host, || Err(FsError::Offline("the server did not finish the command in time".into()))), Ok(None));
+        assert_eq!(tool_of(host, || Ok(("leaf-tool cp\n".into(), Some(0)))), Ok(Some(Tool::Cp)));
+        assert_eq!(tool_of(host, || panic!("asked again")), Ok(Some(Tool::Cp)));
     }
 
     /// A name that is there is never the copy command's target: without "Replace" nothing runs; with it the command writes
