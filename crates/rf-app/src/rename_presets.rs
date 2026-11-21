@@ -100,7 +100,7 @@ mod tests {
     use rf_core::rename_rules::{At, Case, Op, Part, RuleStep};
 
     fn dir(tag: &str) -> PathBuf {
-        let d = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("target").join(format!("rename-presets-test-{tag}-{}", std::process::id()));
+        let d = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap().join("target").join(format!("rename-presets-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

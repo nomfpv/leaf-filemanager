@@ -11,6 +11,9 @@ use rf_win::fileops::Transfer;
 #[derive(Debug, Clone)]
 pub enum UndoOp {
     Renamed { from: PathBuf, to: PathBuf },
+    /// One bulk rename: (original path, new path) of every item that got its new name. Undone
+    /// and redone as one batch through the same safe order (swaps included).
+    BulkRenamed { pairs: Vec<(PathBuf, PathBuf)> },
     Created { path: PathBuf },
     /// (source, result) pairs reported by the shell.
     Transferred { kind: Transfer, pairs: Vec<(PathBuf, PathBuf)> },
@@ -40,6 +43,7 @@ pub fn push(op: UndoOp) {
 fn label(op: &UndoOp) -> &'static str {
     match op {
         UndoOp::Renamed { .. } => t!("Rename"),
+        UndoOp::BulkRenamed { .. } => t!("Bulk rename"),
         UndoOp::Created { .. } => t!("Create"),
         UndoOp::Transferred { kind: Transfer::Copy, .. } => t!("Copy"),
         UndoOp::Transferred { kind: Transfer::Move, .. } => t!("Move"),
@@ -130,6 +134,10 @@ fn undo_op(op: UndoOp, cx: &mut App) {
                 }
             })));
         }
+        UndoOp::BulkRenamed { pairs } => {
+            let back: Vec<(PathBuf, PathBuf)> = pairs.iter().map(|(a, b)| (b.clone(), a.clone())).collect();
+            run_bulk(cx, format!("{} {}", t!("Undoing bulk rename:"), crate::i18n::items(back.len())), back);
+        }
         UndoOp::Created { path } => crate::status_center::delete_ex(cx, vec![path], false, false),
         UndoOp::Transferred { kind: Transfer::Copy, pairs } => {
             crate::status_center::delete_ex(cx, pairs.into_iter().map(|(_, dst)| dst).collect(), false, false)
@@ -174,6 +182,23 @@ fn undo_op(op: UndoOp, cx: &mut App) {
     }
 }
 
+/// Renames (old, new) pairs as one batch in the Status Center (undo / redo of a bulk rename);
+/// the tags follow what was done, what could not be done is the job's error.
+fn run_bulk(cx: &mut App, title: String, pairs: Vec<(PathBuf, PathBuf)>) {
+    let done = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let done_out = done.clone();
+    crate::status_center::start_with(cx, title, move |_| {
+        let out = crate::rename_exec::run_pairs(&pairs, &mut crate::rename_exec::native_rename);
+        *done_out.lock().unwrap() = out.done;
+        if out.failed.is_empty() {
+            Ok(true)
+        } else {
+            let lines: Vec<String> = out.failed.iter().take(8).map(|f| f.line()).collect();
+            anyhow::bail!("{} {}: {}", crate::i18n::items(out.failed.len()), t!("could not be renamed"), lines.join("; "))
+        }
+    }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *done.lock().unwrap())))));
+}
+
 /// Repeats the last undone operation.
 pub fn redo(cx: &mut App) {
     let Some(op) = REDO.lock().pop() else { return };
@@ -191,6 +216,7 @@ pub fn redo(cx: &mut App) {
                 }
             })));
         }
+        UndoOp::BulkRenamed { pairs } => run_bulk(cx, format!("{} {}", t!("Redoing bulk rename:"), crate::i18n::items(pairs.len())), pairs),
         UndoOp::Created { .. } => {}
         UndoOp::Transferred { kind, pairs } => {
             let mut groups: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> = Default::default();
