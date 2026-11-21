@@ -154,10 +154,15 @@ fn run_journaled(rows: &[Row], moves: &[Move], rules: NameRules, salt: &str, jou
         _ => None,
     };
     let out = run(rows, moves, rules, rename);
-    if let Some(p) = written
-        && let Err(e) = std::fs::remove_file(&p)
-    {
-        log::warn!("bulk rename: the journal {} could not be removed: {e}", p.display());
+    // an item left under its temporary name (a rollback that failed): keep the journal, it is
+    // the only record of what that item was called
+    let stranded = out.failed.iter().any(|f| f.left_at.is_some());
+    if let Some(p) = written {
+        if stranded {
+            log::warn!("bulk rename: an item was left under a temporary name; the journal {} is kept", p.display());
+        } else if let Err(e) = std::fs::remove_file(&p) {
+            log::warn!("bulk rename: the journal {} could not be removed: {e}", p.display());
+        }
     }
     Ok(out)
 }
