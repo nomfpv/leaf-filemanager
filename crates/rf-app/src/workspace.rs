@@ -2462,7 +2462,10 @@ impl Workspace {
         }
         // Equal-width tabs that share the strip (like Files / WinUI TabView "Equal"): wide
         // while there are few, shrinking as more open, scrolling only below the minimum.
-        let strip = (self.viewport_w - 150. - if pill { TITLEBAR_LEAD_PILL } else { TITLEBAR_LEAD } - 40. - 40.).max(120.);
+        // (the right-hand controls take their room first, in a window wide enough for them)
+        let prefs_shown = self.compact.is_none() && self.viewport_w >= TITLEBAR_PREFS_MIN_W;
+        let prefs_w = if prefs_shown { crate::titlebar_prefs::WIDTH } else { 0. };
+        let strip = (self.viewport_w - 150. - if pill { TITLEBAR_LEAD_PILL } else { TITLEBAR_LEAD } - 40. - 40. - prefs_w).max(120.);
         let n = self.tabs.len().max(1) as f32;
         let tab_max = p.tab_w.max(TAB_MIN_W);
         let tab_w = ((strip - 4.) / n - 4.).clamp(TAB_MIN_W, tab_max);
@@ -2779,7 +2782,12 @@ impl Workspace {
                     )
                     .children(session_label)
                     .child(tabs)
-                    .child(new_tab),
+                    .child(new_tab)
+                    // the right-hand controls (the mockup's), at the end of the strip before the window buttons
+                    .when(prefs_shown, |d| {
+                        d.child(div().flex_1().min_w(px(8.)))
+                            .child(div().flex_shrink_0().h_full().when(!pill, |d| d.flex().items_end().pb(px(2.))).child(crate::titlebar_prefs::render(p, &self.ops, popups_open, cx)))
+                    }),
             )
     }
 
@@ -4923,6 +4931,8 @@ impl Workspace {
 const TITLEBAR_LEAD: f32 = 32.;
 /// The brand box left of pill tabs (Canopy): the mockups' 44 px.
 const TITLEBAR_LEAD_PILL: f32 = 44.;
+/// Below this window width the title bar's right-hand controls step aside for the tabs.
+const TITLEBAR_PREFS_MIN_W: f32 = 760.;
 /// New tab: the "+" box grows to a tab, then the next "+" slides out from behind it.
 const TAB_ANIM_MS: u64 = 200;
 const PLUS_ANIM_MS: u64 = 160;

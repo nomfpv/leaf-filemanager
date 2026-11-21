@@ -81,6 +81,7 @@ mod downloads;
 mod transfer_view;
 mod tags;
 mod terminal;
+mod titlebar_prefs;
 mod undo;
 mod preview;
 mod preview_trace;
