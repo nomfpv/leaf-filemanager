@@ -558,6 +558,9 @@ impl ReviewView {
     /// Accept the chosen file.
     fn accept_file(&mut self, cx: &mut Context<Self>) {
         let Some(it) = self.current_item() else { return };
+        if self.refuse_conflict(&it, cx) {
+            return;
+        }
         match self.root() {
             Some(root) if it.accepted => self.act("The file could not be taken out of what is staged.", move || review::unstage_file(&root, &it.rel), cx),
             Some(root) => self.act("The file could not be staged.", move || review::stage_file(&root, &it.rel), cx),
@@ -577,6 +580,15 @@ impl ReviewView {
         }
     }
 
+    /// A file in a merge conflict is never accepted here: staging it would take the conflict markers and mark it resolved.
+    fn refuse_conflict(&mut self, it: &FileItem, cx: &mut Context<Self>) -> bool {
+        if it.kind != Kind::Conflicted || self.root().is_none() {
+            return false;
+        }
+        self.say(true, t!("This file is in a merge conflict. Resolve the conflict in the file first; leaf does not accept it here."), "", cx);
+        true
+    }
+
     fn next_unreviewed(&mut self, cx: &mut Context<Self>) {
         if let Some(f) = self.files.iter().find(|f| !f.accepted) {
             let rel = f.rel.clone();
@@ -586,6 +598,11 @@ impl ReviewView {
 
     /// Accept the hunk `hi` of the chosen file (`a`).
     fn accept_hunk(&mut self, hi: usize, cx: &mut Context<Self>) {
+        if let Some(it) = self.current_item()
+            && self.refuse_conflict(&it, cx)
+        {
+            return;
+        }
         let (Some(it), Some(s)) = (self.current_item(), self.shown.as_ref()) else { return };
         if s.staged_view {
             return;
@@ -1077,6 +1094,15 @@ impl ReviewView {
                 };
                 h_flex().flex_1().min_h_0().gap_2().child(side(t!("Before"), before)).child(side(t!("After"), after)).into_any_element()
             }
+            Some(_) if it.kind == Kind::Conflicted => div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .text_color(p.danger)
+                .child(t!("In a merge conflict: resolve it in the file first. It cannot be accepted here."))
+                .into_any_element(),
             Some(s) if s.diff.hunks.is_empty() && !s.diff.binary => {
                 div().flex_1().flex().items_center().justify_center().text_xs().text_color(p.text_tertiary).child(t!("No line changes (only the file's mode or name changed).")).into_any_element()
             }
