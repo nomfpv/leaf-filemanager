@@ -3224,6 +3224,14 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         ),
         card(
             p,
+            L::FolderDown,
+            t!("Sort downloads by file type"),
+            Some(t!("A download into the download folder is put in a subfolder by its file type (Videos, Music, ...). \"Download here\" into a folder you choose is never sorted.")),
+            sw("download-sort", p, s.download_sort, |s, v| s.download_sort = v),
+        ),
+        download_categories_card(p, s),
+        card(
+            p,
             L::Globe,
             t!("Capture browser downloads"),
             Some(t!("Downloads started in Chrome, Edge, Brave or Firefox go to leaf instead, with the browser's sign-in for that one download. Needs the leaf extension in the browser.")),
@@ -3868,4 +3876,68 @@ mod hyperglass_tests {
             assert!(!which.title().is_empty() && !which.desc().is_empty());
         }
     }
+}
+
+/// The download categories: one row each with its folder and extensions, "Edit" (and "Remove" inside it), "Add" and "Defaults".
+fn download_categories_card(p: &Palette, s: &Settings) -> AnyElement {
+    use crate::settings::DownloadCategory;
+    let edit = |index: Option<usize>, window: &mut Window, cx: &mut App| {
+        let current = index.and_then(|i| cx.global::<Settings>().download_categories.get(i).cloned());
+        let initial = current.as_ref().map(DownloadCategory::to_line).unwrap_or_default();
+        let mut buttons = vec![crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, move |value, _, cx| {
+            let line = value.unwrap_or_default();
+            let Some(c) = DownloadCategory::from_line(&line).filter(|c| leaf_download::sanitize(&c.folder) == c.folder) else {
+                return Err(t!("Write a folder name, a colon and the extensions: Videos: mp4 mkv avi").to_string());
+            };
+            settings::update(cx, move |s| match index.filter(|i| *i < s.download_categories.len()) {
+                Some(i) => s.download_categories[i] = c,
+                None => s.download_categories.push(c),
+            });
+            Ok(())
+        })];
+        if let Some(i) = index {
+            buttons.push(crate::prompt::Button::new(t!("Remove"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                settings::update(cx, move |s| {
+                    if i < s.download_categories.len() {
+                        s.download_categories.remove(i);
+                    }
+                });
+                Ok(())
+            }));
+        }
+        buttons.push(crate::prompt::Button::cancel());
+        crate::prompt::show(
+            t!("Download category"),
+            Some(t!("The subfolder, a colon, then the file extensions it takes.").to_string()),
+            Some((initial, "Videos: mp4 mkv avi".to_string())),
+            buttons,
+            window,
+            cx,
+        );
+    };
+    let mut shell = shell(p).child(card_body(p, L::Folder, t!("Categories").into(), Some(t!("Which file types go into which subfolder when sorting is on.").into()), None));
+    for (i, c) in s.download_categories.iter().enumerate() {
+        shell = shell.child(card_body(
+            p,
+            L::Folder,
+            c.folder.clone().into(),
+            Some(c.exts.join(" ").into()),
+            Some(button(("download-category", i), p, t!("Edit"), move |window, cx| edit(Some(i), window, cx))),
+        ));
+    }
+    shell
+        .child(card_body(
+            p,
+            L::Plus,
+            t!("Add a category").into(),
+            None,
+            Some(
+                h_flex()
+                    .gap_2()
+                    .child(button("download-category-defaults", p, t!("Defaults"), |_, cx| settings::update(cx, |s| s.download_categories = DownloadCategory::defaults())))
+                    .child(button("download-category-add", p, t!("Add"), move |window, cx| edit(None, window, cx)))
+                    .into_any_element(),
+            ),
+        ))
+        .into_any_element()
 }

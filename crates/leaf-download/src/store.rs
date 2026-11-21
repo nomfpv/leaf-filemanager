@@ -28,6 +28,9 @@ pub struct Saved {
     /// restart it has to be started from the browser again.
     #[serde(default)]
     pub browser: bool,
+    /// Sorted into a category subfolder by the settings (the folder is the download folder).
+    #[serde(default)]
+    pub sort: bool,
 }
 
 /// A download that ended.

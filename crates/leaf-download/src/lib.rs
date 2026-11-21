@@ -66,11 +66,14 @@ pub struct Options {
     /// part state or any file, never logged (the type shows only the names). Cookie and Authorization are dropped when a redirect
     /// leaves the address's origin (scheme, host or port: https to http on the same host too).
     pub headers: Headers,
+    /// Sort by file type: (subfolder of the download folder, extensions without the dot, lower case). A file whose extension is
+    /// listed goes into that subfolder (made when needed); the others stay in the folder. Empty: no sorting.
+    pub categories: Vec<(String, Vec<String>)>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default() }
+        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default(), categories: Vec::new() }
     }
 }
 
@@ -370,12 +373,30 @@ pub fn download(url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn
     Err(Error::Changed)
 }
 
+/// `dir` or, when `name`'s extension is in a category, that category's subfolder of it (made here). A folder name that is not one
+/// plain name (a path, `..`) is ignored.
+fn category_dir(dir: &Path, name: &str, categories: &[(String, Vec<String>)]) -> Result<PathBuf, Error> {
+    let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+    let Some(ext) = ext else { return Ok(dir.to_path_buf()) };
+    let hit = categories.iter().find(|(f, exts)| exts.iter().any(|e| *e == ext) && !f.is_empty() && sanitize(f) == *f && f != "." && f != "..");
+    match hit {
+        Some((f, _)) => {
+            let sub = dir.join(f);
+            std::fs::create_dir_all(&sub)?;
+            Ok(sub)
+        }
+        None => Ok(dir.to_path_buf()),
+    }
+}
+
 fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn Host) -> Result<Outcome, Error> {
     let probe = with_retries(opts, ctl, || http::probe(agent, url, &opts.headers))?;
     let mut name = name::file_name(probe.disposition.as_deref(), url);
     if name == "download" && probe.disposition.is_none() {
         name = name::file_name(None, &probe.uri);
     }
+    let sorted = category_dir(dir, &name, &opts.categories)?;
+    let dir = sorted.as_path();
     let mut target = dir.join(&name);
     let mut replace = false;
     if exists(&target) {

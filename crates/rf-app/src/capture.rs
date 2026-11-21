@@ -141,6 +141,7 @@ fn start(c: Capture, cx: &mut App) {
         log::warn!("capture: the folder {} could not be made: {e}", dest.display());
     }
     let mut req = crate::downloads::Request::new(c.url, dest);
+    req.sort = true;
     req.browser = c.headers.has_credentials();
     req.headers = c.headers;
     let after: Box<dyn FnOnce(Vec<std::path::PathBuf>, &mut App)> = Box::new(|arrived, cx| {

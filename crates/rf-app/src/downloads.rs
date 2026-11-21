@@ -124,6 +124,7 @@ pub fn from_message(rest: &str, cx: &mut App) -> bool {
 }
 
 pub fn start_cli(url: String, folder: Option<String>, cx: &mut App) {
+    let sort = folder.is_none();
     let dest = folder.map(PathBuf::from).unwrap_or_else(|| default_folder(cx.global::<Settings>()));
     if let Err(e) = std::fs::create_dir_all(&dest) {
         log::warn!("download: the folder {} could not be made: {e}", dest.display());
@@ -134,7 +135,12 @@ pub fn start_cli(url: String, folder: Option<String>, cx: &mut App) {
             crate::workspace::select_in_open_folder(p, cx);
         }
     });
-    start(cx, url, dest, Some(after));
+    start_with(cx, Request { sort, ..Request::new(url, dest) }, Some(after));
+}
+
+/// The categories a request is sorted by: the settings' list when sorting is on and the request is for the download folder.
+fn categories_for(req: &Request, s: &Settings) -> Vec<(String, Vec<String>)> {
+    if req.sort && s.download_sort { s.download_categories.iter().map(|c| (c.folder.clone(), c.exts.clone())).collect() } else { Vec::new() }
 }
 
 /// What a download is asked for.
@@ -155,11 +161,14 @@ pub struct Request {
     /// It came from the browser with the browser's sign-in (Cookie / Authorization): after a restart those are gone and it has to
     /// be started from the browser again.
     pub browser: bool,
+    /// The folder is the download folder: the settings' categories sort the file into a subfolder ("Download here…" and a folder
+    /// given on the command line never do).
+    pub sort: bool,
 }
 
 impl Request {
     pub fn new(url: String, dest: PathBuf) -> Self {
-        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false }
+        Self { url: url.trim().to_string(), dest, sha256: None, verify: false, paused: false, key: None, headers: dl::Headers::default(), browser: false, sort: false }
     }
 }
 
@@ -237,7 +246,7 @@ pub fn restore(cx: &mut App) {
             continue;
         }
         NEXT_KEY.fetch_max(s.key + 1, Ordering::Relaxed);
-        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, ..Request::new(s.url, s.dest) };
+        let req = Request { key: Some(s.key), sha256: s.sha256, verify: s.verify, paused: s.paused, browser: s.browser, sort: s.sort, ..Request::new(s.url, s.dest) };
         start_with(cx, req, None);
     }
 }
@@ -253,14 +262,14 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
         return;
     }
     let s = cx.global::<Settings>();
-    let settings = (s.download_segments.clamp(1, 32) as usize, u64::from(s.download_speed_limit) << 20, s.download_parallel.clamp(1, 16) as usize);
+    let settings = (s.download_segments.clamp(1, 32) as usize, u64::from(s.download_speed_limit) << 20, s.download_parallel.clamp(1, 16) as usize, categories_for(&req, s));
     dl::set_host_cap(s.download_per_host as usize);
     let key = req.key.unwrap_or_else(|| NEXT_KEY.fetch_add(1, Ordering::Relaxed));
     {
         let mut st = store();
         st.forget(key);
         // (the headers are not saved: `browser` says the download needs the browser again after a restart)
-        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser });
+        st.active.push(Saved { key, url: req.url.clone(), dest: req.dest.clone(), sha256: req.sha256.clone(), verify: req.verify, paused: req.paused, browser: req.browser, sort: req.sort });
     }
     persist_soon();
     let title = format!("{} {} → {}", t!("Downloading"), dl::file_name(None, &req.url), rf_core::history::display_name(&req.dest));
@@ -346,7 +355,7 @@ fn ask_limit(limit: Arc<AtomicU64>, own: Arc<AtomicBool>, cx: &mut App) {
     });
 }
 
-fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel): (usize, u64, usize), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
+fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel, categories): (usize, u64, usize, Vec<(String, Vec<String>)>), (limit, arrived): (&Arc<AtomicU64>, &Arc<Mutex<Vec<PathBuf>>>), failed: &AtomicBool) -> anyhow::Result<bool> {
     // (the saved list reads this job's paused flag, the one the card's pause button flips)
     if let Some(l) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|l| l.key == key) {
         l.paused = tr.paused.clone();
@@ -373,7 +382,7 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel): (usize, 
     (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
     let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false) };
     let ctl = dl::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
-    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), ..dl::Options::default() };
+    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), headers: req.headers.clone(), categories: categories.clone(), ..dl::Options::default() };
     if opts.sha256.is_none() && req.verify {
         match dl::fetch_sidecar(&req.url, &opts) {
             Some(sha) => opts.sha256 = Some(sha),

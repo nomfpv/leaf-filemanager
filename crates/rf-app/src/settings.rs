@@ -423,6 +423,40 @@ fn is_default_preview_height(h: &f32) -> bool {
     *h == rf_core::previewpane::BOTTOM_DEFAULT_H
 }
 
+/// A download category: the subfolder of the download folder and the file extensions (no dot) that go into it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DownloadCategory {
+    pub folder: String,
+    pub exts: Vec<String>,
+}
+
+impl DownloadCategory {
+    pub fn defaults() -> Vec<Self> {
+        let c = |f: &str, e: &str| Self { folder: f.into(), exts: e.split_whitespace().map(str::to_string).collect() };
+        vec![
+            c("Videos", "mp4 mkv avi mov wmv flv webm m4v mpg mpeg ts"),
+            c("Music", "mp3 flac wav ogg m4a aac opus wma"),
+            c("Pictures", "jpg jpeg png gif webp bmp svg heic tif tiff avif"),
+            c("Documents", "pdf doc docx xls xlsx ppt pptx odt ods txt rtf epub csv"),
+            c("Archives", "zip rar 7z tar gz bz2 xz zst iso"),
+            c("Programs", "exe msi msix appx deb rpm apk dmg appimage"),
+        ]
+    }
+
+    /// "folder: ext ext ext" as the edit box shows it.
+    pub fn to_line(&self) -> String {
+        format!("{}: {}", self.folder, self.exts.join(" "))
+    }
+
+    /// The reverse of [`Self::to_line`]; `None` when there is no folder name.
+    pub fn from_line(line: &str) -> Option<Self> {
+        let (f, e) = line.split_once(':')?;
+        let folder = f.trim().to_string();
+        let exts = e.split(|c: char| c.is_whitespace() || c == ',').map(|x| x.trim().trim_start_matches(['.', '*']).to_ascii_lowercase()).filter(|x| !x.is_empty()).collect();
+        (!folder.is_empty()).then_some(Self { folder, exts })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -650,6 +684,10 @@ pub struct Settings {
     pub download_per_host: u32,
     /// Where `leaf download <address>` saves without a folder; empty: the Downloads folder.
     pub download_folder: String,
+    /// Downloads into the download folder (not "Download here…" into a chosen folder) are sorted into subfolders by file type.
+    pub download_sort: bool,
+    /// The subfolders and the extensions that go into each.
+    pub download_categories: Vec<DownloadCategory>,
     /// Downloads the browser starts are taken over by leaf (through the leaf extension and `leaf-nmhost`).
     pub capture_browser: bool,
     /// Below this many MB (when the browser knows the size) the browser keeps the download.
@@ -894,6 +932,8 @@ impl Default for Settings {
             download_parallel: 3,
             download_per_host: 32,
             download_folder: String::new(),
+            download_sort: false,
+            download_categories: DownloadCategory::defaults(),
             capture_browser: true,
             capture_min_mb: 1,
             transfer_progress: TransferProgress::StatusBar,
