@@ -1421,6 +1421,34 @@ pub fn revert_file(cx: &mut App, root: std::path::PathBuf, rel: String) {
     set_extras(cx, id, None, None, Some(mark));
 }
 
+/// "Revert" of the Review page, on a work file: `what` writes the reverted content beside the file and renames it in after handing
+/// the file to its `put_away`, which moves it to the Trash here as a job like "Revert this file" (undoable the same way).
+pub fn revert_with_trash(
+    cx: &mut App,
+    path: std::path::PathBuf,
+    what: impl FnOnce(&dyn Fn(&std::path::Path) -> Result<(), String>) -> Result<(), String> + Send + 'static,
+    on_done: Option<OnDone>,
+) {
+    let title = format!("{} {}", t!("Reverting:"), rf_core::history::display_name(&path));
+    let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
+    let marker = mark.clone();
+    let id = start_with_id(cx, title, move |t| {
+        let put_away = |p: &std::path::Path| -> Result<(), String> {
+            fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()).map(|_| ()).map_err(|e| e.to_string())?;
+            let pairs = t.results.lock().unwrap().clone();
+            if !pairs.is_empty() {
+                *marker.lock().unwrap() = pairs.first().map(|(_, bin)| bin.clone());
+                crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
+            }
+            Ok(())
+        };
+        what(&put_away).map_err(|e| anyhow::anyhow!("{}: {e}", t!("The change could not be reverted")))?;
+        Ok(true)
+    }, on_done);
+    set_lock_paths(cx, id, vec![path]);
+    set_extras(cx, id, None, None, Some(mark));
+}
+
 pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, record: bool) {
     // a pinned folder that is deleted leaves the sidebar (its question was answered before this)
     for p in &paths {
