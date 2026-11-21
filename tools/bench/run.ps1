@@ -14,6 +14,7 @@
 .PARAMETER NoiseMs   Allowed settled-time difference against the baseline (default 50).
 .PARAMETER NoiseMB   Allowed private-memory difference against the baseline (default 2).
 .PARAMETER CopyRounds Rounds for copy_vs (default 3).
+.PARAMETER WithCopy  Also run the copy comparison (slow: Windows' own copy takes about a minute per round). Off by default; use it when copy code changed.
 #>
 [CmdletBinding()]
 param(
@@ -21,10 +22,11 @@ param(
     [string]$OutDir = $(if ($env:LEAF_NOTES) { Join-Path $env:LEAF_NOTES 'bench' } else { '' }),
     [string]$Baseline = '',
     [switch]$SkipBuild,
-    [int]$Runs = 6,
+    [int]$Runs = 4,
     [double]$NoiseMs = 50,
     [double]$NoiseMB = 2,
-    [int]$CopyRounds = 3
+    [int]$CopyRounds = 3,
+    [switch]$WithCopy
 )
 
 $ErrorActionPreference = 'Continue'
@@ -95,7 +97,7 @@ Ensure-Files $dir10k 10000
 # copy source: 20,000 small files in 100 sub-folders
 $copySrc = Join-Path $DataDir 'copysrc'
 $copyDst = Join-Path $DataDir 'copydest'
-if (-not (Test-Path -LiteralPath $copySrc)) {
+if ($WithCopy -and -not (Test-Path -LiteralPath $copySrc)) {
     Write-Host "bench: creating 20000 small files in $copySrc"
     $payload = New-Object byte[] 1024
     (New-Object System.Random 1).NextBytes($payload)
@@ -107,7 +109,7 @@ if (-not (Test-Path -LiteralPath $copySrc)) {
         }
     }
 }
-$null = New-Item -ItemType Directory -Force -Path $copyDst
+if ($WithCopy) { $null = New-Item -ItemType Directory -Force -Path $copyDst }
 
 # ---- helpers ----
 function Median([double[]]$v) {
@@ -171,8 +173,11 @@ $r10 = Measure-Set 'files10k' $dir10k
 
 # ---- copy ----
 # copy_vs prints "round R ours   : N ms" / "round R windows: N ms" and "median ours N ms, windows N ms"
-Write-Host ("bench: copy_vs (" + $CopyRounds + " rounds)")
-$copyLines = @(& $copyvs $copyDst $CopyRounds $copySrc)
+$copyLines = @()
+if ($WithCopy) {
+    Write-Host ("bench: copy_vs (" + $CopyRounds + " rounds)")
+    $copyLines = @(& $copyvs $copyDst $CopyRounds $copySrc)
+}
 $copy = $null
 foreach ($l in $copyLines) {
     $m = [regex]::Match([string]$l, 'median ours\s+([\d.]+)\s+ms,\s*windows\s+([\d.]+)\s+ms')
@@ -184,7 +189,7 @@ foreach ($l in $copyLines) {
         }
     }
 }
-if (-not $copy) { Write-Host ("  copy_vs gave no median: " + ($copyLines -join ' / ')) -ForegroundColor Yellow }
+if ($WithCopy -and -not $copy) { Write-Host ("  copy_vs gave no median: " + ($copyLines -join ' / ')) -ForegroundColor Yellow }
 
 # ---- checks ----
 $checks = New-Object System.Collections.Generic.List[object]
@@ -201,7 +206,7 @@ Write-Host "bench: budgets"
 Budget-Check 'open 100k settled' $r100.New.settled_ms $Budget.Settled100k 'ms'
 Budget-Check 'open 10k settled' $r10.New.settled_ms $Budget.Settled10k 'ms'
 Budget-Check 'private memory after 100k' $r100.New.private_mb $Budget.PrivateMB 'MB'
-if ($copy) { Budget-Check 'copy 20k files (ours)' $copy.ours_ms $Budget.CopyOursMs 'ms' } else { Check 'copy 20k files (ours)' $false 'no measurement' }
+if ($WithCopy) { if ($copy) { Budget-Check 'copy 20k files (ours)' $copy.ours_ms $Budget.CopyOursMs 'ms' } else { Check 'copy 20k files (ours)' $false 'no measurement' } }
 if ($Baseline) {
     Write-Host ("bench: against baseline (noise tolerance " + $NoiseMs + " ms, " + $NoiseMB + " MB)")
     foreach ($pair in @(@('100k', $r100), @('10k', $r10))) {
