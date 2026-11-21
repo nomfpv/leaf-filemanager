@@ -1212,14 +1212,14 @@ pub fn delete(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool) {
 
 /// What the user chose for items that lie on a drive without a trash.
 #[cfg(not(windows))]
-enum NoTrashChoice {
+pub enum NoTrashChoice {
     Permanent,
     HomeTrash,
 }
 
 /// A question from a delete job to the window: how many items have no trash, and where the answer goes.
 #[cfg(not(windows))]
-type NoTrashAsk = (usize, std::sync::mpsc::Sender<NoTrashChoice>);
+pub type NoTrashAsk = (usize, std::sync::mpsc::Sender<NoTrashChoice>);
 
 /// "This drive has no trash." Delete permanently / Move to home trash / Cancel. A dialog put away without an answer drops the
 /// sender, which the job reads as Cancel.
