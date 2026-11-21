@@ -1,6 +1,6 @@
 //! Test driver (tools/TESTING.md): `LEAF_CHECK_SCRIPT=<file>` runs the file's lines, in order, on the UI thread once the first
 //! folder is listed. Off (and free) unless the variable is set. Lines: `select a|b|c`, `run <CommandId>` (the action is dispatched
-//! like a key press), `type <text>`, `key <name>` (enter, escape, tab, ...), `wait <ms>`, `wait-idle`, `goto <path|home>`, `usage <path>` (storage usage view), `bin restore`, `bulk apply`, `dups newest|delete`, `settings <page>`,
+//! like a key press), `type <text>`, `key <name>` (enter, escape, tab, ...), `wait <ms>`, `wait-idle`, `goto <path|home>`, `usage <path>` (storage usage view), `bin restore`, `bulk apply`, `sort <key>`, `clip <file>`, `click|rclick|move x y`, `dups newest|delete`, `settings <page>`,
 //! `pane left|right`, `shot <name>` (prints `LEAF_SHOT <name>` on stdout and waits for the wrapper's picture), `quit`.
 //! Blank lines and lines starting with `#` are ignored; an unknown line is logged and skipped.
 
@@ -79,6 +79,25 @@ pub(super) fn start(window: &mut Window, cx: &mut Context<Workspace>) {
                 "quit" => {
                     let _ = this.update_in(cx, |_, _, cx| crate::quit_when_idle(cx));
                     return;
+                }
+                // `click x y`, `rclick x y`, `move x y`: a mouse event at that point of the window, in the pixels of the pictures `shot` takes
+                "click" | "rclick" | "move" => {
+                    let xy: Vec<f32> = arg.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                    if let [x, y] = xy[..] {
+                        let _ = cx.update(|window, cx| {
+                            let at = point(px(x / window.scale_factor()), px(y / window.scale_factor()));
+                            let button = if cmd == "rclick" { MouseButton::Right } else { MouseButton::Left };
+                            let m = Modifiers::default();
+                            window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: at, pressed_button: None, modifiers: m }), cx);
+                            if cmd != "move" {
+                                window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button, position: at, modifiers: m, click_count: 1, first_mouse: false }), cx);
+                                window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: at, modifiers: m, click_count: 1 }), cx);
+                            }
+                        });
+                    } else {
+                        log::warn!("check script: unknown line: {line}");
+                    }
+                    sleep(350).await;
                 }
                 "type" | "key" => {
                     // outside the workspace's own update: the keystroke reaches the workspace again (the focused field is its child)
@@ -208,6 +227,7 @@ impl Workspace {
                     "files" => Page::Files,
                     "filetypes" => Page::FileTypes,
                     "actions" => Page::Actions,
+                    "youractions" => Page::YourActions,
                     "tags" => Page::Tags,
                     "preview" => Page::Look,
                     "search" => Page::Search,
@@ -235,6 +255,24 @@ impl Workspace {
                     self.compare_contents_all_toggle(cx);
                 }
                 self.compare_contents(cx);
+            }
+            // a click on a column header: `sort name|modified|created|size|type` (the same key again flips the direction)
+            "sort" => {
+                use rf_core::SortKey;
+                let key = match arg.to_ascii_lowercase().as_str() {
+                    "name" => SortKey::Name,
+                    "modified" => SortKey::Modified,
+                    "created" => SortKey::Created,
+                    "size" => SortKey::Size,
+                    "type" => SortKey::Type,
+                    _ => return false,
+                };
+                self.active_tab().clone().update(cx, |v, cx| v.set_sort(key, cx));
+            }
+            // `clip <file>`: writes the clipboard's text to the file (nothing when there is none)
+            "clip" => {
+                let text = cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default();
+                let _ = std::fs::write(arg, text);
             }
             "pane" => {
                 let ix = self.active;

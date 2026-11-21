@@ -51,6 +51,8 @@ when unset; code in `crates/rf-app/src/check_script.rs`). One line per step, `#`
 - `dups newest` (the duplicate finder page: tick all but the newest copy of every group), `dups delete` (its Delete ticked button, opens the question; `key enter` answers it)
 - `compare-contents [all]` (folder compare on: the Compare contents chip; `all` also checks same-size, same-time pairs)
 - `tag <name>` (toggles that tag on the selection), `gototag <name>` (the tag's page)
+- `sort name|modified|created|size|type`: a click on that column header; `clip <file>`: writes the clipboard's text to the file
+- `click x y`, `rclick x y`, `move x y`: a mouse event at that point of the window, in the pixels of the pictures `shot` takes
 - `shot <name>`: prints `LEAF_SHOT <name>` on stdout; if `LEAF_CHECK_SHOTDIR` is set it waits (15 s at most) for
   `<dir>/<name>.png` to appear, else 1.5 s. The wrapper takes the picture.
 - `quit`: leaves (after running operations)
