@@ -4286,6 +4286,13 @@ impl Workspace {
             let Some(loc) = crate::hosts_ui::location(&h) else { continue };
             let active = matches!((&cur, &loc), (Location::Remote(a), Location::Remote(b)) if a.starts_with(b));
             col = col.child(self.sidebar_item(("sb-host", i).into(), L::Server, p.text_secondary, h.name.clone(), loc, active, None, p, cx));
+            // the host's bookmarked folders under it
+            for (j, b) in h.bookmarks.iter().enumerate() {
+                let Some(loc) = crate::hosts_ui::bookmark_location(&h, b) else { continue };
+                let active = cur == loc;
+                let name = b.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or(b.as_str()).to_string();
+                col = col.child(self.sidebar_item(("sb-host-bm", i * 1000 + j).into(), L::Bookmark, p.text_secondary, name, loc, active, None, p, cx));
+            }
         }
         // The tags are known at once, the pins and drives above them a moment later: drawn before those, the coloured tag rows stood
         // at the top of the sidebar for the first 90 ms of a cold start and then jumped down (seen frame by frame: a user's report of
@@ -5751,6 +5758,16 @@ impl Render for Workspace {
                 };
                 if let Some(root) = root {
                     v.update(cx, |_, cx| cx.emit(crate::folder_view::FolderEvent::OpenInNewTab(Location::BuildJunk(root))));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &BookmarkRemoteFolder, window, cx| {
+                // the folder shown, when it is on a saved host
+                let loc = this.active_tab().read(cx).location().clone();
+                let Location::Remote(v) = loc else {
+                    return crate::prompt::notice(t!("Bookmark this folder"), t!("This works in a folder on a saved host (Settings > Hosts).").to_string(), window, cx);
+                };
+                if crate::hosts_ui::toggle_bookmark(&v, cx).is_none() {
+                    crate::prompt::notice(t!("Bookmark this folder"), t!("This server is not in the saved hosts. Add it under Settings > Hosts first.").to_string(), window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &ShowProjectBrain, _, cx| {

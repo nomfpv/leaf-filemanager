@@ -35,6 +35,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Trash | Opens the Trash. |  |
 | Focus address bar | Puts the keyboard in the address bar to type a path. | `Ctrl+L`, `Alt+D` |
 | Search | Searches this folder. | `Ctrl+F`, `Ctrl+E` |
+| Bookmark remote folder | Adds the folder shown on a saved host to that host's bookmarks, shown under it in the sidebar; run it again in a bookmarked folder to take the bookmark away. |  |
 | Go to folder alias | Opens a folder by its short name: type @ and the name in the address bar. | `@` |
 | Search past folders | Finds a folder you went to before. | `Ctrl+P` |
 | Open | Opens the selected file or folder. | `Enter` |

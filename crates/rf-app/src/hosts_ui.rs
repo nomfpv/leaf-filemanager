@@ -51,6 +51,21 @@ pub fn location(h: &Host) -> Option<Location> {
     Some(Location::Remote(v))
 }
 
+/// A bookmark of the host as a place.
+pub fn bookmark_location(h: &Host, path: &str) -> Option<Location> {
+    let v = VPath::parse(&h.address()).ok()?;
+    Some(Location::Remote(v.with_path(path)))
+}
+
+/// "Bookmark this folder": adds the remote folder to its saved host, or removes the bookmark. Returns what was done (`None`: no
+/// saved host is this server).
+pub fn toggle_bookmark(v: &VPath, cx: &mut App) -> Option<bool> {
+    all(cx);
+    let mut done = None;
+    change(cx, |hs| done = hs.toggle_bookmark(v));
+    done
+}
+
 /// The second line of a host's row: `user@host:port` and its start folder.
 pub fn subtitle(h: &Host) -> String {
     let mut s = h.address();
@@ -82,7 +97,11 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
                 }
                 let old_name = old_name.clone();
                 change(cx, move |hs| match old_name.and_then(|n| hs.hosts.iter().position(|o| o.name == n)) {
-                    Some(i) => hs.hosts[i] = h,
+                    Some(i) => {
+                        let mut h = h;
+                        h.bookmarks = std::mem::take(&mut hs.hosts[i].bookmarks); // (the line has no bookmarks)
+                        hs.hosts[i] = h;
+                    }
                     None => hs.hosts.push(h),
                 });
                 Ok(())

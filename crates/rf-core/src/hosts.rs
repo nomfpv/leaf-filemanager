@@ -30,6 +30,9 @@ pub struct Host {
     /// OpenSSH `ProxyJump`: `user@jump.example.com:22` or another saved host's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump: Option<String>,
+    /// Folders on the server kept as bookmarks (paths as the server writes them); shown under the host in the sidebar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bookmarks: Vec<String>,
 }
 
 fn default_scheme() -> String {
@@ -38,7 +41,15 @@ fn default_scheme() -> String {
 
 impl Host {
     pub fn new(name: &str, host: &str) -> Host {
-        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None }
+        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new() }
+    }
+
+    /// Whether a remote place is on this host (same scheme, server, user and port).
+    pub fn is_server_of(&self, v: &crate::vpath::VPath) -> bool {
+        self.scheme.eq_ignore_ascii_case(v.scheme())
+            && self.host.eq_ignore_ascii_case(v.host())
+            && self.user.as_deref() == v.user()
+            && self.port == v.port()
     }
 
     /// The address the host's start folder has (`sftp://user@example.com:2222/srv`). No secret is in it.
@@ -139,6 +150,20 @@ impl Hosts {
 
     pub fn find(&self, name: &str) -> Option<&Host> {
         self.hosts.iter().find(|h| h.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Bookmarks the folder on the host it belongs to, or takes the bookmark away when it is one. `Some(true)`: added,
+    /// `Some(false)`: removed, `None`: no saved host is this server.
+    pub fn toggle_bookmark(&mut self, v: &crate::vpath::VPath) -> Option<bool> {
+        let h = self.hosts.iter_mut().find(|h| h.is_server_of(v))?;
+        let path = v.path().to_string();
+        if let Some(i) = h.bookmarks.iter().position(|b| *b == path) {
+            h.bookmarks.remove(i);
+            Some(false)
+        } else {
+            h.bookmarks.push(path);
+            Some(true)
+        }
     }
 
     /// Adds the imported hosts whose name is not in the list yet; returns how many were added.
