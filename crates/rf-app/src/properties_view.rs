@@ -233,6 +233,12 @@ pub struct PropsView {
     sig_sel: usize,
     security: Option<Result<leaf_sys::security::Security, String>>,
     sec_sel: usize,
+    /// The Security tab off Windows: owner, group and the mode as a grid (see `render_unix_security`).
+    perm: Option<PermView>,
+    perm_msg: Option<String>,
+    perm_tree: bool,
+    perm_busy: bool,
+    perm_cancel: Arc<AtomicBool>,
     link: Option<leaf_sys::shortcut::Details>,
     link_loaded: Option<leaf_sys::shortcut::Details>,
     link_inputs: Option<LinkInputs>,
@@ -330,6 +336,11 @@ impl PropsView {
             sig_sel: 0,
             security: None,
             sec_sel: 0,
+            perm: None,
+            perm_msg: None,
+            perm_tree: false,
+            perm_busy: false,
+            perm_cancel: Arc::new(AtomicBool::new(false)),
             link: None,
             link_loaded: None,
             link_inputs: None,
@@ -555,6 +566,190 @@ impl PropsView {
         })
         .detach();
         self.security = None;
+        #[cfg(unix)]
+        self.load_perm(cx);
+    }
+
+    /// Off Windows: owner, group and mode (and `getfacl` text when the tool exists), read when the tab is first shown.
+    #[cfg(unix)]
+    fn load_perm(&mut self, cx: &mut Context<Self>) {
+        if self.perm.is_some() {
+            return;
+        }
+        let p = self.paths[0].clone();
+        let task = cx.background_spawn(async move {
+            let i = leaf_sys::security::unix_info(&p).map_err(|e| format!("{e:#}"))?;
+            let acl = leaf_sys::security::acl_text(&p);
+            Ok::<_, String>(PermView { group: i.group, loaded: i.mode, mode: i.mode, can: i.can_change, is_link: i.is_link, acl })
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |v, cx| {
+                match r {
+                    Ok(pv) => v.perm = Some(pv),
+                    Err(e) => v.perm_msg = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Applies the grid as `chmod`; for a folder with "apply to contents" ticked the walk runs in the background and Cancel stops it.
+    #[cfg(unix)]
+    fn apply_perm(&mut self, cx: &mut Context<Self>) {
+        let Some(pv) = &self.perm else { return };
+        if self.perm_busy || pv.mode == pv.loaded {
+            return;
+        }
+        let (mode, path, tree) = (pv.mode, self.paths[0].clone(), self.perm_tree && self.is_dir());
+        self.perm_busy = true;
+        self.perm_msg = None;
+        self.perm_cancel.store(false, Ordering::Relaxed);
+        let cancel = self.perm_cancel.clone();
+        let task = cx.background_spawn(async move {
+            let r = if tree {
+                leaf_sys::security::chmod_tree(&path, mode, &|| cancel.load(Ordering::Relaxed)).map(|n| format!("{n} items changed"))
+            } else {
+                leaf_sys::security::chmod(&path, mode).map(|_| String::new())
+            };
+            r.map_err(|e| format!("{e:#}"))
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |v, cx| {
+                v.perm_busy = false;
+                match r {
+                    Ok(m) => {
+                        if let Some(pv) = &mut v.perm {
+                            pv.loaded = pv.mode;
+                        }
+                        v.perm_msg = (!m.is_empty()).then_some(m);
+                    }
+                    Err(e) => v.perm_msg = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_unix_security(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        use leaf_sys::perms::{PERMS, WHO, Who};
+        let owner = match &self.security {
+            Some(Ok(s)) => s.owner.clone().unwrap_or_else(|| "—".into()),
+            _ => "—".into(),
+        };
+        let Some(pv) = &self.perm else {
+            return vec![match &self.perm_msg {
+                Some(e) => card(p, vec![row(p, t!("Error"), e.clone())]),
+                None => note(p, t!("Loading…")),
+            }];
+        };
+        let is_dir = self.is_dir();
+        let mut out = vec![card(
+            p,
+            vec![
+                row(p, t!("Object name"), breakable(&self.paths[0].to_string_lossy())),
+                row(p, t!("Owner"), owner),
+                row(p, t!("Group"), pv.group.clone()),
+                row(p, t!("Permissions"), format!("{}  ({})", pv.mode.symbolic(), pv.mode.octal())),
+            ],
+        )];
+        let editable = pv.can && !pv.is_link && !self.perm_busy;
+        let head = |s: &'static str| div().w(px(80.)).flex().justify_center().text_xs().text_color(p.text_secondary).child(s);
+        let mut grid = vec![
+            h_flex()
+                .py(px(5.))
+                .child(div().flex_1())
+                .child(head(t!("Read")))
+                .child(head(t!("Write")))
+                .child(head(if is_dir { t!("Enter") } else { t!("Execute") }))
+                .into_any_element(),
+        ];
+        for (wi, who) in WHO.iter().enumerate() {
+            let label = match who {
+                Who::Owner => t!("Owner"),
+                Who::Group => t!("Group"),
+                Who::Others => t!("Others"),
+            };
+            let mut r = h_flex().py(px(4.)).items_center().text_sm().child(div().flex_1().child(label));
+            for (pi, perm) in PERMS.iter().enumerate() {
+                let (who, perm) = (*who, *perm);
+                let on = pv.mode.get(who, perm);
+                r = r.child(
+                    div().w(px(80.)).flex().justify_center().child(
+                        div()
+                            .id(("perm", wi * 3 + pi))
+                            .size(px(18.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .when(on, |d| d.bg(p.accent))
+                            .when(!on, |d| d.border_1().border_color(p.text_secondary))
+                            .when(editable, |d| d.cursor_pointer())
+                            .when(!editable, |d| d.opacity(0.5))
+                            .children(on.then(|| Icon::new(L::Check).size(px(12.)).text_color(p.accent_text)))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                if let Some(pv) = &mut v.perm {
+                                    if pv.can && !pv.is_link && !v.perm_busy {
+                                        pv.mode = pv.mode.toggled(who, perm);
+                                        cx.notify();
+                                    }
+                                }
+                            })),
+                    ),
+                );
+            }
+            grid.push(r.into_any_element());
+        }
+        out.push(card(p, grid));
+        let special = pv.mode.special_words();
+        if !special.is_empty() {
+            out.push(note(p, &format!("{}: {}", t!("Special bits"), special.join(", "))));
+        }
+        let mut acts = vec![];
+        if is_dir && editable {
+            let on = self.perm_tree;
+            acts.push(check_row(p, "perm-tree", t!("Apply to the folder's contents too"), Some(on), cx.listener(move |v, _, _, cx| {
+                v.perm_tree = !on;
+                cx.notify();
+            })));
+        }
+        if pv.is_link {
+            acts.push(note(p, t!("This is a link; its permissions are those of its target and cannot be changed here.")));
+        } else if !pv.can {
+            acts.push(note(p, t!("Only the owner of this item can change its permissions.")));
+        } else if self.perm_busy {
+            acts.push(link_button(p, "perm-cancel", L::X, t!("Cancel")).on_click(cx.listener(|v, _, _, cx| {
+                v.perm_cancel.store(true, Ordering::Relaxed);
+                cx.notify();
+            })).into_any_element());
+        } else if pv.mode != pv.loaded {
+            acts.push(link_button(p, "perm-apply", L::Check, t!("Apply permissions")).on_click(cx.listener(|_v, _, _, _cx| {
+                #[cfg(unix)]
+                _v.apply_perm(_cx)
+            })).into_any_element());
+            acts.push(
+                link_button(p, "perm-reset", L::X, t!("Revert")).on_click(cx.listener(|v, _, _, cx| {
+                    if let Some(pv) = &mut v.perm {
+                        pv.mode = pv.loaded;
+                    }
+                    cx.notify();
+                })).into_any_element(),
+            );
+        }
+        if !acts.is_empty() {
+            out.push(card(p, acts));
+        }
+        if let Some(m) = &self.perm_msg {
+            out.push(note(p, m));
+        }
+        if let Some(a) = &pv.acl {
+            out.push(card(p, vec![section(p, t!("Access control list")), div().text_xs().font_family("monospace").child(a.clone()).into_any_element()]));
+        }
+        out
     }
 
     /// A key press in the Shortcut key field (see hotkey_field.rs): sets or empties the combination, or says why it is not taken.
@@ -1366,6 +1561,9 @@ impl PropsView {
 
     fn render_security(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use leaf_sys::security::{RIGHTS, Right};
+        if !cfg!(windows) {
+            return self.render_unix_security(p, cx);
+        }
         let s = match &self.security {
             None => return vec![note(p, t!("Loading…"))],
             Some(Err(e)) => return vec![card(p, vec![row(p, t!("Error"), e.clone())]), self.win_props_link(p, cx)],
@@ -2136,4 +2334,15 @@ mod tests {
         assert_eq!(all.len(), 5, "{all:?}");
         std::fs::remove_dir_all(&d).unwrap();
     }
+}
+
+/// What the Security tab knows of a file off Windows (filled by `load_perm`).
+struct PermView {
+    group: String,
+    /// The mode as it is on disk, and as the grid has it now.
+    loaded: leaf_sys::perms::Mode,
+    mode: leaf_sys::perms::Mode,
+    can: bool,
+    is_link: bool,
+    acl: Option<String>,
 }
