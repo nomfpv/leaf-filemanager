@@ -818,6 +818,23 @@ pub fn restore(store: &Store, cp: &Checkpoint, remove: Option<&[String]>, trash:
     let mut done = Restored { auto, written: Vec::new(), back: Vec::new(), trashed: Vec::new(), failed: Vec::new() };
     for it in plan.items.iter().filter(|i| i.change != Change::Added) {
         let path = folder.join(&it.rel);
+        // "comes back" yet something is there: a file git ignores now, or a link the copy store does not list. The automatic
+        // checkpoint does not hold it, so it is never overwritten: it goes to the Trash first, or the file is left as it is.
+        if it.change == Change::Back
+            && let Ok(m) = std::fs::symlink_metadata(&path)
+        {
+            if m.is_dir() {
+                done.failed.push((it.rel.clone(), "a folder of that name is in the way".into()));
+                continue;
+            }
+            match trash(std::slice::from_ref(&path)) {
+                Ok(()) if std::fs::symlink_metadata(&path).is_err() => done.trashed.push(it.rel.clone()),
+                _ => {
+                    done.failed.push((it.rel.clone(), "it exists now but is not in the automatic checkpoint, and it could not be moved to the Trash".into()));
+                    continue;
+                }
+            }
+        }
         let r = match &it.src {
             Src::Blob { oid, mode } => match blobs.as_mut().map(|b| b.get(oid)) {
                 Some(Ok(bytes)) if *mode == 0o120000 => put_link(&path, &bytes),
@@ -980,6 +997,38 @@ mod tests {
             assert_eq!(undo.trashed, vec!["src/b.rs".to_string()]);
             let _ = std::fs::remove_dir_all(&d);
         }
+    }
+
+    #[test]
+    fn a_file_ignored_now_goes_to_the_trash_before_it_is_overwritten() {
+        if !git_ok() {
+            return;
+        }
+        let d = repo("ignored-now");
+        write(&d, "build.out", b"from then");
+        let store = store_for(&d, &temp("ignored-now-data"));
+        let cp = create(&store, "", false, None).unwrap();
+        // later git ignores it, and it holds other bytes: the automatic checkpoint will not have them
+        write(&d, ".gitignore", b"*.log
+*.out
+");
+        write(&d, "build.out", b"only copy of this");
+        // (leaf's own index keeps a file it once took even when it is ignored later; made again from nothing, as after damage, it
+        // does not take it)
+        std::fs::remove_file(d.join(".git").join(INDEX_NAME)).unwrap();
+        let bin = temp("ignored-now-bin");
+        let trash = |paths: &[PathBuf]| -> Result<(), String> {
+            for p in paths {
+                std::fs::rename(p, bin.join(p.file_name().unwrap())).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        };
+        let done = restore(&store, &cp, None, &trash).unwrap();
+        assert!(done.failed.is_empty(), "{:?}", done.failed);
+        assert_eq!(std::fs::read(bin.join("build.out")).unwrap(), b"only copy of this");
+        assert_eq!(std::fs::read(d.join("build.out")).unwrap(), b"from then");
+        assert!(done.trashed.contains(&"build.out".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
