@@ -824,7 +824,15 @@ fn transfer_inner(
     let arrived = Arc::new(std::sync::Mutex::new(Vec::<std::path::PathBuf>::new()));
     let landed = arrived.clone();
     let top = dest.clone();
-    let on_done: Option<OnDone> = after.map(|f| -> OnDone { Box::new(move |_, cx: &mut App| f(std::mem::take(&mut *arrived.lock().unwrap()), cx)) });
+    // a move re-keys the tags of what it moved (a copy leaves the copy untagged); undo and redo of moves come through here too
+    let tag_moves = Arc::new(std::sync::Mutex::new(Vec::<(std::path::PathBuf, std::path::PathBuf)>::new()));
+    let tag_moves_out = tag_moves.clone();
+    let on_done: Option<OnDone> = Some(Box::new(move |_, cx: &mut App| {
+        crate::tags::follow(cx, &std::mem::take(&mut *tag_moves.lock().unwrap()));
+        if let Some(f) = after {
+            f(std::mem::take(&mut *arrived.lock().unwrap()), cx);
+        }
+    }));
     // the strip's sentence, what the finished card opens, and the mark that tells its "Geri al" which undo record is its own
     let words = match kind {
         Transfer::Copy => t!("Copying {items}: {dest}"),
@@ -856,6 +864,10 @@ fn transfer_inner(
             }
         }
         *landed.lock().unwrap() = tops;
+        if kind == Transfer::Move {
+            // only what really left its old place (a cancelled or half-failed move leaves the rest where it was)
+            *tag_moves_out.lock().unwrap() = crate::tags::settled(pairs.clone());
+        }
         if record && !pairs.is_empty() {
             *marker.lock().unwrap() = pairs.first().map(|(_, made)| made.clone());
             crate::undo::push(crate::undo::UndoOp::Transferred { kind, pairs });

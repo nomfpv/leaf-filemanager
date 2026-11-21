@@ -209,7 +209,9 @@ impl BulkRename {
         self.applying = true;
         let work = cx.background_spawn(async move { run_plan(&dir, &pairs) });
         self._task = Some(cx.spawn(async move |this, cx| {
-            let errors = work.await;
+            let (errors, done) = work.await;
+            // (the tags of the files that did get their new names follow them, all at once: names may have swapped places)
+            let _ = cx.update(|cx| crate::tags::follow(cx, &done));
             let _ = this.update(cx, |v, cx| {
                 v.applying = false;
                 if errors.is_empty() {
@@ -225,7 +227,8 @@ impl BulkRename {
 }
 
 /// Executes the swap-safe plan; returns one message per failure.
-fn run_plan(dir: &std::path::Path, pairs: &[(String, String)]) -> Vec<String> {
+fn run_plan(dir: &std::path::Path, pairs: &[(String, String)]) -> (Vec<String>, Vec<(PathBuf, PathBuf)>) {
+    let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
     let pid = std::process::id();
     let tmp = |i: usize| {
         let mut n = 0;
@@ -263,10 +266,11 @@ fn run_plan(dir: &std::path::Path, pairs: &[(String, String)]) -> Vec<String> {
             }
         } else if !temp_names.contains(&s.to) {
             let from = orig_of_tmp.get(&s.from).cloned().unwrap_or_else(|| s.from.clone());
+            done.push((dir.join(&from), dir.join(&s.to)));
             crate::undo::push(crate::undo::UndoOp::Renamed { from: dir.join(from), to: dir.join(&s.to) });
         }
     }
-    errors
+    (errors, done)
 }
 
 fn checkbox(id: &'static str, label: &'static str, on: bool, p: &Palette) -> Stateful<Div> {

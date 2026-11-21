@@ -478,6 +478,7 @@ pub fn start_run(spec: RunSpec, cx: &mut App) {
         },
         Some(Box::new(move |_ok, cx| {
             let Some(rep) = result.lock().unwrap().take() else { return };
+            crate::tags::follow(cx, &rep.record.moves);
             finish(id_for_done.get(), &rep, automatic, cx);
             if let Some(f) = on_finished {
                 f(&rep, cx);
@@ -623,8 +624,18 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
     if !mark_undone(rec.token) {
         return;
     }
+    let back: Vec<(PathBuf, PathBuf)> = rec.moves.iter().rev().map(|(from, to)| (to.clone(), from.clone())).collect();
+    let moved = Arc::new(Mutex::new(Vec::new()));
+    let moved_out = moved.clone();
+    let on_done: Option<crate::status_center::OnDone> = Some(Box::new(move |ok, cx| {
+        crate::tags::follow(cx, &std::mem::take(&mut *moved.lock().unwrap()));
+        if let Some(f) = on_done {
+            f(ok, cx);
+        }
+    }));
     crate::status_center::start_with(cx, t!("Undoing: file organizing").to_string(), move |_| {
         let u = rf_win::organize::undo_moves(&rec);
+        *moved_out.lock().unwrap() = crate::tags::settled(back);
         let mut problems = u.failed.len();
         for f in &u.failed {
             log::warn!("organizer undo: {}: {}", f.path.display(), f.message);
@@ -647,8 +658,12 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
 /// Redo of a run (after an undo): the same moves, the same files to the Recycle Bin.
 pub fn redo_run(rec: Record, cx: &mut App) {
     UNDONE.lock().unwrap().retain(|t| *t != rec.token);
-    crate::status_center::start(cx, t!("Redoing: file organizing").to_string(), move |tracker| {
+    let again: Vec<(PathBuf, PathBuf)> = rec.moves.clone();
+    let moved = Arc::new(Mutex::new(Vec::new()));
+    let moved_out = moved.clone();
+    crate::status_center::start_with(cx, t!("Redoing: file organizing").to_string(), move |tracker| {
         let r = rf_win::organize::redo_moves(&rec);
+        *moved_out.lock().unwrap() = crate::tags::settled(again);
         let mut problems = r.failed.len();
         let present: Vec<PathBuf> = rec.recycled.iter().map(|(orig, _)| orig.clone()).filter(|p| rf_win::organize::exists(p)).collect();
         problems += rec.recycled.len() - present.len();
@@ -658,7 +673,7 @@ pub fn redo_run(rec: Record, cx: &mut App) {
         }
         anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 file could not be moved"), t!("{n} files could not be moved")));
         Ok(true)
-    });
+    }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *moved.lock().unwrap())))));
 }
 
 #[cfg(test)]

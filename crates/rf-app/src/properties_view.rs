@@ -746,6 +746,7 @@ impl PropsView {
                 match r {
                     Ok((paths, renamed)) => {
                         if let Some((from, to)) = renamed {
+                            crate::tags::follow(cx, &[(from.clone(), to.clone())]);
                             crate::undo::push(crate::undo::UndoOp::Renamed { from, to });
                         }
                         v.paths = paths;

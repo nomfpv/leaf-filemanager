@@ -121,9 +121,14 @@ fn undo_op(op: UndoOp, cx: &mut App) {
     match op {
         UndoOp::Renamed { from, to } => {
             let name = from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            crate::status_center::start(cx, format!("{} {name}", t!("Undoing rename →")), move |_| {
-                rf_win::fileops::rename(&to, &name)
-            });
+            crate::status_center::start_with(cx, format!("{} {name}", t!("Undoing rename →")), {
+                let to = to.clone();
+                move |_| rf_win::fileops::rename(&to, &name)
+            }, Some(Box::new(move |ok, cx| {
+                if ok {
+                    crate::tags::follow(cx, &[(to, from)]);
+                }
+            })));
         }
         UndoOp::Created { path } => crate::status_center::delete_ex(cx, vec![path], false, false),
         UndoOp::Transferred { kind: Transfer::Copy, pairs } => {
@@ -156,7 +161,14 @@ fn undo_op(op: UndoOp, cx: &mut App) {
         }
         UndoOp::Flattened { dir, rec } => {
             let name = rf_core::history::display_name(&dir);
-            crate::status_center::start(cx, format!("{} {name}", t!("Undoing: flatten →")), move |_| crate::ops::unflatten(&rec));
+            let back: Vec<(PathBuf, PathBuf)> = rec.moves.iter().rev().map(|(old, new)| (new.clone(), old.clone())).collect();
+            let done = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let done_out = done.clone();
+            crate::status_center::start_with(cx, format!("{} {name}", t!("Undoing: flatten →")), move |_| {
+                let r = crate::ops::unflatten(&rec);
+                *done_out.lock().unwrap() = crate::tags::settled(back);
+                r
+            }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *done.lock().unwrap())))));
         }
         UndoOp::Organized { rec } => crate::organizer::undo_run(rec, None, cx),
     }
@@ -170,9 +182,14 @@ pub fn redo(cx: &mut App) {
     match op {
         UndoOp::Renamed { from, to } => {
             let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            crate::status_center::start(cx, format!("{} {name}", t!("Redoing: rename →")), move |_| {
-                rf_win::fileops::rename(&from, &name)
-            });
+            crate::status_center::start_with(cx, format!("{} {name}", t!("Redoing: rename →")), {
+                let from = from.clone();
+                move |_| rf_win::fileops::rename(&from, &name)
+            }, Some(Box::new(move |ok, cx| {
+                if ok {
+                    crate::tags::follow(cx, &[(from, to)]);
+                }
+            })));
         }
         UndoOp::Created { .. } => {}
         UndoOp::Transferred { kind, pairs } => {
@@ -191,7 +208,14 @@ pub fn redo(cx: &mut App) {
         }
         UndoOp::Flattened { dir, rec } => {
             let name = rf_core::history::display_name(&dir);
-            crate::status_center::start(cx, format!("{} {name}", t!("Redoing: flatten →")), move |_| crate::ops::reflatten(&rec));
+            let again: Vec<(PathBuf, PathBuf)> = rec.moves.clone();
+            let done = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let done_out = done.clone();
+            crate::status_center::start_with(cx, format!("{} {name}", t!("Redoing: flatten →")), move |_| {
+                let r = crate::ops::reflatten(&rec);
+                *done_out.lock().unwrap() = crate::tags::settled(again);
+                r
+            }, Some(Box::new(move |_, cx| crate::tags::follow(cx, &std::mem::take(&mut *done.lock().unwrap())))));
         }
         UndoOp::Organized { rec } => crate::organizer::redo_run(rec, cx),
     }

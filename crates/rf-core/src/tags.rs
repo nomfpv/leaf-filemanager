@@ -52,9 +52,20 @@ impl Default for TagStore {
     }
 }
 
+/// The one place that turns a path into the key its tags are stored under.
+// TODO(linux)
 fn key(p: &Path) -> String {
     let s = p.to_string_lossy().to_lowercase();
     if s.len() > 3 { s.trim_end_matches(['\\', '/']).to_string() } else { s }
+}
+
+/// The start of the keys of everything below the folder with key `k`.
+fn child_prefix(k: &str) -> String {
+    let mut p = k.to_string();
+    if !p.ends_with(['\\', '/']) {
+        p.push(std::path::MAIN_SEPARATOR);
+    }
+    p
 }
 
 impl TagStore {
@@ -141,10 +152,47 @@ impl TagStore {
 
     /// Keep tags when a file is renamed/moved inside the app.
     pub fn moved(&mut self, from: &Path, to: &Path) {
-        if let Some(mut v) = self.items.remove(&key(from)) {
-            v.path = to.to_path_buf();
-            self.items.insert(key(to), v);
+        self.moved_all(&[(from.to_path_buf(), to.to_path_buf())]);
+    }
+
+    /// Re-keys tags from (old path, new path) pairs: an item's own tags and, when the old path was a folder, those of everything
+    /// below it. All pairs are lifted out before any is put down, so renames that swap names (a to b, b to a) lose nothing.
+    /// Returns whether anything moved.
+    pub fn moved_all(&mut self, pairs: &[(PathBuf, PathBuf)]) -> bool {
+        let mut lifted: Vec<(PathBuf, Tagged)> = Vec::new();
+        for (from, to) in pairs {
+            let k = key(from);
+            if let Some(v) = self.items.remove(&k) {
+                lifted.push((to.clone(), v));
+            }
+            let prefix = child_prefix(&k);
+            let below: Vec<String> = self.items.range(prefix.clone()..).take_while(|(c, _)| c.starts_with(&prefix)).map(|(c, _)| c.clone()).collect();
+            let n = from.components().count();
+            for c in below {
+                if let Some(v) = self.items.remove(&c) {
+                    let rest: PathBuf = v.path.components().skip(n).collect();
+                    lifted.push((to.join(rest), v));
+                }
+            }
         }
+        let any = !lifted.is_empty();
+        for (path, mut v) in lifted {
+            v.path = path.clone();
+            self.items.insert(key(&path), v);
+        }
+        any
+    }
+
+    /// Whether [`moved_all`](Self::moved_all) would change anything (no writing): lets a caller skip a save.
+    pub fn follows(&self, pairs: &[(PathBuf, PathBuf)]) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        pairs.iter().any(|(from, _)| {
+            let k = key(from);
+            let prefix = child_prefix(&k);
+            self.items.contains_key(&k) || self.items.range(prefix.clone()..).next().is_some_and(|(c, _)| c.starts_with(&prefix))
+        })
     }
 
     pub fn load(path: &Path) -> Self {
@@ -200,6 +248,109 @@ mod tests {
         assert_eq!(s.tagged_in(Path::new(r"C:\Work")).next().unwrap().tags, [1, 3]);
         assert_eq!(names(r"C:\Work\Sub"), ["deep.txt"]);
         assert!(names(r"C:\Nothing").is_empty() && names(r"E:\").is_empty());
+    }
+
+    fn p(x: &str) -> PathBuf {
+        PathBuf::from(x)
+    }
+
+    fn pairs(v: &[(&str, &str)]) -> Vec<(PathBuf, PathBuf)> {
+        v.iter().map(|(a, b)| (p(a), p(b))).collect()
+    }
+
+    /// A store in memory only; nothing here touches the real tag file.
+    fn tagged(paths: &[(&str, u32)]) -> TagStore {
+        let mut s = TagStore::default();
+        for (path, id) in paths {
+            s.toggle(&[p(path)], *id);
+        }
+        s
+    }
+
+    #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths")]
+    fn a_moved_file_keeps_its_tag() {
+        let mut s = tagged(&[(r"C:\Work\a.txt", 2), (r"C:\Work\keep.txt", 3)]);
+        assert!(s.moved_all(&pairs(&[(r"C:\Work\a.txt", r"D:\Archive\A.txt")])));
+        assert!(s.tags_of(Path::new(r"C:\Work\a.txt")).is_empty());
+        assert_eq!(s.tags_of(Path::new(r"d:\archive\a.txt")), [2]);
+        assert_eq!(s.paths_with(2), vec![p(r"D:\Archive\A.txt")], "the new path keeps its letter case");
+        assert_eq!(s.tags_of(Path::new(r"C:\Work\keep.txt")), [3]);
+        assert!(!s.moved_all(&pairs(&[(r"C:\Nothing.txt", r"C:\Else.txt")])), "an untagged item changes nothing");
+    }
+
+    #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths")]
+    fn a_moved_folder_takes_the_tags_of_everything_below_it() {
+        let mut s = tagged(&[
+            (r"C:\Work\Proj", 1),
+            (r"C:\Work\Proj\a.txt", 2),
+            (r"C:\Work\Proj\Sub\deep.txt", 3),
+            (r"C:\Work\Project2\x.txt", 4),
+            (r"C:\Work\Other.txt", 5),
+        ]);
+        assert!(s.follows(&pairs(&[(r"c:\work\proj", r"C:\New")])));
+        assert!(s.moved_all(&pairs(&[(r"C:\Work\Proj", r"E:\Done\Proj 2")])));
+        assert_eq!(s.tags_of(Path::new(r"E:\Done\Proj 2")), [1]);
+        assert_eq!(s.tags_of(Path::new(r"E:\Done\Proj 2\a.txt")), [2]);
+        assert_eq!(s.tags_of(Path::new(r"E:\Done\Proj 2\Sub\deep.txt")), [3]);
+        assert_eq!(s.paths_with(3), vec![p(r"E:\Done\Proj 2\Sub\deep.txt")]);
+        assert_eq!(s.tags_of(Path::new(r"C:\Work\Project2\x.txt")), [4], "a folder whose name only begins the same stays");
+        assert_eq!(s.tags_of(Path::new(r"C:\Work\Other.txt")), [5]);
+        assert_eq!(s.items.len(), 5);
+        assert!(!s.follows(&pairs(&[(r"C:\Work\Proj", r"C:\Z")])), "nothing is left under the old name");
+    }
+
+    #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths")]
+    fn a_bulk_rename_of_several_files() {
+        let mut s = tagged(&[(r"C:\Pics\img1.jpg", 1), (r"C:\Pics\img2.jpg", 2), (r"C:\Pics\img3.jpg", 3), (r"C:\Pics\note.txt", 4)]);
+        s.moved_all(&pairs(&[(r"C:\Pics\img1.jpg", r"C:\Pics\trip_1.jpg"), (r"C:\Pics\img2.jpg", r"C:\Pics\trip_2.jpg"), (r"C:\Pics\img3.jpg", r"C:\Pics\trip_3.jpg")]));
+        assert_eq!(s.tags_of(Path::new(r"C:\Pics\trip_1.jpg")), [1]);
+        assert_eq!(s.tags_of(Path::new(r"C:\Pics\trip_2.jpg")), [2]);
+        assert_eq!(s.tags_of(Path::new(r"C:\Pics\trip_3.jpg")), [3]);
+        assert_eq!(s.tags_of(Path::new(r"C:\Pics\note.txt")), [4]);
+        assert_eq!(s.items.len(), 4);
+    }
+
+    #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths")]
+    fn names_that_swap_places_lose_no_tag() {
+        let mut s = tagged(&[(r"C:\D\a.txt", 1), (r"C:\D\b.txt", 2)]);
+        s.moved_all(&pairs(&[(r"C:\D\a.txt", r"C:\D\b.txt"), (r"C:\D\b.txt", r"C:\D\a.txt")]));
+        assert_eq!(s.tags_of(Path::new(r"C:\D\b.txt")), [1]);
+        assert_eq!(s.tags_of(Path::new(r"C:\D\a.txt")), [2]);
+        assert_eq!(s.items.len(), 2);
+        // a letter-case-only rename
+        s.moved_all(&pairs(&[(r"C:\D\a.txt", r"C:\D\A.txt")]));
+        assert_eq!(s.paths_with(2), vec![p(r"C:\D\A.txt")]);
+    }
+
+    #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths")]
+    fn a_move_and_its_undo_bring_the_tags_back() {
+        let mut s = tagged(&[(r"C:\Work\Proj", 1), (r"C:\Work\Proj\a.txt", 2), (r"C:\Work\b.txt", 3)]);
+        let before = s.items.clone();
+        s.moved_all(&pairs(&[(r"C:\Work\Proj", r"D:\Proj"), (r"C:\Work\b.txt", r"D:\b.txt")]));
+        assert_eq!(s.tags_of(Path::new(r"D:\Proj\a.txt")), [2]);
+        // the undo of a move is the same pairs the other way round
+        s.moved_all(&pairs(&[(r"D:\Proj", r"C:\Work\Proj"), (r"D:\b.txt", r"C:\Work\b.txt")]));
+        assert_eq!(s.items.len(), before.len());
+        for (k, v) in &before {
+            assert_eq!(s.items.get(k), Some(v));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(not(windows), ignore = "Windows paths")]
+    fn a_save_and_load_round_trip_in_a_temp_file() {
+        let dir = std::env::temp_dir().join(format!("leaf-tags-test-{}", std::process::id()));
+        let file = dir.join("tags.json");
+        let mut s = tagged(&[(r"C:\Work\a.txt", 2)]);
+        s.moved(Path::new(r"C:\Work\a.txt"), Path::new(r"C:\Work\b.txt"));
+        s.save(&file).unwrap();
+        assert_eq!(TagStore::load(&file).tags_of(Path::new(r"C:\Work\b.txt")), [2]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

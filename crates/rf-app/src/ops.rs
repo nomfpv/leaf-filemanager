@@ -589,14 +589,21 @@ impl FolderView {
             vec![
                 crate::prompt::Button::new(t!("Flatten"), crate::prompt::Kind::Primary, move |_, _, cx| {
                     let dir = dir.clone();
-                    crate::status_center::start(cx, format!("{} {name}", t!("Flattening:")), move |t| {
+                    let moved = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                    let moved_out = moved.clone();
+                    crate::status_center::start_with(cx, format!("{} {name}", t!("Flattening:")), move |t| {
                         let mut rec = Flattened::default();
                         let r = flatten(&dir, &t, &mut rec);
+                        *moved_out.lock().unwrap() = rec.moves.clone();
                         if !rec.moves.is_empty() || !rec.removed.is_empty() {
                             crate::undo::push(crate::undo::UndoOp::Flattened { dir: dir.clone(), rec });
                         }
                         r
-                    });
+                    }, Some(Box::new(move |_, cx| {
+                        // (the files the flatten moved up take their tags along)
+                        let pairs = std::mem::take(&mut *moved.lock().unwrap());
+                        crate::tags::follow(cx, &pairs);
+                    })));
                     Ok(())
                 }),
                 crate::prompt::Button::cancel(),
@@ -728,7 +735,7 @@ impl FolderView {
                         Ok(Ok(true)) => {
                             crate::undo::push(crate::undo::UndoOp::Renamed { from: from.clone(), to: to.clone() });
                             let _ = cx.update(|cx| {
-                                crate::tags::update(cx, |t| t.moved(&from, &to));
+                                crate::tags::follow(cx, &[(from.clone(), to.clone())]);
                                 // a pinned folder renamed in the list: its pin follows it
                                 crate::places::pins_follow(cx, &from, Some(&to));
                             });

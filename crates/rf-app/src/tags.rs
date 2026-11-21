@@ -29,6 +29,31 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut TagStore)) {
     cx.refresh_windows();
 }
 
+/// Tags follow their files: re-keys them from (old path, new path) pairs, a folder's children with it. Every place that moves or
+/// renames paths calls this once with what it did (a copy does not: it leaves the copy untagged). Nothing is written when no tag
+/// is affected.
+pub fn follow(cx: &mut App, pairs: &[(PathBuf, PathBuf)]) {
+    if pairs.is_empty() || !cx.global::<Tags>().0.follows(pairs) {
+        return;
+    }
+    update(cx, |t| {
+        t.moved_all(pairs);
+    });
+}
+
+/// Of (old, new) pairs the ones that really happened: the old path is gone and the new one is there (a letter-case-only rename keeps
+/// the old path). Touches the disk, so for a worker thread; for runs that can end half done.
+pub fn settled(pairs: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
+    pairs
+        .into_iter()
+        .filter(|(old, new)| {
+            let there = std::fs::symlink_metadata(new).is_ok();
+            let same = old.as_os_str().to_string_lossy().eq_ignore_ascii_case(&new.as_os_str().to_string_lossy());
+            there && (same || std::fs::symlink_metadata(old).is_err())
+        })
+        .collect()
+}
+
 pub fn color(c: u32) -> Hsla {
     rgb(c).into()
 }

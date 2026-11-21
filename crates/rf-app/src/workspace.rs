@@ -2202,7 +2202,7 @@ impl Workspace {
             let tab_full = cx.global::<crate::settings::Settings>().tab_full_path;
             // (the room in characters for a full path, about 7 px each; the tab's own width is only known further down)
             let room_w = if fit_names { TAB_MAX_W } else { tab_w };
-            let title = crate::full_path::tab_text(v.location(), &name, tab_full, ((room_w - TAB_CHROME_W) / 7.).max(8.) as usize);
+            let title = crate::full_path::tab_text(v.location(), &name, tab_full, ((room_w - TAB_CHROME_W - if tab_terminal { TAB_TERMINAL_W } else { 0. }) / 7.6).max(8.) as usize);
             let tab_tip = crate::full_path::path_text(v.location()).unwrap_or_else(|| name.clone());
             let icon = v.tab_icon();
             let tab_dir = v.location().path().map(Path::to_path_buf);
@@ -2679,7 +2679,7 @@ impl Workspace {
                         Ok(true) => {
                             let _ = cx.update(|cx| {
                                 crate::undo::push(crate::undo::UndoOp::Renamed { from: from.clone(), to: to.clone() });
-                                crate::tags::update(cx, |t| t.moved(&from, &to));
+                                crate::tags::follow(cx, &[(from.clone(), to.clone())]);
                                 let _ = me.update(cx, |ws, cx| ws.place_renamed(&from, &to, cx));
                             });
                         }
