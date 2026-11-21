@@ -89,7 +89,7 @@ enum Open {
     File(std::fs::File),
 }
 
-/// A read-only SFTP server over a folder (directory parts of three names, to test the streaming).
+/// An SFTP server over a folder (writes as OpenSSH does them; read-only when hostile) (directory parts of three names, to test the streaming).
 struct Disk {
     root: PathBuf,
     handles: HashMap<String, Open>,
@@ -170,7 +170,9 @@ impl russh_sftp::server::Handler for Disk {
     }
 
     async fn init(&mut self, _version: u32, _ext: HashMap<String, String>) -> Result<Version, Self::Error> {
-        Ok(Version::new())
+        let mut v = Version::new();
+        v.extensions.insert(crate::conn::POSIX_RENAME.into(), "1".into());
+        Ok(v)
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
@@ -211,12 +213,103 @@ impl russh_sftp::server::Handler for Disk {
     }
 
     async fn open(&mut self, id: u32, filename: String, pflags: OpenFlags, _attrs: FileAttributes) -> Result<Handle, Self::Error> {
-        if pflags.intersects(OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::APPEND) {
+        let writes = pflags.intersects(OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::APPEND);
+        if writes && self.hostile {
             return Err(StatusCode::PermissionDenied);
         }
         let real = if self.hostile && filename.starts_with("/pics/") { self.root.join("payload") } else { self.local(&filename) };
-        let f = std::fs::File::open(real).map_err(io_status)?;
+        let mut o = std::fs::OpenOptions::new();
+        o.read(pflags.contains(OpenFlags::READ) || !writes).write(pflags.contains(OpenFlags::WRITE)).append(pflags.contains(OpenFlags::APPEND));
+        if pflags.contains(OpenFlags::CREATE) {
+            if pflags.contains(OpenFlags::EXCLUDE) {
+                o.create_new(true);
+            } else {
+                o.create(true);
+            }
+        }
+        o.truncate(pflags.contains(OpenFlags::TRUNCATE));
+        let f = o.open(real).map_err(io_status)?;
         Ok(Handle { id, handle: self.handle(Open::File(f)) })
+    }
+
+    async fn write(&mut self, id: u32, handle: String, offset: u64, data: Vec<u8>) -> Result<Status, Self::Error> {
+        use std::io::{Seek, SeekFrom, Write};
+        let Some(Open::File(f)) = self.handles.get_mut(&handle) else { return Err(StatusCode::Failure) };
+        f.seek(SeekFrom::Start(offset)).map_err(io_status)?;
+        f.write_all(&data).map_err(io_status)?;
+        Ok(ok(id))
+    }
+
+    async fn fsetstat(&mut self, id: u32, handle: String, attrs: FileAttributes) -> Result<Status, Self::Error> {
+        let Some(Open::File(f)) = self.handles.get_mut(&handle) else { return Err(StatusCode::Failure) };
+        if let Some(size) = attrs.size {
+            f.set_len(size).map_err(io_status)?;
+        }
+        Ok(ok(id))
+    }
+
+    async fn setstat(&mut self, id: u32, path: String, attrs: FileAttributes) -> Result<Status, Self::Error> {
+        if let Some(t) = attrs.mtime {
+            let f = std::fs::OpenOptions::new().write(true).open(self.local(&path)).map_err(io_status)?;
+            f.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(t as u64)).map_err(io_status)?;
+        }
+        Ok(ok(id))
+    }
+
+    /// As OpenSSH: a link is unlinked (a folder link too), a folder is refused.
+    async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+        let p = self.local(&filename);
+        let m = std::fs::symlink_metadata(&p).map_err(io_status)?;
+        if m.file_type().is_symlink() {
+            std::fs::remove_file(&p).or_else(|_| std::fs::remove_dir(&p)).map_err(io_status)?;
+        } else if m.is_dir() {
+            return Err(StatusCode::Failure);
+        } else {
+            std::fs::remove_file(&p).map_err(io_status)?;
+        }
+        Ok(ok(id))
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        let p = self.local(&path);
+        if std::fs::symlink_metadata(&p).map_err(io_status)?.file_type().is_symlink() {
+            return Err(StatusCode::Failure);
+        }
+        std::fs::remove_dir(&p).map_err(|_| StatusCode::Failure)?;
+        Ok(ok(id))
+    }
+
+    async fn mkdir(&mut self, id: u32, path: String, _attrs: FileAttributes) -> Result<Status, Self::Error> {
+        std::fs::create_dir(self.local(&path)).map_err(|_| StatusCode::Failure)?;
+        Ok(ok(id))
+    }
+
+    /// As OpenSSH: a plain rename never replaces.
+    async fn rename(&mut self, id: u32, oldpath: String, newpath: String) -> Result<Status, Self::Error> {
+        let (a, b) = (self.local(&oldpath), self.local(&newpath));
+        if std::fs::symlink_metadata(&b).is_ok() {
+            return Err(StatusCode::Failure);
+        }
+        std::fs::rename(a, b).map_err(io_status)?;
+        Ok(ok(id))
+    }
+
+    /// `posix-rename@openssh.com`: replaces a file at the new name.
+    async fn extended(&mut self, id: u32, request: String, data: Vec<u8>) -> Result<russh_sftp::protocol::Packet, Self::Error> {
+        if request != crate::conn::POSIX_RENAME {
+            return Err(StatusCode::OpUnsupported);
+        }
+        let mut parts = Vec::new();
+        let mut d = &data[..];
+        while d.len() >= 4 {
+            let n = u32::from_be_bytes([d[0], d[1], d[2], d[3]]) as usize;
+            let s = d.get(4..4 + n).ok_or(StatusCode::BadMessage)?;
+            parts.push(String::from_utf8(s.to_vec()).map_err(|_| StatusCode::BadMessage)?);
+            d = &d[4 + n..];
+        }
+        let [a, b] = parts.as_slice() else { return Err(StatusCode::BadMessage) };
+        std::fs::rename(self.local(a), self.local(b)).map_err(io_status)?;
+        Ok(russh_sftp::protocol::Packet::Status(ok(id)))
     }
 
     async fn read(&mut self, id: u32, handle: String, offset: u64, len: u32) -> Result<Data, Self::Error> {
@@ -711,4 +804,70 @@ fn another_key_after_trust_once_is_refused_and_secrets_forgotten() {
     fs.drop_connections();
     fs.stat(&root).unwrap();
     assert_eq!(ans.asked(), [format!("password {USER}@127.0.0.1 retry=false")]);
+}
+
+/// The files directly in `dir` (names only, sorted).
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    v.sort();
+    v
+}
+
+/// A recursive remove on the server unlinks a link to a folder outside (inside the tree and as the item itself) and never
+/// goes through it: what the link points to is untouched.
+#[test]
+fn recursive_remove_does_not_follow_a_link() {
+    let tmp = Temp::new("rmlink");
+    let served = Temp::new("rmlink-served");
+    let password = format!("pw-{}-rm", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    std::fs::create_dir_all(served.0.join("outside")).unwrap();
+    std::fs::write(served.0.join("outside").join("keep.txt"), b"keep").unwrap();
+    std::fs::create_dir_all(served.0.join("tree").join("sub")).unwrap();
+    std::fs::write(served.0.join("tree").join("a.txt"), b"a").unwrap();
+    std::fs::write(served.0.join("tree").join("sub").join("b.txt"), b"b").unwrap();
+    let local = LocalFs::address(&served.0);
+    assert!(disk_link(&local.join("tree").join("sub").join("out"), &local.join("outside")), "a link on this PC");
+    assert!(disk_link(&local.join("top"), &local.join("outside")));
+    assert_eq!(fs.stat(&server.addr("/tree/sub/out")).unwrap().kind, leaf_vfs::Kind::Link);
+
+    assert_eq!(fs.remove(&server.addr("/tree"), false), Err(FsError::NotEmpty));
+    fs.remove(&server.addr("/tree"), true).unwrap();
+    fs.remove(&server.addr("/top"), true).unwrap();
+    assert_eq!(names_in(&served.0), ["outside"]);
+    assert_eq!(names_in(&served.0.join("outside")), ["keep.txt"]);
+    assert_eq!(std::fs::read(served.0.join("outside").join("keep.txt")).unwrap(), b"keep");
+    assert_eq!(fs.remove(&server.addr("/"), true), Err(FsError::Denied));
+}
+
+/// An upload goes to a temporary name and takes the real one only at the end: a whole one replaces the file (keeping
+/// nothing else behind); one cut off half way (the server gone) leaves the original file exactly as it was.
+#[test]
+fn a_cut_upload_leaves_the_original_intact() {
+    use std::io::Write;
+    let tmp = Temp::new("cut");
+    let served = Temp::new("cut-served");
+    let password = format!("pw-{}-cut", std::process::id());
+    let server = TestServer::start(&served.0, &password, new_key().public_key().clone(), new_key());
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    let doc = served.0.join("doc.txt");
+    std::fs::write(&doc, b"version one").unwrap();
+
+    // a whole upload replaces it
+    let mut w = fs.open_write(&server.addr("/doc.txt"), leaf_vfs::WriteOpts::REPLACE).unwrap();
+    w.write_all(&vec![2u8; 150_000]).unwrap();
+    w.finish().unwrap();
+    assert_eq!(std::fs::read(&doc).unwrap(), vec![2u8; 150_000]);
+    assert_eq!(names_in(&served.0), ["doc.txt"], "no temporary file left");
+    assert!(matches!(fs.open_write(&server.addr("/doc.txt"), leaf_vfs::WriteOpts::CREATE_NEW), Err(FsError::Exists)));
+
+    // cut off: the server goes away in the middle
+    let mut w = fs.open_write(&server.addr("/doc.txt"), leaf_vfs::WriteOpts::REPLACE).unwrap();
+    w.write_all(&vec![3u8; 200_000]).unwrap();
+    drop(server);
+    let r = w.write_all(&vec![3u8; 600_000]).map_err(FsError::from).and_then(|_| w.finish());
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(std::fs::read(&doc).unwrap(), vec![2u8; 150_000], "the original is intact");
+    assert!(names_in(&served.0).iter().all(|n| n == "doc.txt" || n.contains(".leaf-up-")), "{:?}", names_in(&served.0));
 }

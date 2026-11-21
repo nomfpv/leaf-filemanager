@@ -172,6 +172,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub(crate) struct Conn {
     pub sftp: Arc<RawSftpSession>,
     pub statvfs: bool,
+    /// The server has `posix-rename@openssh.com` (a rename that replaces the target in one step).
+    pub posix_rename: bool,
     /// The folder the server logs the user into (`/~` in an address stands for it).
     pub home: String,
     handle: client::Handle<Client>,
@@ -451,13 +453,17 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         .map_err(|_| offline("the server did not start SFTP in time"))?
         .map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
     let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
+    let posix_rename = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
     let home = match tokio::time::timeout(cfg.op_timeout, sftp.realpath(".")).await {
         Ok(Ok(n)) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
         _ => "/".into(),
     };
-    log::info!("remote: connected (SFTP version {}, statvfs {statvfs})", version.version);
-    Ok(Conn { sftp: Arc::new(sftp), statvfs, home, handle, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
+    log::info!("remote: connected (SFTP version {}, statvfs {statvfs}, posix-rename {posix_rename})", version.version);
+    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now() })
 }
+
+/// The OpenSSH extension of a rename that replaces the target atomically.
+pub(crate) const POSIX_RENAME: &str = "posix-rename@openssh.com";
 
 /// One step of the conversation with the server, with a time limit: a stalled server becomes "offline", never a hang.
 async fn step<T, E: std::fmt::Display>(limit: Duration, fut: impl std::future::Future<Output = Result<T, E>>) -> Result<T, FsError> {
