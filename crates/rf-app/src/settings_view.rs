@@ -2981,7 +2981,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
     let dfm_on = crate::DEFAULT_FM.load(std::sync::atomic::Ordering::Relaxed);
     // while leaf is the default file manager: archives can be given to it too (only the
     // user can pick the default app, in Windows' own page)
-    let archives = dfm_on.then(|| {
+    let archives = (dfm_on && cfg!(windows)).then(|| {
         card(
             p,
             L::FileArchive,
@@ -3008,11 +3008,12 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 });
             }
         }),
-        win_only(card(
+        card(
             p,
             L::Power,
             t!("Open leaf when you sign in"),
-            None,
+            // (Linux: the session's autostart folder)
+            if cfg!(windows) { None } else { Some(t!("Adds leaf to your session's autostart (~/.config/autostart). Turn it off to remove it.")) },
             switch("start-win", p, start_on, move |window, _| {
                 if let Ok(exe) = std::env::current_exe() {
                     if let Err(e) = leaf_sys::dialogs::set_start_with_windows(&exe, !start_on) {
@@ -3021,7 +3022,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 }
                 window.refresh();
             }),
-        )),
+        ),
         card(
             p,
             L::PanelBottom,
@@ -3122,11 +3123,15 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             .child(div().pl(px(56.)).pr_4().pb_3().text_xs().text_color(p.text_tertiary).child(live))
             .into_any_element(),
         section(p, t!("Experimental")),
-        win_only(card(
+        card(
             p,
             L::AppWindow,
             t!("Set as default file manager"),
-            Some(t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time.")),
+            Some(if cfg!(windows) {
+                t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time.")
+            } else {
+                t!("Folders open with leaf (your mimeapps.list names it for inode/directory). Applies to this user only; turning it off gives folders back to the program that had them.")
+            }),
             switch("dfm", p, dfm_on, move |window, _| {
                 let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
                 std::thread::spawn(move || {
@@ -3139,7 +3144,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 });
                 window.refresh();
             }),
-        )),
+        ),
     ];
     out.extend(archives);
     out.extend([

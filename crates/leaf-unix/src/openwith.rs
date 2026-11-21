@@ -28,7 +28,7 @@ pub(crate) fn data_dirs() -> Vec<PathBuf> {
     v
 }
 
-fn config_dirs() -> Vec<PathBuf> {
+pub(crate) fn config_dirs() -> Vec<PathBuf> {
     let mut v = Vec::new();
     match std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
         Some(h) => v.push(PathBuf::from(h)),
@@ -62,7 +62,7 @@ pub fn mime_of(path: &Path) -> Option<String> {
 }
 
 /// Desktop-entry ids named for `mime` in the `[section]` of the `mimeapps.list` files (config and data dirs, user first).
-fn mimeapps_ids(section: &str, mime: &str) -> Vec<String> {
+pub(crate) fn mimeapps_ids(section: &str, mime: &str) -> Vec<String> {
     let mut files: Vec<PathBuf> = Vec::new();
     for c in config_dirs() {
         files.push(c.join("mimeapps.list"));
