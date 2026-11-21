@@ -15,6 +15,16 @@ use crate::theme::{self, Palette};
 /// About the width the group takes in the title bar (the tab strip leaves it free).
 pub const WIDTH: f32 = 236.;
 
+/// The group's width now: the VPN dot adds one button when it is shown.
+pub fn width(cx: &App) -> f32 {
+    if vpn_shown(cx) { WIDTH + 34. } else { WIDTH }
+}
+
+/// The VPN dot is there once a Mullvad account is signed in (or while a tunnel runs): a PC without one has no use for it.
+fn vpn_shown(cx: &App) -> bool {
+    cx.global::<crate::settings::Settings>().vpn_signed_in || !matches!(leaf_vpn::state(), leaf_vpn::State::Off)
+}
+
 /// A 32 x 28 icon button of the group (the mockup's `.prefs button`).
 fn icon_button(id: &'static str, p: &Palette, icon: L, tip: SharedString, popups_open: bool) -> Stateful<Div> {
     div()
@@ -52,8 +62,91 @@ pub fn render(p: &Palette, ops: &Entity<crate::status_center::Ops>, popups_open:
             icon_button("tb-theme", p, if p.dark { L::Moon } else { L::Sun }, tip, popups_open)
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::ToggleTheme), cx))
         })
+        .when(vpn_shown(cx), |d| d.child(vpn_dot(p, popups_open)))
         .child(status_dot(p, ops, popups_open, cx))
         .into_any_element()
+}
+
+/// leaf's VPN as a dot beside the Status Center's: hollow while off, the warning colour while connecting, green while on, red
+/// after a failure. The tooltip says where (country, city and the exit address); a click opens its small menu.
+fn vpn_dot(p: &Palette, popups_open: bool) -> AnyElement {
+    let state = leaf_vpn::state();
+    let (word, line) = crate::vpn::describe(&state);
+    let tip: SharedString = match line {
+        Some(l) => format!("{word}\n{l}").into(),
+        None => word,
+    };
+    let fill: Option<Hsla> = match state {
+        leaf_vpn::State::Off => None,
+        leaf_vpn::State::Connecting { .. } => Some(p.warning),
+        leaf_vpn::State::On { .. } => Some(p.success),
+        leaf_vpn::State::Failed(_) => Some(p.danger),
+    };
+    let dot = div().size(px(12.)).rounded_full().border_1();
+    let dot = match fill {
+        Some(c) => dot.bg(c).border_color(p.border_strong),
+        None => dot.border_color(p.text_secondary),
+    };
+    h_flex()
+        .id("tb-vpn")
+        .flex_shrink_0()
+        .h(px(28.))
+        .px(px(6.))
+        .gap(px(5.))
+        .items_center()
+        .justify_center()
+        .rounded(theme::RADIUS_SM)
+        .text_size(px(11.))
+        .text_color(p.text_secondary)
+        .hover(|s| s.bg(p.hover).text_color(p.text))
+        .when(!popups_open, move |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)))
+        .child(dot)
+        .child("VPN")
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, window, cx| vpn_menu(window, cx))
+        .into_any_element()
+}
+
+/// Connect or disconnect, the country (from Mullvad's list), and the VPN settings.
+fn vpn_menu(window: &mut Window, cx: &mut App) {
+    crate::vpn::want_relays(cx);
+    let running = !matches!(leaf_vpn::state(), leaf_vpn::State::Off | leaf_vpn::State::Failed(_));
+    let mut items = vec![if running {
+        Item::action(t!("Disconnect"), MenuIcon::Lucide(L::Power), |_, cx| crate::vpn::disconnect(cx))
+    } else {
+        Item::action(t!("Connect"), MenuIcon::Lucide(L::Power), |_, cx| crate::vpn::connect(cx))
+    }];
+    let places = leaf_vpn::mullvad::places(&crate::vpn::relays());
+    if !places.is_empty() {
+        let now = cx.global::<crate::settings::Settings>().vpn_country.trim().to_ascii_lowercase();
+        let mut countries = vec![Item::action(t!("Anywhere"), MenuIcon::None, |_, cx: &mut App| {
+            crate::settings::update(cx, |s| {
+                s.vpn_country.clear();
+                s.vpn_city.clear();
+            })
+        })
+        .checked(now.is_empty())];
+        countries.extend(places.into_iter().map(|(name, code, _)| {
+            let on = code == now;
+            Item::action(name, MenuIcon::None, move |_, cx: &mut App| {
+                let code = code.clone();
+                crate::settings::update(cx, move |s| {
+                    if s.vpn_country != code {
+                        s.vpn_city.clear();
+                    }
+                    s.vpn_country = code;
+                })
+            })
+            .checked(on)
+        }));
+        items.push(Item::sub(t!("Country"), MenuIcon::Lucide(L::Globe), countries));
+    }
+    items.push(Item::Separator);
+    items.push(Item::action(t!("VPN settings"), MenuIcon::Lucide(L::Settings), |w, cx| {
+        crate::settings_view::open_page(crate::settings_view::Page::Vpn, cx);
+        w.dispatch_action(Box::new(crate::actions::GoSettings), cx)
+    }));
+    crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
 }
 
 /// The drop: the window's material (the same choices as Settings > Appearance > Window material) and the theme.

@@ -2468,7 +2468,7 @@ impl Workspace {
         // while there are few, shrinking as more open, scrolling only below the minimum.
         // (the right-hand controls take their room first, in a window wide enough for them)
         let prefs_shown = self.compact.is_none() && self.viewport_w >= TITLEBAR_PREFS_MIN_W;
-        let prefs_w = if prefs_shown { crate::titlebar_prefs::WIDTH } else { 0. };
+        let prefs_w = if prefs_shown { crate::titlebar_prefs::width(cx) } else { 0. };
         let strip = (self.viewport_w - 150. - if pill { TITLEBAR_LEAD_PILL } else { TITLEBAR_LEAD } - 40. - 40. - prefs_w).max(120.);
         let n = self.tabs.len().max(1) as f32;
         let tab_max = p.tab_w.max(TAB_MIN_W);
@@ -6221,6 +6221,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ShowAgents, _, cx| {
                 this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::Agents)));
             }))
+            .on_action(cx.listener(|_, _: &VpnConnect, _, cx| crate::vpn::connect(cx)))
+            .on_action(cx.listener(|_, _: &VpnDisconnect, _, cx| crate::vpn::disconnect(cx)))
             .on_action(cx.listener(|this, _: &SyncJobs, _, cx| {
                 this.active_view().update(cx, |_, cx| cx.emit(FolderEvent::OpenInNewTab(Location::SyncJobs)));
             }))

@@ -123,6 +123,8 @@ gpui_kit::actions!(
         SyncJobs,
         ShowAgents,
         SyncWith,
+        VpnConnect,
+        VpnDisconnect,
         ShowWorktrees,
         OpenDocker,
         NewWorktree,
