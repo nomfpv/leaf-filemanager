@@ -92,6 +92,9 @@ struct Job<'a> {
     /// A move that must copy (tests: a move across devices on one device).
     force_copy: bool,
     temp_seq: u32,
+    /// A move that copies stays on the device of its item: another mount inside (a share, a stick, a bind mount) is neither copied
+    /// nor removed. `None` for a copy.
+    stay_on: Option<u64>,
 }
 
 impl Job<'_> {
@@ -420,6 +423,13 @@ fn copy_tree(job: &mut Job, src: &Path, dst: &Path, verify: Verify, copied: &mut
             Ok(false)
         }
         Kind::Dir => {
+            if let Some(dev) = job.stay_on {
+                let mount = m.dev() != dev || cpath(src).is_ok_and(|c| crate::fastdelete::is_mount_root_at(libc::AT_FDCWD, &c, src));
+                if mount {
+                    job.fail(src, "a mount point: not moved");
+                    return Ok(false);
+                }
+            }
             std::fs::DirBuilder::new().mode(0o700).create(dst)?;
             let mut all = true;
             for e in std::fs::read_dir(src)? {
@@ -551,6 +561,7 @@ fn copy_new(job: &mut Job, kind_of_job: Transfer, src: &Path, sm: &std::fs::Meta
     let mut copied = Copied::default();
     // (a replace removes the source only after the new file took the old one's place, below)
     let remove_now = kind_of_job == Transfer::Move && !replace;
+    job.stay_on = (kind_of_job == Transfer::Move).then(|| sm.dev());
     let r = copy_tree(job, src, &target, verify, &mut copied, remove_now);
     if replace {
         match &r {
@@ -648,6 +659,7 @@ fn run(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: Arc<Tracke
         decide,
         force_copy,
         temp_seq: 0,
+        stay_on: None,
     };
     job.progress(0, None);
     for (s, d, _) in &jobs {
@@ -686,6 +698,7 @@ pub(crate) fn move_across(src: &Path, dst: &Path) -> anyhow::Result<()> {
         decide: HashMap::new(),
         force_copy: true,
         temp_seq: 0,
+        stay_on: std::fs::symlink_metadata(src).ok().map(|m| m.dev()),
     };
     let mut copied = Copied::default();
     let r = copy_tree(&mut job, src, dst, Verify::Quick, &mut copied, false);
