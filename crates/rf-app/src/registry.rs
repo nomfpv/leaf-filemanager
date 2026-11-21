@@ -177,7 +177,7 @@ pub struct CommandSpec {
 impl CommandSpec {
     /// The action to run: for a user's action one carrying its name, else the row's own.
     pub fn make_action(&self) -> Box<dyn Action> {
-        if self.custom.is_empty() { (self.action)() } else { Box::new(crate::actions::RunCustomAction { name: self.custom.to_string() }) }
+        if self.custom.is_empty() { (self.action)() } else { Box::new(crate::actions::RunCustomAction { name: self.custom.to_string(), keys: String::new() }) }
     }
 
     /// The shortcut as shown ("Ctrl+Shift+N", "Alt+←", "Del"); empty when it has none.

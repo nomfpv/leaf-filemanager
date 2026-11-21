@@ -5433,7 +5433,7 @@ impl Render for FolderView {
             .on_action(cx.listener(|this, _: &CopyPathWsl, _, cx| this.copy_path_as(CopyPathKind::Wsl, cx)))
             .on_action(cx.listener(|this, _: &CopyPathUrl, _, cx| this.copy_path_as(CopyPathKind::Url, cx)))
             .on_action(cx.listener(|this, a: &crate::actions::RunCustomAction, window, cx| {
-                crate::custom_actions::run_named(&a.name, this.selection_paths(), this.current_dir(), window, cx)
+                crate::custom_actions::run_named(&a.name, &a.keys, this.selection_paths(), this.current_dir(), window, cx)
             }))
             .on_action(cx.listener(|this, _: &RotateRight, window, cx| this.rotate_selection(true, window, cx)))
             .on_action(cx.listener(|this, _: &RotateLeft, window, cx| this.rotate_selection(false, window, cx)))

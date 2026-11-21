@@ -98,17 +98,20 @@ pub fn init(cx: &mut App) {
             s.keybindings.insert(keys.clone(), action.clone());
         });
         // bind just the new key (re-binding the whole map would stack duplicates)
-        let built = match action.strip_prefix(crate::custom_actions::ID_PREFIX) {
-            // one of the user's own actions (actions.toml)
-            Some(name) => Ok(Box::new(crate::actions::RunCustomAction { name: name.to_string() }) as Box<dyn Action>),
-            None => cx.build_action(&format!("leaf::{action}"), None),
-        };
-        match built {
-            Ok(a) => match KeyBinding::load(&keys, a, None, false, None, cx) {
-                Ok(b) => cx.bind_keys([b]),
-                Err(e) => log::warn!("keybinding {keys:?}: {e}"),
-            },
-            Err(e) => log::warn!("keybinding action {action:?}: {e}"),
+        if let Some(name) = action.strip_prefix(crate::custom_actions::ID_PREFIX) {
+            // one of the user's own actions (actions.toml): its earlier keys stop working at once (see RunCustomAction::keys)
+            match crate::custom_actions::binding(name, &keys) {
+                Some(b) => cx.bind_keys([b]),
+                None => log::warn!("keybinding {keys:?}: not a key"),
+            }
+        } else {
+            match cx.build_action(&format!("leaf::{action}"), None) {
+                Ok(a) => match KeyBinding::load(&keys, a, None, false, None, cx) {
+                    Ok(b) => cx.bind_keys([b]),
+                    Err(e) => log::warn!("keybinding {keys:?}: {e}"),
+                },
+                Err(e) => log::warn!("keybinding action {action:?}: {e}"),
+            }
         }
         window.refresh();
     })

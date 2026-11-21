@@ -149,13 +149,32 @@ fn bind(a: &CustomAction, cx: &mut App) {
     if cx.global::<State>().bound.iter().any(|(n, k)| *n == a.name && *k == keys) {
         return;
     }
-    match KeyBinding::load(&keys, Box::new(crate::actions::RunCustomAction { name: a.name.clone() }), None, false, None, cx) {
-        Ok(b) => {
+    match binding(&a.name, &keys) {
+        Some(b) => {
             cx.bind_keys([b]);
             cx.global_mut::<State>().bound.push((a.name.clone(), keys));
         }
-        Err(e) => log::warn!("actions: shortcut {keys:?} of {:?}: {e}", a.name),
+        None => log::warn!("actions: shortcut {keys:?} of {:?} is not a key", a.name),
     }
+}
+
+/// The key binding of an action's shortcut: in the file list's key context, the one the built-in file commands (Copy path ...)
+/// are bound in. `None` when `keys` is not a valid keystroke.
+pub fn binding(name: &str, keys: &str) -> Option<KeyBinding> {
+    if keys.split(' ').any(|k| Keystroke::parse(k).is_err()) {
+        return None;
+    }
+    Some(KeyBinding::new(keys, crate::actions::RunCustomAction { name: name.to_string(), keys: keys.to_string() }, Some(crate::actions::FOLDER_CTX)))
+}
+
+/// Whether a key press that reached the binding made for `keys` is still the shortcut of the action `name` (the user's own, else
+/// the file's). Palette and menu runs carry no keys and always run.
+fn current(name: &str, keys: &str, cx: &App) -> bool {
+    if keys.is_empty() {
+        return true;
+    }
+    let id = format!("{ID_PREFIX}{name}");
+    crate::keymap_editor::custom_keys(&id, cx).or_else(|| file_shortcut(&id, cx)).is_some_and(|k| k.eq_ignore_ascii_case(keys))
 }
 
 /// The file's shortcut of the action with registry id `id` (for the shortcut editor's list of clashes).
@@ -223,7 +242,10 @@ pub fn menu_section(items: &[(PathBuf, bool)], dir: &Path, background: bool, cx:
 }
 
 /// Runs the action called `name` on what the file list has selected (a key, the palette).
-pub fn run_named(name: &str, files: Vec<PathBuf>, dir: Option<PathBuf>, window: &mut Window, cx: &mut App) {
+pub fn run_named(name: &str, keys: &str, files: Vec<PathBuf>, dir: Option<PathBuf>, window: &mut Window, cx: &mut App) {
+    if !current(name, keys, cx) {
+        return;
+    }
     if let Some(a) = list(cx).into_iter().find(|a| a.name == name) {
         run(a, files, dir, window, cx);
     }

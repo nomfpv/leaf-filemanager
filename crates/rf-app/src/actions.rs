@@ -119,6 +119,9 @@ gpui_kit::actions!(
 #[action(namespace = leaf, no_json)]
 pub struct RunCustomAction {
     pub name: String,
+    /// The keys this binding was made for; empty when it comes from the palette or a menu. A key that is no longer the action's
+    /// shortcut (it was changed) still has its old binding until restart, which does nothing.
+    pub keys: String,
 }
 
 pub const FOLDER_CTX: &str = "FolderView";
@@ -137,9 +140,9 @@ pub fn bind_user(cx: &mut App) {
     let mut bindings = Vec::new();
     for (keys, action) in map {
         if let Some(n) = action.strip_prefix(crate::custom_actions::ID_PREFIX) {
-            match KeyBinding::load(&keys, Box::new(RunCustomAction { name: n.to_string() }), None, false, None, cx) {
-                Ok(b) => bindings.push(b),
-                Err(e) => log::warn!("keybinding {keys:?}: {e}"),
+            match crate::custom_actions::binding(n, &keys) {
+                Some(b) => bindings.push(b),
+                None => log::warn!("keybinding {keys:?}: not a key"),
             }
             continue;
         }
