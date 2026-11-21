@@ -82,9 +82,11 @@ pub fn kill_command(pid: u32) -> String {
     format!("kill -TERM -- -{pid} 2>/dev/null || kill -TERM {pid}")
 }
 
-/// The process id in the first line a copy command printed.
+/// The process id a copy command printed (`leaf-pid <pid>`), read from whole lines only (a line still without its `\n` may be
+/// cut: `leaf-pid 4` of `leaf-pid 4242`). A pid of 1 or less is refused: `kill -- -1` would signal every process of the user.
 pub fn parse_pid(head: &str) -> Option<u32> {
-    head.lines().find_map(|l| l.trim().strip_prefix("leaf-pid ")?.trim().parse().ok())
+    let whole = &head[..head.rfind('\n')?];
+    whole.lines().find_map(|l| l.trim().strip_prefix("leaf-pid ")?.trim().parse::<u32>().ok()).filter(|&p| p > 1)
 }
 
 /// The bytes done in a piece of `rsync --info=progress2` output (`  1,234,567  45%  12.34MB/s  0:00:12`): the last such line
@@ -229,6 +231,11 @@ mod tests {
         assert_eq!(parse_probe("leaf-tool none"), None);
         assert_eq!(parse_probe("'command' is not recognized as an internal or external command"), None);
         assert_eq!(parse_pid("leaf-pid 4242\n"), Some(4242));
+        // a line that arrived in two pieces is read only once it is whole; pid 1 (and 0) is never taken
+        assert_eq!(parse_pid("welcome\nleaf-pid 4"), None);
+        assert_eq!(parse_pid("welcome\nleaf-pid 4242\n"), Some(4242));
+        assert_eq!(parse_pid("leaf-pid 1\n"), None);
+        assert_eq!(parse_pid("leaf-pid 0\n"), None);
         assert_eq!(parse_rsync_progress("      1,234,567  45%   12.34MB/s    0:00:12\r  2,000,000  70%  1MB/s  0:00:01 (xfr#1)\r"), Some(2_000_000));
         assert_eq!(parse_rsync_progress("rsync: error\n"), None);
         assert_eq!(parse_size("12\t/srv/x\n"), Some(12 * 1024));

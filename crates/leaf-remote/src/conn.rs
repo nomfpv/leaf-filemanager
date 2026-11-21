@@ -806,10 +806,17 @@ impl Conn {
             match ev {
                 Ev::Msg(Some(russh::ChannelMsg::Data { data })) => {
                     let text = String::from_utf8_lossy(&data);
-                    if pid.is_none() && head.len() < 4096 {
+                    if pid.is_none() {
+                        // (whole lines only; what comes before the pid line, a login banner, is dropped as it passes)
                         head.push_str(&text);
                         pid = parse_pid(&head);
                         end.started = pid.is_some();
+                        if let Some(i) = head.rfind('\n') {
+                            head.drain(..=i);
+                        }
+                        if head.len() > 64 * 1024 {
+                            head.clear();
+                        }
                     }
                     if let Some(l) = text.split(['\r', '\n']).map(str::trim).rfind(|l| !l.is_empty() && !l.starts_with("leaf-pid ") && crate::server_copy::parse_rsync_progress(l).is_none()) {
                         end.last_line = l.chars().take(300).collect();
