@@ -379,11 +379,50 @@ fn delete_merged_branch(repo: &Path, branch: &str) -> bool {
     !branch.is_empty() && !branch.starts_with('-') && exec(repo, ["branch", "-d", branch]).is_ok_and(|o| o.ok)
 }
 
+/// What a discard did besides putting the folder away.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Discarded {
+    /// The lane's branch was merged and is deleted.
+    pub branch_deleted: bool,
+    /// A branch made to keep commits that only the lane's own (detached) HEAD held.
+    pub kept: Option<String>,
+}
+
+/// When `dir`'s HEAD is detached on commits no branch or tag holds (an agent's `git checkout <sha>` and commits, a rebase stopped
+/// halfway), makes `lane/<name>-kept-<short hash>` at it: the worktree's own HEAD is all that keeps them, and it goes with the lane.
+fn keep_detached_head(dir: &Path, name: &str) -> Result<Option<String>, LaneError> {
+    if exec(dir, ["symbolic-ref", "-q", "HEAD"])?.ok {
+        return Ok(None);
+    }
+    let head = exec(dir, ["rev-parse", "--verify", "-q", "HEAD"])?;
+    let sha = head.stdout.trim().to_string();
+    if !head.ok || sha.len() < 7 {
+        return Ok(None);
+    }
+    let held = exec(dir, ["for-each-ref", "--count=1", "--format=%(refname)", "--contains", &sha, "refs/heads", "refs/tags"])?;
+    if !held.ok {
+        return Err(failed("git could not tell which branches hold the lane's head", &held));
+    }
+    if !held.stdout.trim().is_empty() {
+        return Ok(None);
+    }
+    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect();
+    let branch = format!("lane/{}-kept-{}", safe.trim_matches(['-', '.']), &sha[..7]);
+    let made = exec(dir, ["branch", "--end-of-options", &branch, &sha])?;
+    if made.ok {
+        return Ok(Some(branch));
+    }
+    // made by an earlier try that stopped later on
+    let there = exec(dir, ["rev-parse", "--verify", "-q", &format!("refs/heads/{branch}")])?;
+    if there.ok && there.stdout.trim() == sha { Ok(Some(branch)) } else { Err(failed("git did not make a branch to keep the lane's commits", &made)) }
+}
+
 /// Discards the lane, whatever is in it: its worktree folder goes to `put_away` (leaf: the Trash), then `git worktree prune`
 /// forgets it; the branch is kept unless it is merged. Only a linked worktree of `repo` is handed over: never a link (its target
-/// could be anything), never the main worktree or a folder that holds it. A folder already gone is just pruned. `Ok(true)` when
-/// the branch was deleted.
-pub fn discard(repo: &Path, dir: &Path, branch: &str, put_away: &dyn Fn(&Path) -> Result<(), String>) -> Result<bool, LaneError> {
+/// could be anything), never the main worktree or a folder that holds it. A folder already gone is just pruned. Commits only a
+/// detached HEAD holds get a branch first (`lane/<name>-kept-<hash>`).
+pub fn discard(repo: &Path, dir: &Path, name: &str, branch: &str, put_away: &dyn Fn(&Path) -> Result<(), String>) -> Result<Discarded, LaneError> {
+    let mut kept = None;
     let list = worktrees(repo)?;
     let main = list[0].path.clone();
     let meta = std::fs::symlink_metadata(dir);
@@ -400,6 +439,7 @@ pub fn discard(repo: &Path, dir: &Path, branch: &str, put_away: &dyn Fn(&Path) -
         if !dir.is_dir() {
             return Err(LaneError::NotALane(format!("{} is not a folder", dir.display())));
         }
+        kept = keep_detached_head(dir, name)?;
         put_away(dir).map_err(|e| LaneError::Git { what: "the lane folder could not be moved to the Trash".into(), detail: e })?;
         if std::fs::symlink_metadata(dir).is_ok() {
             return Err(LaneError::Git { what: "the lane folder is still there".into(), detail: dir.display().to_string() });
@@ -411,7 +451,7 @@ pub fn discard(repo: &Path, dir: &Path, branch: &str, put_away: &dyn Fn(&Path) -
     if !o.ok {
         return Err(failed("git did not forget the worktree", &o));
     }
-    Ok(delete_merged_branch(repo, branch))
+    Ok(Discarded { branch_deleted: delete_merged_branch(repo, branch), kept })
 }
 
 #[cfg(test)]
@@ -548,14 +588,14 @@ mod tests {
             std::fs::rename(p, trash.join("feat")).map_err(|e| e.to_string())
         };
         // the link to the lane, the main worktree, a plain folder: refused, nothing handed over
-        assert!(matches!(discard(&r.main, &alias, "feat", &put_away), Err(LaneError::NotALane(_))));
-        assert!(matches!(discard(&r.main, &r.main, "feat", &put_away), Err(LaneError::NotALane(_))));
-        assert!(matches!(discard(&r.main, &r.top, "feat", &put_away), Err(LaneError::NotALane(_))));
-        assert!(matches!(discard(&r.main, &outside, "feat", &put_away), Err(LaneError::NotALane(_))));
+        assert!(matches!(discard(&r.main, &alias, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
+        assert!(matches!(discard(&r.main, &r.main, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
+        assert!(matches!(discard(&r.main, &r.top, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
+        assert!(matches!(discard(&r.main, &outside, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
         assert!(handed.borrow().is_empty());
         // the lane itself: only its folder is handed over; what the link inside points to stays
         r.commit(&dir, "b.txt", "lane\n");
-        assert_eq!(discard(&r.main, &dir, "feat", &put_away), Ok(false));
+        assert_eq!(discard(&r.main, &dir, "feat", "feat", &put_away).map(|d| d.branch_deleted), Ok(false));
         assert_eq!(*handed.borrow(), vec![dir.clone()]);
         assert!(!dir.exists());
         assert_eq!(std::fs::read_to_string(outside.join("keep.txt")).unwrap(), "keep\n");
@@ -563,6 +603,28 @@ mod tests {
         // pruned, the unmerged branch kept
         assert!(!r.git(&r.main, &["worktree", "list"]).contains("feat"));
         assert!(r.git(&r.main, &["branch", "--list", "feat"]).contains("feat"));
+    }
+
+    #[test]
+    fn lane_discard_keeps_commits_of_a_detached_head_on_a_branch() {
+        let r = Repo::new("detached");
+        let dir = r.lane("feat");
+        let start = r.git(&dir, &["rev-parse", "HEAD"]);
+        r.git(&dir, &["checkout", "-q", "--detach", &start]);
+        r.commit(&dir, "lost.txt", "only here\n");
+        let sha = r.git(&dir, &["rev-parse", "HEAD"]);
+        let trash = r.top.join("trash");
+        let put_away = |p: &Path| -> Result<(), String> { std::fs::rename(p, &trash).map_err(|e| e.to_string()) };
+        let done = discard(&r.main, &dir, "feat", "feat", &put_away).unwrap();
+        let kept = format!("lane/feat-kept-{}", &sha[..7]);
+        assert_eq!(done.kept.as_deref(), Some(kept.as_str()));
+        assert_eq!(r.git(&r.main, &["rev-parse", &format!("refs/heads/{kept}")]), sha);
+        // a lane on its branch needs none
+        let other = r.lane("plain");
+        r.commit(&other, "c.txt", "x\n");
+        let trash2 = r.top.join("trash2");
+        let put_away2 = |p: &Path| -> Result<(), String> { std::fs::rename(p, &trash2).map_err(|e| e.to_string()) };
+        assert_eq!(discard(&r.main, &other, "plain", "plain", &put_away2).unwrap().kept, None);
     }
 
     #[test]
@@ -598,7 +660,7 @@ mod tests {
             handed.set(true);
             Err("must not be called".into())
         };
-        assert!(matches!(discard(&r.main, &dir, "feat", &put_away), Err(LaneError::NotALane(_))));
+        assert!(matches!(discard(&r.main, &dir, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
         assert!(!handed.get());
         assert!(dir.join(".git").is_dir() && dir.join("own.txt").is_file());
         assert!(matches!(remove(&r.main, &dir, "feat", "main"), Err(LaneError::NotALane(_))));

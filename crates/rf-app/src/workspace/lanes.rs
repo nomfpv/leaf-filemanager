@@ -432,7 +432,12 @@ fn discard_dialog(lane: Lane, _me: WeakEntity<Workspace>, window: &mut Window, c
         }
         let l = lane.clone();
         let path = lane.path.clone();
-        crate::status_center::start_with(
+        // the job's last words: the branch made to keep commits of a detached head, or the branch kept
+        let said = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let said_done = said.clone();
+        let job = std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let job_done = job.clone();
+        let id = crate::status_center::start_with_id(
             cx,
             format!("{} {}", t!("Discarding lane:"), lane.name),
             move |t| {
@@ -443,8 +448,18 @@ fn discard_dialog(lane: Lane, _me: WeakEntity<Workspace>, window: &mut Window, c
                         Err(e) => Err(format!("{e:#}")),
                     }
                 };
-                match leaf_dev::lanes::discard(&l.repo, &l.path, &l.branch, &put_away) {
-                    Ok(_) => Ok(true),
+                match leaf_dev::lanes::discard(&l.repo, &l.path, &l.name, &l.branch, &put_away) {
+                    Ok(done) => {
+                        let words = match (&done.kept, done.branch_deleted) {
+                            (Some(b), _) => format!("{} {b}", t!("Lane discarded. Commits only its detached head had are kept on the branch")),
+                            (None, true) => t!("Lane discarded; its branch was merged and is deleted").to_string(),
+                            (None, false) => format!("{} {}", t!("Lane discarded; its branch is kept:"), l.branch),
+                        };
+                        if let Ok(mut s) = said.lock() {
+                            *s = Some(words);
+                        }
+                        Ok(true)
+                    }
                     // the folder is gone and git does not know it any more: only the record is left to forget
                     Err(LaneError::NotALane(_)) if std::fs::symlink_metadata(&l.path).is_err() => Ok(true),
                     Err(e) => Err(anyhow::anyhow!("{}: {}", t!("The lane was not discarded"), error_text(&e))),
@@ -453,9 +468,13 @@ fn discard_dialog(lane: Lane, _me: WeakEntity<Workspace>, window: &mut Window, c
             Some(Box::new(move |ok, cx| {
                 if ok {
                     crate::lanes::forget(&path, cx);
+                    if let Some(words) = said_done.lock().ok().and_then(|mut s| s.take()) {
+                        crate::status_center::set_result(cx, job_done.get(), Some(words), None);
+                    }
                 }
             })),
         );
+        job.set(id);
         Ok(())
     });
     crate::prompt::show(t!("Discard lane"), Some(msg), Some((String::new(), name)), vec![go, Button::cancel()], window, cx);
