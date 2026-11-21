@@ -2,8 +2,9 @@
 //!
 //! Data safety: the walk goes through folder descriptors (`openat` with `O_NOFOLLOW | O_DIRECTORY`, `fstatat` with
 //! `AT_SYMLINK_NOFOLLOW`, `unlinkat`), so a link is removed as a link and its target is never entered, even when a folder is swapped
-//! for a link while the walk runs. A folder on another device (a mount point inside the tree, or a chosen item that is itself a mount
-//! point) is never entered nor removed: it is reported. Nothing is retried or handed to anyone else; what fails stays and is named in
+//! for a link while the walk runs. A mount point (a folder on another device, and also a bind mount of a folder of the same file
+//! system, which has the same `st_dev`: told by `statx` `STATX_ATTR_MOUNT_ROOT`, else by `/proc/self/mountinfo`), inside the tree or
+//! chosen itself, is never entered nor removed: it is reported. Nothing is retried or handed to anyone else; what fails stays and is named in
 //! the error.
 
 use std::ffi::{CStr, CString};
@@ -28,6 +29,43 @@ fn fstat(fd: RawFd) -> io::Result<libc::stat> {
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: `st` is a valid out-pointer of the right type.
     if unsafe { libc::fstat(fd, &mut st) } == 0 { Ok(st) } else { Err(last_err()) }
+}
+
+/// Whether the folder `name` of `dir` is the root of a mount, a bind mount of the same file system included (`path` names it, for
+/// the fallback). `statx` tells it from Linux 5.8 on; before that the mount points of `/proc/self/mountinfo` are compared.
+pub(crate) fn is_mount_root_at(dir: RawFd, name: &CStr, path: &Path) -> bool {
+    const STATX_ATTR_MOUNT_ROOT: u64 = 0x2000;
+    let mut sx: libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: `name` is NUL-terminated, `sx` is a valid out-pointer of the struct statx expects.
+    let r = unsafe { libc::syscall(libc::SYS_statx, dir, name.as_ptr(), libc::AT_SYMLINK_NOFOLLOW, libc::STATX_BASIC_STATS, &mut sx as *mut libc::statx) };
+    if r == 0 && sx.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT != 0 {
+        return sx.stx_attributes & STATX_ATTR_MOUNT_ROOT != 0;
+    }
+    let Ok(p) = std::fs::canonicalize(path) else { return true };
+    mount_points().iter().any(|m| *m == p)
+}
+
+/// The mount points in `/proc/self/mountinfo` (field 5, octal escapes undone).
+pub(crate) fn mount_points() -> Vec<PathBuf> {
+    let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    text.lines()
+        .filter_map(|l| l.split(' ').nth(4))
+        .map(|m| {
+            let b = m.as_bytes();
+            let mut out = Vec::with_capacity(b.len());
+            let mut i = 0;
+            while i < b.len() {
+                if b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
+                    out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
+                    i += 4;
+                } else {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+            PathBuf::from(std::ffi::OsStr::from_bytes(&out))
+        })
+        .collect()
 }
 
 pub(crate) fn is_dir(st: &libc::stat) -> bool {
@@ -156,8 +194,8 @@ impl Walk<'_> {
                 }
             };
         }
-        if st.st_dev != self.dev {
-            self.fail(path, "on another file system (a mount point): not entered");
+        if st.st_dev != self.dev || is_mount_root_at(dir, name, path) {
+            self.fail(path, "a mount point: not entered");
             return false;
         }
         let sub = match open_dir_at(dir, name) {
@@ -214,22 +252,22 @@ impl Walk<'_> {
 }
 
 /// Counts the entries `remove` will visit (same rules: no links followed, no other device), for the progress fraction.
-fn count(dir: RawFd, name: &CStr, dev: libc::dev_t, cancel: &std::sync::atomic::AtomicBool) -> u64 {
+fn count(dir: RawFd, name: &CStr, path: &Path, dev: libc::dev_t, cancel: &std::sync::atomic::AtomicBool) -> u64 {
     if cancel.load(Ordering::Relaxed) {
         return 0;
     }
     let Ok(st) = lstat_at(dir, name) else { return 0 };
-    if !is_dir(&st) || st.st_dev != dev {
+    if !is_dir(&st) || st.st_dev != dev || is_mount_root_at(dir, name, path) {
         return 1;
     }
     let Ok(sub) = open_dir_at(dir, name) else { return 1 };
     let mut n = 1;
     for c in names(sub.as_raw_fd()).unwrap_or_default() {
-        n += count(sub.as_raw_fd(), &c, dev, cancel);
+        let child = path.join(std::ffi::OsStr::from_bytes(c.to_bytes()));
+        n += count(sub.as_raw_fd(), &c, &child, dev, cancel);
     }
     n
 }
-
 /// A fraction as the two `u32` work units of `on_progress`.
 pub(crate) fn units(total: u64, done: u64) -> (u32, u32) {
     if total <= u32::MAX as u64 {
@@ -260,10 +298,10 @@ pub fn delete_permanent(paths: &[PathBuf], tracker: Arc<Tracker>, _threads: usiz
     }
     let mut total = 0;
     let mut devs = Vec::new();
-    for (_, (dir, name)) in &roots {
+    for (p, (dir, name)) in &roots {
         let dev = fstat(dir.as_raw_fd())?.st_dev;
         devs.push(dev);
-        total += count(dir.as_raw_fd(), name, dev, &tracker.cancel);
+        total += count(dir.as_raw_fd(), name, p, dev, &tracker.cancel);
     }
     let mut w = Walk { dev: 0, tracker: &tracker, total, done: 0, failed: Vec::new(), failed_count: 0, cancelled: false };
     (tracker.on_progress)(units(total, 0).0, 0, None);
