@@ -132,6 +132,10 @@ pub struct RunCustomAction {
 }
 
 pub const FOLDER_CTX: &str = "FolderView";
+/// The controls of a Home widget in Customize mode. Left and Right are bound to the file list's selection moves in
+/// [`FOLDER_CTX`], and a binding is matched before any key listener is asked, so the controls' own key handler (Left / Right move the
+/// widget) never saw them. `NoAction` in this nearer context lets the keys through to it.
+pub const HOME_CONTROLS_CTX: &str = "HomeControls";
 /// The folder tree's key context. Tab is bound in it (to [`LeaveTree`]) because the component library binds Tab at the window's
 /// root to "focus the next tab stop": a binding is matched before any key listener is asked, so the tree's own key handler never
 /// saw Tab, and the keyboard stayed in the tree (issue 38: "TAB seems to be buggy, mine is not going anywhere"). A binding in a
@@ -171,6 +175,7 @@ pub fn bind_user(cx: &mut App) {
 /// dialog's own contexts there (issue 38): a binding in a context nearer to the focus wins over the component library's root Tab.
 pub fn bind(cx: &mut App) {
     cx.bind_keys(crate::registry::default_bindings());
+    cx.bind_keys(["left", "right", "alt-left", "alt-right"].map(|k| KeyBinding::new(k, gpui_kit::NoAction, Some(HOME_CONTROLS_CTX))));
     bind_layout_shifted(cx);
 }
 /// GPUI reports Shift+digit as the layout's shifted character without Shift (Turkish Q:

@@ -559,6 +559,7 @@ fn edit_controls(pos: usize, len: usize, i: usize, size: Size, p: &Palette, cx: 
     });
     row.children(pick_folder)
         .id(SharedString::from(format!("home-controls-{}", w.id)))
+        .key_context(crate::actions::HOME_CONTROLS_CTX)
         .focusable()
         .tab_stop(true)
         .on_key_down(keys)
