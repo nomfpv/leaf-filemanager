@@ -133,7 +133,7 @@ pub fn picture(index: i32, px: u32) -> Option<Bgra> {
         unsafe {
             let il: IImageList = SHGetImageList(list as i32).ok()?;
             let icon = il.GetIcon(index, ILD_TRANSPARENT.0).ok()?;
-            let b = crate::dock::icons::hicon_to_bgra(icon);
+            let b = crate::kit::icons::hicon_to_bgra(icon);
             let _ = DestroyIcon(icon);
             b
         }

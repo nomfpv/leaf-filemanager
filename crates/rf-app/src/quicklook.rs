@@ -22,7 +22,7 @@ const START_WAIT: Duration = Duration::from_secs(6);
 
 fn pipe() -> Option<&'static str> {
     static PIPE: OnceLock<Option<String>> = OnceLock::new();
-    PIPE.get_or_init(|| rf_win::dock::startuser::current_sid().map(|sid| format!(r"\\.\pipe\QuickLook.App.Pipe.{sid}"))).as_deref()
+    PIPE.get_or_init(|| rf_win::kit::current_sid().map(|sid| format!(r"\\.\pipe\QuickLook.App.Pipe.{sid}"))).as_deref()
 }
 
 /// The line QuickLook reads: the message, the path, no options.

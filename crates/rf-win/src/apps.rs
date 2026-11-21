@@ -125,7 +125,7 @@ pub fn direct_way(id: &str, target: Option<std::path::PathBuf>, args: Option<Str
 #[doc(hidden)]
 pub fn direct_way_of(app: &App) -> Direct {
     let parsing = app.parsing();
-    let target = crate::dock::startapps::target_of(&parsing);
+    let target = target_of(&parsing);
     let args = crate::apps_direct::arguments_of(&parsing);
     let shortcut = target.as_deref().and_then(|t| crate::apps_direct::find_shortcut(&app.name, t));
     direct_way(&app.id, target, args, shortcut)
@@ -138,13 +138,56 @@ pub fn launch_directly_for_probe(app: &App) -> anyhow::Result<()> {
 }
 
 fn launch_directly(app: &App) -> anyhow::Result<()> {
-    use crate::dock::model::Launch;
     match direct_way_of(app) {
-        Direct::Shortcut(lnk) => crate::dock::launch::start(&Launch::Link(lnk)),
-        Direct::File { path, args } => crate::dock::launch::start(&Launch::Exe { path, args }),
+        Direct::Shortcut(lnk) => open_with_shell(lnk.as_os_str(), "", None),
+        Direct::File { path, args } => open_with_shell(path.as_os_str(), &args, path.parent()),
         Direct::Packaged(id) => crate::activate::packaged(&id, ""),
         Direct::Nothing => anyhow::bail!("the entry names no file and is not a packaged app"),
     }
+}
+
+/// The program or shortcut an AppsFolder item starts (`System.Link.TargetParsingPath`); `None` for packaged apps and when the shell does
+/// not say.
+fn target_of(parsing: &str) -> Option<std::path::PathBuf> {
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+    use windows::Win32::UI::Shell::PropertiesSystem::{GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName};
+    crate::shell::ensure_com();
+    let w = crate::wide::wide(parsing);
+    unsafe {
+        let store: IPropertyStore = SHGetPropertyStoreFromParsingName(windows::core::PCWSTR(w.as_ptr()), None, GPS_DEFAULT).ok()?;
+        let key = PROPERTYKEY { fmtid: windows::core::GUID::from_u128(0xB9B4B3FC_2B51_4A42_B5D8_324146AFCF25), pid: 2 };
+        let v = store.GetValue(&key).ok()?;
+        let s = PropVariantToStringAlloc(&v).ok()?;
+        let out = s.to_string().ok();
+        windows::Win32::System::Com::CoTaskMemFree(Some(s.0 as *const _));
+        out.filter(|t| !t.trim().is_empty()).map(std::path::PathBuf::from)
+    }
+}
+
+/// Opens `file` with the shell's "open", as a double click in Explorer would.
+fn open_with_shell(file: &std::ffi::OsStr, args: &str, dir: Option<&std::path::Path>) -> anyhow::Result<()> {
+    use windows::Win32::UI::Shell::{SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{PCWSTR, w};
+    crate::shell::ensure_com();
+    let file = crate::wide::wide(file);
+    let args = (!args.is_empty()).then(|| crate::wide::wide(args));
+    let dir = dir.filter(|d| !d.as_os_str().is_empty()).map(crate::wide::wide);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        // NOASYNC: the call returns when the shell is done. It runs on a thread that ends right after, and a verb the shell hands to
+        // another thread (DDE, some extensions) would otherwise be lost with it.
+        fMask: SEE_MASK_NOASYNC,
+        lpVerb: w!("open"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: args.as_ref().map_or(PCWSTR::null(), |a| PCWSTR(a.as_ptr())),
+        lpDirectory: dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info)? };
+    Ok(())
 }
 
 #[cfg(test)]

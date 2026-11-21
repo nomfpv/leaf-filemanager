@@ -1,4 +1,4 @@
-//! The spring the dock's motions move with. Pure arithmetic: no clock of its own, no window.
+//! A damped spring for UI motions (formerly the dock's). Pure arithmetic: no clock of its own, no window.
 //!
 //! WHAT A SPRING IS HERE. A weight on a damped spring, pulled towards a target: `x'' = -2 z w x' - w^2 (x - target)`. It starts
 //! gently (it has to pick up speed), runs fast in the middle and comes to rest softly, and, which no fixed curve can do, a motion

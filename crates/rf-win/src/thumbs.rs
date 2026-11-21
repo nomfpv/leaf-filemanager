@@ -106,7 +106,7 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
     {
         let file = std::path::PathBuf::from(crate::folder_custom::expand_env(&file));
         let file = if file.is_relative() { path.join(file) } else { file };
-        if let Some(b) = crate::dock::icons::extract_resource(&file, index, size) {
+        if let Some(b) = crate::kit::icons::extract_resource(&file, index, size) {
             return Ok(b);
         }
     }

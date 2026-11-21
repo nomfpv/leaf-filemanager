@@ -276,12 +276,12 @@ pub fn current(window: &Window, cx: &App) -> Option<Entity<MenuView>> {
 }
 
 /// The screen rectangle of a window of ours (device px); `None` when it is gone.
-fn screen_rect(w: AnyWindowHandle, cx: &mut App) -> Option<rf_win::dock::layout::Rect> {
+fn screen_rect(w: AnyWindowHandle, cx: &mut App) -> Option<rf_win::kit::Rect> {
     let hwnd = w.update(cx, |_, window, _| crate::look::window::hwnd_of(window)).ok()?;
     let mut r = windows::Win32::Foundation::RECT::default();
     // SAFETY: a plain read of a window's rectangle.
     unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(windows::Win32::Foundation::HWND(hwnd as *mut _), &mut r).ok()? };
-    Some(rf_win::dock::layout::Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom })
+    Some(rf_win::kit::Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom })
 }
 
 /// Whether the window in front belongs to this process.
@@ -304,7 +304,7 @@ fn front_is_ours() -> bool {
 /// never got the foreground is never told that it lost it). A look every [`ORPHAN_LOOK`] while this menu is the open one; nothing
 /// runs once it is closed.
 fn watch_orphan(view: Entity<MenuView>, cx: &mut App) {
-    use rf_win::dock::panel as geo;
+    use rf_win::kit as geo;
     let opened = Instant::now();
     cx.spawn(async move |cx| {
         let mut was_down = geo::any_button_down();

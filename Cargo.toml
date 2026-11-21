@@ -60,7 +60,6 @@ lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "x
 windows = { version = "0.62", features = [
     "Data_Pdf",
     # Windows.Graphics.Capture: the glass's screen capture that leaves chosen windows out of one capture only (glass/wgc.rs)
-    "Foundation_Collections",
     "Graphics_Capture",
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",
@@ -77,14 +76,9 @@ windows = { version = "0.62", features = [
     "Win32_Storage_FileSystem",
     "Win32_Storage_Xps",
     "Win32_NetworkManagement_NetManagement",
-    "Win32_NetworkManagement_Ndis",
     "Win32_NetworkManagement_IpHelper",
-    "Win32_Networking_WinSock",
-    "Win32_Devices_DeviceAndDriverInstallation",
-    "Win32_Devices_Properties",
-    "Win32_Media_KernelStreaming",
-    "Win32_NetworkManagement_WiFi",
-    "Win32_Networking_WinHttp",
+    # GetIfEntry2 / MIB_IF_ROW2 (network.rs)
+    "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinInet",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
@@ -96,7 +90,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Performance",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
-    # the notification panel: a notification's UTC time to the user's local date
+    # a UTC time to the user's local date
     "Win32_System_Time",
     "Win32_System_IO",
     "Win32_System_Ioctl",
@@ -113,33 +107,16 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_WinTrust",
-    # the dock's Start panel: the power buttons (lock, sleep, sign out, restart, shut down) and the user's display name
-    "Win32_System_Power",
-    "Win32_System_Shutdown",
-    "Win32_Security_Authentication_Identity",
-    # the shell host: the session number of a process (the single-instance names of the dock / shell group carry it)
+    # the session number of a process (the single-instance names carry it)
     "Win32_System_RemoteDesktop",
-    # the dock's control centre: Core Audio (volume, devices), the system media session, network / radio / Bluetooth state, battery,
-    # and DDC/CI brightness
-    "Win32_Media_Audio_Endpoints",
-    "Win32_Devices_FunctionDiscovery",
-    "Win32_Devices_Display",
-    "Media_Control",
-    # the dock's notification panel: UserNotificationListener (the list other apps have posted, read-only polling) and the app behind each
-    "UI_Notifications",
-    "UI_Notifications_Management",
     # our own toasts (Ferry's questions and arrivals: rf-win toast_post.rs)
+    "UI_Notifications",
     "Data_Xml_Dom",
     "ApplicationModel",
     # the share sheet for our windows (rf-win share.rs, issue 48)
     "ApplicationModel_DataTransfer",
+    # StorageFolder (share.rs)
     "Storage_Search",
-    "Networking_Connectivity",
-    "Devices_Radios",
-    # the dock's weather from the PC's approximate position (rf-win weather_location.rs)
-    "Devices_Geolocation",
-    "Devices_Bluetooth",
-    "Devices_Enumeration",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",

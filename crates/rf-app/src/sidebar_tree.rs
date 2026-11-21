@@ -79,7 +79,7 @@ impl Slide {
     fn at(&self, now: Instant) -> (f32, bool) {
         let Some(since) = self.since else { return (self.to, false) };
         let x = now.saturating_duration_since(since).as_secs_f32() * 1000.0 / SLIDE_MS;
-        if x >= 1.0 { (self.to, false) } else { (self.from + (self.to - self.from) * rf_win::dock::spring::curve_with(x, 0.0), true) }
+        if x >= 1.0 { (self.to, false) } else { (self.from + (self.to - self.from) * rf_win::kit::spring::curve_with(x, 0.0), true) }
     }
 
     /// Sends it to `to`: from where it is at this moment (a slide that is turned around does not jump), or at once.

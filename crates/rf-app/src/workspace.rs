@@ -242,7 +242,7 @@ impl MainPlacement {
         let bounds = [f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height), max];
         let current_display = window.display(cx);
         let display = Workspace::hwnd(window)
-            .and_then(rf_win::dock::monitors::monitor_of_window)
+            .and_then(rf_win::kit::monitor_of_window)
             .and_then(|h| {
                 let on_monitor = |id| u64::from(id) == h as u64;
                 current_display.as_ref().filter(|d| on_monitor(d.id())).cloned()
@@ -4595,7 +4595,7 @@ impl Render for Workspace {
             panel
                 .with_animation(
                     ("rail-peek-move", serial as usize),
-                    Animation::new(std::time::Duration::from_millis(ms)).with_easing(move |t| rf_win::dock::spring::curve_with(t, bounce)),
+                    Animation::new(std::time::Duration::from_millis(ms)).with_easing(move |t| rf_win::kit::spring::curve_with(t, bounce)),
                     move |el, t| {
                         let shown = if opening { t } else { 1.0 - t };
                         // (the width alone moves: the panel is matte from its first frame, nothing shows through it on the way)

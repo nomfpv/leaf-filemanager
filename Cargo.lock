@@ -945,17 +945,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfb"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a347dcabdae9c31b0825fd6a8bed285ec9c2acb89c47827126d52fa4f59cece3"
-dependencies = [
- "fnv",
- "uuid",
- "web-time",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6492,7 +6481,6 @@ name = "rf-win"
 version = "0.9.4"
 dependencies = [
  "anyhow",
- "cfb",
  "chrono",
  "crc32fast",
  "crossbeam-channel",

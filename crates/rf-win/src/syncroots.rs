@@ -52,7 +52,7 @@ fn resolve_resource(reference: &str) -> Option<String> {
 
 /// This account's sync roots that exist on the disk, in the registry's order.
 pub fn list() -> Vec<SyncRoot> {
-    let Some(sid) = crate::dock::startuser::current_sid() else { return Vec::new() };
+    let Some(sid) = crate::kit::current_sid() else { return Vec::new() };
     let Ok(root) = windows_registry::LOCAL_MACHINE.open(KEY) else { return Vec::new() };
     let Ok(ids) = root.keys() else { return Vec::new() };
     let mut out: Vec<SyncRoot> = Vec::new();
