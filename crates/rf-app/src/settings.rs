@@ -638,7 +638,7 @@ pub struct Settings {
     pub wsl_drop_zone: bool,
     /// Copy speed limit in MB/s (0 = none).
     pub copy_speed_limit: u32,
-    /// Connections to one file in a download (the server must take byte ranges).
+    /// Connections a download of a large file starts with (the server must take byte ranges); more are added while the speed rises.
     pub download_segments: u32,
     /// Download speed limit in MB/s over all connections of a download (0 = none).
     pub download_speed_limit: u32,
@@ -879,10 +879,10 @@ impl Default for Settings {
             copy_verify: CopyVerify::Off,
             wsl_drop_zone: false,
             copy_speed_limit: 0,
-            download_segments: 6,
+            download_segments: 16,
             download_speed_limit: 0,
             download_parallel: 3,
-            download_per_host: 8,
+            download_per_host: 32,
             download_folder: String::new(),
             transfer_progress: TransferProgress::StatusBar,
             thumb_cache_mb: None,

@@ -27,14 +27,28 @@ pub use name::{file_name, percent_decode, sanitize};
 const MIN_SEG: u64 = 1 << 20;
 /// A running segment is split only when more than twice this is left.
 const MIN_STEAL: u64 = 512 << 10;
+/// A file smaller than this starts with about one connection per `PER_CONN` bytes.
+const BIG: u64 = 64 << 20;
+const PER_CONN: u64 = 4 << 20;
+/// Connections added each time the total speed still rises.
+const GROW_BY: usize = 4;
 const BUF: usize = 256 << 10;
+/// Connections a download of `len` bytes starts with.
+fn start_count(o: &Options, len: u64) -> usize {
+    let n = o.segments.max(1) as u64;
+    let n = if len >= BIG { n } else { n.min(len.div_ceil(PER_CONN)) };
+    n.min(len.div_ceil(MIN_SEG)).max(1) as usize
+}
+
 /// The extension of the file being written, and of its state file after it.
 pub const PART_EXT: &str = ".leaf-part";
 const STATE_EXT: &str = ".state";
 
 pub struct Options {
-    /// Connections to one file (when the server takes ranges).
+    /// Connections a file starts with (when the server takes ranges); fewer for a small file (about one per 4 MiB).
     pub segments: usize,
+    /// Connections to one file at most: more are opened while the total speed still rises.
+    pub max_segments: usize,
     /// Tries after the first one, for a request or a segment, before the download fails.
     pub retries: u32,
     /// Wait before the first retry; doubles each time (30 s at most).
@@ -49,7 +63,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 6, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None }
+        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None }
     }
 }
 
@@ -246,9 +260,24 @@ fn write_state(part: &Path, st: &State) {
     }
 }
 
+/// Removes the state file (and a half-written one); tries again a few times where something briefly holds the file (a scanner).
+fn remove_state(part: &Path) {
+    let st = state_path(part);
+    let mut tmp = st.as_os_str().to_owned();
+    tmp.push(".tmp");
+    for p in [PathBuf::from(tmp), st] {
+        for _ in 0..5 {
+            match std::fs::remove_file(&p) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => std::thread::sleep(Duration::from_millis(50)),
+                _ => break,
+            }
+        }
+    }
+}
+
 fn discard(part: &Path) {
     let _ = std::fs::remove_file(part);
-    let _ = std::fs::remove_file(state_path(part));
+    remove_state(part);
 }
 
 fn exists(p: &Path) -> bool {
@@ -352,7 +381,7 @@ fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control
     let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
     let part = part_path(&target);
     let want = match probe.len {
-        Some(len) if probe.ranges && len > 0 => (opts.segments.max(1) as u64).min(len.div_ceil(MIN_SEG)).max(1) as usize,
+        Some(len) if probe.ranges && len > 0 => start_count(opts, len),
         _ => 1,
     };
     // (what the other downloads from this server leave under the cap)
@@ -377,7 +406,7 @@ fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control
                 dest = unique_target(dir, &name, url);
             }
             std::fs::rename(&part, &dest)?;
-            let _ = std::fs::remove_file(state_path(&part));
+            remove_state(&part);
             Ok(Outcome::Saved(dest))
         }
         Err(Error::Cancelled) => {
@@ -485,7 +514,7 @@ impl Job<'_> {
             None => {
                 // (a different or stale partial file is not trusted)
                 file.set_len(0)?;
-                let n = (self.net.opts.segments.max(1) as u64).min(len.div_ceil(MIN_SEG)).max(1);
+                let n = start_count(self.net.opts, len) as u64;
                 let size = len.div_ceil(n);
                 (0..n).map(|i| Seg::new(i * size, i * size, ((i + 1) * size).min(len))).filter(|s| s.start < s.end.load(Ordering::Relaxed)).collect()
             }
@@ -502,11 +531,11 @@ impl Job<'_> {
         let failure: Mutex<Option<Error>> = Mutex::new(None);
         let stop = AtomicBool::new(false);
         let alive = AtomicUsize::new(0);
-        let workers = (self.net.opts.segments.max(1) as u64).min(len.div_ceil(MIN_SEG)).max(1) as usize;
+        let workers = start_count(self.net.opts, len);
         let workers = workers.min(self.net.allowed.load(Ordering::Relaxed)).max(1);
         let w = Worker { net: &self.net, file: &file, table: &table, failure: &failure, stop: &stop };
         std::thread::scope(|sc| {
-            for index in 0..workers {
+            let spawn = |index: usize| {
                 alive.fetch_add(1, Ordering::SeqCst);
                 let (w, alive) = (&w, &alive);
                 std::thread::Builder::new()
@@ -519,7 +548,13 @@ impl Job<'_> {
                     .unwrap_or_else(|_| {
                         alive.fetch_sub(1, Ordering::SeqCst);
                     });
+            };
+            for index in 0..workers {
+                spawn(index);
             }
+            // more connections while the total speed still rises (not under a speed limit, not after the server asked for fewer)
+            let mut spawned = workers;
+            let (mut window, mut window_done, mut last_rate, mut flat) = (Instant::now(), had, 0.0f64, 0u32);
             let mut saved = Instant::now();
             loop {
                 std::thread::sleep(Duration::from_millis(100));
@@ -531,6 +566,24 @@ impl Job<'_> {
                 if saved.elapsed() >= Duration::from_secs(1) {
                     saved = Instant::now();
                     self.save(&table, len);
+                }
+                if window.elapsed() >= Duration::from_secs(3) && !self.net.ctl.paused.load(Ordering::Relaxed) {
+                    let rate = done.saturating_sub(window_done) as f64 / window.elapsed().as_secs_f64();
+                    (window, window_done) = (Instant::now(), done);
+                    flat = if rate > last_rate * 1.1 { 0 } else { flat + 1 };
+                    last_rate = rate;
+                    let room = self.net.opts.max_segments.max(workers).saturating_sub(spawned);
+                    let steady = self.net.allowed.load(Ordering::Relaxed) == spawned && self.net.ctl.limit.load(Ordering::Relaxed) == 0;
+                    if flat < 2 && steady && room > 0 && len - done > 8 * PER_CONN {
+                        let add = self.net.lease.grow(GROW_BY.min(room));
+                        if add > 0 {
+                            spawned += add;
+                            self.net.allowed.store(spawned, Ordering::Relaxed);
+                            for index in spawned - add..spawned {
+                                spawn(index);
+                            }
+                        }
+                    }
                 }
                 if done >= len || self.cancelled() || failure.lock().unwrap_or_else(|e| e.into_inner()).is_some() || alive.load(Ordering::SeqCst) == 0 {
                     break;

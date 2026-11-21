@@ -240,3 +240,15 @@ fn a_checksum_mismatch_keeps_the_part_file_and_makes_no_file() {
     assert!(has_password("https://u:p@h/x") && !has_password("https://u@h/x?a=b:c@d"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_finished_download_leaves_no_part_files() {
+    let body = data(9 << 20);
+    let srv = serve(body.clone());
+    let dir = tmp("nostate");
+    let out = download(&url(&srv, "/f.bin"), &dir, &opts(1), &Control::default(), &host(Resolve::KeepBoth)).unwrap();
+    assert!(matches!(out, Outcome::Saved(_)));
+    let left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["f.bin".to_string()], "nothing but the file: {left:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

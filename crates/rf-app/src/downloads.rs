@@ -362,7 +362,7 @@ fn work(tr: &Tracker, req: &Request, key: u64, (segments, _, parallel): (usize, 
     (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
     let link = Link { tr, label: Mutex::new(String::new()), asked_cancel: AtomicBool::new(false) };
     let ctl = dl::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
-    let mut opts = dl::Options { segments, sha256: req.sha256.clone(), ..dl::Options::default() };
+    let mut opts = dl::Options { segments, max_segments: 32, sha256: req.sha256.clone(), ..dl::Options::default() };
     if opts.sha256.is_none() && req.verify {
         match dl::fetch_sidecar(&req.url, &opts) {
             Some(sha) => opts.sha256 = Some(sha),

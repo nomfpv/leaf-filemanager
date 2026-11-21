@@ -3162,8 +3162,8 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::Network,
             t!("Connections per download"),
-            Some(t!("A file is fetched over several connections at once when the server allows it. More is faster on a fast line, up to what the server gives.")),
-            dropdown("download-segments", p, s.download_segments, [1u32, 2, 4, 6, 8, 12, 16].into_iter().map(|n| (n, n.to_string())).collect(), |s, v| s.download_segments = v),
+            Some(t!("A large file starts with this many connections when the server allows it; small files use fewer. More are opened while the speed still rises, up to 32.")),
+            dropdown("download-segments", p, s.download_segments, [1u32, 2, 4, 6, 8, 12, 16, 24, 32].into_iter().map(|n| (n, n.to_string())).collect(), |s, v| s.download_segments = v),
         ),
         card(
             p,
@@ -3176,8 +3176,8 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::Network,
             t!("Connections to one server"),
-            Some(t!("Over all downloads together: several downloads from the same server share this many. Fewer are used when the server asks for it.")),
-            dropdown("download-per-host", p, s.download_per_host, [0u32, 2, 4, 6, 8, 12, 16, 24].into_iter().map(|n| (n, if n == 0 { t!("No limit").to_string() } else { n.to_string() })).collect(), |s, v| s.download_per_host = v),
+            Some(t!("The most connections open to one server, over all downloads together (default 32, up to 64). Fewer are used when the server asks for it; a server that takes only one connection gets one.")),
+            dropdown("download-per-host", p, s.download_per_host, [0u32, 2, 4, 8, 16, 24, 32, 48, 64].into_iter().map(|n| (n, if n == 0 { t!("No limit").to_string() } else { n.to_string() })).collect(), |s, v| s.download_per_host = v),
         ),
         card(
             p,

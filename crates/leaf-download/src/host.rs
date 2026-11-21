@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-static CAP: AtomicUsize = AtomicUsize::new(8);
+static CAP: AtomicUsize = AtomicUsize::new(32);
 static USED: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Default::default);
 
 /// Connections per host over all running downloads (0 = no cap). Applies to downloads that start after the change.
 pub fn set_host_cap(n: usize) {
-    CAP.store(n, Ordering::Relaxed);
+    CAP.store(if n == 0 { 0 } else { n.min(64) }, Ordering::Relaxed);
 }
 
 /// The server part of an address, in lower case (without a login).
@@ -40,6 +40,17 @@ impl Lease {
 
     pub fn count(&self) -> usize {
         self.n.load(Ordering::Relaxed)
+    }
+
+    /// Up to `n` more connections, as far as the cap leaves room; returns how many were added.
+    pub fn grow(&self, n: usize) -> usize {
+        let cap = CAP.load(Ordering::Relaxed);
+        let mut used = USED.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = used.entry(self.host.clone()).or_default();
+        let add = if cap == 0 { n } else { n.min(cap.saturating_sub(*slot)) };
+        *slot += add;
+        self.n.fetch_add(add, Ordering::Relaxed);
+        add
     }
 
     /// Gives connections back down to `n` (the server asked for fewer).
