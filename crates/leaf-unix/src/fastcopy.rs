@@ -939,6 +939,13 @@ fn item(job: &mut Job, kind_of_job: Transfer, src: &Path, dst: &Path) -> io::Res
                     Ok(()) => {}
                 }
             }
+            // a resumed job: a folder it made before the cut (made 0700 and ours, its mode and time were due after its contents) gets
+            // them now; a folder that was there before the job is left as a merge leaves it
+            // SAFETY: geteuid has no preconditions.
+            if job.resume.is_some() && dm.mode() & 0o7777 == 0o700 && dm.uid() == unsafe { libc::geteuid() } {
+                let _ = std::fs::set_permissions(&dst, std::os::unix::fs::PermissionsExt::from_mode(kept_mode(&sm)));
+                let _ = set_times_path(&dst, &sm, false);
+            }
             if kind_of_job == Transfer::Move {
                 // (only when it is empty now: what stayed behind keeps it)
                 let _ = std::fs::remove_dir(src);
