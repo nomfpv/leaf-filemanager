@@ -54,6 +54,7 @@ pub mod locks;
 pub mod look;
 pub mod nameindex;
 pub mod network;
+pub mod nmhost;
 pub mod openrules;
 pub mod organize;
 pub mod osver;

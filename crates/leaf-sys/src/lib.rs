@@ -17,7 +17,7 @@ pub use leaf_common::{design, docs, dupes, elf, exif_orient, hash, ownfolder, pe
 pub use os::{
     accent, activate, apppkg, apps, bench, cert, clipboard, compat, complete, ctxmenu, datefmt, default_fm, dialogs, diskusage, dnd,
     drives, editors, encoding, engine_guard, fastcopy, fastdelete, fileactions, fileinfo, fileops, folder_custom, foldersize, geom, git,
-    glass, handover, hotkey, indexer, jumplist, keys, kit, known, libraries, listing, localized, look, nameindex, network, openrules,
+    glass, handover, hotkey, indexer, jumplist, keys, kit, known, libraries, listing, localized, look, nameindex, network, nmhost, openrules,
     organize, osver, overlays, pe, picture_fallback, pkgverbs, preview_host, propcols, props, recycle, recycle_settings, removal, rotate, runcmd, runfind,
     scrollbars, search, security, sendto, settingscat, share, shell, shell_window, shellfolder, shortcut, signature, single_instance,
     sound, sta, syncroots, sysparams, taskbar_progress, thumbs, toast_post, tray, vfiles, volume, window, wsearch,

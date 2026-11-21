@@ -5046,6 +5046,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-nmhost"
+version = "0.9.4"
+dependencies = [
+ "leaf-sys",
+ "serde_json",
+]
+
+[[package]]
 name = "leaf-remote"
 version = "0.9.4"
 dependencies = [

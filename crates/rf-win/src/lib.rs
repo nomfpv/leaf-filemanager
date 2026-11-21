@@ -54,6 +54,7 @@ pub mod look;
 pub mod listing;
 pub mod localized;
 pub mod nameindex;
+pub mod nmhost;
 pub mod organize;
 pub mod osver;
 pub mod pkgverbs;
