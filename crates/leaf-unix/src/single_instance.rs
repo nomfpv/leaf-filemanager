@@ -21,3 +21,8 @@ impl InstanceGuard {
         InstanceGuard { _p: () }
     }
 }
+
+/// Never calls `on_message` (serve style): no other launch reaches this process yet.
+pub fn serve_app(_app: &str, _on_message: impl Fn(String) + Send + Sync + 'static) {
+    stub!("single_instance::serve_app")
+}

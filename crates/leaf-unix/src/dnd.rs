@@ -5,7 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use leaf_common::stub_err;
+
 pub use leaf_common::fileops::Transfer;
+
+use crate::Owner;
 
 /// Paths of drags that must never be moved, each with the time its mark ends.
 static COPY_ONLY: Mutex<Vec<(PathBuf, Instant)>> = Mutex::new(Vec::new());
@@ -59,6 +63,17 @@ pub fn default_transfer(sources: &[PathBuf], dest_dir: &Path, ctrl: bool, shift:
 /// True when dropping `sources` into `dest_dir` makes no sense (onto itself or its own child).
 pub fn is_invalid_drop(sources: &[PathBuf], dest_dir: &Path) -> bool {
     sources.iter().any(|s| dest_dir == s || dest_dir.starts_with(s)) || sources.iter().all(|s| s.parent() == Some(dest_dir))
+}
+
+/// Starts a drag of `items` out of leaf (it must run on the thread that owns the window): no drag is started on Linux yet. The answer
+/// is the drop effect the target chose, as `DROPEFFECT` bits.
+pub fn drag_out(_owner: Owner, _ui_thread: u32, _items: &[PathBuf]) -> anyhow::Result<u32> {
+    stub_err!("dnd::drag_out")
+}
+
+/// [`drag_out`] for files that must not be MOVED by the target (a copy only): no drag is started on Linux yet.
+pub fn drag_out_copy_only(_owner: Owner, _ui_thread: u32, _items: &[PathBuf]) -> anyhow::Result<u32> {
+    stub_err!("dnd::drag_out_copy_only")
 }
 
 #[cfg(test)]
