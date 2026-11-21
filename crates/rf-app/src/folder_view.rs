@@ -3186,6 +3186,15 @@ impl FolderView {
                     f
                 });
                 let name_text = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref()));
+                // a card's tags: dots in the picture's top left corner (the mockups')
+                let tag_colors: Vec<Hsla> = if style == GridStyle::Tiles {
+                    let store = &cx.global::<crate::tags::Tags>().0;
+                    self.path_of(ei)
+                        .map(|path| store.tags_of(&path).iter().filter_map(|id| store.def(*id)).map(|d| crate::tags::color(d.color)).collect())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 let base = match style {
                     // a card: the picture in a rounded box (a quiet fill behind icons, a soft shadow under photos), the name, the size
                     GridStyle::Tiles => v_flex()
@@ -3226,6 +3235,19 @@ impl FolderView {
                                 .children(lock.map(|l| {
                                     div().absolute().right(px(4.)).top(px(4.)).p(px(2.)).rounded(px(3.)).bg(gpui_kit::hsla(0., 0., 0., 0.62)).child(l)
                                 }))
+                                .when(!tag_colors.is_empty() && cmp_word.is_none(), |d| {
+                                    // (the dark ring outside the dot, as the mockups' shadow ring: the box is the dot and 1.5 px round it)
+                                    d.child(h_flex().absolute().left(px(3.5)).top(px(3.5)).children(tag_colors.iter().map(|c| {
+                                        div()
+                                            .size(px(p.tag_dot + 3.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_full()
+                                            .bg(gpui_kit::hsla(0., 0., 0., 0.35))
+                                            .child(div().size(px(p.tag_dot)).rounded_full().bg(*c))
+                                    })))
+                                })
                                 .children(git.map(|(g, c)| {
                                     div()
                                         .absolute()
@@ -3315,7 +3337,8 @@ impl FolderView {
                     .rounded(if tiles { px(p.tile_radius) } else { theme::RADIUS })
                     // tiles: quiet fill + a thin accent outline (a pill would read as a crop)
                     .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).border_1().border_color(if p.selection_border.a > 0. { p.selection_border } else { p.row_selection }))
-                    .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { p.selection_inactive }))
+                    // (no outline where the theme has none for a pane in the back: the fill alone, the mockups'; the border stays for the layout)
+                    .when(selected && inactive, |d| d.bg(p.selection_inactive).border_1().border_color(if p.selection_inactive_border.a > 0. { p.selection_inactive_border } else { transparent_black() }))
                     .when(!selected, |d| d.border_1().border_color(transparent_black()))
                     .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
                     .when(cmp.is_some_and(|l| l.is_same()), |d| d.opacity(0.55))
