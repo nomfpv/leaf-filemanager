@@ -48,6 +48,10 @@ enum Ev {
     /// LocalSend: the devices found changed; a device asks to send files.
     LsDevices(Vec<LsDevice>),
     LsRequest(LsRequest),
+    /// A LocalSend request closed without our answer (the two minutes ran out, or the sender left): its question goes.
+    LsRequestEnded(u64),
+    /// A device we send to wants a PIN: the sender of the reply waits for what the user types (`None`: gives up).
+    LsPin(String, bool, std::sync::mpsc::Sender<Option<String>>),
 }
 
 /// What the LocalSend engine says, carried to the UI thread in the same events as the other engine's (its transfer ids are far from
@@ -60,6 +64,15 @@ impl LsListener for LsL {
     }
     fn request(&self, request: LsRequest) {
         let _ = self.0.unbounded_send(Ev::LsRequest(request));
+    }
+    fn request_ended(&self, id: u64) {
+        let _ = self.0.unbounded_send(Ev::LsRequestEnded(id));
+    }
+    fn pin(&self, alias: &str, wrong: bool) -> Option<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.0.unbounded_send(Ev::LsPin(alias.to_string(), wrong, tx)).ok()?;
+        // (a dialog closed without an answer drops its sender: that ends the wait too)
+        rx.recv_timeout(Duration::from_secs(150)).ok().flatten()
     }
     fn progress(&self, transfer: u64, done: u64, total: u64) {
         let _ = self.0.unbounded_send(Ev::Progress(transfer, done, total));
@@ -219,6 +232,7 @@ fn ls_apply(cx: &mut App) {
     let Some(ls) = cx.global::<NearbyService>().ls.clone() else { return };
     let s = cx.global::<Settings>();
     ls.set_alias(&name_of(s));
+    ls.set_pin(Some(&s.nearby_localsend_pin));
     let want = s.nearby_localsend_receive;
     if want == ls.is_receiving() {
         return;
@@ -348,6 +362,8 @@ fn on_event(ev: Ev, cx: &mut App) {
             cx.refresh_windows();
         }
         Ev::LsRequest(request) => ask(Question::Ls(request), cx),
+        Ev::LsRequestEnded(id) => forget_question(&format!("ls-{id}"), cx),
+        Ev::LsPin(alias, wrong, reply) => ask_pin(alias, wrong, reply, cx),
         Ev::Receiving(offer) => {
             let dest = inbox_of(cx.global::<Settings>());
             cx.global_mut::<NearbyService>().incoming.insert(offer.transfer, offer.from_name.clone());
@@ -462,7 +478,9 @@ fn failure_text(error: Option<&str>) -> String {
     } else if has("declined") {
         t!("The other device declined.").to_string()
     } else if has("asks for a PIN") {
-        t!("The other device asks for a PIN, which leaf can't give yet.").to_string()
+        t!("The other device asks for a PIN.").to_string()
+    } else if has("PIN was not right") {
+        t!("The PIN was not right.").to_string()
     } else if has("busy with another transfer") {
         t!("The other device is busy with another transfer.").to_string()
     } else if has("did not answer") || has("no answer") || has("timed out") {
@@ -523,6 +541,35 @@ fn answer(q: &Question, yes: bool, cx: &mut App) {
         Question::Pair { peer, .. } => n.confirm_pairing(peer.clone(), yes),
         Question::Ls(_) => {}
     }
+}
+
+/// A device we send to asks for its PIN: a small dialog for it (three tries are the crate's; each asks again with a note).
+fn ask_pin(alias: String, wrong: bool, reply: std::sync::mpsc::Sender<Option<String>>, cx: &mut App) {
+    let Some(w) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
+        let _ = reply.send(None);
+        return;
+    };
+    let reply = std::rc::Rc::new(std::cell::RefCell::new(Some(reply)));
+    let on_ok = reply.clone();
+    let _ = w.update(cx, move |_, window, cx| {
+        let ok = crate::prompt::Button::new(t!("Send"), crate::prompt::Kind::Primary, move |text, _, _| {
+            let pin = text.unwrap_or_default().trim().to_string();
+            if pin.is_empty() {
+                return Err(t!("Enter the PIN").into());
+            }
+            if let Some(tx) = on_ok.borrow_mut().take() {
+                let _ = tx.send(Some(pin));
+            }
+            Ok(())
+        });
+        let mut message = format!("{} {}", alias, t!("asks for a PIN before it takes files. It shows or has it in its LocalSend settings."));
+        if wrong {
+            message = format!("{}\n{}", t!("That PIN was not right."), message);
+        }
+        crate::prompt::show(t!("PIN needed"), Some(message), Some((String::new(), "PIN".to_string())), vec![ok, crate::prompt::Button::cancel()], window, cx);
+    });
+    // (Cancel and Escape: the dialog goes, the sender with it, and the waiting side reads that as "no PIN")
+    drop(reply);
 }
 
 /// Takes a LocalSend request into `dest`, when the drive has room for it (else it is declined and a card says why).
@@ -1155,6 +1202,33 @@ fn ls_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     if let Some(problem) = problem.filter(|_| recv) {
         v.push(card(p, L::TriangleAlert, t!("Can't receive from nearby devices"), Some(problem.as_str()), div().into_any_element()));
     }
+    let pin_set = !s.nearby_localsend_pin.trim().is_empty();
+    v.push(card(
+        p,
+        L::Lock,
+        t!("PIN for receiving"),
+        Some(if pin_set { t!("A device must give this PIN before it can send here.") } else { t!("None: every request is asked about, but no PIN is needed.") }),
+        h_flex()
+            .gap_2()
+            .children(pin_set.then(|| button("nearby-ls-pin-off", p, t!("Remove"), |_, cx| settings::update(cx, |s| s.nearby_localsend_pin.clear()))))
+            .child(button("nearby-ls-pin", p, t!("Set…"), |window, cx| {
+                let ok = crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |text, _, cx| {
+                    let text = text.unwrap_or_default().trim().to_string();
+                    settings::update(cx, |s| s.nearby_localsend_pin = text);
+                    Ok(())
+                });
+                let current = cx.global::<Settings>().nearby_localsend_pin.clone();
+                crate::prompt::show(
+                    t!("PIN for receiving"),
+                    Some(t!("Devices sending to this PC over LocalSend must type this PIN first. Leave it empty for none.").to_string()),
+                    Some((current, "PIN".to_string())),
+                    vec![ok, crate::prompt::Button::cancel()],
+                    window,
+                    cx,
+                );
+            }))
+            .into_any_element(),
+    ));
     v.push(section(p, t!("LocalSend devices")));
     v.push(card(
         p,
@@ -1167,11 +1241,36 @@ fn ls_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             }
         }),
     ));
+    v.push(card(
+        p,
+        L::Plus,
+        t!("Add device by address"),
+        Some(t!("For a device the search does not find, such as one on another network: its address, like 192.168.1.20 or 192.168.1.20:53317.")),
+        button("nearby-ls-add", p, t!("Add…"), |window, cx| {
+            let ok = crate::prompt::Button::new(t!("Add"), crate::prompt::Kind::Primary, |text, _, cx| {
+                let text = text.unwrap_or_default();
+                let Some(addr) = parse_address(&text) else {
+                    return Err(t!("Enter an address like 192.168.1.20 or 192.168.1.20:53317").into());
+                };
+                if let Some(ls) = cx.global::<NearbyService>().ls.clone() {
+                    ls.add_device(addr);
+                }
+                Ok(())
+            });
+            crate::prompt::show(t!("Add device by address"), None, Some((String::new(), "192.168.1.20".to_string())), vec![ok, crate::prompt::Button::cancel()], window, cx);
+        }),
+    ));
     for d in &devices {
         let desc = format!("{} · {}", d.model.clone().unwrap_or_else(|| d.device_type.clone()), d.ip);
         v.push(card(p, L::Monitor, &d.alias, Some(desc.as_str()), div().into_any_element()));
     }
     v
+}
+
+/// "192.168.1.20", "192.168.1.20:53317" or "[::1]:53317": where a LocalSend device is (the port defaults to LocalSend's).
+fn parse_address(text: &str) -> Option<std::net::SocketAddr> {
+    let text = text.trim();
+    text.parse::<std::net::SocketAddr>().ok().or_else(|| text.trim_matches(['[', ']']).parse::<std::net::IpAddr>().ok().map(|ip| std::net::SocketAddr::new(ip, LS_PORT)))
 }
 
 /// Settings > Nearby was drawn in `window`. While it is on screen this PC is seen by everyone, the way a Mac is while Finder's AirDrop

@@ -745,6 +745,8 @@ pub struct Settings {
     pub nearby_auto_accept_trusted: bool,
     /// Phones and computers running LocalSend may send files to this PC (off: nothing listens; sending to them needs no setting).
     pub nearby_localsend_receive: bool,
+    /// The PIN other devices must give before they send here over LocalSend (empty: none).
+    pub nearby_localsend_pin: String,
 }
 
 /// Settings -> General: what a new tab opens.
@@ -924,6 +926,7 @@ impl Default for Settings {
             nearby_inbox: String::new(),
             nearby_auto_accept_trusted: true,
             nearby_localsend_receive: false,
+            nearby_localsend_pin: String::new(),
         }
     }
 }
