@@ -149,6 +149,12 @@ impl SftpFs {
         let open = |path: String, flags: OpenFlags, attrs: FileAttributes| run(&c, limit, c.sftp.open(path, flags, attrs)).map(|h| h.handle);
         let (handle, off, place) = match mode {
             WriteMode::At(off) => {
+                // resuming writes in place: never through a link (its target would be cut and written)
+                match &existing {
+                    Some(m) if m.kind == Kind::Link => return Err(FsError::Other("This is a link on the server; leaf does not write through it".into())),
+                    None => return Err(FsError::NotFound),
+                    Some(_) => {}
+                }
                 let h = open(target.clone(), OpenFlags::WRITE, FileAttributes::empty())?;
                 let size = existing.as_ref().map_or(0, |m| m.size);
                 let r = if off > size {
