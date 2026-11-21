@@ -51,6 +51,9 @@ impl Server {
     fn seen(&self) -> Vec<Seen> {
         lock(&self.state).seen.clone()
     }
+    fn add_file(&self, p: &str, c: &str) {
+        lock(&self.state).files.insert(p.to_string(), c.as_bytes().to_vec());
+    }
     fn file(&self, p: &str) -> Option<Vec<u8>> {
         lock(&self.state).files.get(p).cloned()
     }
@@ -381,6 +384,26 @@ fn webdav_put_goes_to_a_temp_name_and_move_carries_overwrite() {
     assert_eq!(s.file("/docs/big.bin").map(|f| f.len()), Some(big.len()));
     // no PUT in this whole run ever named a file that matters
     assert!(s.seen().iter().filter(|r| r.method == "PUT").all(|r| r.path.contains("/.a b.txt.leaf-up-") || r.path.contains("/.big.bin.leaf-up-")));
+}
+
+/// A WebDAV server has no login folder: its root is the share, and a delete with the trash on goes into `.leaf-trash` there (or,
+/// where the server will not take it, asks "Delete permanently?" by `CannotMove`; never a plain refusal).
+#[test]
+fn webdav_delete_goes_to_the_trash_in_the_share_root() {
+    let s = start(&["/docs"], &[("/docs/old.txt", "old")]);
+    let fs = fs_for(Arc::new(Answers::default()));
+    let item = addr(&s, "/docs/old.txt");
+    let home = addr(&s, "/").root();
+    let moved = crate::trash::move_to_trash(&fs, &home, &item, "2026-01-01_00-00-00.000").unwrap();
+    assert_eq!(moved.path(), "/.leaf-trash/2026-01-01_00-00-00.000/docs/old.txt");
+    assert!(s.file("/docs/old.txt").is_none() && s.file(moved.path()).is_some());
+    // the share root itself is never moved
+    assert_eq!(crate::trash::move_to_trash(&fs, &home, &home, "x"), Err(crate::trash::TrashError::Fs(FsError::Denied)));
+    // a server that will not move into the trash: the caller is asked
+    lock(&s.state).fail_move = true;
+    s.add_file("/docs/b.txt", "b");
+    assert!(matches!(crate::trash::move_to_trash(&fs, &home, &addr(&s, "/docs/b.txt"), "2026-01-01_00-00-01.000"), Err(crate::trash::TrashError::CannotMove(_))));
+    assert!(s.file("/docs/b.txt").is_some());
 }
 
 /// The password is asked in the dialog (Basic over plain http says so), reaches the server, and is nowhere else: not in an

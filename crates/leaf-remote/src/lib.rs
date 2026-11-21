@@ -162,6 +162,8 @@ pub fn home(v: &VPath) -> Result<VPath, FsError> {
     match v.scheme() {
         "sftp" => sftp_backend().home(v),
         "ftp" | "ftps" => ftp_backend().home(v),
+        // (WebDAV has no login folder: the share's root is the home, and only the root itself is guarded in the trash)
+        "dav" | "davs" => Ok(v.root()),
         _ => Ok(v.root()),
     }
 }
