@@ -86,15 +86,15 @@ pub fn type_label(e: &Entry) -> String {
 /// [`type_label`] for a folder or for a file's extension (lower case, no dot).
 pub fn type_label_of(dir: bool, ext: &str) -> String {
     if dir {
-        return t!("Dosya klasörü").into();
+        return t!("File folder").into();
     }
     match ext {
-        "" => t!("Dosya").into(),
-        "exe" => t!("Uygulama").into(),
-        "lnk" => t!("Kısayol").into(),
-        "txt" => t!("Metin Belgesi").into(),
-        "pdf" => t!("PDF Belgesi").into(),
-        "zip" => t!("Sıkıştırılmış (zip) klasör").into(),
-        ext => format!("{} {}", ext.to_uppercase(), t!("Dosyası")),
+        "" => t!("File").into(),
+        "exe" => t!("Application").into(),
+        "lnk" => t!("Shortcut").into(),
+        "txt" => t!("Text Document").into(),
+        "pdf" => t!("PDF Document").into(),
+        "zip" => t!("Compressed (zipped) folder").into(),
+        ext => format!("{} {}", ext.to_uppercase(), t!("File")),
     }
 }

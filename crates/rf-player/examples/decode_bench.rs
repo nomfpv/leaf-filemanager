@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         m.frame_at(i as f64 / fps)?;
     }
     let el = t.elapsed();
-    println!("{}x{} {} kare: açma {:?}, çözme {:.1} kare/s", v.width, v.height, n, opened, n as f64 / el.as_secs_f64());
+    println!("{}x{} {} frames: open {:?}, decode {:.1} frames/s", v.width, v.height, n, opened, n as f64 / el.as_secs_f64());
     let f = m.frame_at(0.0)?;
     for (w, h) in [(1600u32, 900u32), (v.width, v.height)] {
         let t = Instant::now();

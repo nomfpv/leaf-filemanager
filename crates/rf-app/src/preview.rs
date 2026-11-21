@@ -448,7 +448,7 @@ impl Preview {
             .media
             .as_ref()
             .filter(|(mp, _)| self.target.as_ref().is_some_and(|(t, _)| t == mp))
-            .and_then(|(_, list)| list.iter().find(|(k, _)| *k == "Süre"))
+            .and_then(|(_, list)| list.iter().find(|(k, _)| *k == "Duration"))
             .and_then(|(_, v)| v.split(':').try_fold(0u64, |acc, part| part.trim().parse::<u64>().ok().map(|n| acc * 60 + n)))
             .map(|secs| secs as f64);
         let bar_cell = self.player.as_ref().map(|pl| pl.bar.clone()).unwrap_or_default();
@@ -604,20 +604,20 @@ impl Preview {
     /// The lines of the property block, in order (label, value): the same for the pane at the right and at the bottom.
     fn property_rows(&self, path: &Path, e: &Entry, cx: &App) -> Vec<(&'static str, String)> {
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let mut rows: Vec<(&'static str, String)> = vec![(t!("Tür"), icons::type_label(e).to_string())];
+        let mut rows: Vec<(&'static str, String)> = vec![(t!("Type"), icons::type_label(e).to_string())];
         if e.is_dir() && !crate::archive_view::is_browsable_path(path) {
             let on_disk = cx.global::<crate::settings::Settings>().folder_size_on_disk;
             let txt = match &self.folder_size {
                 Some((fp, Some(fs))) if fp == path => {
                     let shown = if on_disk { fs.allocated.unwrap_or(fs.bytes) } else { fs.bytes };
-                    format!("{} · {} {}, {} {}", format::size(shown), group(fs.files), t!("dosya"), group(fs.dirs), t!("klasör"))
+                    format!("{} · {} {}, {} {}", format::size(shown), group(fs.files), t!("files"), group(fs.dirs), t!("folders"))
                 }
-                _ => t!("Hesaplanıyor…").to_string(),
+                _ => t!("Calculating…").to_string(),
             };
-            rows.push((t!("Boyut"), txt));
+            rows.push((t!("Size"), txt));
         }
         if !e.is_dir() {
-            rows.push((t!("Boyut"), format!("{} ({} {})", format::size(e.size), group(e.size), t!("bayt"))));
+            rows.push((t!("Size"), format!("{} ({} {})", format::size(e.size), group(e.size), t!("bytes"))));
         }
         if let Some((mp, list)) = &self.media
             && mp == path
@@ -626,28 +626,28 @@ impl Preview {
                 rows.push((crate::i18n::t(label), value.clone()));
             }
         }
-        rows.push((t!("Değiştirilme"), format::datetime(e.modified_ms)));
-        rows.push((t!("Oluşturulma"), format::datetime(e.created_ms)));
+        rows.push((t!("Modified"), format::datetime(e.modified_ms)));
+        rows.push((t!("Created"), format::datetime(e.created_ms)));
         // zero-width space after each separator: long paths wrap at folder boundaries
-        rows.push((t!("Konum"), dir.to_string_lossy().replace('\\', "\\\u{200B}")));
+        rows.push((t!("Location"), dir.to_string_lossy().replace('\\', "\\\u{200B}")));
         let mut flags = Vec::new();
         if e.is_hidden() {
-            flags.push(t!("Gizli"));
+            flags.push(t!("Hidden"));
         }
         if e.is_system() {
-            flags.push(t!("Sistem"));
+            flags.push(t!("System"));
         }
         if e.attrs & rf_core::attrs::READONLY != 0 {
-            flags.push(t!("Salt okunur"));
+            flags.push(t!("Read-only"));
         }
         if e.is_cloud_placeholder() {
-            flags.push(t!("Yalnızca çevrimiçi"));
+            flags.push(t!("Online-only"));
         }
         if e.is_symlink() {
-            flags.push(t!("Bağlantı"));
+            flags.push(t!("Link"));
         }
         if !flags.is_empty() {
-            rows.push((t!("Öznitelikler"), flags.join(", ")));
+            rows.push((t!("Attributes"), flags.join(", ")));
         }
         rows
     }
@@ -867,16 +867,16 @@ fn render_extra_sized(p: &Palette, x: &Extra, tall: bool) -> AnyElement {
                 .bg(p.tile_bg)
                 .border_1()
                 .border_color(p.border)
-                .child(div().text_xs().text_color(p.text_secondary).child(format!("{} — {}", t!("Arşiv içeriği"), crate::i18n::items(*total))))
+                .child(div().text_xs().text_color(p.text_secondary).child(format!("{} — {}", t!("Archive contents"), crate::i18n::items(*total))))
                 .children(rows)
                 .into_any_element()
         }
         Extra::Shortcut { target, args, dir } => v_flex()
             .w_full()
             .gap_1p5()
-            .child(prop_row(p, t!("Hedef"), target.replace('\\', "\\\u{200B}")))
-            .when(!args.is_empty(), |d| d.child(prop_row(p, t!("Bağımsız değişkenler"), args.clone())))
-            .when(!dir.is_empty(), |d| d.child(prop_row(p, t!("Başlangıç yeri"), dir.replace('\\', "\\\u{200B}"))))
+            .child(prop_row(p, t!("Target"), target.replace('\\', "\\\u{200B}")))
+            .when(!args.is_empty(), |d| d.child(prop_row(p, t!("Arguments"), args.clone())))
+            .when(!dir.is_empty(), |d| d.child(prop_row(p, t!("Start in"), dir.replace('\\', "\\\u{200B}"))))
             .into_any_element(),
     }
 }
@@ -901,7 +901,7 @@ impl Render for Preview {
                 .items_center()
                 .justify_center()
                 .child(Icon::new(if self.wide.is_some() { L::PanelBottom } else { L::PanelRight }).size(px(32.)).text_color(p.text_tertiary))
-                .child(div().text_sm().text_color(p.text_secondary).child(t!("Önizleme için bir öğe seçin")))
+                .child(div().text_sm().text_color(p.text_secondary).child(t!("Select an item to preview")))
                 .into_any_element();
         };
         if self.large {
@@ -1038,7 +1038,7 @@ impl Render for Preview {
                     .hover(|s| s.bg(p.pressed))
                     .cursor_pointer()
                     .text_sm()
-                    .child(t!("Hash hesapla (MD5, SHA…)"))
+                    .child(t!("Calculate hash (MD5, SHA…)"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let pth = path2.clone();
                         this.hash = Some(cx.new(|cx| crate::hash_panel::HashPanel::new(pth, cx)));
@@ -1055,9 +1055,9 @@ impl Render for Preview {
     }
 }
 
-/// 1234567 → "1.234.567"
+/// 1234567 → "1,234,567"
 fn group(n: u64) -> String {
-    let sep = if crate::i18n::is_tr() { '.' } else { ',' };
+    let sep = ',';
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {

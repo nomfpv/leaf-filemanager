@@ -35,13 +35,13 @@ impl VolumeInfo {
 /// Turkish name for a `GetDriveTypeW` result.
 pub fn drive_type_name(t: u32) -> &'static str {
     match t {
-        2 => "Çıkarılabilir Disk",
-        3 => "Yerel Disk",
-        4 => "Ağ Sürücüsü",
-        5 => "Optik Sürücü (CD/DVD)",
+        2 => "Removable Disk",
+        3 => "Local Disk",
+        4 => "Network Drive",
+        5 => "Optical Drive (CD/DVD)",
         6 => "RAM Disk",
-        1 => "Bağlı Değil",
-        _ => "Bilinmiyor",
+        1 => "Not Connected",
+        _ => "Unknown",
     }
 }
 
@@ -64,7 +64,7 @@ pub fn volume_info(root: &Path) -> anyhow::Result<VolumeInfo> {
         unsafe {
             let _ = GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut free), Some(&mut total), None);
         }
-    } else if drive_type != "Optik Sürücü (CD/DVD)" {
+    } else if drive_type != "Optical Drive (CD/DVD)" {
         has_vol?; // media-less optical drives are reported with empty details instead of failing
     }
     Ok(VolumeInfo {
@@ -125,11 +125,11 @@ pub fn removable_drives() -> Vec<(char, String)> {
 /// Fails when files are still open on the drive.
 pub fn eject(drive_letter: char) -> anyhow::Result<()> {
     let letter = drive_letter.to_ascii_uppercase();
-    anyhow::ensure!(letter.is_ascii_uppercase(), "Geçersiz sürücü harfi");
+    anyhow::ensure!(letter.is_ascii_uppercase(), "Invalid drive letter");
     let root = format!("{letter}:\\");
     let rw = wide(&root);
     let t = unsafe { GetDriveTypeW(PCWSTR(rw.as_ptr())) };
-    anyhow::ensure!(t == 2 || t == 5, "{letter}: sürücüsü çıkarılabilir değil");
+    anyhow::ensure!(t == 2 || t == 5, "Drive {letter}: is not removable");
 
     ensure_com();
     unsafe {
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn c_drive_info() {
         let v = volume_info(Path::new("C:\\")).unwrap();
-        assert_eq!(v.drive_type, "Yerel Disk");
+        assert_eq!(v.drive_type, "Local Disk");
         assert!(v.total > 0 && v.free <= v.total);
         assert!(!v.filesystem.is_empty());
         assert_eq!(v.serial_string().len(), 9);

@@ -133,7 +133,7 @@ impl Viewer for Opening {
             .justify_center()
             .gap_2()
             .child(Icon::new(L::LoaderCircle).size(px(20.)).text_color(p.text_secondary))
-            .child(div().text_sm().text_color(p.text_secondary).child(t!("Açılıyor…")))
+            .child(div().text_sm().text_color(p.text_secondary).child(t!("Opening…")))
             .into_any_element()
     }
 }
@@ -452,23 +452,23 @@ impl LookWindow {
     /// `width`: the window's width (logical px), which the bar's own content must stay within.
     fn render_bar(&mut self, p: &Palette, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let show_reload = cx.global::<LookSettings>().look_show_reload;
-        let run_tip: SharedString = if self.is_executable() { t!("Çalıştır").into() } else { t!("Aç").into() };
+        let run_tip: SharedString = if self.is_executable() { t!("Run").into() } else { t!("Open").into() };
         let overlay = self.overlay_titlebar;
         let buttons = h_flex()
             .gap_0p5()
             .items_center()
-            .child(self.button("look-pin", if self.pinned { L::PinOff } else { L::Pin }, t!("Sabitle").into(), self.pinned, p).on_click(
+            .child(self.button("look-pin", if self.pinned { L::PinOff } else { L::Pin }, t!("Pin").into(), self.pinned, p).on_click(
                 cx.listener(|_, _, _, cx| {
                     cx.defer(super::LookManager::pin_current);
                 }),
             ))
-            .child(self.button("look-top", L::Layers, t!("Üstte tut").into(), self.topmost, p).on_click(cx.listener(|v, _, _, cx| {
+            .child(self.button("look-top", L::Layers, t!("Keep on top").into(), self.topmost, p).on_click(cx.listener(|v, _, _, cx| {
                 let on = !v.topmost;
                 v.set_topmost(on, cx);
             })))
-            .child(self.button("look-share", L::Share, t!("Paylaş").into(), false, p).on_click(cx.listener(|v, _, window, cx| v.share(window, cx))))
+            .child(self.button("look-share", L::Share, t!("Share").into(), false, p).on_click(cx.listener(|v, _, window, cx| v.share(window, cx))))
             .child(
-                self.button("look-openwith", L::SquareArrowOutUpRight, t!("Birlikte aç").into(), false, p)
+                self.button("look-openwith", L::SquareArrowOutUpRight, t!("Open with").into(), false, p)
                     .on_click(cx.listener(|v, _, _, _| v.open_with())),
             )
             .child(self.button("look-open", L::ExternalLink, run_tip, false, p).on_click(cx.listener(|v, _, window, _| {
@@ -476,11 +476,11 @@ impl LookWindow {
                 window.remove_window();
             })))
             .when(show_reload, |d| {
-                d.child(self.button("look-reload", L::RefreshCw, t!("Yeniden yükle").into(), false, p).on_click(cx.listener(|v, _, window, cx| {
+                d.child(self.button("look-reload", L::RefreshCw, t!("Reload").into(), false, p).on_click(cx.listener(|v, _, window, cx| {
                     v.reload(window, cx);
                 })))
             })
-            .child(self.button("look-more", L::Ellipsis, t!("Diğer").into(), self.more_open, p).on_click(cx.listener(|v, _, _, cx| {
+            .child(self.button("look-more", L::Ellipsis, t!("More").into(), self.more_open, p).on_click(cx.listener(|v, _, _, cx| {
                 v.more_open = !v.more_open;
                 cx.notify();
             })));
@@ -537,12 +537,12 @@ impl LookWindow {
             .shadow_lg()
             .text_color(p.text)
             .when(!show_reload, |d| {
-                d.child(item("more-reload", t!("Yeniden yükle")).on_click(cx.listener(|v, _, window, cx| {
+                d.child(item("more-reload", t!("Reload")).on_click(cx.listener(|v, _, window, cx| {
                     v.more_open = false;
                     v.reload(window, cx);
                 })))
             })
-            .child(item("more-copy", t!("Yolu kopyala")).on_click(cx.listener(|v, _, _, cx| {
+            .child(item("more-copy", t!("Copy path")).on_click(cx.listener(|v, _, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(v.path.to_string_lossy().into_owned()));
                 v.more_open = false;
                 cx.notify();
@@ -597,7 +597,7 @@ fn file_title(p: &std::path::Path) -> SharedString {
 
 impl Render for LookWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        super::trace::mark("pencere çizildi");
+        super::trace::mark("window drawn");
         let p = Palette::for_window(window);
         let overlay = self.overlay_titlebar;
         let show_bar = !overlay || self.chrome_shown || self.more_open;

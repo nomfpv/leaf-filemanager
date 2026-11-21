@@ -10,7 +10,7 @@ fn main() {
     for (key, windows) in rf_win::tasklist::grouped(tasks) {
         println!("{key}");
         for w in windows {
-            println!("    {}{}", if w.minimized { "(küçük) " } else { "" }, w.title);
+            println!("    {}{}", if w.minimized { "(minimized) " } else { "" }, w.title);
         }
     }
     println!("\n{n} pencere, {took:?}");

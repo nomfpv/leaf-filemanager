@@ -7,7 +7,7 @@ fn main() -> windows::core::Result<()> {
     let ext = std::env::args().nth(1).unwrap_or_else(|| ".7z".into());
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        for (label, filter) in [("önerilen", ASSOC_FILTER_RECOMMENDED), ("hepsi", ASSOC_FILTER_NONE)] {
+        for (label, filter) in [("recommended", ASSOC_FILTER_RECOMMENDED), ("all", ASSOC_FILTER_NONE)] {
             println!("--- {label}");
             let en = SHAssocEnumHandlers(&HSTRING::from(ext.as_str()), filter)?;
             loop {

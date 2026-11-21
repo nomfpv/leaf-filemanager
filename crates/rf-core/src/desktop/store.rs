@@ -355,7 +355,7 @@ impl Store {
 
 fn aside_names(path: &Path) -> Vec<PathBuf> {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return Vec::new() };
-    let prefix = format!("{name}.bozuk-");
+    let prefix = format!("{name}.corrupt-");
     std::fs::read_dir(dir)
         .map(|rd| rd.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)).map(|e| e.path()).collect())
         .unwrap_or_default()
@@ -438,7 +438,7 @@ mod tests {
             assert!(!reason.is_empty());
             let aside = aside.unwrap_or_else(|| panic!("{tag}: no aside path"));
             assert_eq!(std::fs::read_to_string(&aside).unwrap(), junk, "{tag}: the user's bytes are kept");
-            assert!(aside.file_name().unwrap().to_string_lossy().starts_with("desktop-layout.json.bozuk-"));
+            assert!(aside.file_name().unwrap().to_string_lossy().starts_with("desktop-layout.json.corrupt-"));
             assert!(!path.exists(), "{tag}: the broken file no longer sits where the next save would overwrite it");
             assert_eq!(s, Store::default());
             // the fresh store can be saved, and the aside copy is still there afterwards

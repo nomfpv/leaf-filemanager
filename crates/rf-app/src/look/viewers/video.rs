@@ -547,7 +547,7 @@ impl MediaView {
         self._tasks.push(cx.spawn(async move |this, cx| {
             let (meta, lyrics) = work.await;
             if std::env::var_os("RUSTYFILES_LOOK_TRACE").is_some() {
-                eprintln!("look: ses bilgisi {meta:?}, {} söz satırı", lyrics.len());
+                eprintln!("look: audio info {meta:?}, {} lyric lines", lyrics.len());
             }
             let _ = this.update(cx, |v, cx| {
                 v.meta = meta;
@@ -675,7 +675,7 @@ impl MediaView {
                 v.mf_state = st;
                 // Media Foundation de açamadıysa (süre gelmedi): oynatıcı kapanır, açıklama gösterilir
                 if v.failed.is_none() && v.opened_at.elapsed() > v.mf_wait && st.is_none_or(|s| s.duration <= 0.0) {
-                    v.failed = Some(t!("Bu biçim desteklenmiyor (ne FilmCraft ne de Windows çözebildi)").to_string());
+                    v.failed = Some(t!("This format is not supported (neither FilmCraft nor Windows could decode it)").to_string());
                     v.mf = false;
                     v.video = false;
                     rf_win::sta::run(|_| rf_win::preview_host::hide());
@@ -947,7 +947,7 @@ impl Render for MediaView {
                 .justify_center()
                 .gap_2()
                 .p_4()
-                .child(div().text_color(p.text).child(t!("Bu dosya oynatılamıyor")))
+                .child(div().text_color(p.text).child(t!("This file cannot be played")))
                 .child(div().text_xs().text_color(p.text_secondary).child(e.clone()))
                 .into_any_element();
         }
@@ -1096,13 +1096,13 @@ impl MediaView {
         // (the system's accent, as the app's selection: DirectLook's own theme colour is a neutral grey)
         let accent = p.accent;
         let field = |k: &str| self.meta.iter().find(|(l, _)| *l == k).map(|(_, v)| v.clone()).filter(|v| !v.trim().is_empty());
-        let title = field("Başlık").unwrap_or_else(|| {
+        let title = field("Title").unwrap_or_else(|| {
             // (no title tag: the file's name without its extension)
             let n = super::file_name(&self.path);
             std::path::Path::new(&n).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(n)
         });
-        let artist = field("Sanatçı");
-        let album = field("Albüm");
+        let artist = field("Artist");
+        let album = field("Album");
         let art = div()
             .size(px(132.))
             .flex_shrink_0()

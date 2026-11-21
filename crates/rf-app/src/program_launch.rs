@@ -47,18 +47,18 @@ pub(crate) fn launch(program: PathBuf, arguments: Vec<OsString>, uses_paths: boo
         (program, Vec::new(), None)
     };
     anyhow::ensure!(exe.is_absolute() && accepts_program(&exe) && rf_win::runfind::is_program_file(&exe),
-        "{}", tx("Program bulunamadı.", "Program not found."));
+        "{}", tx("Program not found."));
     // Command can quote paths for an executable or a batch file. Explicit shell command
     // evaluation has its own syntax and must not interpret characters from filenames.
     if uses_paths && exe.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("cmd")) {
         anyhow::ensure!(!arguments.iter().any(|a| a.to_string_lossy().contains(['&', '|', '<', '>', '^', '%', '!', '(', ')', '"', '\r', '\n'])),
-            "{}", tx("Bu bağımsız değişkenleri doğrudan bir .bat veya .cmd dosyasına verin.", "Pass these arguments directly to a .bat or .cmd file."));
+            "{}", tx("Pass these arguments directly to a .bat or .cmd file."));
     }
     if uses_paths && exe.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("powershell") || s.eq_ignore_ascii_case("pwsh")) {
         anyhow::ensure!(!existing.iter().chain(&arguments).any(|a| {
             let a = a.to_string_lossy().to_ascii_lowercase();
             a.starts_with('-') && (a == "-c" || "-command".starts_with(&a) && a.len() > 2 || a == "-commandwithargs")
-        }), "{}", tx("Dosya yollarını geçirmek için PowerShell -File kullanın.", "Use PowerShell -File to pass file paths."));
+        }), "{}", tx("Use PowerShell -File to pass file paths."));
     }
     let mut command = std::process::Command::new(&exe);
     command.args(existing).args(arguments);
@@ -70,7 +70,7 @@ pub(crate) fn launch(program: PathBuf, arguments: Vec<OsString>, uses_paths: boo
 }
 
 pub(crate) fn launch_error(error: anyhow::Error, window: &mut Window, cx: &mut App) {
-    crate::prompt::notice(tx("Program başlatılamadı", "Could not start the program"), error.to_string(), window, cx);
+    crate::prompt::notice(tx("Could not start the program"), error.to_string(), window, cx);
 }
 
 #[cfg(test)]

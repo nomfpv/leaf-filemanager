@@ -282,7 +282,7 @@ pub fn sort_order(entries: &[Entry], values: &[PropValue], spec: &SortSpec) -> V
 }
 
 /// The group of files that have no value.
-pub const UNSPECIFIED: &str = "Belirtilmemiş";
+pub const UNSPECIFIED: &str = "Not specified";
 
 /// The group (order, label) of every entry for a grouping by a property. `cells` is aligned with the
 /// entries. Dates group by calendar month (newest first; `month_name` gives a month's name, 1 to 12);
@@ -800,12 +800,12 @@ mod tests {
 
     fn props() -> Vec<(String, String)> {
         [
-            ("System.Author", "Yazarlar"),
-            ("System.Music.Artist", "Katkıda bulunan sanatçılar"),
-            ("System.Photo.DateTaken", "Çekim tarihi"),
-            ("System.Media.Duration", "Uzunluk"),
-            ("System.Zeta.Other", "Başka bir şey"),
-            ("System.Title", "Başlık"),
+            ("System.Author", "Authors"),
+            ("System.Music.Artist", "Contributing artists"),
+            ("System.Photo.DateTaken", "Date taken"),
+            ("System.Media.Duration", "Length"),
+            ("System.Zeta.Other", "Title of something else"),
+            ("System.Title", "Title"),
         ]
         .iter()
         .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn the_chooser_search_matches_either_name_in_any_case_and_keeps_common_ones_first() {
         let all = props();
-        assert_eq!(chooser_rows(&all, "BAŞ"), vec![ChooserRow::Item(5), ChooserRow::Item(4)], "Title is common, the other is not");
+        assert_eq!(chooser_rows(&all, "TIT"), vec![ChooserRow::Item(5), ChooserRow::Item(4)], "Title is common, the other is not");
         assert_eq!(chooser_rows(&all, "system.zeta"), vec![ChooserRow::Item(4)]);
         assert_eq!(chooser_rows(&all, "  "), chooser_rows(&all, ""));
         assert!(chooser_rows(&all, "yok böyle").is_empty());

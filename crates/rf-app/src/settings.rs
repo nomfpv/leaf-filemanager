@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-use crate::i18n::Lang;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -368,8 +367,6 @@ fn is_default_preview_height(h: &f32) -> bool {
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemePref,
-    /// UI language (`system` follows the Windows UI language).
-    pub language: Lang,
     pub default_view: DefaultView,
     pub show_hidden: bool,
     pub preview_open: bool,
@@ -646,7 +643,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: ThemePref::System,
-            language: Lang::System,
             default_view: DefaultView::Adaptive,
             show_hidden: false,
             preview_open: true,
@@ -986,7 +982,6 @@ impl Settings {
 
     pub(crate) fn apply_side_effects(&self) {
         sync_name_index(self.name_index, &self.index_excluded);
-        crate::i18n::set(self.language);
         crate::aliases::set(self.folder_aliases.clone());
         rf_win::openrules::set(self.open_rules.clone());
         rf_win::drives::set_hidden(rf_win::drives::mask_of_letters(&self.hidden_drives));
@@ -1145,6 +1140,9 @@ mod tests {
         let partial: Settings = toml::from_str("theme = \"dark\"").unwrap();
         assert_eq!(partial.theme, ThemePref::Dark);
         assert!(partial.restore_session);
+        // an older file still has the language setting (the UI is English only now): it loads
+        let old = Settings::parse_lenient("language = \"tr\"\ntheme = \"dark\"").unwrap();
+        assert_eq!(old.theme, ThemePref::Dark);
     }
 
     /// The second panes of the session survive the settings file, and a file from before them has none.

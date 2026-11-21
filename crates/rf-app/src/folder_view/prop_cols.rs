@@ -651,7 +651,7 @@ impl FolderView {
                 } else {
                     self.props.group = None;
                 }
-                self.props.notice = Some((t!("Bir özellik işleyicisi yanıt vermedi, sıralama yapılamadı").into(), Instant::now()));
+                self.props.notice = Some((t!("A property handler did not answer, so the list could not be sorted").into(), Instant::now()));
                 self.props_notice_timer(cx);
             }
             JobOutcome::Sorted(order) => {
@@ -856,9 +856,9 @@ impl FolderView {
         if let Some(j) = self.props.sort_job.as_ref().or(self.props.group_job.as_ref()) {
             let total = j.total.load(Ordering::Relaxed);
             return Some(if total == usize::MAX {
-                t!("Özellikler okunuyor…").to_string()
+                t!("Reading properties…").to_string()
             } else {
-                format!("{} {} / {}", t!("Özellikler okunuyor…"), j.done.load(Ordering::Relaxed).min(total), total)
+                format!("{} {} / {}", t!("Reading properties…"), j.done.load(Ordering::Relaxed).min(total), total)
             });
         }
         self.props.notice.as_ref().filter(|(_, at)| at.elapsed().as_secs() < NOTICE_SECS).map(|(m, _)| m.to_string())
@@ -873,10 +873,10 @@ impl FolderView {
             Item::action(label.to_string(), MenuIcon::None, move |_, cx| crate::settings::update(cx, set)).checked(on)
         };
         let mut items = vec![
-            fixed(t!("Değiştirme tarihi"), c.modified, |s| s.columns.modified = !s.columns.modified),
-            fixed(t!("Oluşturma tarihi"), c.created, |s| s.columns.created = !s.columns.created),
-            fixed(t!("Tür"), c.kind, |s| s.columns.kind = !s.columns.kind),
-            fixed(t!("Boyut"), c.size, |s| s.columns.size = !s.columns.size),
+            fixed(t!("Date modified"), c.modified, |s| s.columns.modified = !s.columns.modified),
+            fixed(t!("Date created"), c.created, |s| s.columns.created = !s.columns.created),
+            fixed(t!("Type"), c.kind, |s| s.columns.kind = !s.columns.kind),
+            fixed(t!("Size"), c.size, |s| s.columns.size = !s.columns.size),
         ];
         let chosen = self.props_chosen(cx);
         if !chosen.is_empty() {
@@ -898,7 +898,7 @@ impl FolderView {
         }
         items.push(Item::Separator);
         // (opened after the menu has closed, so the chooser takes the focus the menu gives back)
-        items.push(Item::action(t!("Diğer sütunlar…"), MenuIcon::Lucide(L::Columns3), |window, cx| {
+        items.push(Item::action(t!("More columns…"), MenuIcon::Lucide(L::Columns3), |window, cx| {
             window.defer(cx, crate::prop_chooser::open)
         }));
         fluent_menu::show(Menu { quick: Vec::new(), items }, pos, window, cx);

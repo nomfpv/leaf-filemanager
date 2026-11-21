@@ -35,7 +35,7 @@ impl Button {
     }
     /// A button that just closes.
     pub fn cancel() -> Self {
-        Self::new(crate::t!("İptal"), Kind::Normal, |_, _, _| Ok(()))
+        Self::new(crate::t!("Cancel"), Kind::Normal, |_, _, _| Ok(()))
     }
 }
 
@@ -103,7 +103,7 @@ pub fn show_with(
 
 /// A plain notice with one button.
 pub fn notice(title: impl Into<SharedString>, message: String, window: &mut Window, cx: &mut App) {
-    show(title, Some(message), None, vec![Button::new(crate::t!("Tamam"), Kind::Primary, |_, _, _| Ok(()))], window, cx)
+    show(title, Some(message), None, vec![Button::new(crate::t!("OK"), Kind::Primary, |_, _, _| Ok(()))], window, cx)
 }
 
 /// A yes/no question. The receiver gets `true` for "Evet" and `false` for "Hayır"; Escape, or a dialog put away some other way,
@@ -124,7 +124,7 @@ pub fn ask(title: impl Into<SharedString>, message: String, window: &mut Window,
             Ok(())
         }
     };
-    let buttons = vec![Button::new(crate::t!("Evet"), Kind::Primary, answer(true)), Button::new(crate::t!("Hayır"), Kind::Normal, answer(false))];
+    let buttons = vec![Button::new(crate::t!("Yes"), Kind::Primary, answer(true)), Button::new(crate::t!("No"), Kind::Normal, answer(false))];
     show(title, Some(message), None, buttons, window, cx);
     rx
 }

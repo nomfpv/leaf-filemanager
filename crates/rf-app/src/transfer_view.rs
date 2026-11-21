@@ -26,12 +26,12 @@ use crate::theme::{self, Palette};
 
 /// "45,3 MB/sn" in the app's own size formatting.
 pub(crate) fn speed_text(bytes_per_sec: f64) -> String {
-    format!("{}/{}", format::size(bytes_per_sec as u64), t!("sn"))
+    format!("{}/{}", format::size(bytes_per_sec as u64), t!("s"))
 }
 
 /// "~34 sn kaldı".
 fn eta_text(secs: f64) -> String {
-    format!("{} {}", fmt_duration(secs as f32), t!("kaldı"))
+    format!("{} {}", fmt_duration(secs as f32), t!("left"))
 }
 
 /// "3,2 GB / 8,1 GB".
@@ -285,11 +285,11 @@ fn answer_buttons(ops: &Entity<Ops>, p: &Palette, v: &OpView) -> Vec<AnyElement>
         text_button((name, id as usize), p, label, primary, move |_, cx| ops.update(cx, |o, cx| o.answer(id, r, cx)))
     };
     vec![
-        ans("q-replace", t!("Değiştir"), Resolve::Replace, false),
-        ans("q-skip", t!("Atla"), Resolve::Skip, false),
-        ans("q-both", t!("İkisini de tut"), Resolve::KeepBoth, true),
+        ans("q-replace", t!("Replace"), Resolve::Replace, false),
+        ans("q-skip", t!("Skip"), Resolve::Skip, false),
+        ans("q-both", t!("Keep both"), Resolve::KeepBoth, true),
         // the full list is the dialog's: opened here, in the window the click is in
-        text_button(("q-each", id as usize), p, t!("Seç…"), false, {
+        text_button(("q-each", id as usize), p, t!("Choose…"), false, {
             let ops = ops.clone();
             move |window, cx| {
                 let w = window.window_handle();
@@ -300,12 +300,12 @@ fn answer_buttons(ops: &Entity<Ops>, p: &Palette, v: &OpView) -> Vec<AnyElement>
 }
 
 fn question_text(v: &OpView) -> String {
-    format!("{} ({})", t!("Hedefte aynı adlı öğeler var"), v.question.unwrap_or(0))
+    format!("{} ({})", t!("Items with the same name exist at the destination"), v.question.unwrap_or(0))
 }
 
 fn failure_text(v: &OpView) -> String {
     match &v.phase {
-        OpPhase::Failed(e) => format!("{} {}", t!("Hata:"), crate::i18n::td(e)),
+        OpPhase::Failed(e) => format!("{} {}", t!("Error:"), crate::i18n::td(e)),
         _ => String::new(),
     }
 }
@@ -351,7 +351,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
             .rounded(theme::RADIUS_SM)
             .cursor_pointer()
             .hover(|s| s.bg(p.hover))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Durum Merkezi")).build(w, cx))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Status Center")).build(w, cx))
             .on_click(center.clone())
     };
     let words = |s: String, color: Hsla| div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_color(color).child(s);
@@ -360,7 +360,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
     if matches!(v.phase, OpPhase::Failed(_)) {
         let dismiss = {
             let ops = ops.clone();
-            icon_button(("strip-dismiss", id as usize), p, L::X, t!("Kapat"), move |_, cx| ops.update(cx, |o, cx| o.dismiss(id, cx)))
+            icon_button(("strip-dismiss", id as usize), p, L::X, t!("Close"), move |_, cx| ops.update(cx, |o, cx| o.dismiss(id, cx)))
         };
         return Some(
             frame
@@ -378,7 +378,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
     if v.question.is_some() {
         let cancel = {
             let ops = ops.clone();
-            icon_button(("strip-cancel", id as usize), p, L::X, t!("İptal"), move |_, cx| ops.update(cx, |o, cx| o.cancel_op(id, cx)))
+            icon_button(("strip-cancel", id as usize), p, L::X, t!("Cancel"), move |_, cx| ops.update(cx, |o, cx| o.cancel_op(id, cx)))
         };
         // the copy stands still until this is answered: an accent-tinted bar, not a status line like the others (issue 95: the
         // question went unseen and the copy "would not begin")
@@ -403,20 +403,20 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
     let pct = v.frac.map(|f| crate::i18n::pct(f * 100.0)).unwrap_or_default();
     let speed = v.pace.speed.filter(|s| *s >= 1.0 && fit.speed).map(speed_text);
     let eta = v.pace.eta_secs.filter(|_| fit.eta).map(eta_text);
-    let text = if v.paused { format!("{} · {}", v.words, t!("Duraklatıldı")) } else { v.words.clone() };
+    let text = if v.paused { format!("{} · {}", v.words, t!("Paused")) } else { v.words.clone() };
     let pause = {
         let ops = ops.clone();
         icon_button(
             ("strip-pause", id as usize),
             p,
             if v.paused { L::Play } else { L::Pause },
-            if v.paused { t!("Devam et") } else { t!("Duraklat") },
+            if v.paused { t!("Resume") } else { t!("Pause") },
             move |_, cx| ops.update(cx, |o, cx| o.toggle_pause(id, cx)),
         )
     };
     let cancel = {
         let ops = ops.clone();
-        icon_button(("strip-cancel", id as usize), p, L::X, t!("İptal"), move |_, cx| ops.update(cx, |o, cx| o.cancel_op(id, cx)))
+        icon_button(("strip-cancel", id as usize), p, L::X, t!("Cancel"), move |_, cx| ops.update(cx, |o, cx| o.cancel_op(id, cx)))
     };
     let chip = {
         let ops = ops.clone();
@@ -435,7 +435,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
             .hover(|s| s.opacity(0.9))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Durum Merkezi")).build(w, cx))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Status Center")).build(w, cx))
             .child(format!("+{others}"))
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
@@ -492,7 +492,7 @@ pub(crate) fn cards(ops: &Entity<Ops>, p: &Palette, bottom: f32, cx: &App) -> Op
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
-                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Durum Merkezi")).build(w, cx))
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Status Center")).build(w, cx))
                 .child(format!("+{}", stack.more))
                 .on_click(move |_, window, cx| open_center(&ops, window, cx)),
         );
@@ -536,19 +536,19 @@ fn card(ops: &Entity<Ops>, p: &Palette, v: &OpView) -> Stateful<Div> {
     let dismiss = {
         let ops = ops.clone();
         let vid = v.id;
-        icon_button(("card-dismiss", id), p, L::X, t!("Kapat"), move |_, cx| ops.update(cx, |o, cx| o.dismiss(vid, cx)))
+        icon_button(("card-dismiss", id), p, L::X, t!("Close"), move |_, cx| ops.update(cx, |o, cx| o.dismiss(vid, cx)))
     };
     let cancel = {
         let ops = ops.clone();
         let vid = v.id;
-        icon_button(("card-cancel", id), p, L::X, t!("İptal"), move |_, cx| ops.update(cx, |o, cx| o.cancel_op(vid, cx)))
+        icon_button(("card-cancel", id), p, L::X, t!("Cancel"), move |_, cx| ops.update(cx, |o, cx| o.cancel_op(vid, cx)))
     };
     let green: Hsla = gpui_kit::rgb(0x30D158).into();
     match v.stage {
         Stage::Result(Outcome::Failed) => {
             let details = {
                 let ops = ops.clone();
-                text_button(("card-details", id), p, t!("Ayrıntılar"), false, move |window, cx| open_center(&ops, window, cx))
+                text_button(("card-details", id), p, t!("Details"), false, move |window, cx| open_center(&ops, window, cx))
             };
             shell
                 .child(title(L::CircleAlert, p.danger, v.title.clone()))
@@ -557,12 +557,12 @@ fn card(ops: &Entity<Ops>, p: &Palette, v: &OpView) -> Stateful<Div> {
         }
         Stage::Result(Outcome::Done) => {
             let open = v.open_dest.clone().map(|dir| {
-                text_button(("card-open", id), p, t!("Hedefi aç"), false, move |_, cx| crate::workspace::route_ipc(dir.to_string_lossy().into_owned(), cx))
+                text_button(("card-open", id), p, t!("Open destination"), false, move |_, cx| crate::workspace::route_ipc(dir.to_string_lossy().into_owned(), cx))
             });
             let undo = v.can_undo.then(|| {
                 let ops = ops.clone();
                 let vid = v.id;
-                text_button(("card-undo", id), p, t!("Geri al"), false, move |_, cx| {
+                text_button(("card-undo", id), p, t!("Undo"), false, move |_, cx| {
                     crate::undo::undo(cx);
                     ops.update(cx, |o, cx| o.dismiss(vid, cx));
                 })
@@ -571,12 +571,12 @@ fn card(ops: &Entity<Ops>, p: &Palette, v: &OpView) -> Stateful<Div> {
             let own = v.action.clone().map(|(label, run)| text_button(("card-act", id), p, label, false, move |_, cx| run(cx)));
             shell
                 .child(title(L::CircleCheck, green, v.title.clone()))
-                .child(div().text_xs().text_color(p.text_secondary).child(t!("Tamamlandı")))
+                .child(div().text_xs().text_color(p.text_secondary).child(t!("Completed")))
                 .child(h_flex().gap_2().items_center().children(open).children(undo).children(own).child(div().flex_1()).child(dismiss))
         }
         Stage::Result(Outcome::Cancelled) => shell
             .child(h_flex().gap_2().items_center().child(div().flex_1().min_w_0().child(title(L::CircleSlash, p.text_secondary, v.title.clone()))).child(dismiss))
-            .child(div().text_xs().text_color(p.text_secondary).child(t!("İptal edildi"))),
+            .child(div().text_xs().text_color(p.text_secondary).child(t!("Cancelled"))),
         Stage::Asking => shell
             .child(h_flex().gap_2().items_center().child(div().flex_1().min_w_0().child(title(L::CircleAlert, p.accent, v.title.clone()))).child(cancel))
             .child(div().text_xs().text_color(p.text_secondary).child(question_text(v)))
@@ -591,13 +591,13 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
     let accent = if v.paused { p.text_tertiary } else { p.accent };
     let fold = {
         let ops = ops.clone();
-        icon_button(("card-fold", id), p, if v.collapsed { L::ChevronUp } else { L::ChevronDown }, if v.collapsed { t!("Genişlet") } else { t!("Küçült") }, move |_, cx| {
+        icon_button(("card-fold", id), p, if v.collapsed { L::ChevronUp } else { L::ChevronDown }, if v.collapsed { t!("Expand") } else { t!("Collapse") }, move |_, cx| {
             ops.update(cx, |o, cx| o.toggle_collapsed(vid, cx))
         })
     };
     let pause = {
         let ops = ops.clone();
-        icon_button(("card-pause", id), p, if v.paused { L::Play } else { L::Pause }, if v.paused { t!("Devam et") } else { t!("Duraklat") }, move |_, cx| {
+        icon_button(("card-pause", id), p, if v.paused { L::Play } else { L::Pause }, if v.paused { t!("Resume") } else { t!("Pause") }, move |_, cx| {
             ops.update(cx, |o, cx| o.toggle_pause(vid, cx))
         })
     };
@@ -608,7 +608,7 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
     // folded to one line: the pace and a thin bar
     if v.collapsed {
         let pace = [Some(pct), speed, eta].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-        let pace = if v.paused { t!("Duraklatıldı").to_string() } else { pace };
+        let pace = if v.paused { t!("Paused").to_string() } else { pace };
         return shell
             .p_2()
             .child(
@@ -648,7 +648,7 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
                 .text_xs()
                 .text_color(p.text_secondary)
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(totals.unwrap_or_default()))
-                .child(div().flex_shrink_0().child(if v.paused { t!("Duraklatıldı").to_string() } else { pace })),
+                .child(div().flex_shrink_0().child(if v.paused { t!("Paused").to_string() } else { pace })),
         )
         .child(h_flex().gap_2().items_end().child(div().flex_1().children(bars)).child(pause).child(cancel))
 }

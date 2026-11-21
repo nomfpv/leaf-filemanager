@@ -35,7 +35,7 @@ fn open(owner: HWND) -> anyhow::Result<Guard> {
         }
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
-    anyhow::bail!("pano açılamadı")
+    anyhow::bail!("couldn't open the clipboard")
 }
 
 unsafe fn alloc(bytes: &[u8]) -> anyhow::Result<HGLOBAL> {

@@ -68,17 +68,17 @@ struct ChooserView {
 
 fn category_name(c: Option<Category>) -> &'static str {
     match c {
-        Some(Category::Pictures) => t!("Resimler"),
-        Some(Category::Music) => t!("Müzik"),
-        Some(Category::Video) => t!("Videolar"),
-        Some(Category::Documents) => t!("Belgeler"),
-        None => t!("Tüm özellikler"),
+        Some(Category::Pictures) => t!("Pictures"),
+        Some(Category::Music) => t!("Music"),
+        Some(Category::Video) => t!("Videos"),
+        Some(Category::Documents) => t!("Documents"),
+        None => t!("All properties"),
     }
 }
 
 impl ChooserView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("Özellik ara…")));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("Search properties…")));
         let sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| {
             if let InputEvent::Change = ev {
                 this.refilter(cx);
@@ -131,7 +131,7 @@ impl ChooserView {
             full = !had && !c.contains(&name);
             s.columns.properties = c.to_setting();
         });
-        self.note = full.then(|| format!("{} {}", t!("Bu kadar özellik sütunu seçilebilir:"), pc::MAX_COLUMNS).into());
+        self.note = full.then(|| format!("{} {}", t!("The most property columns that can be chosen:"), pc::MAX_COLUMNS).into());
         cx.notify();
     }
 
@@ -204,7 +204,7 @@ impl Render for ChooserView {
             .flex_1()
             .px_2();
         let empty = (n == 0).then(|| {
-            let msg = if self.loaded { t!("Eşleşen özellik yok") } else { t!("Özellikler yükleniyor…") };
+            let msg = if self.loaded { t!("No matching property") } else { t!("Loading properties…") };
             div().p_4().text_sm().text_color(p.text_secondary).child(msg)
         });
         div()
@@ -241,7 +241,7 @@ impl Render for ChooserView {
                         v_flex()
                             .p_4()
                             .gap_3()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Sütunları seç")))
+                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Choose columns")))
                             .child(
                                 div()
                                     .h(px(34.))
@@ -281,7 +281,7 @@ impl Render for ChooserView {
                                     .bg(p.accent)
                                     .text_color(p.accent_text)
                                     .hover(|s| s.opacity(0.9))
-                                    .child(t!("Bitti"))
+                                    .child(t!("Done"))
                                     .on_click(cx.listener(|_, _, window, cx| close(window, cx))),
                             ),
                     ),

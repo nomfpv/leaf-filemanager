@@ -222,7 +222,7 @@ impl Preview {
                 .hover(|s| s.bg(p.pressed))
                 .cursor_pointer()
                 .text_sm()
-                .child(t!("Hash hesapla (MD5, SHA…)"))
+                .child(t!("Calculate hash (MD5, SHA…)"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let pth = path2.clone();
                     this.hash = Some(cx.new(|cx| crate::hash_panel::HashPanel::new(pth, cx)));

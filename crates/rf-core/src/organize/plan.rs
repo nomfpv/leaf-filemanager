@@ -66,11 +66,11 @@ pub enum SkipReason {
 impl SkipReason {
     pub fn text(self) -> &'static str {
         match self {
-            SkipReason::InvalidName => T!("Şablonun ürettiği ad geçerli bir Windows adı değil"),
-            SkipReason::PathTooLong => T!("Yeni yol çok uzun"),
-            SkipReason::NoDate => T!("Dosyanın tarihi bilinmiyor"),
-            SkipReason::TooManyClashes => T!("Aynı adlı çok fazla dosya var"),
-            SkipReason::ProtectedDest => T!("Hedef klasör korunuyor (Windows, Program Files, AppData ya da uygulamanın klasörü)"),
+            SkipReason::InvalidName => T!("The name the template makes is not a valid Windows name"),
+            SkipReason::PathTooLong => T!("The new path is too long"),
+            SkipReason::NoDate => T!("The file's date is unknown"),
+            SkipReason::TooManyClashes => T!("Too many files with the same name"),
+            SkipReason::ProtectedDest => T!("The destination folder is protected (Windows, Program Files, AppData or the app's own folder)"),
         }
     }
 }
@@ -521,9 +521,9 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn a_relative_destination_is_taken_from_the_watched_folder() {
-        let r = rule(1, "r", vec![ext(&["pdf"])], Action::MoveTo { folder: PathBuf::from("Belgeler") });
+        let r = rule(1, "r", vec![ext(&["pdf"])], Action::MoveTo { folder: PathBuf::from("Documents") });
         let p = run(&[r], &[file(DL, "a.pdf")], &[]);
-        assert_eq!(moved(&p), [(format!(r"{DL}\a.pdf"), format!(r"{DL}\Belgeler\a.pdf"))]);
+        assert_eq!(moved(&p), [(format!(r"{DL}\a.pdf"), format!(r"{DL}\Documents\a.pdf"))]);
     }
 
     #[test]
@@ -552,10 +552,10 @@ mod tests {
         let protected = prot();
         let mut ctx = PlanContext::new(0, classify, &exists, &protected);
         ctx.offset_secs = Some(0);
-        ctx.kind_labels[FileKind::Image.index()] = "Resimler".into();
+        ctx.kind_labels[FileKind::Image.index()] = "Pictures".into();
         let r = rule(1, "r", vec![], Action::MoveToTemplate { template: r"D:\{kind}".into() });
         let p = plan(&[r], &[file(DL, "a.jpg")], &ctx);
-        assert_eq!(moved(&p), [(format!(r"{DL}\a.jpg"), r"D:\Resimler\a.jpg".to_string())]);
+        assert_eq!(moved(&p), [(format!(r"{DL}\a.jpg"), r"D:\Pictures\a.jpg".to_string())]);
     }
 
     #[test]
@@ -720,7 +720,7 @@ mod tests {
 
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn a_destination_inside_the_folder_loops_only_when_it_would_be_seen_again() {
-        let inside = Action::MoveTo { folder: PathBuf::from("Resimler") };
+        let inside = Action::MoveTo { folder: PathBuf::from("Pictures") };
         // subfolders off: Downloads\Resimler is not looked at
         let r = rule(1, "r", vec![ext(&["jpg"])], inside.clone());
         let p = run(&[r], &[file(DL, "a.jpg")], &[]);

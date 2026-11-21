@@ -39,13 +39,13 @@ pub fn push(op: UndoOp) {
 /// A short name for what an operation did, for a menu entry that says what it would undo ("Geri al: Silme").
 fn label(op: &UndoOp) -> &'static str {
     match op {
-        UndoOp::Renamed { .. } => t!("Yeniden adlandırma"),
-        UndoOp::Created { .. } => t!("Oluşturma"),
-        UndoOp::Transferred { kind: Transfer::Copy, .. } => t!("Kopyalama"),
-        UndoOp::Transferred { kind: Transfer::Move, .. } => t!("Taşıma"),
-        UndoOp::Recycled { .. } => t!("Silme"),
-        UndoOp::Flattened { .. } => t!("Klasörü düzleştirme"),
-        UndoOp::Organized { .. } => t!("Düzenleme"),
+        UndoOp::Renamed { .. } => t!("Rename"),
+        UndoOp::Created { .. } => t!("Create"),
+        UndoOp::Transferred { kind: Transfer::Copy, .. } => t!("Copy"),
+        UndoOp::Transferred { kind: Transfer::Move, .. } => t!("Move"),
+        UndoOp::Recycled { .. } => t!("Delete"),
+        UndoOp::Flattened { .. } => t!("Flatten folder"),
+        UndoOp::Organized { .. } => t!("Organize"),
     }
 }
 
@@ -121,7 +121,7 @@ fn undo_op(op: UndoOp, cx: &mut App) {
     match op {
         UndoOp::Renamed { from, to } => {
             let name = from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            crate::status_center::start(cx, format!("{} {name}", t!("Geri alınıyor: yeniden adlandırma →")), move |_| {
+            crate::status_center::start(cx, format!("{} {name}", t!("Undoing rename →")), move |_| {
                 rf_win::fileops::rename(&to, &name)
             });
         }
@@ -143,20 +143,20 @@ fn undo_op(op: UndoOp, cx: &mut App) {
         }
         UndoOp::Recycled { pairs } => {
             let n = pairs.len();
-            crate::status_center::start(cx, format!("{} {}", t!("Geri dönüşüm kutusundan geri yükleniyor:"), crate::i18n::items(n)), move |_| {
+            crate::status_center::start(cx, format!("{} {}", t!("Restoring from Recycle Bin:"), crate::i18n::items(n)), move |_| {
                 let wanted: Vec<String> = pairs.iter().map(|(_, bin)| bin.to_string_lossy().to_lowercase()).collect();
                 let items: Vec<_> = rf_win::recycle::list()?
                     .into_iter()
                     .filter(|it| wanted.contains(&it.parsing_path.to_lowercase()))
                     .collect();
-                anyhow::ensure!(!items.is_empty(), t!("öğeler geri dönüşüm kutusunda bulunamadı"));
+                anyhow::ensure!(!items.is_empty(), t!("items were not found in the Recycle Bin"));
                 rf_win::recycle::restore(&items)?;
                 Ok(true)
             });
         }
         UndoOp::Flattened { dir, rec } => {
             let name = rf_core::history::display_name(&dir);
-            crate::status_center::start(cx, format!("{} {name}", t!("Geri alınıyor: düzleştirme →")), move |_| crate::ops::unflatten(&rec));
+            crate::status_center::start(cx, format!("{} {name}", t!("Undoing: flatten →")), move |_| crate::ops::unflatten(&rec));
         }
         UndoOp::Organized { rec } => crate::organizer::undo_run(rec, None, cx),
     }
@@ -170,7 +170,7 @@ pub fn redo(cx: &mut App) {
     match op {
         UndoOp::Renamed { from, to } => {
             let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            crate::status_center::start(cx, format!("{} {name}", t!("Yineleniyor: yeniden adlandırma →")), move |_| {
+            crate::status_center::start(cx, format!("{} {name}", t!("Redoing: rename →")), move |_| {
                 rf_win::fileops::rename(&from, &name)
             });
         }
@@ -191,7 +191,7 @@ pub fn redo(cx: &mut App) {
         }
         UndoOp::Flattened { dir, rec } => {
             let name = rf_core::history::display_name(&dir);
-            crate::status_center::start(cx, format!("{} {name}", t!("Yineleniyor: düzleştirme →")), move |_| crate::ops::reflatten(&rec));
+            crate::status_center::start(cx, format!("{} {name}", t!("Redoing: flatten →")), move |_| crate::ops::reflatten(&rec));
         }
         UndoOp::Organized { rec } => crate::organizer::redo_run(rec, cx),
     }

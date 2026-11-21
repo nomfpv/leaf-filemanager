@@ -4,10 +4,10 @@ use rf_core::organize::store::RulesFile;
 use rf_core::organize::{Action, Condition, FileKind, ProtectedPaths};
 use std::path::{Path, PathBuf};
 
-/// Every user-facing Turkish text of the engine and the runner (marked `T!("...")` / `tx("...")`
-/// there) has its English pair, so nothing shows up untranslated.
+/// Every user-facing text of the engine and the runner (marked `T!("...")` / `tx("...")` there)
+/// is English, so nothing shows up in another language.
 #[test]
-fn the_texts_of_the_lower_crates_have_english_pairs() {
+fn the_texts_of_the_lower_crates_are_english() {
     let sources = [
         (include_str!("../../../rf-core/src/organize/rule.rs"), "T!(\""),
         (include_str!("../../../rf-core/src/organize/plan.rs"), "T!(\""),
@@ -15,7 +15,6 @@ fn the_texts_of_the_lower_crates_have_english_pairs() {
         (include_str!("../../../rf-core/src/organize/summary.rs"), "T!(\""),
         (include_str!("../../../rf-win/src/organize.rs"), "tx(\""),
     ];
-    let have: std::collections::HashSet<&str> = crate::i18n_en::EN.iter().map(|(tr, _)| *tr).collect();
     let mut checked = 0;
     for (src, marker) in sources {
         let code = src.split("#[cfg(test)]").next().unwrap();
@@ -30,7 +29,7 @@ fn the_texts_of_the_lower_crates_have_english_pairs() {
             }
             if after[end + 1..].starts_with(')') {
                 let key = after[..end].replace("\\\"", "\"").replace("\\\\", "\\");
-                assert!(have.contains(key.as_str()), "no English pair for {key:?}");
+                assert!(!key.chars().any(|c| "çğıöşüÇĞİÖŞÜ".contains(c)), "not English: {key:?}");
                 checked += 1;
             }
             rest = &after[end..];

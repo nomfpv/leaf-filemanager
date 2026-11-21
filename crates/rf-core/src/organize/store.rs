@@ -147,7 +147,7 @@ impl RulesFile {
 fn corrupt(path: &Path, reason: String) -> LoadOutcome {
     let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!(".bozuk-{ms}"));
+    name.push(format!(".corrupt-{ms}"));
     let aside = path.with_file_name(name);
     let moved_to = std::fs::rename(path, &aside).ok().map(|_| aside);
     LoadOutcome::Corrupt { moved_to, reason }
@@ -167,7 +167,7 @@ mod tests {
 
     fn sample() -> Rule {
         Rule {
-            name: "İndirilenler: resimler".into(),
+            name: "Downloads: resimler".into(),
             folder: PathBuf::from(r"C:\Users\user\Downloads"),
             subfolders: true,
             join: Join::Any,
@@ -223,7 +223,7 @@ mod tests {
         let LoadOutcome::Corrupt { moved_to, reason } = RulesFile::load(&path) else { panic!("not corrupt") };
         assert!(!reason.is_empty());
         let aside = moved_to.expect("renamed");
-        assert!(aside.file_name().unwrap().to_string_lossy().starts_with("organizer.json.bozuk-"));
+        assert!(aside.file_name().unwrap().to_string_lossy().starts_with("organizer.json.corrupt-"));
         assert!(!path.exists());
         assert_eq!(std::fs::read_to_string(&aside).unwrap(), "{ \"rules\": [ {oops");
         // the next load sees no file: the broken one is not read again, not overwritten

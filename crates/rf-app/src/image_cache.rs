@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn a_customised_folder_and_a_program_have_pictures_of_their_own() {
         use rf_core::{Entry, EntryKind};
-        let dir = |attrs: u32| Entry::new("klasör", EntryKind::Dir, 0, 0, 0, 0x10 | attrs);
+        let dir = |attrs: u32| Entry::new("folders", EntryKind::Dir, 0, 0, 0, 0x10 | attrs);
         assert!(!own_picture(&dir(0)), "a plain folder");
         assert!(!own_picture(&dir(0x2)), "a hidden folder is not a customised one");
         assert!(own_picture(&dir(0x1)), "read-only: how Explorer marks a folder with an icon of its own");

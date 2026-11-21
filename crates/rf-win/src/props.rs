@@ -18,23 +18,23 @@ use crate::wide::wide;
 /// (label, key) pairs shown in the preview pane, in display order.
 fn wanted() -> Vec<(&'static str, PROPERTYKEY)> {
     vec![
-        ("Süre", PKEY_Media_Duration),
-        ("Çözünürlük", PKEY_Video_FrameWidth), // merged with height below
-        ("Kare hızı", PKEY_Video_FrameRate),
-        ("Video bit hızı", PKEY_Video_EncodingBitrate),
-        ("Toplam bit hızı", PKEY_Video_TotalBitrate),
-        ("Ses bit hızı", PKEY_Audio_EncodingBitrate),
-        ("Örnekleme", PKEY_Audio_SampleRate),
-        ("Kanal", PKEY_Audio_ChannelCount),
-        ("Boyutlar", PKEY_Image_Dimensions),
-        ("Bit derinliği", PKEY_Image_BitDepth),
-        ("Kamera", PKEY_Photo_CameraModel),
-        ("Çekim tarihi", PKEY_Photo_DateTaken),
-        ("Sanatçı", PKEY_Music_Artist),
-        ("Albüm", PKEY_Music_AlbumTitle),
-        ("Başlık", PKEY_Title),
-        ("Sayfa", PKEY_Document_PageCount),
-        ("Yazar", PKEY_Author),
+        ("Duration", PKEY_Media_Duration),
+        ("Resolution", PKEY_Video_FrameWidth), // merged with height below
+        ("Frame rate", PKEY_Video_FrameRate),
+        ("Video bit rate", PKEY_Video_EncodingBitrate),
+        ("Total bit rate", PKEY_Video_TotalBitrate),
+        ("Audio bit rate", PKEY_Audio_EncodingBitrate),
+        ("Sample rate", PKEY_Audio_SampleRate),
+        ("Channels", PKEY_Audio_ChannelCount),
+        ("Dimensions", PKEY_Image_Dimensions),
+        ("Bit depth", PKEY_Image_BitDepth),
+        ("Camera", PKEY_Photo_CameraModel),
+        ("Date taken", PKEY_Photo_DateTaken),
+        ("Artist", PKEY_Music_Artist),
+        ("Album", PKEY_Music_AlbumTitle),
+        ("Title", PKEY_Title),
+        ("Pages", PKEY_Document_PageCount),
+        ("Author", PKEY_Author),
     ]
 }
 
@@ -178,7 +178,7 @@ mod tests {
             .and_then(|mut d| d.find_map(|e| e.ok().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jpg"))));
         if let Some(p) = jpg {
             let props = super::media_props(&p);
-            assert!(props.iter().any(|(l, _)| *l == "Boyutlar"), "{props:?}");
+            assert!(props.iter().any(|(l, _)| *l == "Dimensions"), "{props:?}");
         }
     }
 }

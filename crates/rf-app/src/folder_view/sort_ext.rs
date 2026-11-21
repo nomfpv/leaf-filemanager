@@ -383,8 +383,8 @@ mod tests {
     fn store() -> TagStore {
         let mut s = TagStore { defs: Vec::new(), items: Default::default(), next_id: 10 };
         // the user's list: blue first, red second (ids are not positions)
-        s.defs.push(TagDef { id: 7, name: "Mavi".into(), color: 1 });
-        s.defs.push(TagDef { id: 3, name: "Kırmızı".into(), color: 2 });
+        s.defs.push(TagDef { id: 7, name: "Blue".into(), color: 1 });
+        s.defs.push(TagDef { id: 3, name: "Red".into(), color: 2 });
         let mut add = |path: &str, tags: &[u32]| {
             s.items.insert(path.to_lowercase(), Tagged { path: path.into(), tags: tags.to_vec() });
         };

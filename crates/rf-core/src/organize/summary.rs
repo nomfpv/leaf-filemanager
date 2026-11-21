@@ -59,13 +59,13 @@ pub fn size_text(bytes: u64) -> String {
 /// The kind as a short lower-case word ("resim").
 pub fn kind_word(k: FileKind, tr: &dyn Fn(&'static str) -> String) -> String {
     match k {
-        FileKind::Image => tr(T!("resim")),
+        FileKind::Image => tr(T!("image")),
         FileKind::Video => tr(T!("video")),
-        FileKind::Audio => tr(T!("ses")),
-        FileKind::Document => tr(T!("belge")),
-        FileKind::Archive => tr(T!("arşiv")),
+        FileKind::Audio => tr(T!("audio")),
+        FileKind::Document => tr(T!("document")),
+        FileKind::Archive => tr(T!("archive")),
         FileKind::Program => tr(T!("program")),
-        FileKind::Other => tr(T!("diğer")),
+        FileKind::Other => tr(T!("other")),
     }
 }
 
@@ -90,34 +90,34 @@ fn condition_words(c: &Condition, tr: &dyn Fn(&'static str) -> String) -> String
     match c {
         Condition::Name { op, text } => {
             let key = match op {
-                NameOp::Contains => tr(T!("adında “{x}” geçen")),
-                NameOp::StartsWith => tr(T!("adı “{x}” ile başlayan")),
-                NameOp::EndsWith => tr(T!("adı “{x}” ile biten")),
-                NameOp::Wildcard => tr(T!("adı “{x}” desenine uyan")),
+                NameOp::Contains => tr(T!("the name contains “{x}”")),
+                NameOp::StartsWith => tr(T!("the name starts with “{x}”")),
+                NameOp::EndsWith => tr(T!("the name ends with “{x}”")),
+                NameOp::Wildcard => tr(T!("the name matches “{x}”")),
             };
             with(key, text.trim().to_string())
         }
         Condition::Extension { list } => {
             let exts: Vec<String> = list.iter().map(|e| clean_ext(e)).filter(|e| !e.is_empty()).collect();
-            with(tr(T!("uzantısı {x} olan")), exts.join(", "))
+            with(tr(T!("the extension is {x}")), exts.join(", "))
         }
         Condition::Kind { kinds } => {
             let words: Vec<String> = kinds.iter().map(|k| kind_word(*k, tr)).collect();
-            with(tr(T!("türü {x} olan")), words.join(", "))
+            with(tr(T!("the type is {x}")), words.join(", "))
         }
         Condition::Size { cmp, bytes } => {
             let key = match cmp {
-                Cmp::Greater => tr(T!("boyutu {x}'den büyük olan")),
-                Cmp::Less => tr(T!("boyutu {x}'den küçük olan")),
+                Cmp::Greater => tr(T!("the size is over {x}")),
+                Cmp::Less => tr(T!("the size is under {x}")),
             };
             with(key, size_text(*bytes))
         }
         Condition::Age { field, cmp, days } => {
             let key = match (field, cmp) {
-                (TimeField::Modified, Cmp::Greater) => tr(T!("değiştirilme tarihi {x} günden eski olan")),
-                (TimeField::Modified, Cmp::Less) => tr(T!("değiştirilme tarihi {x} günden yeni olan")),
-                (TimeField::Created, Cmp::Greater) => tr(T!("oluşturulma tarihi {x} günden eski olan")),
-                (TimeField::Created, Cmp::Less) => tr(T!("oluşturulma tarihi {x} günden yeni olan")),
+                (TimeField::Modified, Cmp::Greater) => tr(T!("it was modified more than {x} days ago")),
+                (TimeField::Modified, Cmp::Less) => tr(T!("it was modified less than {x} days ago")),
+                (TimeField::Created, Cmp::Greater) => tr(T!("it was created more than {x} days ago")),
+                (TimeField::Created, Cmp::Less) => tr(T!("it was created less than {x} days ago")),
             };
             with(key, days.to_string())
         }
@@ -129,22 +129,22 @@ pub fn action_words(a: &Action, tr: &dyn Fn(&'static str) -> String, home: Optio
     match a {
         Action::MoveTo { folder } => show_path(folder, home),
         Action::MoveToTemplate { template } => show_path(Path::new(template), home),
-        Action::Rename { template } => tr(T!("yeniden adlandır: {x}")).replace("{x}", template),
-        Action::Recycle => tr(T!("Geri Dönüşüm Kutusu'na gönder")),
+        Action::Rename { template } => tr(T!("rename to {x}")).replace("{x}", template),
+        Action::Recycle => tr(T!("Send to the Recycle Bin")),
     }
 }
 
 /// The whole rule in one line.
 pub fn summary(rule: &Rule, tr: &dyn Fn(&'static str) -> String, home: Option<&Path>) -> String {
     let who = if rule.conditions.is_empty() {
-        tr(T!("tüm dosyalar"))
+        tr(T!("all files"))
     } else {
         let joiner = match rule.join {
-            Join::All => tr(T!("ve")),
-            Join::Any => tr(T!("veya")),
+            Join::All => tr(T!("and")),
+            Join::Any => tr(T!("or")),
         };
         let parts: Vec<String> = rule.conditions.iter().map(|c| condition_words(c, tr)).collect();
-        tr(T!("{c} dosyalar")).replace("{c}", &parts.join(&format!(" {joiner} ")))
+        tr(T!("files where {c}")).replace("{c}", &parts.join(&format!(" {joiner} ")))
     };
     format!("{who} → {}", action_words(&rule.action, tr, home))
 }
@@ -171,8 +171,8 @@ mod tests {
             Action::MoveToTemplate { template: r"C:\Users\user\Pictures\{year}\{month}".into() },
         );
         let home = PathBuf::from(r"C:\Users\user");
-        assert_eq!(summary(&r, &id, Some(&home)), r"uzantısı jpg, png olan dosyalar → Pictures\{year}\{month}");
-        assert_eq!(summary(&r, &id, None), r"uzantısı jpg, png olan dosyalar → C:\Users\user\Pictures\{year}\{month}");
+        assert_eq!(summary(&r, &id, Some(&home)), r"files where the extension is jpg, png → Pictures\{year}\{month}");
+        assert_eq!(summary(&r, &id, None), r"files where the extension is jpg, png → C:\Users\user\Pictures\{year}\{month}");
     }
 
     #[test]
@@ -187,10 +187,10 @@ mod tests {
         );
         assert_eq!(
             summary(&r, &id, None),
-            "adı “IMG” ile başlayan ve boyutu 5 MB'den büyük olan ve değiştirilme tarihi 30 günden eski olan dosyalar → Geri Dönüşüm Kutusu'na gönder"
+            "files where the name starts with “IMG” and the size is over 5 MB and it was modified more than 30 days ago → Send to the Recycle Bin"
         );
         r.join = Join::Any;
-        assert!(summary(&r, &id, None).contains(" veya "));
+        assert!(summary(&r, &id, None).contains(" or "));
     }
 
     #[test]
@@ -208,9 +208,9 @@ mod tests {
         );
         assert_eq!(
             summary(&r, &id, None),
-            "adında “rapor” geçen ve adı “.bak” ile biten ve adı “*.tmp” desenine uyan ve türü resim, video olan ve boyutu 1536 B'den küçük olan ve oluşturulma tarihi 7 günden yeni olan dosyalar → yeniden adlandır: {year}-{name}.{ext}"
+            "files where the name contains “rapor” and the name ends with “.bak” and the name matches “*.tmp” and the type is image, video and the size is under 1536 B and it was created less than 7 days ago → rename to {year}-{name}.{ext}"
         );
-        assert_eq!(summary(&rule(vec![], Action::MoveTo { folder: PathBuf::from(r"D:\Arşiv") }), &id, None), r"tüm dosyalar → D:\Arşiv");
+        assert_eq!(summary(&rule(vec![], Action::MoveTo { folder: PathBuf::from(r"D:\Arşiv") }), &id, None), r"all files → D:\Arşiv");
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
     fn a_translator_is_used_for_every_text() {
         let marked = |s: &'static str| format!("[{s}]");
         let r = rule(vec![Condition::Kind { kinds: vec![FileKind::Audio] }], Action::Recycle);
-        assert_eq!(summary(&r, &marked, None), "[[türü [ses] olan] dosyalar] → [Geri Dönüşüm Kutusu'na gönder]");
+        assert_eq!(summary(&r, &marked, None), "[files where [the type is [audio]]] → [Send to the Recycle Bin]");
     }
 
     #[test]
@@ -239,6 +239,6 @@ mod tests {
         assert_eq!(show_path(Path::new(r"D:\x"), Some(&home)), r"D:\x");
         assert_eq!(show_path(Path::new(r"C:\Users\user"), Some(&home)), r"C:\Users\user");
         assert_eq!(show_path(Path::new(r"C:\Users\user.old\x"), Some(&home)), r"C:\Users\user.old\x");
-        assert_eq!(show_path(Path::new(r"c:\users\user\Belgeler"), Some(&home)), r"Belgeler");
+        assert_eq!(show_path(Path::new(r"c:\users\user\Belgeler"), Some(&home)), "Belgeler");
     }
 }

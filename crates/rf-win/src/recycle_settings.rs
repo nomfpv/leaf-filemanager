@@ -121,7 +121,7 @@ impl BinSettingsStore for SystemBinSettings {
             unsafe { SHGetSetSettings(Some(&mut ss), SSF_NOCONFIRMRECYCLE, true) };
             // The call gives no answer of its own and the API is documented as no longer supported: read it back, and say so when the
             // system did not take it (the drives above are already written; the dialog reads the settings again after a failure).
-            anyhow::ensure!(confirm_state() == confirm, "Windows silme onayı ayarını kabul etmedi");
+            anyhow::ensure!(confirm_state() == confirm, "Windows didn't accept the delete confirmation setting");
         }
         Ok(())
     }

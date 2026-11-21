@@ -15,19 +15,19 @@ use crate::wide::{from_wide, long_path};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ListError {
-    #[error("Klasör bulunamadı")]
+    #[error("Folder not found")]
     NotFound,
-    #[error("Erişim reddedildi")]
+    #[error("Access denied")]
     AccessDenied,
-    #[error("Geçersiz klasör adı")]
+    #[error("Invalid folder name")]
     InvalidName,
-    #[error("Sürücü hazır değil")]
+    #[error("The drive is not ready")]
     NotReady,
-    #[error("Ağ yolu bulunamadı")]
+    #[error("Network path not found")]
     NetworkPath,
-    #[error("Listeleme hatası (kod {0})")]
+    #[error("Listing error (code {0})")]
     Os(u32),
-    #[error("İptal edildi")]
+    #[error("Cancelled")]
     Cancelled,
 }
 

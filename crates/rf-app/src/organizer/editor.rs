@@ -39,12 +39,12 @@ impl Field {
 
     fn label(self) -> &'static str {
         match self {
-            Field::Name => t!("Ad"),
-            Field::Extension => t!("Uzantı"),
-            Field::Kind => t!("Tür"),
-            Field::Size => t!("Boyut"),
-            Field::Modified => t!("Değiştirme tarihi"),
-            Field::Created => t!("Oluşturma tarihi"),
+            Field::Name => t!("Name"),
+            Field::Extension => t!("Extension"),
+            Field::Kind => t!("Type"),
+            Field::Size => t!("Size"),
+            Field::Modified => t!("Date modified"),
+            Field::Created => t!("Date created"),
         }
     }
 }
@@ -53,7 +53,7 @@ impl Field {
 /// field is changed (it did not: a size condition made from an extension one still said "jpg, png").
 fn value_hint(field: Field) -> &'static str {
     match field {
-        Field::Name => t!("Aranacak metin"),
+        Field::Name => t!("Text to find"),
         Field::Extension => t!("jpg, png"),
         Field::Size => "5",
         Field::Modified | Field::Created => "30",
@@ -63,19 +63,19 @@ fn value_hint(field: Field) -> &'static str {
 
 fn name_op_label(op: NameOp) -> &'static str {
     match op {
-        NameOp::Contains => t!("şunu içerir"),
-        NameOp::StartsWith => t!("şununla başlar"),
-        NameOp::EndsWith => t!("şununla biter"),
-        NameOp::Wildcard => t!("şu desene uyar (* ve ?)"),
+        NameOp::Contains => t!("contains"),
+        NameOp::StartsWith => t!("starts with"),
+        NameOp::EndsWith => t!("ends with"),
+        NameOp::Wildcard => t!("matches the pattern (* and ?)"),
     }
 }
 
 fn cmp_label(field: Field, cmp: Cmp) -> &'static str {
     match (field, cmp) {
-        (Field::Size, Cmp::Greater) => t!("şundan büyük"),
-        (Field::Size, Cmp::Less) => t!("şundan küçük"),
-        (_, Cmp::Greater) => t!("daha eski"),
-        (_, Cmp::Less) => t!("daha yeni"),
+        (Field::Size, Cmp::Greater) => t!("is larger than"),
+        (Field::Size, Cmp::Less) => t!("is smaller than"),
+        (_, Cmp::Greater) => t!("older"),
+        (_, Cmp::Less) => t!("newer"),
     }
 }
 
@@ -96,18 +96,18 @@ impl ActKind {
 
     fn label(self) -> &'static str {
         match self {
-            ActKind::MoveTo => t!("Klasöre taşı"),
-            ActKind::MoveToTemplate => t!("Şablonla oluşturulan klasöre taşı"),
-            ActKind::Rename => t!("Şablonla yeniden adlandır"),
-            ActKind::Recycle => t!("Geri Dönüşüm Kutusu'na gönder"),
+            ActKind::MoveTo => t!("Move to a folder"),
+            ActKind::MoveToTemplate => t!("Move to a folder made from a template"),
+            ActKind::Rename => t!("Rename with a template"),
+            ActKind::Recycle => t!("Send to the Recycle Bin"),
         }
     }
 
     fn placeholder(self) -> &'static str {
         match self {
-            ActKind::MoveTo => t!("Hedef klasör, örneğin D:\\Resimler"),
-            ActKind::MoveToTemplate => t!("Klasör şablonu, örneğin D:\\Resimler\\{year}\\{month}"),
-            ActKind::Rename => t!("Yeni ad şablonu, örneğin {year}-{month}-{day} {name}.{ext}"),
+            ActKind::MoveTo => t!("Destination folder, e.g. D:\\Pictures"),
+            ActKind::MoveToTemplate => t!("Folder template, e.g. D:\\Pictures\\{year}\\{month}"),
+            ActKind::Rename => t!("New name template, e.g. {year}-{month}-{day} {name}.{ext}"),
             ActKind::Recycle => "",
         }
     }
@@ -161,7 +161,7 @@ pub fn problem_text(p: &RuleProblem) -> String {
     let base = crate::i18n::td(p.text());
     match p {
         RuleProblem::UnknownVariable(v) => format!("{base}: {{{v}}}"),
-        RuleProblem::EmptyCondition(i) => format!("{}. {}", i + 1, t!("koşul boş: değerini yazın ya da koşulu kaldırın")),
+        RuleProblem::EmptyCondition(i) => format!("{}. {}", i + 1, t!("condition is empty: enter a value or remove it")),
         _ => base,
     }
 }
@@ -169,7 +169,7 @@ pub fn problem_text(p: &RuleProblem) -> String {
 impl EditorView {
     pub fn new(rule: Option<Rule>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let rule = rule.unwrap_or_else(|| super::blank_rule(PathBuf::new()));
-        let name = new_input(window, cx, t!("Kuralın adı"), &rule.name);
+        let name = new_input(window, cx, t!("Rule name"), &rule.name);
         let (action, dest_text) = match &rule.action {
             Action::MoveTo { folder } => (ActKind::MoveTo, folder.to_string_lossy().into_owned()),
             Action::MoveToTemplate { template } => (ActKind::MoveToTemplate, template.clone()),
@@ -274,11 +274,11 @@ impl EditorView {
             Field::Extension => Condition::Extension { list: parse_ext_list(&text) },
             Field::Kind => Condition::Kind { kinds: row.kinds.clone() },
             Field::Size => {
-                let n = parse_number(&text).ok_or_else(|| t!("Boyut için bir sayı yazın").to_string())?;
+                let n = parse_number(&text).ok_or_else(|| t!("Enter a number for the size").to_string())?;
                 Condition::Size { cmp: row.cmp, bytes: (n * row.unit.bytes() as f64).round() as u64 }
             }
             Field::Modified | Field::Created => {
-                let days: u32 = text.trim().parse().map_err(|_| t!("Gün sayısı için bir tam sayı yazın").to_string())?;
+                let days: u32 = text.trim().parse().map_err(|_| t!("Enter a whole number of days").to_string())?;
                 Condition::Age { field: if row.field == Field::Modified { TimeField::Modified } else { TimeField::Created }, cmp: row.cmp, days }
             }
         })
@@ -357,7 +357,7 @@ impl EditorView {
 
     fn pick_folder(&mut self, for_dest: bool, cx: &mut Context<Self>) {
         let (tx, rx) = futures::channel::oneshot::channel::<Option<PathBuf>>();
-        let title = if for_dest { t!("Hedef klasörü seçin") } else { t!("İzlenecek klasörü seçin") };
+        let title = if for_dest { t!("Choose the destination folder") } else { t!("Choose the folder to watch") };
         rf_win::sta::run(move |owner| {
             let _ = tx.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::Folder));
         });
@@ -400,14 +400,14 @@ impl EditorView {
         // only a finished rule has conditions that can be told apart: the loose one has none
         let matching = if built.is_some() { self.samples.iter().find(|f| rule.matches(f, now)) } else { self.samples.first() };
         let (sample, label) = match matching {
-            Some(f) => (f.clone(), t!("Örnek:")),
+            Some(f) => (f.clone(), t!("Example:")),
             None => match self.samples.first() {
-                Some(f) => (f.clone(), t!("Örnek (koşullardan bağımsız):")),
-                None => (FileFact::new(rule.folder.join("örnek.jpg"), 2 << 20, now, now, FileKind::Image), t!("Örnek (varsayımsal dosya):")),
+                Some(f) => (f.clone(), t!("Example (ignores conditions):")),
+                None => (FileFact::new(rule.folder.join("sample.jpg"), 2 << 20, now, now, FileKind::Image), t!("Example (made-up file):")),
             },
         };
         let text = if matches!(rule.action, Action::Recycle) {
-            format!("{} → {}", sample.name, t!("Geri Dönüşüm Kutusu"))
+            format!("{} → {}", sample.name, t!("Recycle Bin"))
         } else {
             let exists = |_: &std::path::Path| false;
             let mut ctx = rf_core::organize::PlanContext::new(now, super::classify, &exists, &self.protected);
@@ -415,7 +415,7 @@ impl EditorView {
             let home = super::home();
             match rf_core::organize::preview_dest(&rule, &sample, &ctx) {
                 Ok(Dest::Move(d)) => format!("{} → {}", sample.name, show_path(&d, home.as_deref())),
-                Ok(Dest::Recycle) => format!("{} → {}", sample.name, t!("Geri Dönüşüm Kutusu")),
+                Ok(Dest::Recycle) => format!("{} → {}", sample.name, t!("Recycle Bin")),
                 Err(why) => format!("{}: {}", sample.name, crate::i18n::td(why.text())),
             }
         };
@@ -569,9 +569,9 @@ impl Render for EditorView {
                     .text_ellipsis()
                     .whitespace_nowrap()
                     .when(self.folder.is_none(), |d| d.text_color(p.text_tertiary))
-                    .child(self.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_else(|| t!("Bir klasör seçin").to_string())),
+                    .child(self.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_else(|| t!("Choose a folder").to_string())),
             )
-            .child(button("ed-folder", t!("Seç…"), false, &p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(false, cx))));
+            .child(button("ed-folder", t!("Choose…"), false, &p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(false, cx))));
 
         // --- conditions
         let mut cond_rows = v_flex().gap_2();
@@ -642,7 +642,7 @@ impl Render for EditorView {
                             .collect()
                     })
                 }
-                Field::Extension | Field::Kind => div().min_w(px(180.)).text_sm().text_color(p.text_secondary).child(t!("şunlardan biri")).into_any_element(),
+                Field::Extension | Field::Kind => div().min_w(px(180.)).text_sm().text_color(p.text_secondary).child(t!("is one of")).into_any_element(),
             };
             let value: AnyElement = match field {
                 Field::Kind => {
@@ -697,7 +697,7 @@ impl Render for EditorView {
                     .flex_1()
                     .min_w_0()
                     .child(div().flex_1().min_w_0().child(input_box(&row.text, &p)))
-                    .child(div().text_sm().text_color(p.text_secondary).child(t!("günden")))
+                    .child(div().text_sm().text_color(p.text_secondary).child(t!("days ago:")))
                     .into_any_element(),
                 Field::Name | Field::Extension => div().flex_1().min_w_0().child(input_box(&row.text, &p)).into_any_element(),
             };
@@ -719,7 +719,7 @@ impl Render for EditorView {
                             .cursor_pointer()
                             .tab_index(0)
                             .hover(|s| s.bg(p.hover))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Koşulu kaldır")).build(w, cx))
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Remove condition")).build(w, cx))
                             .child(Icon::new(L::X).size(px(14.)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if i < this.conds.len() {
@@ -731,12 +731,12 @@ impl Render for EditorView {
             );
         }
         let join_seg = h_flex().p_0p5().gap_0p5().rounded(theme::RADIUS).bg(p.hover).child(
-            chip("ed-join-all", t!("Koşulların hepsi uysun").into(), self.join == Join::All, &p).on_click(cx.listener(|this, _, _, cx| {
+            chip("ed-join-all", t!("All conditions must match").into(), self.join == Join::All, &p).on_click(cx.listener(|this, _, _, cx| {
                 this.join = Join::All;
                 cx.notify();
             })),
         ).child(
-            chip("ed-join-any", t!("Koşullardan biri uysun").into(), self.join == Join::Any, &p).on_click(cx.listener(|this, _, _, cx| {
+            chip("ed-join-any", t!("Any condition may match").into(), self.join == Join::Any, &p).on_click(cx.listener(|this, _, _, cx| {
                 this.join = Join::Any;
                 cx.notify();
             })),
@@ -768,12 +768,12 @@ impl Render for EditorView {
         let dest_row: Option<AnyElement> = (self.action != ActKind::Recycle).then(|| {
             let mut r = h_flex().gap_2().items_center().child(div().flex_1().min_w_0().child(input_box(&self.dest, &p)));
             if self.action == ActKind::MoveTo || self.action == ActKind::MoveToTemplate {
-                r = r.child(button("ed-dest-pick", t!("Seç…"), false, &p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(true, cx))));
+                r = r.child(button("ed-dest-pick", t!("Choose…"), false, &p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(true, cx))));
             }
             r.into_any_element()
         });
         let vars: Option<AnyElement> = matches!(self.action, ActKind::MoveToTemplate | ActKind::Rename).then(|| {
-            let mut r = h_flex().flex_wrap().gap_1().items_center().child(div().text_xs().text_color(p.text_secondary).child(t!("Değişkenler (tıklayınca eklenir):")));
+            let mut r = h_flex().flex_wrap().gap_1().items_center().child(div().text_xs().text_color(p.text_secondary).child(t!("Variables (click to insert):")));
             for (vi, v) in TEMPLATE_VARS.iter().enumerate() {
                 let token = format!("{{{v}}}");
                 let t2 = token.clone();
@@ -802,20 +802,20 @@ impl Render for EditorView {
             r.into_any_element()
         });
         let var_help = matches!(self.action, ActKind::MoveToTemplate | ActKind::Rename).then(|| {
-            div().text_xs().text_color(p.text_tertiary).child(t!("{name} dosya adı (uzantısız) · {ext} uzantı · {kind} tür klasörü · {year} {month} {day} değiştirilme tarihinden"))
+            div().text_xs().text_color(p.text_tertiary).child(t!("{name} file name (no extension) · {ext} extension · {kind} kind folder · {year} {month} {day} from the modified date"))
         });
         let example = self.example(cx);
 
         // --- the form
         let mut form = v_flex().gap_4().px_6().py_4();
-        form = form.child(v_flex().gap_1().child(label(&p, t!("Kuralın adı"))).child(input_box(&self.name, &p)));
+        form = form.child(v_flex().gap_1().child(label(&p, t!("Rule name"))).child(input_box(&self.name, &p)));
         form = form.child(
             v_flex()
                 .gap_1()
-                .child(label(&p, t!("İzlenecek klasör")))
+                .child(label(&p, t!("Folder to watch")))
                 .child(folder_row)
                 .children(refusal.map(|r| div().text_xs().text_color(p.danger).child(crate::i18n::td(r.text()))))
-                .child(checkbox("ed-sub", t!("Alt klasörlerdeki dosyalar da").into(), self.subfolders, &p).on_click(cx.listener(|this, _, _, cx| {
+                .child(checkbox("ed-sub", t!("Files in subfolders too").into(), self.subfolders, &p).on_click(cx.listener(|this, _, _, cx| {
                     this.subfolders = !this.subfolders;
                     cx.notify();
                 }))),
@@ -823,19 +823,19 @@ impl Render for EditorView {
         form = form.child(
             v_flex()
                 .gap_2()
-                .child(h_flex().gap_3().items_center().child(label(&p, t!("Koşullar")).flex_1()).child(join_seg))
+                .child(h_flex().gap_3().items_center().child(label(&p, t!("Conditions")).flex_1()).child(join_seg))
                 .child(cond_rows)
-                .when(self.conds.is_empty(), |d| d.child(div().text_xs().text_color(p.text_tertiary).child(t!("Koşul yok: klasördeki tüm dosyalar kurala uyar."))))
+                .when(self.conds.is_empty(), |d| d.child(div().text_xs().text_color(p.text_tertiary).child(t!("No conditions: every file of the folder matches."))))
                 .child(
                     h_flex().child(
-                        button("ed-add", t!("Koşul ekle"), false, &p).on_click(cx.listener(|this, _, window, cx| this.add_condition(window, cx))),
+                        button("ed-add", t!("Add condition"), false, &p).on_click(cx.listener(|this, _, window, cx| this.add_condition(window, cx))),
                     ),
                 ),
         );
         form = form.child(
             v_flex()
                 .gap_2()
-                .child(label(&p, t!("Ne yapılsın")))
+                .child(label(&p, t!("What to do")))
                 .child(h_flex().child(div().min_w(px(280.)).child(action_box)))
                 .children(dest_row)
                 .children(vars)
@@ -857,7 +857,7 @@ impl Render for EditorView {
                                 .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(e.text)),
                         )
                         .when(e.loops, |d| {
-                            d.child(div().text_xs().text_color(p.danger).child(t!("Bu kural kendi sonucunu yeniden yakalıyor, bu yüzden hiçbir çalıştırmada kullanılmaz. Koşulu, yeni ad artık uymayacak şekilde daraltın (örneğin ad \"IMG\" ile başlasın) ya da dosyaları başka bir klasöre gönderin.")))
+                            d.child(div().text_xs().text_color(p.danger).child(t!("This rule would match its own result again, so no run uses it. Narrow the condition so the new name no longer matches (for example name starts with \"IMG\"), or send the files to another folder.")))
                         })
                 })),
         );
@@ -865,19 +865,19 @@ impl Render for EditorView {
         form = form.child(
             v_flex()
                 .gap_1()
-                .child(checkbox("ed-auto", t!("Dosya geldiğinde kendiliğinden çalıştır").into(), self.auto, &p).on_click(cx.listener(|this, _, _, cx| {
+                .child(checkbox("ed-auto", t!("Run by itself when files arrive").into(), self.auto, &p).on_click(cx.listener(|this, _, _, cx| {
                     this.auto = !this.auto;
                     cx.notify();
                 })))
-                .when(self.auto, |d| d.child(div().text_xs().text_color(p.text_secondary).pl(px(24.)).child(t!("Kendiliğinden çalışırken önizleme gösterilmez; her çalıştırma Durum Merkezi'ndeki satırından geri alınabilir."))))
+                .when(self.auto, |d| d.child(div().text_xs().text_color(p.text_secondary).pl(px(24.)).child(t!("Runs by itself show no preview; every run can be undone from its row in the Status Center."))))
                 .when(self.auto && matches!(self.action, ActKind::Recycle), |d| {
-                    d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("Dikkat: bu kural uyan dosyaları sormadan Geri Dönüşüm Kutusu'na gönderecek.")))
+                    d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("Careful: this rule will send matching files to the Recycle Bin without asking.")))
                 })
                 .when(self.auto && self.needs_manual_run(), |d| {
-                    d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("\"Daha eski\" yaş koşulu olan bir kural kendiliğinden çalışmaz (az önce kopyalanan ya da çıkarılan dosyaların tarihi eski olabilir); yalnızca elle çalışır.")))
+                    d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("A rule with an \"older\" age condition does not run by itself (files just copied or extracted can carry old dates); it runs by hand only.")))
                 })
                 .when(self.auto && !master_on, |d| {
-                    d.child(div().text_xs().text_color(p.text_secondary).pl(px(24.)).child(t!("Not: Ayarlar'daki otomatik düzenleme şu an kapalı; açılana kadar bu kural yalnızca elle çalışır.")))
+                    d.child(div().text_xs().text_color(p.text_secondary).pl(px(24.)).child(t!("Note: automatic organizing is off in Settings; until it is turned on this rule only runs by hand.")))
                 }),
         );
 
@@ -889,7 +889,7 @@ impl Render for EditorView {
             .border_b_1()
             .border_color(p.divider)
             .child(Icon::new(L::WandSparkles).size(px(18.)).text_color(p.text_secondary))
-            .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(if self.id == 0 { t!("Yeni kural") } else { t!("Kuralı düzenle") }));
+            .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(if self.id == 0 { t!("New rule") } else { t!("Edit rule") }));
         let footer = h_flex()
             .px_6()
             .py_3()
@@ -898,8 +898,8 @@ impl Render for EditorView {
             .border_t_1()
             .border_color(p.divider)
             .child(div().flex_1().min_w_0().text_sm().text_color(p.danger).child(self.error.clone().unwrap_or_default()))
-            .child(button("ed-cancel", t!("İptal"), false, &p).on_click(cx.listener(|_, _, window, cx| super::close(window, cx))))
-            .child(button("ed-save", t!("Kaydet"), true, &p).on_click(cx.listener(|this, _, window, cx| this.save(window, cx))));
+            .child(button("ed-cancel", t!("Cancel"), false, &p).on_click(cx.listener(|_, _, window, cx| super::close(window, cx))))
+            .child(button("ed-save", t!("Save"), true, &p).on_click(cx.listener(|this, _, window, cx| this.save(window, cx))));
 
         div()
             .id("organizer-editor")

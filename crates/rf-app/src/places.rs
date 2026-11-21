@@ -10,10 +10,10 @@ use rf_win::{Drive, DriveKind, KnownFolder};
 pub fn drive_name(d: &Drive) -> String {
     if d.label.is_empty() {
         let kind = match d.kind {
-            DriveKind::Removable => crate::t!("USB Sürücü"),
-            DriveKind::Network => crate::t!("Ağ Sürücüsü"),
-            DriveKind::Optical => crate::t!("DVD Sürücü"),
-            _ => crate::t!("Yerel Disk"),
+            DriveKind::Removable => crate::t!("USB Drive"),
+            DriveKind::Network => crate::t!("Network Drive"),
+            DriveKind::Optical => crate::t!("DVD Drive"),
+            _ => crate::t!("Local Disk"),
         };
         format!("{kind} ({}:)", d.letter)
     } else {
@@ -77,7 +77,7 @@ fn load_cloud_and_wsl() -> Vec<Pinned> {
             out.push(Pinned { title, path, icon });
         }
     };
-    for (var, title) in [("OneDriveConsumer", "OneDrive"), ("OneDriveCommercial", "OneDrive (İş)"), ("OneDrive", "OneDrive")] {
+    for (var, title) in [("OneDriveConsumer", "OneDrive"), ("OneDriveCommercial", "OneDrive (Work)"), ("OneDrive", "OneDrive")] {
         if let Some(v) = std::env::var_os(var) {
             add(title.into(), PathBuf::from(v), L::Cloud);
         }

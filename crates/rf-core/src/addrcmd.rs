@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn what_can_only_be_a_place() {
-        for t in ["home", "Ana Sayfa", "shell:Downloads", "@proje", "@proje\\src", r"\\server\share", "//server/share", r"C:\Users\", "D:", "c:", "https://x.y", r#""C:\Program Files\""#, ""] {
+        for t in ["home", "Home", "shell:Downloads", "@proje", "@proje\\src", r"\\server\share", "//server/share", r"C:\Users\", "D:", "c:", "https://x.y", r#""C:\Program Files\""#, ""] {
             assert!(is_plain_place(t), "{t}");
         }
         for t in ["cmd", "cmd /k dir", r"C:\Windows", r"C:\Windows\notepad", "docs", "%USERPROFILE%", "..", r"..\x", "wt -d ."] {

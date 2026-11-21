@@ -155,7 +155,7 @@ impl FolderView {
         let key = Key {
             listing: self.entries_gen,
             probes: [format::datetime(now - 400 * DAY), format::size(1023)],
-            language: t!("Boyut").as_ptr() as usize,
+            language: t!("Size").as_ptr() as usize,
             calc_link: !prefs.calculate_folder_sizes,
             git: self.git.as_ref().map_or(0, |g| Arc::as_ptr(g) as usize),
             font: style.font_family.clone(),
@@ -183,7 +183,7 @@ impl FolderView {
         let date_w = widest(&dates, sm);
         // sizes: four digits, three with a unit, a decimal point; and the "calculate" link of a folder, which is drawn smaller
         let sizes: Vec<String> = [1023, 1023 << 10, 104_752_742, 10_726_932_152, 1023 << 30].iter().map(|b| format::size(*b)).collect();
-        let size_w = widest(&sizes, sm).max(if key.calc_link { width(t!("Boyutu hesapla"), xs) } else { 0. });
+        let size_w = widest(&sizes, sm).max(if key.calc_link { width(t!("Calculate size"), xs) } else { 0. });
         // types: what this listing has
         let k = kinds(self.entries.iter().take(SCAN).map(|e| (e.is_dir(), &e.ext)));
         let mut types: Vec<String> = k.exts.iter().chain(k.longest_more.iter()).map(|ext| icons::type_label_of(false, ext)).collect();
@@ -207,12 +207,12 @@ impl FolderView {
 
         self.auto_cols = AutoCols {
             w: [
-                Some(fit(date_w, heading(t!("Değiştirme tarihi")), AIR)),
-                Some(fit(date_w, heading(t!("Oluşturma tarihi")), AIR)),
-                (!types.is_empty()).then(|| fit(type_w, heading(t!("Tür")), AIR)),
-                Some(fit(size_w, heading(t!("Boyut")), 0.)),
-                (!tagged.is_empty()).then(|| fit(tag_w, heading(t!("Dosya etiketi")), AIR)),
-                (key.git != 0).then(|| fit(git_w, heading(t!("Git durumu")), AIR)),
+                Some(fit(date_w, heading(t!("Date modified")), AIR)),
+                Some(fit(date_w, heading(t!("Date created")), AIR)),
+                (!types.is_empty()).then(|| fit(type_w, heading(t!("Type")), AIR)),
+                Some(fit(size_w, heading(t!("Size")), 0.)),
+                (!tagged.is_empty()).then(|| fit(tag_w, heading(t!("File tag")), AIR)),
+                (key.git != 0).then(|| fit(git_w, heading(t!("Git status")), AIR)),
                 None,
             ],
             // (a place that is not a folder, and a search, keep the column as it was: its items are not "this folder's")

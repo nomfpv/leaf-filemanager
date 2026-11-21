@@ -662,7 +662,7 @@ impl SidebarTree {
         let cut = lead.min(0.);
         let deep = row.depth > TOOLTIP_PAST_LEVEL;
         if row.kind == RowKind::Error {
-            let text = if info.not_found { t!("Klasör bulunamadı").to_string() } else { format!("{}: {}", t!("Açılamadı"), info.error.unwrap_or_default()) };
+            let text = if info.not_found { t!("Folder not found").to_string() } else { format!("{}: {}", t!("Could not be opened"), info.error.unwrap_or_default()) };
             return h_flex()
                 .id(("tree-err", id as usize))
                 .h(px(ROW_H))
@@ -994,7 +994,7 @@ impl Workspace {
         view.update(cx, |t, cx| t.sync(path.as_deref(), shown_elsewhere, lens, cx));
         col.track_scroll(&self.side_tree.scroll).child(
             v_flex()
-                .child(div().px_2().pt_3().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text_tertiary).child(t!("Klasörler")))
+                .child(div().px_2().pt_3().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text_tertiary).child(t!("Folders")))
                 .child(view),
         )
     }
@@ -1004,12 +1004,12 @@ impl Workspace {
         use crate::fluent_menu::{Item, Menu, MenuIcon};
         let s = cx.global::<crate::settings::Settings>();
         let (on, follow) = (s.sidebar_tree, s.sidebar_tree_follow);
-        let mut items = vec![Item::action(t!("Klasör ağacı"), MenuIcon::Lucide(L::FolderTree), move |_, cx| {
+        let mut items = vec![Item::action(t!("Folder tree"), MenuIcon::Lucide(L::FolderTree), move |_, cx| {
             crate::settings::update(cx, |s| s.sidebar_tree = !on)
         })
         .checked(on)];
         if on {
-            items.push(Item::action(t!("Açık klasörü izle"), MenuIcon::Lucide(L::Crosshair), move |_, cx| {
+            items.push(Item::action(t!("Follow the open folder"), MenuIcon::Lucide(L::Crosshair), move |_, cx| {
                 crate::settings::update(cx, |s| s.sidebar_tree_follow = !follow)
             })
             .checked(follow));
@@ -1112,10 +1112,10 @@ mod tests {
     #[test]
     fn the_watcher_names_become_folders_or_nothing() {
         let d = scratch("changes");
-        std::fs::create_dir(d.join("Yeni")).unwrap();
+        std::fs::create_dir(d.join("New")).unwrap();
         std::fs::write(d.join("dosya.txt"), b"x").unwrap();
-        let got = read_changes(&d, vec!["yeni".into(), "dosya.txt".into(), "yok".into()]).unwrap();
-        assert_eq!(got[0].item.as_ref().map(|i| i.name.as_str()), Some("Yeni"), "the name as the disk spells it");
+        let got = read_changes(&d, vec!["new".into(), "dosya.txt".into(), "yok".into()]).unwrap();
+        assert_eq!(got[0].item.as_ref().map(|i| i.name.as_str()), Some("New"), "the name as the disk spells it");
         assert!(got[1].item.is_none() && got[2].item.is_none());
         // a name that can't be a file name can't be told
         assert!(read_changes(&d, vec!["a*b".into()]).is_err());

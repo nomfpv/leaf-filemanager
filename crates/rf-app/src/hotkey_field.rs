@@ -100,8 +100,8 @@ pub fn row(
     let text = hotkey::text(word);
     let (shown, dim) = match (text.is_empty(), focused) {
         (false, _) => (text, false),
-        (true, true) => (t!("Tuşlara basın…").to_string(), true),
-        (true, false) => (t!("Yok").to_string(), true),
+        (true, true) => (t!("Press keys…").to_string(), true),
+        (true, false) => (t!("None").to_string(), true),
     };
     h_flex()
         .w_full()
@@ -135,7 +135,7 @@ pub fn row(
                             cx.stop_propagation();
                         }),
                 )
-                .when(focused && state.message.is_none(), |d| d.child(div().text_xs().text_color(p.text_tertiary).child(t!("Silmek için Backspace"))))
+                .when(focused && state.message.is_none(), |d| d.child(div().text_xs().text_color(p.text_tertiary).child(t!("Backspace clears"))))
                 .children(state.message.map(|m| div().text_xs().text_color(p.danger).child(m))),
         )
         .into_any_element()

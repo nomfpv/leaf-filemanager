@@ -31,10 +31,10 @@ impl Drive {
     pub fn display_name(&self) -> String {
         let label = if self.label.is_empty() {
             match self.kind {
-                DriveKind::Removable => "USB Sürücü",
-                DriveKind::Network => "Ağ Sürücüsü",
-                DriveKind::Optical => "DVD Sürücü",
-                _ => "Yerel Disk",
+                DriveKind::Removable => "USB Drive",
+                DriveKind::Network => "Network Drive",
+                DriveKind::Optical => "DVD Drive",
+                _ => "Local Disk",
             }
             .to_string()
         } else {

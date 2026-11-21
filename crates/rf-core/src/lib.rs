@@ -29,7 +29,7 @@ pub use sort::{SortDir, SortKey, SortSpec};
 pub fn backup_corrupt(path: &std::path::Path) {
     let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!(".bozuk-{ms}"));
+    name.push(format!(".corrupt-{ms}"));
     let _ = std::fs::rename(path, path.with_file_name(name));
 }
 

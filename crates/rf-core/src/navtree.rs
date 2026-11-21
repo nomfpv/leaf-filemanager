@@ -1356,10 +1356,10 @@ mod tests {
         let c = id_of(&t, r"C:\");
         let r = t.toggle(c, 0).remove(0);
         let mut dl = item("Downloads");
-        dl.label = Some("İndirilenler".into());
+        dl.label = Some("Downloads".into());
         t.apply_listing(&r, Ok(vec![item("Zeta"), dl, item("Alfa")]), 0);
         let names: Vec<String> = labels(&t).into_iter().filter(|(d, _)| *d == 1).map(|(_, n)| n).collect();
-        assert_eq!(names, ["Alfa", "İndirilenler", "Zeta"]);
+        assert_eq!(names, ["Alfa", "Downloads", "Zeta"]);
     }
 
     #[test]
@@ -1414,11 +1414,11 @@ mod tests {
         let mut t = tree();
         let c = id_of(&t, r"C:\");
         let r = t.toggle(c, 0).remove(0);
-        t.apply_listing(&r, Err(ListFailure::Other("Erişim reddedildi".into())), 1);
+        t.apply_listing(&r, Err(ListFailure::Other("Access denied".into())), 1);
         let rows = t.rows().to_vec();
         assert_eq!(rows[2].kind, RowKind::Error);
         assert_eq!(rows[2].depth, 1);
-        assert_eq!(t.info(&rows[2], 1).error, Some("Erişim reddedildi"));
+        assert_eq!(t.info(&rows[2], 1).error, Some("Access denied"));
         let retry = t.retry(c, 2);
         assert_eq!(retry.len(), 1);
         assert!(t.info(&t.rows()[1], 2).loading);
@@ -1547,8 +1547,8 @@ mod tests {
         assert!(before.contains(&"a".to_string()));
         let parent = Path::new(r"C:\Users\user");
         // made
-        assert!(t.apply_changes(parent, vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
-        assert!(labels(&t).iter().any(|(_, n)| n == "Yeni"));
+        assert!(t.apply_changes(parent, vec![Change { name: "New".into(), item: Some(item("New")) }]));
+        assert!(labels(&t).iter().any(|(_, n)| n == "New"));
         // renamed: the old name is gone, the new one is there; the open folder below keeps its state
         assert!(t.apply_changes(parent, vec![Change { name: "dir2".into(), item: None }, Change { name: "iki".into(), item: Some(item("iki")) }]));
         let l: Vec<String> = labels(&t).into_iter().map(|(_, n)| n).collect();
@@ -1622,8 +1622,8 @@ mod tests {
         assert_eq!(w.iter().filter(|p| p.as_path() == Path::new(r"C:\Users\user")).count(), 1);
         assert_eq!(w.len(), 4, "C:\\, Users, user and Documents: {w:?}");
         // a change in that folder is applied to both nodes
-        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
-        assert_eq!(labels(&t).iter().filter(|(_, n)| n == "Yeni").count(), 2);
+        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "New".into(), item: Some(item("New")) }]));
+        assert_eq!(labels(&t).iter().filter(|(_, n)| n == "New").count(), 2);
         // the cap
         let mut many = NavTree::new();
         many.set_roots(vec![root(r"C:\", "C", RootKind::Fixed)], 0);
@@ -1848,16 +1848,16 @@ mod tests {
         t.toggle(user, 1); // closed by hand
         let relist = t.toggle(user, 2).into_iter().find(|r| r.path == Path::new(r"C:\Users\user")).expect("the node is listed again, quietly");
         // The listing had passed the place where "Yeni" is made before it was made; the watcher reports it and the tree shows it.
-        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "Yeni".into(), item: Some(item("Yeni")) }]));
-        assert!(labels(&t).iter().any(|(_, n)| n == "Yeni"));
+        assert!(t.apply_changes(Path::new(r"C:\Users\user"), vec![Change { name: "New".into(), item: Some(item("New")) }]));
+        assert!(labels(&t).iter().any(|(_, n)| n == "New"));
         // The answer comes without it. It must not leave the tree wrong: one more listing is asked for.
         let more = t.apply_listing(&relist, Ok(items(&["Documents", "Downloads", "dir10", "dir2"])), 3);
         assert_eq!(more.len(), 1, "listed once more after it");
-        t.apply_listing(&more[0], Ok(items(&["Documents", "Downloads", "dir10", "dir2", "Yeni"])), 4);
-        assert!(labels(&t).iter().any(|(_, n)| n == "Yeni"), "the new folder is there");
+        t.apply_listing(&more[0], Ok(items(&["Documents", "Downloads", "dir10", "dir2", "New"])), 4);
+        assert!(labels(&t).iter().any(|(_, n)| n == "New"), "the new folder is there");
         // and a listing nobody changed anything during asks for nothing more
         let quiet = t.rescan(Path::new(r"C:\Users\user")).remove(0);
-        assert!(t.apply_listing(&quiet, Ok(items(&["Documents", "Yeni"])), 5).is_empty());
+        assert!(t.apply_listing(&quiet, Ok(items(&["Documents", "New"])), 5).is_empty());
     }
 
     #[test]

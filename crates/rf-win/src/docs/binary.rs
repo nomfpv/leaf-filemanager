@@ -87,16 +87,16 @@ impl Db {
     fn open(path: &Path) -> Result<Db> {
         let mut file = File::open(path)?;
         let mut h = [0u8; 100];
-        file.read_exact(&mut h).context("SQLite veritabanı okunamadı")?;
+        file.read_exact(&mut h).context("Couldn't read the SQLite database")?;
         if &h[..16] != b"SQLite format 3\0" {
-            bail!("SQLite veritabanı değil");
+            bail!("Not an SQLite database");
         }
         let page_size = match u16::from_be_bytes([h[16], h[17]]) {
             1 => 65536,
             n => n as usize,
         };
         if page_size < 512 || !page_size.is_power_of_two() {
-            bail!("SQLite veritabanı okunamadı");
+            bail!("Couldn't read the SQLite database");
         }
         let len = file.metadata()?.len();
         Ok(Db { file, page_size, usable: page_size - h[20] as usize, encoding: u32::from_be_bytes([h[56], h[57], h[58], h[59]]), pages: (len / page_size as u64) as u32, budget: 20_000 })
@@ -105,7 +105,7 @@ impl Db {
     /// Page `n` (the first is 1).
     fn page(&mut self, n: u32) -> Result<Vec<u8>> {
         if n == 0 || n > self.pages || self.budget == 0 {
-            bail!("SQLite veritabanı okunamadı");
+            bail!("Couldn't read the SQLite database");
         }
         self.budget -= 1;
         let mut buf = vec![0u8; self.page_size];
@@ -133,9 +133,9 @@ impl Db {
             let k = m + (len - m) % (u - 4);
             if k <= x { k } else { m }
         };
-        let mut out = page.get(at..at + local).context("SQLite veritabanı okunamadı")?.to_vec();
+        let mut out = page.get(at..at + local).context("Couldn't read the SQLite database")?.to_vec();
         if local < len {
-            let mut next = u32::from_be_bytes(page.get(at + local..at + local + 4).context("SQLite veritabanı okunamadı")?.try_into()?);
+            let mut next = u32::from_be_bytes(page.get(at + local..at + local + 4).context("Couldn't read the SQLite database")?.try_into()?);
             while next != 0 && out.len() < len {
                 let p = self.page(next)?;
                 next = u32::from_be_bytes([p[0], p[1], p[2], p[3]]);
@@ -294,9 +294,9 @@ pub(super) fn sqlite(path: &Path, tr: Tr) -> Result<String> {
         .map(|r| (text(r.get(1)), match r.get(3) { Some(Value::Int(n)) => *n as u32, _ => 0 }, text(r.get(4))))
         .collect();
     let others = schema.len() - tables.len();
-    let mut out = format!("**SQLite** · {} {} · {} {} · {} {}\n\n", tables.len(), tr("tablo"), db.pages, tr("sayfa"), db.page_size, tr("bayt/sayfa"));
+    let mut out = format!("**SQLite** · {} {} · {} {} · {} {}\n\n", tables.len(), tr("tables"), db.pages, tr("pages"), db.page_size, tr("bytes per page"));
     if others > 0 {
-        out.push_str(&format!("{others} {}\n\n", tr("dizin, görünüm ve tetikleyici")));
+        out.push_str(&format!("{others} {}\n\n", tr("indexes, views and triggers")));
     }
     for (name, root, sql) in tables.iter().take(SQLITE_TABLES) {
         let (names, rowid_col) = columns(sql);
@@ -315,7 +315,7 @@ pub(super) fn sqlite(path: &Path, tr: Tr) -> Result<String> {
             .ok()
         };
         out.push_str(&match count {
-            Some(n) => format!("## {} · {n} {}\n\n", esc(name), tr("satır")),
+            Some(n) => format!("## {} · {n} {}\n\n", esc(name), tr("rows")),
             None => format!("## {}\n\n", esc(name)),
         });
         out.push_str(&table(&rows));
@@ -359,7 +359,7 @@ pub(super) fn minidump(path: &Path, tr: Tr) -> Result<String> {
     let mut head = vec![0u8; len.min(8 << 20) as usize];
     f.read_exact(&mut head)?;
     if !head.starts_with(b"MDMP") {
-        bail!("Bellek dökümü okunamadı");
+        bail!("Couldn't read the crash dump");
     }
     let read_at = |f: &mut File, at: u64, n: usize| -> Option<Vec<u8>> {
         if at.checked_add(n as u64)? > len {
@@ -384,7 +384,7 @@ pub(super) fn minidump(path: &Path, tr: Tr) -> Result<String> {
             (u32le(&head, at)? == kind).then_some((u32le(&head, at + 4)?, u32le(&head, at + 8)?))
         })
     };
-    let mut rows: Vec<Vec<String>> = vec![vec![tr("Özellik"), tr("Değer")]];
+    let mut rows: Vec<Vec<String>> = vec![vec![tr("Property"), tr("Value")]];
     let mut add = |k: String, v: String| {
         if !v.is_empty() {
             rows.push(vec![k, v]);
@@ -404,10 +404,10 @@ pub(super) fn minidump(path: &Path, tr: Tr) -> Result<String> {
     }
     let short = |p: &str| p.rsplit(['\\', '/']).next().unwrap_or(p).to_string();
     if let Some((_, _, name)) = modules.first() {
-        add(tr("İşlem"), short(name));
+        add(tr("Process"), short(name));
     }
     if time != 0 {
-        add(tr("Zaman"), rf_core::format::datetime_full(time as i64 * 1000));
+        add(tr("Time"), rf_core::format::datetime_full(time as i64 * 1000));
     }
     if let Some((_, rva)) = stream(7) {
         let at = rva as usize;
@@ -420,7 +420,7 @@ pub(super) fn minidump(path: &Path, tr: Tr) -> Result<String> {
         };
         let cpus = head.get(at + 6).copied().unwrap_or(0);
         if let (Some(major), Some(minor), Some(build)) = (u32le(&head, at + 8), u32le(&head, at + 12), u32le(&head, at + 16)) {
-            add(tr("Sistem"), format!("Windows {major}.{minor}.{build} · {arch} · {cpus} {}", tr("işlemci")));
+            add(tr("System"), format!("Windows {major}.{minor}.{build} · {arch} · {cpus} {}", tr("CPU")));
         }
     }
     if let Some((_, rva)) = stream(6) {
@@ -428,23 +428,23 @@ pub(super) fn minidump(path: &Path, tr: Tr) -> Result<String> {
         // thread id, alignment, then the exception record: code, flags, record, address
         if let (Some(code), Some(addr)) = (u32le(&head, at + 8), u64le(&head, at + 24)) {
             let name = exception_name(code);
-            add(tr("Hata"), if name.is_empty() { format!("0x{code:08X}") } else { format!("0x{code:08X} ({name})") });
+            add(tr("Error"), if name.is_empty() { format!("0x{code:08X}") } else { format!("0x{code:08X} ({name})") });
             let place = modules
                 .iter()
                 .find(|(base, size, _)| addr >= *base && addr < *base + *size as u64)
                 .map_or_else(|| format!("0x{addr:X}"), |(base, _, name)| format!("{} + 0x{:X}", short(name), addr - base));
-            add(tr("Hatanın yeri"), place);
+            add(tr("Where it failed"), place);
         }
     }
     if let Some((_, rva)) = stream(3) {
         if let Some(n) = u32le(&head, rva as usize) {
-            add(tr("İş parçacıkları"), n.to_string());
+            add(tr("Threads"), n.to_string());
         }
     }
-    add(tr("Boyut"), rf_core::format::size(len));
+    add(tr("Size"), rf_core::format::size(len));
     let mut out = table(&rows);
     if !modules.is_empty() {
-        out.push_str(&format!("\n## {} · {}\n\n", tr("Modüller"), modules.len()));
+        out.push_str(&format!("\n## {} · {}\n\n", tr("Modules"), modules.len()));
         for (_, _, name) in modules.iter().take(200) {
             out.push_str(&format!("- {}\n", cell(&short(name))));
         }
@@ -470,20 +470,20 @@ fn prefetch_bytes(raw: Vec<u8>) -> Result<Vec<u8>> {
         return Ok(raw);
     }
     const XPRESS_HUFF: u16 = 4;
-    let size = u32le(&raw, 4).context("Prefetch dosyası okunamadı")?;
+    let size = u32le(&raw, 4).context("Couldn't read the prefetch file")?;
     if size > 64 << 20 {
-        bail!("Prefetch dosyası okunamadı");
+        bail!("Couldn't read the prefetch file");
     }
     let mut out = vec![0u8; size as usize];
     let (mut ws, mut frag, mut done) = (0u32, 0u32, 0u32);
     unsafe {
         if RtlGetCompressionWorkSpaceSize(XPRESS_HUFF, &mut ws, &mut frag) != 0 {
-            bail!("Prefetch dosyası açılamadı");
+            bail!("Couldn't decompress the prefetch file");
         }
         let mut workspace = vec![0u8; ws as usize];
         let st = RtlDecompressBufferEx(XPRESS_HUFF, out.as_mut_ptr(), size, raw[8..].as_ptr(), (raw.len() - 8) as u32, &mut done, workspace.as_mut_ptr().cast());
         if st != 0 {
-            bail!("Prefetch dosyası açılamadı");
+            bail!("Couldn't decompress the prefetch file");
         }
     }
     out.truncate(done as usize);
@@ -493,7 +493,7 @@ fn prefetch_bytes(raw: Vec<u8>) -> Result<Vec<u8>> {
 /// (program, run count, last runs as Unix ms, files it loaded) of a decompressed prefetch file.
 fn prefetch_parse(b: &[u8]) -> Result<(String, u32, Vec<i64>, Vec<String>)> {
     if b.get(4..8) != Some(b"SCCA") {
-        bail!("Prefetch dosyası okunamadı");
+        bail!("Couldn't read the prefetch file");
     }
     let version = u32le(b, 0).unwrap_or(0);
     let name = utf16le(b.get(16..76).unwrap_or(&[]));
@@ -516,12 +516,12 @@ fn prefetch_parse(b: &[u8]) -> Result<(String, u32, Vec<i64>, Vec<String>)> {
 pub(super) fn prefetch(path: &Path, tr: Tr) -> Result<String> {
     let raw = super::read_limited(path, 32 << 20)?;
     let (name, count, times, files) = prefetch_parse(&prefetch_bytes(raw)?)?;
-    let mut rows: Vec<Vec<String>> = vec![vec![tr("Özellik"), tr("Değer")], vec![tr("Program"), name], vec![tr("Çalıştırılma sayısı"), count.to_string()]];
+    let mut rows: Vec<Vec<String>> = vec![vec![tr("Property"), tr("Value")], vec![tr("Program"), name], vec![tr("Times run"), count.to_string()]];
     for (i, t) in times.iter().enumerate() {
-        rows.push(vec![if i == 0 { tr("Son çalıştırma") } else { String::new() }, rf_core::format::datetime_full(*t)]);
+        rows.push(vec![if i == 0 { tr("Last run") } else { String::new() }, rf_core::format::datetime_full(*t)]);
     }
     let mut out = table(&rows);
-    out.push_str(&format!("\n## {} · {}\n\n", tr("Yüklediği dosyalar"), files.len()));
+    out.push_str(&format!("\n## {} · {}\n\n", tr("Files it loaded"), files.len()));
     for f in files.iter().take(300) {
         out.push_str(&format!("- {}\n", cell(f)));
     }
@@ -595,7 +595,7 @@ mod tests {
         std::fs::write(&p, &db).unwrap();
         let md = sqlite(&p, &same).unwrap();
         let _ = std::fs::remove_file(&p);
-        assert!(md.starts_with("**SQLite** · 1 tablo · 2 sayfa · 512 bayt/sayfa\n\n## notlar · 2 satır\n\n"), "{md}");
+        assert!(md.starts_with("**SQLite** · 1 tables · 2 pages · 512 bytes per page\n\n## notlar · 2 rows\n\n"), "{md}");
         assert!(md.contains("| id | ad | puan |\n| --- | --- | --- |\n| 7 | Zoë | 90 |\n| 9 | a\\|b | -2 |\n"), "{md}");
     }
 
@@ -633,11 +633,11 @@ mod tests {
         std::fs::write(&p, &d).unwrap();
         let md = minidump(&p, &same).unwrap();
         let _ = std::fs::remove_file(&p);
-        assert!(md.contains("| İşlem | oyun.exe |"), "{md}");
-        assert!(md.contains("| Sistem | Windows 10.0.26100 · x64 · 16 işlemci |"), "{md}");
-        assert!(md.contains("| Hata | 0xC0000005 (Access violation) |"), "{md}");
-        assert!(md.contains("| Hatanın yeri | oyun.exe + 0x1234 |"), "{md}");
-        assert!(md.contains("## Modüller · 1\n\n- oyun.exe\n"), "{md}");
+        assert!(md.contains("| Process | oyun.exe |"), "{md}");
+        assert!(md.contains("| System | Windows 10.0.26100 · x64 · 16 CPU |"), "{md}");
+        assert!(md.contains("| Error | 0xC0000005 (Access violation) |"), "{md}");
+        assert!(md.contains("| Where it failed | oyun.exe + 0x1234 |"), "{md}");
+        assert!(md.contains("## Modules · 1\n\n- oyun.exe\n"), "{md}");
     }
 
     #[test]

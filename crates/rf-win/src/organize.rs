@@ -62,17 +62,17 @@ pub enum Why {
 impl Why {
     pub fn text(self) -> &'static str {
         match self {
-            Why::Gone => tx("Dosya artık yok"),
-            Why::NotAFile => tx("Dosya değil"),
-            Why::Hidden => tx("Gizli ya da sistem dosyası"),
-            Why::Partial => tx("Henüz yazılıyor (kısmi indirme)"),
-            Why::OutsideRoot => tx("İzlenen klasörün dışında"),
-            Why::Link => tx("Bağlantı (sembolik) dosya"),
-            Why::InUse => tx("Başka bir uygulama kullanıyor"),
-            Why::TooYoung => tx("Az önce değişti: biraz beklenecek"),
-            Why::NoRecycleBin => tx("Bu sürücüde Geri Dönüşüm Kutusu yok"),
-            Why::BinRefuses => tx("Geri Dönüşüm Kutusu kapalı ya da bu dosya için fazla büyük"),
-            Why::Changed => tx("Planlandıktan sonra değişti"),
+            Why::Gone => tx("The file is gone"),
+            Why::NotAFile => tx("Not a file"),
+            Why::Hidden => tx("Hidden or system file"),
+            Why::Partial => tx("Still being written (partial download)"),
+            Why::OutsideRoot => tx("Outside the watched folder"),
+            Why::Link => tx("A link (symbolic) file"),
+            Why::InUse => tx("Another app is using it"),
+            Why::TooYoung => tx("Changed a moment ago: waiting a little"),
+            Why::NoRecycleBin => tx("This drive has no Recycle Bin"),
+            Why::BinRefuses => tx("The Recycle Bin is off or too small for this file"),
+            Why::Changed => tx("Changed since it was planned"),
         }
     }
 
@@ -440,7 +440,7 @@ fn ensure_dir(dir: &Path, created: &mut Vec<PathBuf>) -> std::io::Result<()> {
             Ok(m) => {
                 // a file where a folder is needed
                 if !m.is_dir() && missing.is_empty() {
-                    return Err(std::io::Error::other(tx("Hedef bir klasör değil, aynı adlı bir dosya var")));
+                    return Err(std::io::Error::other(tx("The destination is not a folder: a file has the same name")));
                 }
                 break;
             }
@@ -518,7 +518,7 @@ pub fn run(steps: &[Step], opts: &RunOptions, recycler: &dyn Recycler, progress:
             Ok(pairs) => {
                 for p in &paths {
                     if !pairs.iter().any(|(orig, _)| norm(orig) == norm(p)) {
-                        rep.failed.push(Failure { path: p.clone(), message: tx("Geri Dönüşüm Kutusu'na gönderilemedi").to_string() });
+                        rep.failed.push(Failure { path: p.clone(), message: tx("Could not be sent to the Recycle Bin").to_string() });
                     }
                 }
                 rep.record.recycled = pairs;
@@ -551,7 +551,7 @@ fn do_move(src: &Path, dest: &Path, created: &mut Vec<PathBuf>) -> Result<PathBu
 
 fn move_into(src: &Path, dest: &Path, created: &mut Vec<PathBuf>) -> Result<PathBuf, String> {
     if let Some(dir) = dest.parent() {
-        ensure_dir(dir, created).map_err(|e| format!("{}: {e}", tx("Hedef klasör oluşturulamadı")))?;
+        ensure_dir(dir, created).map_err(|e| format!("{}: {e}", tx("Could not create the destination folder")))?;
     }
     let dir = dest.parent().map(Path::to_path_buf).unwrap_or_default();
     let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -563,7 +563,7 @@ fn move_into(src: &Path, dest: &Path, created: &mut Vec<PathBuf>) -> Result<Path
             Err(e) => return Err(e.to_string()),
         }
     }
-    Err(tx("Hedefte aynı ad bulundu").to_string())
+    Err(tx("The name is already taken at the destination").to_string())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -580,11 +580,11 @@ pub fn undo_moves(rec: &Record) -> UndoReport {
     for (from, to) in rec.moves.iter().rev() {
         let fail = |out: &mut UndoReport, m: &'static str| out.failed.push(Failure { path: to.clone(), message: m.to_string() });
         if std::fs::symlink_metadata(verbatim(to)).is_err() {
-            fail(&mut out, tx("Dosya artık yok"));
+            fail(&mut out, tx("The file is gone"));
             continue;
         }
         if std::fs::symlink_metadata(verbatim(from)).is_ok() {
-            fail(&mut out, tx("Eski yeri başka bir dosya tutuyor"));
+            fail(&mut out, tx("Another file is in its old place"));
             continue;
         }
         if let Some(dir) = from.parent() {
@@ -608,7 +608,7 @@ pub fn redo_moves(rec: &Record) -> UndoReport {
     let mut created = Vec::new();
     for (from, to) in &rec.moves {
         if std::fs::symlink_metadata(verbatim(from)).is_err() || std::fs::symlink_metadata(verbatim(to)).is_ok() {
-            out.failed.push(Failure { path: from.clone(), message: tx("Dosya taşınamadı").to_string() });
+            out.failed.push(Failure { path: from.clone(), message: tx("The file could not be moved").to_string() });
             continue;
         }
         let r = match to.parent() {

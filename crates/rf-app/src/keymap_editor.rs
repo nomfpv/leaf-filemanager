@@ -206,18 +206,18 @@ mod tests {
 
     #[test]
     fn a_custom_shortcut_on_another_commands_keys_is_reported() {
-        let entries = [("Yeni sekme", "Ctrl+T", "NewTab".to_string()), ("Geri", "Alt+←", "GoBack".to_string()), ("Rafı göster/gizle", "", "ToggleShelf".to_string())];
+        let entries = [("New tab", "Ctrl+T", "NewTab".to_string()), ("Back", "Alt+←", "GoBack".to_string()), ("Show/hide shelf", "", "ToggleShelf".to_string())];
         let none = |_: &str| None;
         assert!(super::conflicts(&entries, &none).is_empty());
         // the shelf gets Ctrl+T: both commands are marked, each naming the other
         let shelf = |a: &str| (a == "ToggleShelf").then(|| "ctrl-t".to_string());
         let c = super::conflicts(&entries, &shelf);
-        assert_eq!(c.get("ToggleShelf"), Some(&"Yeni sekme"));
-        assert_eq!(c.get("NewTab"), Some(&"Rafı göster/gizle"));
+        assert_eq!(c.get("ToggleShelf"), Some(&"New tab"));
+        assert_eq!(c.get("NewTab"), Some(&"Show/hide shelf"));
         assert_eq!(c.len(), 2);
         // an arrow key, written the way GPUI names it
         let back = |a: &str| (a == "ToggleShelf").then(|| "alt-left".to_string());
-        assert_eq!(super::conflicts(&entries, &back).get("GoBack"), Some(&"Rafı göster/gizle"));
+        assert_eq!(super::conflicts(&entries, &back).get("GoBack"), Some(&"Show/hide shelf"));
         // moving a command away from its built-in keys frees them
         let moved = |a: &str| match a {
             "NewTab" => Some("ctrl-alt-n".to_string()),

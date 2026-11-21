@@ -123,14 +123,14 @@ mod tests {
     #[test]
     fn builds_jump_list() {
         let exe = std::env::current_exe().unwrap();
-        let pins = vec![("Belgeler".to_string(), std::env::temp_dir())];
-        let recent = vec![("Son".to_string(), std::env::temp_dir()), ("Önceki".to_string(), std::env::temp_dir())];
-        let cats = [("Sabitlenenler".to_string(), pins), ("Son klasörler".to_string(), recent), ("Boş".to_string(), Vec::new())];
-        super::set(&exe, &[("Yeni pencere", super::NEW_WINDOW_ARG)], &cats).unwrap();
+        let pins = vec![("Documents".to_string(), std::env::temp_dir())];
+        let recent = vec![("Son".to_string(), std::env::temp_dir()), ("Previous".to_string(), std::env::temp_dir())];
+        let cats = [("Pinned".to_string(), pins), ("Recent folders".to_string(), recent), ("Empty".to_string(), Vec::new())];
+        super::set(&exe, &[("New window", super::NEW_WINDOW_ARG)], &cats).unwrap();
     }
 
     fn one_category(i: usize) -> [super::Category; 1] {
-        [("Son klasörler".to_string(), vec![(format!("Klasör {i}"), std::env::temp_dir())])]
+        [("Recent folders".to_string(), vec![(format!("Klasör {i}"), std::env::temp_dir())])]
     }
 
     /// Several writers at once each get their turn (they collided until 2026-11-16: see `WRITING`).
@@ -140,7 +140,7 @@ mod tests {
         let writers: Vec<_> = (0..6)
             .map(|i| {
                 let exe = exe.clone();
-                std::thread::spawn(move || super::set(&exe, &[("Yeni pencere", super::NEW_WINDOW_ARG)], &one_category(i)).map_err(|e| format!("{e:#}")))
+                std::thread::spawn(move || super::set(&exe, &[("New window", super::NEW_WINDOW_ARG)], &one_category(i)).map_err(|e| format!("{e:#}")))
             })
             .collect();
         for w in writers {
@@ -159,7 +159,7 @@ mod tests {
                 let exe = exe.clone();
                 std::thread::spawn(move || {
                     crate::shell::ensure_com();
-                    super::write(&exe, &[("Yeni pencere", super::NEW_WINDOW_ARG)], &one_category(i)).map_err(|e| format!("{:#x} {}", e.code().0, e.message()))
+                    super::write(&exe, &[("New window", super::NEW_WINDOW_ARG)], &one_category(i)).map_err(|e| format!("{:#x} {}", e.code().0, e.message()))
                 })
             })
             .collect();

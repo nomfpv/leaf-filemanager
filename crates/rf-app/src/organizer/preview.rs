@@ -165,7 +165,7 @@ fn button(id: &'static str, label: &'static str, primary: bool, enabled: bool, p
 fn notes(plan: &Plan) -> Vec<String> {
     let mut v = Vec::new();
     for (_, name) in &plan.loops {
-        v.push(format!("«{name}»: {}", t!("kural kendi sonucunu yeniden yakalıyor; atlandı. Koşulu, yeni ad artık uymayacak şekilde daraltın (örneğin ad \"IMG\" ile başlasın) ya da dosyaları başka bir klasöre gönderin.")));
+        v.push(format!("«{name}»: {}", t!("the rule would match its own result again; skipped. Narrow the condition so the new name no longer matches (for example name starts with \"IMG\"), or send the files to another folder.")));
     }
     for (_, name, why) in &plan.unusable {
         let why = match why {
@@ -187,7 +187,7 @@ fn notes(plan: &Plan) -> Vec<String> {
         if names.len() > 3 {
             shown.push_str(&format!(" +{}", names.len() - 3));
         }
-        v.push(format!("{} ({}): {shown}", super::plural(names.len(), t!("1 dosya atlandı"), t!("{n} dosya atlandı")), crate::i18n::td(reason.text())));
+        v.push(format!("{} ({}): {shown}", super::plural(names.len(), t!("1 file skipped"), t!("{n} files skipped")), crate::i18n::td(reason.text())));
     }
     v
 }
@@ -202,8 +202,8 @@ impl Render for PreviewView {
             State::Scanning => (0, 0),
         };
         let subtitle: String = match &self.state {
-            State::Scanning => t!("Dosyalar taranıyor…").to_string(),
-            State::Ready { plan, .. } if plan.steps.is_empty() => t!("Düzenlenecek dosya yok").to_string(),
+            State::Scanning => t!("Scanning files…").to_string(),
+            State::Ready { plan, .. } if plan.steps.is_empty() => t!("No files to organize").to_string(),
             State::Ready { .. } => crate::i18n::items(total),
         };
 
@@ -219,7 +219,7 @@ impl Render for PreviewView {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).overflow_hidden().text_ellipsis().whitespace_nowrap().child(format!("{}: {}", t!("Klasörü düzenle"), self.title)))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).overflow_hidden().text_ellipsis().whitespace_nowrap().child(format!("{}: {}", t!("Organize folder"), self.title)))
                     .child(div().text_xs().text_color(p.text_secondary).child(subtitle)),
             )
             .child(
@@ -238,7 +238,7 @@ impl Render for PreviewView {
             );
 
         let body: AnyElement = match &self.state {
-            State::Scanning => div().flex_1().flex().items_center().justify_center().text_sm().text_color(p.text_secondary).child(t!("Dosyalar taranıyor…")).into_any_element(),
+            State::Scanning => div().flex_1().flex().items_center().justify_center().text_sm().text_color(p.text_secondary).child(t!("Scanning files…")).into_any_element(),
             State::Ready { folder_problem: Some(why), .. } => v_flex()
                 .flex_1()
                 .items_center()
@@ -247,13 +247,13 @@ impl Render for PreviewView {
                 .px_6()
                 .text_sm()
                 .text_color(p.danger)
-                .child(div().child(t!("Klasör bulunamadı ya da açılamadı.")))
+                .child(div().child(t!("The folder was not found or cannot be opened.")))
                 .child(div().text_xs().child(why.clone()))
                 .into_any_element(),
             State::Ready { plan, .. } if plan.steps.is_empty() => {
-                let mut lines = vec![t!("Kurallara uyan, yerinden oynatılacak bir dosya yok.").to_string()];
+                let mut lines = vec![t!("No file matches the rules and needs to move.").to_string()];
                 if plan.in_place > 0 {
-                    lines.push(super::plural(plan.in_place, t!("1 dosya zaten olması gereken yerde"), t!("{n} dosya zaten olması gereken yerde")));
+                    lines.push(super::plural(plan.in_place, t!("1 file is already where it belongs"), t!("{n} files are already where they belong")));
                 }
                 v_flex().flex_1().items_center().justify_center().gap_1().text_sm().text_color(p.text_secondary).children(lines.into_iter().map(|l| div().child(l))).into_any_element()
             }
@@ -267,10 +267,10 @@ impl Render for PreviewView {
                     .border_b_1()
                     .border_color(p.divider)
                     .child(div().w(px(16.)))
-                    .child(div().flex_1().child(t!("Dosya")))
+                    .child(div().flex_1().child(t!("File")))
                     .child(div().w(px(14.)))
-                    .child(div().flex_1().child(t!("Hedef")))
-                    .child(div().w(px(120.)).child(t!("Kural")));
+                    .child(div().flex_1().child(t!("Target")))
+                    .child(div().w(px(120.)).child(t!("Rule")));
                 let _ = plan;
                 let list = uniform_list(
                     "pv-rows",
@@ -291,7 +291,7 @@ impl Render for PreviewView {
                                         d.parent().map(|d| show_path(d, home.as_deref())).unwrap_or_default(),
                                         false,
                                     ),
-                                    Dest::Recycle => (t!("Geri Dönüşüm Kutusu").to_string(), String::new(), true),
+                                    Dest::Recycle => (t!("Recycle Bin").to_string(), String::new(), true),
                                 };
                                 // (the full destination is in the tooltip: a long name is cut at the end, and
                                 // the number a clash adds, " (2)", sits there)
@@ -372,7 +372,7 @@ impl Render for PreviewView {
         let ready = matches!(self.state, State::Ready { .. });
         // with nothing to do the dialog only closes
         let nothing_to_do = ready && total == 0;
-        let status = if ready { format!("{selected} / {total} {}", t!("seçili")) } else { String::new() };
+        let status = if ready { format!("{selected} / {total} {}", t!("selected")) } else { String::new() };
         let all_on = total > 0 && selected == total;
         let footer = h_flex()
             .px_4()
@@ -394,13 +394,13 @@ impl Render for PreviewView {
                         .cursor_pointer()
                         .hover(|s| s.bg(p.hover))
                         .tab_index(0)
-                        .child(if all_on { t!("Hiçbirini seçme") } else { t!("Tümünü seç") })
+                        .child(if all_on { t!("Select none") } else { t!("Select all") })
                         .on_click(cx.listener(move |this, _, _, cx| this.set_all(!all_on, cx))),
                 )
             })
             .child(div().flex_1())
-            .child(button("pv-cancel", if nothing_to_do { t!("Kapat") } else { t!("İptal") }, false, true, &p).on_click(cx.listener(|_, _, window, cx| super::close(window, cx))))
-            .child(button("pv-apply", t!("Uygula"), true, selected > 0, &p).on_click(cx.listener(|this, _, window, cx| this.apply(window, cx))));
+            .child(button("pv-cancel", if nothing_to_do { t!("Close") } else { t!("Cancel") }, false, true, &p).on_click(cx.listener(|_, _, window, cx| super::close(window, cx))))
+            .child(button("pv-apply", t!("Apply"), true, selected > 0, &p).on_click(cx.listener(|this, _, window, cx| this.apply(window, cx))));
 
         let _ = home;
         div()

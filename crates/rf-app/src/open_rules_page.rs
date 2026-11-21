@@ -38,13 +38,13 @@ fn small_button(id: impl Into<ElementId>, icon: L, tip: &'static str, p: &Palett
 /// What the dialog says when the extensions typed cannot be taken; `Ok` with the extensions otherwise. `ix`: the list being changed
 /// (`None`: a new one).
 pub(crate) fn exts_answer(rules: &[OpenRule], ix: Option<usize>, text: &str) -> Result<Vec<String>, String> {
-    let exts = openrules::parse_exts(text).map_err(|bad| format!("{}: {bad}", t!("Bu bir uzantı değil")))?;
+    let exts = openrules::parse_exts(text).map_err(|bad| format!("{}: {bad}", t!("This is not an extension")))?;
     if exts.is_empty() {
-        return Err(t!("En az bir uzantı yazın.").to_string());
+        return Err(t!("Type at least one extension.").to_string());
     }
     let taken = openrules::taken(rules, ix, &exts);
     if !taken.is_empty() {
-        return Err(format!("{}: {}", t!("Bu uzantıların zaten bir listesi var"), taken.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ")));
+        return Err(format!("{}: {}", t!("These extensions already have a list"), taken.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ")));
     }
     Ok(exts)
 }
@@ -53,11 +53,11 @@ pub(crate) fn exts_answer(rules: &[OpenRule], ix: Option<usize>, text: &str) -> 
 fn ask_exts(ix: Option<usize>, window: &mut Window, cx: &mut App) {
     let current = ix.and_then(|i| cx.global::<Settings>().open_rules.get(i).map(|r| r.exts.join(", "))).unwrap_or_default();
     crate::prompt::show(
-        if ix.is_some() { t!("Uzantıları değiştir") } else { t!("Yeni dosya türü") },
-        Some(t!("Bu liste hangi uzantılar için? Birden çok uzantıyı virgülle ayırın.").to_string()),
+        if ix.is_some() { t!("Change extensions") } else { t!("New file type") },
+        Some(t!("Which extensions is this list for? Separate several with commas.").to_string()),
         Some((current, "dll, sys".to_string())),
         vec![
-            crate::prompt::Button::new(t!("Kaydet"), crate::prompt::Kind::Primary, move |text, _, cx| {
+            crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, move |text, _, cx| {
                 let exts = exts_answer(&cx.global::<Settings>().open_rules, ix, &text.unwrap_or_default())?;
                 settings::update(cx, move |s| match ix {
                     Some(i) => {
@@ -90,7 +90,7 @@ fn add_program(ix: usize, path: String, cx: &mut App) {
 /// A program for list `ix`, chosen in a file dialog (off the UI thread; the list changes when the dialog answers).
 fn pick_program(ix: usize, cx: &mut App) {
     let (tx, rx) = futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
-    let (title, programs, all) = (t!("Program seçin"), t!("Programlar"), t!("Tüm dosyalar"));
+    let (title, programs, all) = (t!("Choose a program"), t!("Programs"), t!("All files"));
     rf_win::sta::run(move |owner| {
         let _ = tx.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::File { filters: &[(programs, "*.exe;*.bat;*.cmd;*.com;*.lnk"), (all, "*.*")] }));
     });
@@ -105,12 +105,12 @@ fn pick_program(ix: usize, cx: &mut App) {
 /// A program for list `ix`, typed or pasted as a path.
 fn ask_program_path(ix: usize, window: &mut Window, cx: &mut App) {
     crate::prompt::show(
-        t!("Programın yolu"),
-        Some(t!("Programın tam yolunu yazın ya da yapıştırın.").to_string()),
+        t!("The program's path"),
+        Some(t!("Type or paste the program's full path.").to_string()),
         Some((String::new(), r"C:\Program Files\Program\program.exe".to_string())),
         vec![
-            crate::prompt::Button::new(t!("Ekle"), crate::prompt::Kind::Primary, move |text, _, cx| {
-                let path = openrules::clean_program(&text.unwrap_or_default()).ok_or_else(|| t!("Bir yol yazın.").to_string())?;
+            crate::prompt::Button::new(t!("Add"), crate::prompt::Kind::Primary, move |text, _, cx| {
+                let path = openrules::clean_program(&text.unwrap_or_default()).ok_or_else(|| t!("Type a path.").to_string())?;
                 add_program(ix, path, cx);
                 Ok(())
             }),
@@ -123,11 +123,11 @@ fn ask_program_path(ix: usize, window: &mut Window, cx: &mut App) {
 
 fn delete_dialog(ix: usize, window: &mut Window, cx: &mut App) {
     crate::prompt::show(
-        t!("Liste silinsin mi?"),
-        Some(t!("Bu türdeki dosyalar yeniden Windows'un varsayılan programıyla açılır.").to_string()),
+        t!("Delete this list?"),
+        Some(t!("Files of this type open with Windows' default program again.").to_string()),
         None,
         vec![
-            crate::prompt::Button::new(t!("Sil"), crate::prompt::Kind::Danger, move |_, _, cx| {
+            crate::prompt::Button::new(t!("Delete"), crate::prompt::Kind::Danger, move |_, _, cx| {
                 settings::update(cx, move |s| {
                     if ix < s.open_rules.len() {
                         s.open_rules.remove(ix);
@@ -153,9 +153,9 @@ pub(crate) fn follow_file() {
 /// The line under a list's extensions: what a double click on such a file does.
 pub(crate) fn rule_line(r: &OpenRule) -> String {
     match (r.programs.first(), r.double_click) {
-        (None, _) => t!("Henüz program yok: bir program ekleyin.").to_string(),
-        (Some(first), true) => format!("{}: {}", t!("Çift tıklama"), openrules::program_label(first)),
-        (Some(_), false) => t!("Çift tıklama Windows'un varsayılanıyla açar; programlar yalnızca \"Birlikte aç\" menüsünde durur.").to_string(),
+        (None, _) => t!("No program yet: add one.").to_string(),
+        (Some(first), true) => format!("{}: {}", t!("Double click"), openrules::program_label(first)),
+        (Some(_), false) => t!("A double click opens with Windows' default; the programs are only under \"Open with\".").to_string(),
     }
 }
 
@@ -179,12 +179,12 @@ fn program_row(p: &Palette, ix: usize, pi: usize, n: usize, path: &str, is_defau
                         .gap_2()
                         .items_center()
                         .child(div().text_sm().child(openrules::program_label(path)))
-                        .when(is_default, |d| d.child(div().px_1p5().rounded(px(4.)).border_1().border_color(p.accent).text_xs().text_color(p.accent).child(t!("çift tıklama")))),
+                        .when(is_default, |d| d.child(div().px_1p5().rounded(px(4.)).border_1().border_color(p.accent).text_xs().text_color(p.accent).child(t!("double click")))),
                 )
                 .child(div().text_xs().text_color(p.text_tertiary).overflow_hidden().text_ellipsis().whitespace_nowrap().child(path.to_string())),
         )
         .when(pi > 0, |d| {
-            d.child(small_button(("or-up", key), L::ChevronUp, t!("Yukarı taşı"), p, move |_, cx| {
+            d.child(small_button(("or-up", key), L::ChevronUp, t!("Move up"), p, move |_, cx| {
                 settings::update(cx, move |s| {
                     if let Some(r) = s.open_rules.get_mut(ix) {
                         r.programs = openrules::moved(&r.programs, pi, -1);
@@ -193,7 +193,7 @@ fn program_row(p: &Palette, ix: usize, pi: usize, n: usize, path: &str, is_defau
             }))
         })
         .when(pi + 1 < n, |d| {
-            d.child(small_button(("or-down", key), L::ChevronDown, t!("Aşağı taşı"), p, move |_, cx| {
+            d.child(small_button(("or-down", key), L::ChevronDown, t!("Move down"), p, move |_, cx| {
                 settings::update(cx, move |s| {
                     if let Some(r) = s.open_rules.get_mut(ix) {
                         r.programs = openrules::moved(&r.programs, pi, 1);
@@ -201,7 +201,7 @@ fn program_row(p: &Palette, ix: usize, pi: usize, n: usize, path: &str, is_defau
                 })
             }))
         })
-        .child(small_button(("or-rm", key), L::X, t!("Listeden çıkar"), p, move |_, cx| {
+        .child(small_button(("or-rm", key), L::X, t!("Remove from the list"), p, move |_, cx| {
             settings::update(cx, move |s| {
                 if let Some(r) = s.open_rules.get_mut(ix)
                     && pi < r.programs.len()
@@ -217,8 +217,8 @@ fn rule_card(p: &Palette, ix: usize, r: &OpenRule) -> AnyElement {
     let (on, n) = (r.double_click, r.programs.len());
     let head = h_flex()
         .gap_2()
-        .child(button(("or-exts", ix), p, t!("Uzantıları değiştir"), move |window, cx| ask_exts(Some(ix), window, cx)))
-        .child(button(("or-del", ix), p, t!("Sil"), move |window, cx| delete_dialog(ix, window, cx)))
+        .child(button(("or-exts", ix), p, t!("Change extensions"), move |window, cx| ask_exts(Some(ix), window, cx)))
+        .child(button(("or-del", ix), p, t!("Delete"), move |window, cx| delete_dialog(ix, window, cx)))
         .into_any_element();
     shell(p)
         .child(card_body(p, L::FileType, openrules::exts_line(r).into(), Some(rule_line(r).into()), Some(head)))
@@ -232,8 +232,8 @@ fn rule_card(p: &Palette, ix: usize, r: &OpenRule) -> AnyElement {
                 .items_center()
                 .border_t_1()
                 .border_color(p.border)
-                .child(button(("or-add", ix), p, t!("Program ekle…"), move |_, cx| pick_program(ix, cx)))
-                .child(button(("or-path", ix), p, t!("Yol yaz…"), move |window, cx| ask_program_path(ix, window, cx))),
+                .child(button(("or-add", ix), p, t!("Add program…"), move |_, cx| pick_program(ix, cx)))
+                .child(button(("or-path", ix), p, t!("Type a path…"), move |window, cx| ask_program_path(ix, window, cx))),
         )
         // (a row of its own: beside the two buttons the words and the switch did not fit a narrow window)
         .child(
@@ -245,7 +245,7 @@ fn rule_card(p: &Palette, ix: usize, r: &OpenRule) -> AnyElement {
                 .items_center()
                 .border_t_1()
                 .border_color(p.border)
-                .child(div().flex_1().min_w_0().text_sm().child(t!("Çift tıklamada ilk programla aç")))
+                .child(div().flex_1().min_w_0().text_sm().child(t!("Open with the first program on a double click")))
                 .child(switch(("or-dbl", ix), p, on, move |_, cx| {
                     settings::update(cx, move |s| {
                         if let Some(r) = s.open_rules.get_mut(ix) {
@@ -264,9 +264,9 @@ pub fn page(p: &Palette, s: &Settings) -> Vec<AnyElement> {
             .child(card_body(
                 p,
                 L::AppWindow,
-                t!("Dosya türlerine göre programlar").into(),
-                Some(t!("Bir dosya türü için kendi program listenizi yapın: listedeki ilk program o türü çift tıklamada açar, hepsi sağ tık menüsündeki \"Birlikte aç\"ın başında durur. Programlar yollarıyla verilir; Windows'un tanımadığı bir program da olabilir. Bu listelere yalnızca rustyfiles uyar, Windows'un varsayılan programları değişmez.").into()),
-                Some(button("or-new", p, t!("Yeni tür"), |window, cx| ask_exts(None, window, cx))),
+                t!("Programs by file type").into(),
+                Some(t!("Make your own list of programs for a file type: the first program in the list opens that type on a double click, and all of them stand at the top of \"Open with\" in the right-click menu. Programs are given by their paths, so a program Windows does not know works too. Only rustyfiles follows these lists; Windows' default programs do not change.").into()),
+                Some(button("or-new", p, t!("New type"), |window, cx| ask_exts(None, window, cx))),
             ))
             .into_any_element(),
     );
@@ -276,14 +276,14 @@ pub fn page(p: &Palette, s: &Settings) -> Vec<AnyElement> {
                 .child(card_body(
                     p,
                     L::Sparkles,
-                    t!("Henüz liste yok").into(),
-                    Some(t!("Örnek: .dll için önce dnSpy, sonra Ghidra. Çift tıklama dnSpy ile açar, Ghidra \"Birlikte aç\" menüsünde bir tık ötede durur.").into()),
+                    t!("No lists yet").into(),
+                    Some(t!("Example: for .dll, dnSpy first and Ghidra second. A double click opens with dnSpy, and Ghidra is one click away under \"Open with\".").into()),
                     None,
                 ))
                 .into_any_element(),
         );
     } else {
-        out.push(section(p, t!("Listeler")));
+        out.push(section(p, t!("Lists")));
         for (i, r) in s.open_rules.iter().enumerate() {
             out.push(rule_card(p, i, r));
         }
@@ -305,22 +305,22 @@ mod tests {
     #[test]
     fn the_dialog_takes_extensions_and_says_what_is_wrong_with_the_rest() {
         let rules = [rule(&["dll", "sys"], &[], true), rule(&["js"], &[], true)];
-        crate::i18n::while_turkish(|| {
+        {
             assert_eq!(exts_answer(&rules, None, ".bin, DAT"), Ok(vec!["bin".to_string(), "dat".to_string()]));
             assert_eq!(exts_answer(&rules, Some(0), "dll, sys, bin"), Ok(vec!["dll".to_string(), "sys".to_string(), "bin".to_string()]), "a list keeps its own extensions");
-            assert_eq!(exts_answer(&rules, None, "  "), Err("En az bir uzantı yazın.".to_string()));
-            assert_eq!(exts_answer(&rules, None, "tar.gz"), Err("Bu bir uzantı değil: tar.gz".to_string()));
-            assert_eq!(exts_answer(&rules, None, "ts, js, dll"), Err("Bu uzantıların zaten bir listesi var: .js, .dll".to_string()));
-            assert_eq!(exts_answer(&rules, Some(1), "dll"), Err("Bu uzantıların zaten bir listesi var: .dll".to_string()));
-        });
+            assert_eq!(exts_answer(&rules, None, "  "), Err("Type at least one extension.".to_string()));
+            assert_eq!(exts_answer(&rules, None, "tar.gz"), Err("This is not an extension: tar.gz".to_string()));
+            assert_eq!(exts_answer(&rules, None, "ts, js, dll"), Err("These extensions already have a list: .js, .dll".to_string()));
+            assert_eq!(exts_answer(&rules, Some(1), "dll"), Err("These extensions already have a list: .dll".to_string()));
+        }
     }
 
     #[test]
     fn a_lists_line_says_what_a_double_click_does() {
-        crate::i18n::while_turkish(|| {
-            assert_eq!(rule_line(&rule(&["dll"], &[r"C:\t\dnSpy.exe", r"C:\t\ghidraRun.bat"], true)), "Çift tıklama: dnSpy");
-            assert!(rule_line(&rule(&["exe"], &[r"C:\t\ghidraRun.bat"], false)).starts_with("Çift tıklama Windows'un varsayılanıyla açar"));
-            assert!(rule_line(&rule(&["dll"], &[], true)).starts_with("Henüz program yok"));
-        });
+        {
+            assert_eq!(rule_line(&rule(&["dll"], &[r"C:\t\dnSpy.exe", r"C:\t\ghidraRun.bat"], true)), "Double click: dnSpy");
+            assert!(rule_line(&rule(&["exe"], &[r"C:\t\ghidraRun.bat"], false)).starts_with("A double click opens with Windows' default"));
+            assert!(rule_line(&rule(&["dll"], &[], true)).starts_with("No program yet"));
+        }
     }
 }

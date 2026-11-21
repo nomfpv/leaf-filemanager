@@ -84,9 +84,9 @@ fn mb(bytes: u64) -> String {
     format!("{} MB", (bytes as f64 / 1_048_576.0).round() as u64)
 }
 
-/// 2330750 → "2.330.750" (Turkish) / "2,330,750".
+/// 2330750 → "2,330,750".
 pub(crate) fn count(n: u64) -> String {
-    let sep = if crate::i18n::t("1.000 dosya").starts_with("1.000") { '.' } else { ',' };
+    let sep = ',';
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -105,18 +105,18 @@ fn times(slow: f64, fast: f64) -> String {
 
 fn test_label(t: OpenTest) -> &'static str {
     match t {
-        OpenTest::Start => t!("Açılış (boş klasör)"),
-        OpenTest::Files1k => t!("1.000 dosya"),
-        OpenTest::Files10k => t!("10.000 dosya"),
-        OpenTest::Files100k => t!("100.000 dosya"),
-        OpenTest::Images => t!("2.000 resim"),
+        OpenTest::Start => t!("Start (empty folder)"),
+        OpenTest::Files1k => t!("1,000 files"),
+        OpenTest::Files10k => t!("10,000 files"),
+        OpenTest::Files100k => t!("100,000 files"),
+        OpenTest::Images => t!("2,000 pictures"),
     }
 }
 
 fn app_label(k: AppKind) -> &'static str {
     match k {
         AppKind::Rustyfiles => "rustyfiles",
-        AppKind::Explorer => t!("Dosya Gezgini"),
+        AppKind::Explorer => t!("File Explorer"),
         AppKind::Files => "Files",
         AppKind::FilePilot => "File Pilot",
     }
@@ -264,7 +264,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     for kind in [AppKind::Explorer, AppKind::Files, AppKind::FilePilot] {
         let here = installed.contains(&kind);
         let on = here && !st.off.contains(&kind);
-        let label = if here { app_label(kind).to_string() } else { format!("{} · {}", app_label(kind), t!("kurulu değil")) };
+        let label = if here { app_label(kind).to_string() } else { format!("{} · {}", app_label(kind), t!("not installed")) };
         chips = chips.child(chip(p, ("bench-app", kind as usize), &label, on, !here || running, move |cx| {
             let off = &mut state(cx).off;
             if !off.remove(&kind) {
@@ -273,13 +273,13 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         }));
     }
     let action = if running {
-        button("bench-stop", p, L::X, t!("Durdur"), false, |_, cx| {
+        button("bench-stop", p, L::X, t!("Stop"), false, |_, cx| {
             if let Some((_, c)) = &state(cx).running {
                 c.store(true, Ordering::Relaxed);
             }
         })
     } else {
-        button("bench-start", p, L::Play, if st.results.is_some() { t!("Yeniden çalıştır") } else { t!("Testi başlat") }, true, |_, cx| start(cx))
+        button("bench-start", p, L::Play, if st.results.is_some() { t!("Run again") } else { t!("Start the test") }, true, |_, cx| start(cx))
     };
     let mut intro = v_flex()
         .p_4()
@@ -293,20 +293,20 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                     v_flex()
                         .flex_1()
                         .min_w_0()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(t!("Bu bilgisayarda hız testi")))
-                        .child(div().text_xs().text_color(p.text_secondary).child(if machine.is_empty() { t!("Bilgisayar okunuyor…").to_string() } else { machine })),
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(t!("Speed test on this PC")))
+                        .child(div().text_xs().text_color(p.text_secondary).child(if machine.is_empty() { t!("Reading this PC…").to_string() } else { machine })),
                 )
                 .child(action),
         )
         .child(chips)
         .child(div().text_xs().text_color(p.text_secondary).child(t!(
-            "Her uygulama aynı klasörleri sırayla açar; süre, işlemci ve bellek ölçülür. Test sırasında diğer uygulamaların pencereleri açılıp kapanır: fareye ve klavyeye dokunmayın. Yaklaşık 5–10 dakika sürer; test dosyaları ilk seferde hazırlanır (~1,3 GB, yerel uygulama verisinde)."
+            "Each app opens the same folders in turn; time, CPU and memory are measured. Other apps' windows open and close during the test: don't touch the mouse or keyboard. It takes about 5–10 minutes; the test files are made the first time (~1.3 GB, in local app data)."
         )));
     if running {
         let (frac, label) = match &st.progress {
-            Some(Progress::Step { i, n, label }) => (*i as f32 / (*n).max(1) as f32, format!("{} {i}/{n} · {label}", t!("Adım"))),
-            Some(Progress::Preparing(what, f)) => (*f * 0.05, format!("{} {what}", t!("Test dosyaları hazırlanıyor:"))),
-            None => (0.0, t!("Başlıyor…").to_string()),
+            Some(Progress::Step { i, n, label }) => (*i as f32 / (*n).max(1) as f32, format!("{} {i}/{n} · {label}", t!("Step"))),
+            Some(Progress::Preparing(what, f)) => (*f * 0.05, format!("{} {what}", t!("Preparing test files:"))),
+            None => (0.0, t!("Starting…").to_string()),
         };
         intro = intro.child(
             v_flex()
@@ -316,7 +316,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         );
     }
     if let Some(e) = &st.error {
-        intro = intro.child(div().text_sm().text_color(p.danger).child(format!("{} {e}", t!("Test tamamlanamadı:"))));
+        intro = intro.child(div().text_sm().text_color(p.danger).child(format!("{} {e}", t!("The test couldn't finish:"))));
     }
     out.push(shell(p).child(intro).into_any_element());
 
@@ -335,7 +335,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             .text_xs()
             .text_color(p.text_tertiary)
             .child(div().flex_1().min_w_0().child(t!(
-                "Ortanca değerler (3 çalıştırma, ısınma turu sayılmaz). Süre: uygulama başlatıldığından pencere içeriği 500 ms boyunca değişmeyene dek. * işaretli değerlerde uygulama zaten çalışıyordu: işlemci pencere açıldıktan sonrasını, bellek tüm süreci gösterir. Bellek, Görev Yöneticisi'nin gösterdiği değerdir."
+                "Medians of 3 runs (a warm-up run isn't counted). Time: from starting the app until its window stops changing for 500 ms. * The app was already running: CPU counts from when the window appeared, memory is the whole process. Memory is the figure Task Manager shows."
             )))
             .child(
                 div()
@@ -343,7 +343,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                     .cursor_pointer()
                     .text_color(p.accent)
                     .hover(|s| s.underline())
-                    .child(t!("Test dosyalarını sil"))
+                    .child(t!("Delete test files"))
                     .on_click(|_, _, cx| {
                         std::thread::spawn(|| {
                             let _ = crate::bench::delete_test_files();
@@ -416,10 +416,10 @@ fn race_card(p: &Palette, r: &Results, race: OpenTest, elapsed: f64) -> AnyEleme
                 let color = if app == AppKind::Rustyfiles { p.accent } else { p.text_secondary };
                 (
                     div().h(px(8.)).w_full().rounded_full().bg(p.divider).child(div().h_full().w(relative(frac.max(0.005))).rounded_full().bg(color)).into_any_element(),
-                    if done { format!("{}{}", ms(m.settled_ms), if m.shared { " *" } else { "" }) } else { t!("Listeleniyor…").to_string() },
+                    if done { format!("{}{}", ms(m.settled_ms), if m.shared { " *" } else { "" }) } else { t!("Listing…").to_string() },
                 )
             }
-            (None, Some(_)) => (div().text_xs().text_color(p.text_tertiary).child(t!("ölçülemedi")).into_any_element(), "—".into()),
+            (None, Some(_)) => (div().text_xs().text_color(p.text_tertiary).child(t!("couldn't be measured")).into_any_element(), "—".into()),
             _ => (div().into_any_element(), "—".into()),
         };
         let winner = m.as_ref().is_some_and(|m| m.settled_ms == best && elapsed >= m.settled_ms);
@@ -448,8 +448,8 @@ fn race_card(p: &Palette, r: &Results, race: OpenTest, elapsed: f64) -> AnyEleme
             h_flex()
                 .gap_3()
                 .items_center()
-                .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(t!("Klasörün açılması, gerçek hızda")))
-                .child(button("bench-replay", p, L::RotateCcw, t!("Tekrar oynat"), false, move |_, cx| replay(race, cx))),
+                .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(t!("Opening a folder, at real speed")))
+                .child(button("bench-replay", p, L::RotateCcw, t!("Replay"), false, move |_, cx| replay(race, cx))),
         )
         .child(tabs)
         .child(lanes)
@@ -471,11 +471,11 @@ fn table_card(p: &Palette, r: &Results) -> AnyElement {
                     let mem = if m.private_ws > 0 { mb(m.private_ws) } else if m.private > 0 { mb(m.private) } else { mb(m.ram) };
                     (
                         format!("{}{}{}", ms(m.settled_ms), if m.shared { " *" } else { "" }, if m.timed_out { " ⏱" } else { "" }),
-                        format!("{} {} · {} {}", t!("işlemci"), ms(m.cpu_ms), t!("bellek"), mem),
+                        format!("{} {} · {} {}", t!("CPU"), ms(m.cpu_ms), t!("memory"), mem),
                         m.settled_ms == best,
                     )
                 }
-                (None, Some(e)) => ("—".to_string(), format!("{} ({})", t!("ölçülemedi"), e.chars().take(60).collect::<String>()), false),
+                (None, Some(e)) => ("—".to_string(), format!("{} ({})", t!("couldn't be measured"), e.chars().take(60).collect::<String>()), false),
                 _ => ("—".to_string(), String::new(), false),
             };
             block = block.child(
@@ -498,7 +498,7 @@ fn table_card(p: &Palette, r: &Results) -> AnyElement {
         list = list.child(block);
     }
     shell(p)
-        .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("Ayrıntılar: süre, işlemci ve bellek"))))
+        .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("Details: time, CPU and memory"))))
         .child(list)
         .into_any_element()
 }
@@ -511,14 +511,14 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
         let mb = |m: f64| format!("+{m:.0} MB");
         let mut parts = Vec::new();
         if let Some(c) = ours.0 {
-            let mut s = format!("{}: rustyfiles {}", t!("işlemci süresi"), ms(c));
+            let mut s = format!("{}: rustyfiles {}", t!("CPU time"), ms(c));
             if let Some((Some(tc), _, name)) = theirs {
                 s.push_str(&format!(" · {name} {}", ms(tc)));
             }
             parts.push(s);
         }
         if let Some(m) = ours.1 {
-            let mut s = format!("{}: {}", t!("bellek"), mb(m));
+            let mut s = format!("{}: {}", t!("memory"), mb(m));
             if let Some((_, Some(tm), _)) = theirs {
                 s.push_str(&format!(" · {}", mb(tm)));
             }
@@ -537,21 +537,21 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
         };
         // within 10 %: the disk sets the pace for both
         let verdict = if (a - b).abs() <= a.max(b) * 0.1 {
-            t!("aynı hızda").to_string()
+            t!("the same speed").to_string()
         } else if b > a {
-            t!("{x} daha hızlı").replace("{x}", &times(b, a))
+            t!("{x} faster").replace("{x}", &times(b, a))
         } else {
-            t!("{x} daha yavaş").replace("{x}", &times(a, b))
+            t!("{x} slower").replace("{x}", &times(a, b))
         };
         rows.push((label.to_string(), format!("rustyfiles {} · {windows_name} {}", ms(a), ms(b)), verdict, usage));
     };
-    versus(t!("Kopyalama: 10.000 küçük dosya"), &e.copy_small, "Windows");
-    versus(t!("Kopyalama: 1 GB'lık tek dosya"), &e.copy_big, "Windows");
-    versus(t!("ZIP çıkarma: 10.000 dosya"), &e.unzip, "Windows");
+    versus(t!("Copying: 10,000 small files"), &e.copy_small, "Windows");
+    versus(t!("Copying: one 1 GB file"), &e.copy_big, "Windows");
+    versus(t!("Extracting a ZIP: 10,000 files"), &e.unzip, "Windows");
     if let Some(s) = e.search_ms {
         let rate = e.search_entries as f64 / (s / 1000.0).max(0.001);
         let usage = cost((e.search_cpu_ms, e.search_mb), None);
-        rows.push((t!("Alt klasörlerde arama").to_string(), format!("{} {} · {}", count(e.search_entries), t!("öğe"), ms(s)), t!("saniyede {n} öğe").replace("{n}", &count(rate as u64)), usage));
+        rows.push((t!("Search in subfolders").to_string(), format!("{} {} · {}", count(e.search_entries), t!("items"), ms(s)), t!("{n} items a second").replace("{n}", &count(rate as u64)), usage));
     }
     if rows.is_empty() {
         return None;
@@ -580,7 +580,7 @@ fn engines_card(p: &Palette, r: &Results) -> Option<AnyElement> {
     }
     Some(
         shell(p)
-            .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("rustyfiles motorları ve Windows"))))
+            .child(h_flex().px_4().pt_4().pb_1().child(div().font_weight(FontWeight::SEMIBOLD).child(t!("rustyfiles' engines and Windows'"))))
             .child(list)
             .into_any_element(),
     )

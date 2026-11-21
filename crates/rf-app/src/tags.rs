@@ -95,9 +95,9 @@ pub fn parse_query(text: &str) -> Vec<(Join, String)> {
     };
     for word in text.split_whitespace() {
         let op = match word {
-            "and" | "ve" | "&" | "&&" => Some(Join::And),
-            "or" | "veya" | "|" | "||" => Some(Join::Or),
-            "not" | "değil" | "degil" | "!" => Some(Join::Not),
+            "and" | "&" | "&&" => Some(Join::And),
+            "or" | "|" | "||" => Some(Join::Or),
+            "not" | "!" => Some(Join::Not),
             _ => None,
         };
         match op {
@@ -148,7 +148,7 @@ mod tests {
     fn tag_queries_with_and_or_not() {
         assert_eq!(parse_query("kırmızı"), vec![(Join::Or, "kırmızı".into())]);
         assert_eq!(parse_query("kırmızı and iş dosyası"), vec![(Join::Or, "kırmızı".into()), (Join::And, "iş dosyası".into())]);
-        assert_eq!(parse_query("kırmızı veya mavi değil bitti"), vec![(Join::Or, "kırmızı".into()), (Join::Or, "mavi".into()), (Join::Not, "bitti".into())]);
+        assert_eq!(parse_query("kırmızı or mavi not bitti"), vec![(Join::Or, "kırmızı".into()), (Join::Or, "mavi".into()), (Join::Not, "bitti".into())]);
         assert_eq!(parse_query("not bitti"), vec![(Join::Not, "bitti".into())]);
         assert_eq!(parse_query("  "), vec![]);
 

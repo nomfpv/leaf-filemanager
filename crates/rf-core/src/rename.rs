@@ -56,21 +56,21 @@ impl RenameSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RenameError {
-    #[error("Ad boş olamaz")]
+    #[error("The name cannot be empty")]
     Empty,
-    #[error("Geçersiz karakter: < > : \" / \\ | ? * veya denetim karakteri")]
+    #[error("Invalid character: < > : \" / \\ | ? * or a control character")]
     InvalidChars,
-    #[error("Ad nokta veya boşlukla bitemez")]
+    #[error("The name cannot end with a dot or a space")]
     TrailingDotSpace,
-    #[error("Ayrılmış Windows adı")]
+    #[error("Reserved Windows name")]
     Reserved,
-    #[error("Ad çok uzun")]
+    #[error("The name is too long")]
     TooLong,
-    #[error("Aynı ada çıkan başka bir öğe var")]
+    #[error("Another item would get the same name")]
     Duplicate,
-    #[error("Klasörde bu ada sahip başka bir öğe var")]
+    #[error("An item with this name already exists in the folder")]
     Exists,
-    #[error("Geçersiz düzenli ifade: {0}")]
+    #[error("Invalid regular expression: {0}")]
     BadRegex(String),
 }
 
@@ -300,8 +300,8 @@ mod tests {
 
     #[test]
     fn counter_padding_and_step() {
-        let r = ok(compute(&items(&["a.jpg", "b.jpg", "c.png"]), &pat("Tatil_{n:03}", 1, 1)));
-        assert_eq!(r, ["Tatil_001.jpg", "Tatil_002.jpg", "Tatil_003.png"]);
+        let r = ok(compute(&items(&["a.jpg", "b.jpg", "c.png"]), &pat("Holiday_{n:03}", 1, 1)));
+        assert_eq!(r, ["Holiday_001.jpg", "Holiday_002.jpg", "Holiday_003.png"]);
         let r = ok(compute(&items(&["a.txt", "b.txt"]), &pat("{n:02}-{name}", 10, 5)));
         assert_eq!(r, ["10-a.txt", "15-b.txt"]);
         let r = ok(compute(&items(&["x.txt", "y.txt"]), &pat("f{n}", 99, 1)));

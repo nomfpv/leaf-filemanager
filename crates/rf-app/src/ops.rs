@@ -130,7 +130,7 @@ pub(crate) fn unflatten(rec: &Flattened) -> anyhow::Result<bool> {
             failed += 1;
         }
     }
-    anyhow::ensure!(failed == 0, "{failed} {}", t!("dosya eski yerine taşınamadı"));
+    anyhow::ensure!(failed == 0, "{failed} {}", t!("files could not be moved back"));
     Ok(true)
 }
 
@@ -147,7 +147,7 @@ pub(crate) fn reflatten(rec: &Flattened) -> anyhow::Result<bool> {
     for d in dirs {
         let _ = std::fs::remove_dir(&d);
     }
-    anyhow::ensure!(failed == 0, "{failed} {}", t!("dosya taşınamadı"));
+    anyhow::ensure!(failed == 0, "{failed} {}", t!("files could not be moved"));
     Ok(true)
 }
 
@@ -253,11 +253,11 @@ impl FolderView {
                 if !errors.is_empty() {
                     log::warn!("rotate: {}", errors.join("; "));
                     crate::prompt::show(
-                        t!("Döndürülemedi"),
+                        t!("Couldn't rotate"),
                         Some(errors.join("
 ")),
                         None,
-                        vec![crate::prompt::Button::new(t!("Tamam"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
+                        vec![crate::prompt::Button::new(t!("OK"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
                         window,
                         cx,
                     );
@@ -304,7 +304,7 @@ impl FolderView {
             let Ok(Some((paths, _))) = rx.await else { return };
             let work = cx.background_spawn(async move {
                 for p in paths {
-                    let stem = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Kısayol".into());
+                    let stem = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Shortcut".into());
                     // never overwrite: "x.lnk", "x (2).lnk", …
                     let mut link = dir.join(format!("{stem}.lnk"));
                     let mut n = 2;
@@ -467,11 +467,11 @@ impl FolderView {
                 .collect();
             let what = if inners.len() == 1 { format!("\"{}\"", inners[0].rsplit('/').next().unwrap_or_default()) } else { crate::i18n::items(inners.len()) };
             crate::prompt::show(
-                t!("Arşivden silinsin mi?"),
-                Some(format!("{what} {}", t!("arşivden kalıcı olarak silinecek."))),
+                t!("Delete from the archive?"),
+                Some(format!("{what} {}", t!("will be permanently deleted from the archive."))),
                 None,
                 vec![
-                    crate::prompt::Button::new(t!("Sil"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                    crate::prompt::Button::new(t!("Delete"), crate::prompt::Kind::Danger, move |_, _, cx| {
                         crate::archive_view::delete_inside(cx, archive.clone(), inners.clone());
                         Ok(())
                     }),
@@ -497,16 +497,16 @@ impl FolderView {
             crate::i18n::items(paths.len())
         };
         let (title, msg) = if permanent {
-            (t!("Kalıcı olarak silinsin mi?"), format!("{what} {}", t!("geri alınamayacak şekilde silinecek.")))
+            (t!("Delete permanently?"), format!("{what} {}", t!("will be deleted and can't be recovered.")))
         } else {
-            (t!("Geri dönüşüm kutusuna taşınsın mı?"), format!("{what} {}", t!("geri dönüşüm kutusuna taşınacak.")))
+            (t!("Move to the Recycle Bin?"), format!("{what} {}", t!("will be moved to the Recycle Bin.")))
         };
         crate::prompt::show(
             title,
             Some(msg),
             None,
             vec![
-                crate::prompt::Button::new(t!("Sil"), if permanent { crate::prompt::Kind::Danger } else { crate::prompt::Kind::Primary }, move |_, _, cx| {
+                crate::prompt::Button::new(t!("Delete"), if permanent { crate::prompt::Kind::Danger } else { crate::prompt::Kind::Primary }, move |_, _, cx| {
                     crate::status_center::delete(cx, paths.clone(), permanent);
                     Ok(())
                 }),
@@ -527,11 +527,11 @@ impl FolderView {
             let taken: Vec<String> = self.entries.iter().map(|e| e.name.to_string()).collect();
             let inner = inner.to_string_lossy().replace('\\', "/").trim_matches('/').to_string();
             if folder {
-                let name = crate::archive_view::unique_name(t!("Yeni klasör"), "", &taken);
+                let name = crate::archive_view::unique_name(t!("New folder"), "", &taken);
                 crate::archive_view::mkdir_inside(cx, archive, inner, name.clone());
                 self.set_reselect(name);
             } else {
-                let name = crate::archive_view::unique_name(t!("Yeni metin belgesi"), ".txt", &taken);
+                let name = crate::archive_view::unique_name(t!("New text document"), ".txt", &taken);
                 let tmp = std::env::temp_dir().join(format!("rustyfiles-new-{}", std::process::id()));
                 let file = tmp.join(&name);
                 if std::fs::create_dir_all(&tmp).and_then(|_| std::fs::write(&file, b"")).is_ok() {
@@ -541,7 +541,7 @@ impl FolderView {
             }
             return;
         }
-        let name = if folder { t!("Yeni klasör") } else { t!("Yeni metin belgesi") }.to_string();
+        let name = if folder { t!("New folder") } else { t!("New text document") }.to_string();
         let task = cx.background_spawn(async move {
             if folder { fileops::new_folder(&dir, &name) } else { fileops::new_text_file(&dir, &name) }
         });
@@ -564,7 +564,7 @@ impl FolderView {
         if items.is_empty() {
             return;
         }
-        let name = t!("Yeni klasör").to_string();
+        let name = t!("New folder").to_string();
         let task = cx.background_spawn(async move { fileops::new_folder(&dir, &name) });
         cx.spawn(async move |this, cx| {
             if let Ok(folder) = task.await {
@@ -583,13 +583,13 @@ impl FolderView {
     pub fn flatten_folder(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let name = rf_core::history::display_name(&dir);
         crate::prompt::show(
-            t!("Klasör düzleştirilsin mi?"),
-            Some(format!("{} \"{name}\" {}", t!("Alt klasörlerdeki tüm dosyalar"), t!("içine taşınır ve boş kalan alt klasörler silinir."))),
+            t!("Flatten folder?"),
+            Some(format!("{} \"{name}\" {}", t!("All files in subfolders"), t!("will be moved into it, and the empty subfolders will be deleted."))),
             None,
             vec![
-                crate::prompt::Button::new(t!("Düzleştir"), crate::prompt::Kind::Primary, move |_, _, cx| {
+                crate::prompt::Button::new(t!("Flatten"), crate::prompt::Kind::Primary, move |_, _, cx| {
                     let dir = dir.clone();
-                    crate::status_center::start(cx, format!("{} {name}", t!("Düzleştiriliyor:")), move |t| {
+                    crate::status_center::start(cx, format!("{} {name}", t!("Flattening:")), move |t| {
                         let mut rec = Flattened::default();
                         let r = flatten(&dir, &t, &mut rec);
                         if !rec.moves.is_empty() || !rec.removed.is_empty() {
@@ -658,8 +658,8 @@ impl FolderView {
         // Explorer's rule, said up front instead of a shell error after the fact
         const INVALID: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
         if new_name.contains(INVALID) || new_name.ends_with('.') {
-            let title = crate::t!("Yeniden adlandır").to_string();
-            let msg = format!("{}\n\n{}", new_name, crate::t!("Dosya adı şu karakterleri içeremez: \\ / : * ? \" < > | ve nokta ile bitemez."));
+            let title = crate::t!("Rename").to_string();
+            let msg = format!("{}\n\n{}", new_name, crate::t!("A file name can't contain any of these characters: \\ / : * ? \" < > | and can't end with a period."));
             crate::prompt::notice(title, msg, window, cx);
             cx.notify();
             return;
@@ -690,8 +690,8 @@ impl FolderView {
                 // (a dialog of our own, in the window: it was a Windows message box, which opened behind the window, issue 30)
                 let asks = warn && !self.entry(ei).is_dir() && ext(&old).is_some() && ext(&old) != ext(&new_name);
                 let confirm_rx = if asks {
-                    let msg = crate::t!("Dosya adı uzantısını değiştirirseniz dosya kullanılamaz hale gelebilir. Değiştirmek istediğinizden emin misiniz?").to_string();
-                    Some(crate::prompt::ask(crate::t!("Dosya adı uzantısı"), msg, window, cx))
+                    let msg = crate::t!("If you change a file name extension, the file might become unusable. Are you sure you want to change it?").to_string();
+                    Some(crate::prompt::ask(crate::t!("File name extension"), msg, window, cx))
                 } else {
                     None
                 };
@@ -714,8 +714,8 @@ impl FolderView {
                         })
                         .await;
                     if clash {
-                        let msg = format!("{}\n\n{}", n2, crate::t!("Bu adda bir öğe zaten var. Başka bir ad deneyin."));
-                        let _ = handle.update(cx, |_, window, cx| crate::prompt::notice(crate::t!("Yeniden adlandır"), msg, window, cx));
+                        let msg = format!("{}\n\n{}", n2, crate::t!("An item with this name already exists. Try another name."));
+                        let _ = handle.update(cx, |_, window, cx| crate::prompt::notice(crate::t!("Rename"), msg, window, cx));
                         let _ = this.update(cx, |v, cx| v.rename_failed(cx));
                         return;
                     }
@@ -758,46 +758,46 @@ impl FolderView {
         let item = |id: u32, label: &str| ExtraItem { id, label: label.to_string(), enabled: true };
         let extra: Vec<ExtraItem> = if background {
             vec![
-                item(MENU_NEW_FOLDER, t!("Yeni klasör\tCtrl+Shift+N")),
-                item(MENU_NEW_TEXT, t!("Yeni metin belgesi")),
-                ExtraItem { id: MENU_PASTE, label: t!("Yapıştır\tCtrl+V").into(), enabled: rf_win::clipboard::can_paste() },
-                item(MENU_TERMINAL, t!("Terminalde aç")),
-                item(MENU_COPY_PATH, t!("Yolu kopyala")),
+                item(MENU_NEW_FOLDER, t!("New folder\tCtrl+Shift+N")),
+                item(MENU_NEW_TEXT, t!("New text document")),
+                ExtraItem { id: MENU_PASTE, label: t!("Paste\tCtrl+V").into(), enabled: rf_win::clipboard::can_paste() },
+                item(MENU_TERMINAL, t!("Open in terminal")),
+                item(MENU_COPY_PATH, t!("Copy path")),
             ]
         } else {
             let mut v = Vec::new();
             if self.is_search() && items.len() == 1 {
-                v.push(item(MENU_OPEN_LOCATION, t!("Dosya konumunu aç")));
+                v.push(item(MENU_OPEN_LOCATION, t!("Open file location")));
             }
             if single_dir {
-                v.push(item(MENU_NEW_TAB, t!("Yeni sekmede aç")));
-                v.push(item(MENU_PIN, t!("Kenar çubuğuna sabitle")));
-                v.push(item(MENU_TERMINAL, t!("Terminalde aç")));
+                v.push(item(MENU_NEW_TAB, t!("Open in new tab")));
+                v.push(item(MENU_PIN, t!("Pin to sidebar")));
+                v.push(item(MENU_TERMINAL, t!("Open in terminal")));
             }
-            v.push(item(MENU_COPY_PATH, t!("Yolu kopyala\tCtrl+Shift+C")));
+            v.push(item(MENU_COPY_PATH, t!("Copy path\tCtrl+Shift+C")));
             if items.len() > 1 && !self.is_search() {
-                v.push(item(MENU_BULK_RENAME, t!("Toplu yeniden adlandır…\tF2")));
+                v.push(item(MENU_BULK_RENAME, t!("Bulk rename…\tF2")));
             }
             if !items.is_empty() && items.iter().all(|p| rf_archive::is_supported(p)) {
-                v.push(item(MENU_EXTRACT_HERE, t!("Buraya çıkar")));
-                v.push(item(MENU_EXTRACT_SMART, t!("Akıllı çıkar")));
+                v.push(item(MENU_EXTRACT_HERE, t!("Extract here")));
+                v.push(item(MENU_EXTRACT_SMART, t!("Extract smartly")));
                 if items.len() == 1 {
-                    v.push(item(MENU_EXTRACT_TO, &format!("{} {}\\", t!("Klasöre çıkar:"), archive_stem(&items[0]))));
+                    v.push(item(MENU_EXTRACT_TO, &format!("{} {}\\", t!("Extract to folder:"), archive_stem(&items[0]))));
                 } else {
-                    v.push(item(MENU_EXTRACT_TO, t!("Her birini kendi klasörüne çıkar")));
+                    v.push(item(MENU_EXTRACT_TO, t!("Extract each to its own folder")));
                 }
-                v.push(item(MENU_EXTRACT_PICK, t!("Şuraya çıkar…")));
+                v.push(item(MENU_EXTRACT_PICK, t!("Extract to…")));
             }
-            v.push(item(MENU_ZIP, t!("ZIP olarak sıkıştır")));
-            v.push(item(MENU_7Z, t!("7z olarak sıkıştır")));
-            v.push(item(MENU_TAGS, t!("Etiketle…")));
-            v.push(item(MENU_SHELF, t!("Rafa ekle\tCtrl+Shift+S")));
+            v.push(item(MENU_ZIP, t!("Compress to ZIP")));
+            v.push(item(MENU_7Z, t!("Compress to 7z")));
+            v.push(item(MENU_TAGS, t!("Tag…")));
+            v.push(item(MENU_SHELF, t!("Add to shelf\tCtrl+Shift+S")));
             if self.dual {
                 if single_dir {
-                    v.push(item(MENU_OTHER_OPEN, t!("Diğer panelde aç")));
+                    v.push(item(MENU_OTHER_OPEN, t!("Open in other pane")));
                 }
-                v.push(item(MENU_OTHER_COPY, t!("Diğer panele kopyala")));
-                v.push(item(MENU_OTHER_MOVE, t!("Diğer panele taşı")));
+                v.push(item(MENU_OTHER_COPY, t!("Copy to other pane")));
+                v.push(item(MENU_OTHER_MOVE, t!("Move to other pane")));
             }
             v
         };
@@ -871,7 +871,7 @@ impl FolderView {
                     if let Some(first) = tag_items.first() {
                         let dir = first.parent().map(|p| p.to_path_buf()).unwrap_or_default();
                         let stem = if tag_items.len() == 1 {
-                            first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Arşiv".into())
+                            first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into())
                         } else {
                             rf_core::history::display_name(&dir)
                         };
@@ -937,7 +937,7 @@ enum Pasted {
 fn paste_as_file(what: Pasted, dir: PathBuf, view: WeakEntity<FolderView>, cx: &mut App) {
     let task = cx.background_spawn(async move {
         let (stem, ext, bytes) = match what {
-            Pasted::Text(t) => (t!("Yapıştırılan metin"), ".txt".to_string(), t.into_bytes()),
+            Pasted::Text(t) => (t!("Pasted text"), ".txt".to_string(), t.into_bytes()),
             Pasted::Image(i) => {
                 let (ext, bytes) = match i.format {
                     ImageFormat::Png => ("png", i.bytes.clone()),
@@ -952,7 +952,7 @@ fn paste_as_file(what: Pasted, dir: PathBuf, view: WeakEntity<FolderView>, cx: &
                         ("png", png)
                     }
                 };
-                (t!("Yapıştırılan resim"), format!(".{ext}"), bytes)
+                (t!("Pasted picture"), format!(".{ext}"), bytes)
             }
         };
         let path = fileops::unique_name(&dir, stem, &ext);
@@ -1085,10 +1085,10 @@ impl FolderView {
             if let Ok(Some(why)) = rx.await {
                 let _ = cx.update(|window, cx| {
                     crate::prompt::show(
-                        format!("{}: {}", t!("Program başlatılamadı"), rf_core::openrules::program_label(&program)),
+                        format!("{}: {}", t!("The program could not be started"), rf_core::openrules::program_label(&program)),
                         Some(format!("{program}\n{why}")),
                         None,
-                        vec![crate::prompt::Button::new(t!("Tamam"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
+                        vec![crate::prompt::Button::new(t!("OK"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
                         window,
                         cx,
                     );

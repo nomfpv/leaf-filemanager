@@ -79,13 +79,13 @@ impl Refusal {
     /// The reason, in a Turkish text the app translates.
     pub fn text(self) -> &'static str {
         match self {
-            Refusal::NotAbsolute => T!("İzlenecek klasörü seçin"),
-            Refusal::DriveRoot => T!("Bir sürücünün kökü düzenlenemez: daha belirli bir klasör seçin"),
-            Refusal::WindowsFolder => T!("Windows klasörü düzenlenemez"),
-            Refusal::ProgramFiles => T!("Program Files klasörleri düzenlenemez"),
-            Refusal::UserProfile => T!("Kullanıcı klasörünün kendisi düzenlenemez: İndirilenler gibi bir alt klasör seçin"),
-            Refusal::AppData => T!("AppData klasörü düzenlenemez: uygulamaların ayarları orada durur"),
-            Refusal::AppOwn => T!("rustyfiles'ın kendi ayar ve veri klasörü düzenlenemez"),
+            Refusal::NotAbsolute => T!("Choose the folder to watch"),
+            Refusal::DriveRoot => T!("The root of a drive cannot be organized: choose a more specific folder"),
+            Refusal::WindowsFolder => T!("The Windows folder cannot be organized"),
+            Refusal::ProgramFiles => T!("Program Files folders cannot be organized"),
+            Refusal::UserProfile => T!("The user folder itself cannot be organized: choose a subfolder such as Downloads"),
+            Refusal::AppData => T!("The AppData folder cannot be organized: apps keep their settings there"),
+            Refusal::AppOwn => T!("rustyfiles' own settings and data folder cannot be organized"),
         }
     }
 }

@@ -130,7 +130,7 @@ mod tests {
             title: evil,
             lines: &["a & b <c>", "it's"],
             launch: "ferry:open:q",
-            buttons: &[Button { label: "Kabul et".into(), argument: "ferry:yes:q".into() }],
+            buttons: &[Button { label: "Accept".into(), argument: "ferry:yes:q".into() }],
             stays: true,
         };
         let x = xml(&t);

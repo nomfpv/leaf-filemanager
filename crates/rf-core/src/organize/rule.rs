@@ -268,14 +268,14 @@ impl RuleProblem {
     /// The message (a Turkish text; the app translates it).
     pub fn text(&self) -> &'static str {
         match self {
-            RuleProblem::NoName => T!("Kurala bir ad verin"),
-            RuleProblem::FolderNotAbsolute => T!("İzlenecek klasörü seçin"),
-            RuleProblem::EmptyCondition(_) => T!("Boş bir koşul var: değerini yazın ya da koşulu kaldırın"),
-            RuleProblem::NoDestination => T!("Hedefi belirtin"),
-            RuleProblem::UnknownVariable(_) => T!("Bilinmeyen değişken"),
-            RuleProblem::BadTemplate => T!("Hedef şablonu geçersiz: yasak karakter ya da \"..\" var"),
-            RuleProblem::RenameNeedsName => T!("Yeni ad şablonu bir dosya adı olmalı: klasör ayracı içeremez"),
-            RuleProblem::RecycleNeedsCondition => T!("Geri Dönüşüm Kutusu'na göndermek için en az bir koşul ekleyin"),
+            RuleProblem::NoName => T!("Give the rule a name"),
+            RuleProblem::FolderNotAbsolute => T!("Choose the folder to watch"),
+            RuleProblem::EmptyCondition(_) => T!("A condition is empty: enter a value or remove it"),
+            RuleProblem::NoDestination => T!("Specify the destination"),
+            RuleProblem::UnknownVariable(_) => T!("Unknown variable"),
+            RuleProblem::BadTemplate => T!("The destination template is invalid: it has a forbidden character or \"..\""),
+            RuleProblem::RenameNeedsName => T!("The new name template must be a file name: it cannot contain a folder separator"),
+            RuleProblem::RecycleNeedsCondition => T!("Add at least one condition before sending files to the Recycle Bin"),
         }
     }
 }
@@ -527,7 +527,7 @@ mod tests {
     #[cfg_attr(not(windows), ignore = "Windows paths and APIs; a Unix test comes when the Mac port uses this")]
     fn rules_are_validated() {
         let ok = Rule {
-            name: "Resimler".into(),
+            name: "Pictures".into(),
             folder: PathBuf::from(r"C:\Users\user\Downloads"),
             conditions: vec![Condition::Extension { list: vec!["jpg".into()] }],
             action: Action::MoveTo { folder: PathBuf::from(r"C:\Users\user\Pictures") },

@@ -134,9 +134,9 @@ pub fn sync(cx: &mut App) {
     for (id, name) in missing {
         if !TOLD.lock().unwrap().contains(&id) {
             TOLD.lock().unwrap().push(id);
-            let msg = format!("«{name}»: {}", t!("Klasör bulunamadı ya da açılamadı; kural kendiliğinden çalışmıyor. Klasör yerine gelince kuralı kaydedin ya da rustyfiles'ı yeniden başlatın."));
+            let msg = format!("«{name}»: {}", t!("The folder was not found or cannot be opened; the rule is not running by itself. Save the rule once the folder is back, or restart rustyfiles."));
             log::warn!("organizer: {msg}");
-            crate::status_center::start(cx, t!("Dosya düzenleyici").to_string(), move |_| anyhow::bail!("{msg}"));
+            crate::status_center::start(cx, t!("File organizer").to_string(), move |_| anyhow::bail!("{msg}"));
         }
     }
     if !cx.has_global::<Auto>() {
@@ -235,7 +235,7 @@ fn after_plan(key: String, want: Want, rules: Vec<Rule>, plan: rf_core::organize
     let mut complaints: Vec<(u32, String)> = Vec::new();
     for (id, name) in &plan.loops {
         if auto_ids.contains(id) {
-            complaints.push((*id, format!("«{name}»: {}", t!("kural kendi sonucunu yeniden yakalıyor; çalıştırılmadı. Koşulu daraltın ya da dosyaları başka bir klasöre gönderin."))));
+            complaints.push((*id, format!("«{name}»: {}", t!("the rule would match its own result again; not run. Narrow the condition or send the files to another folder."))));
         }
     }
     for (id, name, why) in &plan.unusable {
@@ -259,7 +259,7 @@ fn after_plan(key: String, want: Want, rules: Vec<Rule>, plan: rf_core::organize
     }
     for (_, msg) in complaints {
         log::warn!("organizer: {msg}");
-        crate::status_center::start(cx, t!("Dosya düzenleyici").to_string(), move |_| anyhow::bail!("{msg}"));
+        crate::status_center::start(cx, t!("File organizer").to_string(), move |_| anyhow::bail!("{msg}"));
     }
     if steps.is_empty() {
         done(&key, cx);

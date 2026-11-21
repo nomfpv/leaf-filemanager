@@ -8,7 +8,7 @@ use rf_core::hotkey::Refusal;
 use rf_core::recycle_bin::{DeleteFacts, DeleteReport, Problem};
 
 pub fn delete_title() -> &'static str {
-    t!("Kalıcı olarak silinsin mi?")
+    t!("Delete permanently?")
 }
 
 /// The confirmation's message: how many items (the name when it is one), how much data, that it cannot be undone.
@@ -18,13 +18,13 @@ pub fn delete_message(facts: DeleteFacts, name: Option<&str>) -> String {
         Some(n) if facts.count == 1 => format!("\"{n}\""),
         _ => crate::i18n::items(facts.count),
     };
-    let mut s = format!("{subject} {}", t!("Geri Dönüşüm Kutusu'ndan kalıcı olarak silinecek."));
+    let mut s = format!("{subject} {}", t!("will be permanently deleted from the Recycle Bin."));
     let mut detail = Vec::new();
     if facts.count > 1 {
         detail.push(crate::i18n::items(facts.count));
     }
     if facts.folders > 0 {
-        detail.push(format!("{} {}", t!("Aralarındaki klasör sayısı:"), facts.folders));
+        detail.push(format!("{} {}", t!("Folders among them:"), facts.folders));
     }
     if facts.bytes > 0 {
         detail.push(format::size(facts.bytes));
@@ -34,31 +34,31 @@ pub fn delete_message(facts: DeleteFacts, name: Option<&str>) -> String {
         s.push_str(&detail.join(" · "));
     }
     s.push('\n');
-    s.push_str(t!("Bu işlem geri alınamaz."));
+    s.push_str(t!("This cannot be undone."));
     s
 }
 
 /// What the bin view's status line says after a deletion, and whether it is a problem (shown as one).
 pub fn delete_status(r: &DeleteReport) -> (String, bool) {
     if r.requested == 0 && r.error.is_none() {
-        return (t!("Silinecek öğe Geri Dönüşüm Kutusu'nda bulunamadı").to_string(), true);
+        return (t!("The items to delete were not found in the Recycle Bin").to_string(), true);
     }
     let mut parts = Vec::new();
     if r.unknown {
         // the request may still run, or may have run: neither "deleted" nor "not deleted" is said
-        parts.push(t!("Sonuç bilinmiyor; öğeler silinmiş olabilir").to_string());
+        parts.push(t!("Outcome unknown; the items may have been deleted").to_string());
     }
     if r.deleted > 0 {
-        parts.push(format!("{} {}", crate::i18n::items(r.deleted), t!("kalıcı olarak silindi")));
+        parts.push(format!("{} {}", crate::i18n::items(r.deleted), t!("permanently deleted")));
     }
     if r.left > 0 {
-        parts.push(format!("{} {}", crate::i18n::items(r.left), t!("silinemedi")));
+        parts.push(format!("{} {}", crate::i18n::items(r.left), t!("could not be deleted")));
     }
     if r.collateral > 0 {
-        parts.push(format!("{} {}", crate::i18n::items(r.collateral), t!("istenmediği halde kutudan kalktı")));
+        parts.push(format!("{} {}", crate::i18n::items(r.collateral), t!("left the bin although they were not asked for")));
     }
     if parts.is_empty() {
-        parts.push(t!("Hiçbir öğe silinmedi").to_string());
+        parts.push(t!("No item was deleted").to_string());
     }
     let mut s = parts.join(" · ");
     if let Some(e) = &r.error {
@@ -71,20 +71,20 @@ pub fn delete_status(r: &DeleteReport) -> (String, bool) {
 /// One line for a size that cannot be saved. `capacity_mb` is the drive's size in MB (0 = unknown).
 pub fn problem_text(p: Problem) -> String {
     match p {
-        Problem::NotANumber => t!("Boyut, megabayt olarak bir tam sayı olmalı").to_string(),
-        Problem::TooSmall => t!("Boyut en az 1 MB olmalı").to_string(),
-        Problem::TooBig(0) => t!("Boyut çok büyük").to_string(),
-        Problem::TooBig(cap) => format!("{} {}", t!("Boyut sürücüden büyük olamaz:"), format::size(cap * 1024 * 1024)),
+        Problem::NotANumber => t!("The size must be a whole number of megabytes").to_string(),
+        Problem::TooSmall => t!("The size must be at least 1 MB").to_string(),
+        Problem::TooBig(0) => t!("The size is too large").to_string(),
+        Problem::TooBig(cap) => format!("{} {}", t!("The size cannot exceed the drive's:"), format::size(cap * 1024 * 1024)),
     }
 }
 
 /// The one line the shortcut key field shows when a combination is not taken.
 pub fn refusal_text(r: Refusal) -> &'static str {
     match r {
-        Refusal::OnlyModifier => t!("Ctrl, Alt ya da Shift tek başına olmaz; bir tuşa da basın"),
-        Refusal::WinKey => t!("Windows tuşu kısayol tuşunda kullanılamaz"),
-        Refusal::KeyNotAllowed => t!("Bu tuş kısayol tuşu olamaz"),
-        Refusal::Reserved => t!("Windows bu tuş birleşimini kendine ayırmış"),
+        Refusal::OnlyModifier => t!("Ctrl, Alt or Shift alone will not do; press a key too"),
+        Refusal::WinKey => t!("The Windows key cannot be part of a shortcut key"),
+        Refusal::KeyNotAllowed => t!("This key cannot be a shortcut key"),
+        Refusal::Reserved => t!("Windows keeps this key combination for itself"),
     }
 }
 

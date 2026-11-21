@@ -27,7 +27,7 @@ impl Render for DocView {
         let p = crate::theme::Palette::for_window(window);
         let page = div().id("dl-doc-scroll").size_full().overflow_y_scroll().bg(p.content_bg).text_color(p.text).px_8().py_6();
         match &self.doc {
-            None => div().size_full().p_6().text_sm().text_color(p.text_secondary).child(t!("Açılıyor…")).into_any_element(),
+            None => div().size_full().p_6().text_sm().text_color(p.text_secondary).child(t!("Opening…")).into_any_element(),
             Some(Err(e)) => div().size_full().p_4().text_color(p.danger).child(crate::i18n::td(e)).into_any_element(),
             Some(Ok(Doc::Markdown(md))) => page.child(TextView::markdown("dl-doc", SharedString::from(md.clone()))).into_any_element(),
             Some(Ok(Doc::Html(html))) => page.child(TextView::html("dl-doc", SharedString::from(html.clone()))).into_any_element(),

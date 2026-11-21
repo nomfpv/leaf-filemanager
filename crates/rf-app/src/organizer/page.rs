@@ -46,7 +46,7 @@ fn problem_card(p: &Palette, problem: &Problem, blocked: bool) -> AnyElement {
                 .items_center()
                 .child(Icon::new(L::TriangleAlert).size(px(18.)).flex_shrink_0().text_color(p.danger))
                 .child(div().flex_1().min_w_0().text_sm().child(text))
-                .when(!blocked, |d| d.child(button("org-problem-ok", p, t!("Tamam"), |_, cx| super::dismiss_problem(cx)))),
+                .when(!blocked, |d| d.child(button("org-problem-ok", p, t!("OK"), |_, cx| super::dismiss_problem(cx)))),
         )
         .into_any_element()
 }
@@ -75,7 +75,7 @@ fn rule_card(p: &Palette, r: &Rule, first: bool, last: bool, refusal: Option<&'s
                                 .gap_2()
                                 .items_center()
                                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).when(!on, |d| d.text_color(p.text_tertiary)).child(r.name.clone()))
-                                .when(r.auto, |d| d.child(div().px_1p5().rounded(px(4.)).border_1().border_color(p.accent).text_xs().text_color(p.accent).child(t!("otomatik")))),
+                                .when(r.auto, |d| d.child(div().px_1p5().rounded(px(4.)).border_1().border_color(p.accent).text_xs().text_color(p.accent).child(t!("automatic")))),
                         )
                         .child(div().text_xs().text_color(p.text_secondary).child(words))
                         .child(
@@ -85,7 +85,7 @@ fn rule_card(p: &Palette, r: &Rule, first: bool, last: bool, refusal: Option<&'s
                                 .overflow_hidden()
                                 .text_ellipsis()
                                 .whitespace_nowrap()
-                                .child(format!("{}: {}{}", t!("Klasör"), r.folder.display(), if r.subfolders { format!(" · {}", t!("alt klasörler dahil")) } else { String::new() })),
+                                .child(format!("{}: {}{}", t!("Folder"), r.folder.display(), if r.subfolders { format!(" · {}", t!("subfolders included")) } else { String::new() })),
                         )
                         .children(refusal.map(|why| div().text_xs().text_color(p.danger).child(crate::i18n::td(why)))),
                 )
@@ -105,23 +105,23 @@ fn rule_card(p: &Palette, r: &Rule, first: bool, last: bool, refusal: Option<&'s
                 .pl(px(50.))
                 .gap_2()
                 .items_center()
-                .child(button(("org-run", id as usize), p, t!("Şimdi çalıştır"), move |window, cx| super::run_rule_now(id, window, cx)))
-                .child(button(("org-edit", id as usize), p, t!("Kuralı değiştir"), move |window, cx| super::edit_rule(Some(id), None, window, cx)))
-                .child(button(("org-del", id as usize), p, t!("Sil"), move |window, cx| delete_dialog(id, window, cx)))
+                .child(button(("org-run", id as usize), p, t!("Run now"), move |window, cx| super::run_rule_now(id, window, cx)))
+                .child(button(("org-edit", id as usize), p, t!("Edit rule"), move |window, cx| super::edit_rule(Some(id), None, window, cx)))
+                .child(button(("org-del", id as usize), p, t!("Delete"), move |window, cx| delete_dialog(id, window, cx)))
                 .child(div().flex_1())
-                .when(!first, |d| d.child(small_button(("org-up", id as usize), L::ChevronUp, t!("Yukarı taşı (önce bu kural denenir)"), p, move |_, cx| super::update(cx, |f| f.shift(id, -1)))))
-                .when(!last, |d| d.child(small_button(("org-down", id as usize), L::ChevronDown, t!("Aşağı taşı"), p, move |_, cx| super::update(cx, |f| f.shift(id, 1))))),
+                .when(!first, |d| d.child(small_button(("org-up", id as usize), L::ChevronUp, t!("Move up (this rule is tried first)"), p, move |_, cx| super::update(cx, |f| f.shift(id, -1)))))
+                .when(!last, |d| d.child(small_button(("org-down", id as usize), L::ChevronDown, t!("Move down"), p, move |_, cx| super::update(cx, |f| f.shift(id, 1))))),
         )
         .into_any_element()
 }
 
 fn delete_dialog(id: u32, window: &mut Window, cx: &mut App) {
     crate::prompt::show(
-        t!("Kural silinsin mi?"),
-        Some(t!("Kural kaldırılır. Daha önce düzenlenmiş dosyalara dokunulmaz.").to_string()),
+        t!("Delete this rule?"),
+        Some(t!("The rule is removed. Files organized before are not touched.").to_string()),
         None,
         vec![
-            crate::prompt::Button::new(t!("Sil"), crate::prompt::Kind::Danger, move |_, _, cx| {
+            crate::prompt::Button::new(t!("Delete"), crate::prompt::Kind::Danger, move |_, _, cx| {
                 super::update(cx, |f| f.remove(id));
                 Ok(())
             }),
@@ -145,19 +145,19 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     out.push(card(
         p,
         L::Zap,
-        t!("Dosyalar geldikçe kendiliğinden düzenle"),
-        Some(t!("Açıkken, \"kendiliğinden çalıştır\" seçili kuralların klasörleri izlenir; yeni gelen dosyalar 3 saniye durulduktan sonra önizleme gösterilmeden taşınır, yeniden adlandırılır ya da Geri Dönüşüm Kutusu'na gönderilir. Kapalıyken hiçbir şey izlenmez ve çalışmaz.")),
+        t!("Organize files by themselves as they arrive"),
+        Some(t!("When on, the folders of rules set to run by themselves are watched; new files are moved, renamed or sent to the Recycle Bin 3 seconds after changes settle, without a preview. When off, nothing is watched and nothing runs.")),
         switch("org-auto", p, auto_on, move |_, cx| super::update(cx, |f| f.auto_enabled = !auto_on)),
     ));
-    out.push(section(p, t!("Kurallar")));
+    out.push(section(p, t!("Rules")));
     out.push(
         shell(p)
             .child(card_body(
                 p,
                 L::ListFilter,
-                t!("Düzenleme kuralları").into(),
-                Some(t!("Bir dosyaya uyan ilk kural uygulanır. Elle çalıştırmada önce önizleme gösterilir; kendiliğinden çalışan kurallar önizleme göstermez. Her çalıştırma, Durum Merkezi'ndeki satırından tek hamlede geri alınabilir.").into()),
-                Some(button("org-new", p, t!("Yeni kural"), |window, cx| super::edit_rule(None, None, window, cx))),
+                t!("Organizing rules").into(),
+                Some(t!("The first rule that matches a file is applied. Running by hand shows a preview first; rules that run by themselves show none. Every run can be undone in one step from its row in the Status Center.").into()),
+                Some(button("org-new", p, t!("New rule"), |window, cx| super::edit_rule(None, None, window, cx))),
             ))
             .into_any_element(),
     );
@@ -167,9 +167,9 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                 .child(card_body(
                     p,
                     L::Sparkles,
-                    t!("Henüz kural yok").into(),
-                    Some(t!("Bir klasör seçin, hangi dosyalara bakacağını yazın ve nereye gideceklerini belirleyin. Hiçbir kural siz kaydedene kadar oluşmaz.").into()),
-                    Some(button("org-starter", p, t!("Örnek kuralı dene"), |window, cx| super::edit_rule(None, Some(super::starter_rule()), window, cx))),
+                    t!("No rules yet").into(),
+                    Some(t!("Choose a folder, say which files to look at and where they should go. No rule is made until you save it.").into()),
+                    Some(button("org-starter", p, t!("Try the example rule"), |window, cx| super::edit_rule(None, Some(super::starter_rule()), window, cx))),
                 ))
                 .child(
                     div()
@@ -178,7 +178,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                         .pl(px(50.))
                         .text_xs()
                         .text_color(p.text_secondary)
-                        .child(t!("Örnek: İndirilenler klasöründeki resimler Resimler\\{year}\\{month} klasörüne gitsin.")),
+                        .child(t!("Example: images in Downloads go to Pictures\\{year}\\{month}.")),
                 )
                 .into_any_element(),
         );

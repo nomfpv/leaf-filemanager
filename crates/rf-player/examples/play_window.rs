@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
             let mut msg = MSG::default();
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
-                    println!("{frames} kare gösterildi");
+                    println!("{frames} frames shown");
                     return Ok(());
                 }
                 let _ = TranslateMessage(&msg);
@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
                 shot_done = true;
             }
             if player.state().ended {
-                println!("{frames} kare gösterildi, {:?}", player.state());
+                println!("{frames} frames shown, {:?}", player.state());
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(4));

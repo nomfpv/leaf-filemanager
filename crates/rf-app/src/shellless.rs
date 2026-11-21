@@ -12,23 +12,23 @@ use rf_win::engine_guard::{EngineStalled, NoShellEngine, Op, PartlyDone};
 pub fn op_failure_text(err: &anyhow::Error) -> String {
     if let Some(n) = err.downcast_ref::<NoShellEngine>() {
         return match n.op {
-            Op::RecycleDelete => crate::t!("Geri Dönüşüm Kutusu'na taşıma Windows kabuğunu (Explorer) gerektiriyor ve kabuk çalışmıyor. Hiçbir şey silinmedi; kalıcı silme kullanılabilir.").to_string(),
-            Op::Copy | Op::Move => crate::t!("Bu kopyalama ya da taşıma Windows kabuğunu (Explorer) gerektiriyor ve kabuk çalışmıyor. Hiçbir şey değiştirilmedi.").to_string(),
-            Op::RestoreFromBin | Op::DeleteFromBin => crate::t!("Geri Dönüşüm Kutusu işlemi Windows kabuğunu (Explorer) gerektiriyor ve kabuk çalışmıyor. Hiçbir şey değiştirilmedi.").to_string(),
-            Op::PermanentDelete | Op::Rename => crate::t!("Bazı öğeler silinemedi (kilitli, salt okunur ya da izin yok) ve ayrıntıyı gösterecek Windows kabuğu (Explorer) çalışmıyor.").to_string(),
+            Op::RecycleDelete => crate::t!("Moving to the Recycle Bin needs the Windows shell (Explorer), which is not running. Nothing was deleted; permanent delete is still available.").to_string(),
+            Op::Copy | Op::Move => crate::t!("This copy or move needs the Windows shell (Explorer), which is not running. Nothing was changed.").to_string(),
+            Op::RestoreFromBin | Op::DeleteFromBin => crate::t!("This Recycle Bin operation needs the Windows shell (Explorer), which is not running. Nothing was changed.").to_string(),
+            Op::PermanentDelete | Op::Rename => crate::t!("Some items could not be deleted (locked, read-only or no permission), and the Windows shell (Explorer) that would show the details is not running.").to_string(),
         };
     }
     // our own engine did its part first: the sentence says how much is left and that the rest was done (never "nothing was changed")
     if let Some(p) = err.downcast_ref::<PartlyDone>() {
         let n = p.left.unwrap_or(0).to_string();
         return match p.op {
-            Op::Copy => crate::t!("{n} öğe kopyalanamadı: bunun için Windows kabuğu (Explorer) gerekiyor ve kabuk çalışmıyor. Geri kalan her şey yapıldı.").replace("{n}", &n),
-            Op::Move => crate::t!("{n} öğe taşınamadı: bunun için Windows kabuğu (Explorer) gerekiyor ve kabuk çalışmıyor. Geri kalan her şey yapıldı.").replace("{n}", &n),
-            _ => crate::t!("Bazı öğeler silinemedi (kilitli, salt okunur ya da izin yok); geri kalanı silindi. Ayrıntıyı gösterecek Windows kabuğu (Explorer) çalışmıyor.").to_string(),
+            Op::Copy => crate::t!("{n} items could not be copied: that needs the Windows shell (Explorer) and no shell is running. Everything else was done.").replace("{n}", &n),
+            Op::Move => crate::t!("{n} items could not be moved: that needs the Windows shell (Explorer) and no shell is running. Everything else was done.").replace("{n}", &n),
+            _ => crate::t!("Some items could not be deleted (locked, read-only or access denied); the rest was deleted. No Windows shell (Explorer) is running to show details.").to_string(),
         };
     }
     if let Some(s) = err.downcast_ref::<EngineStalled>() {
-        return crate::t!("Windows'un dosya motoru {n} saniyede başlamadı; Explorer kapanmış ya da takılmış olabilir. İşlem yine de bitebilir: Windows'un kendi penceresine bakın.").replace("{n}", &s.waited.as_secs().to_string());
+        return crate::t!("Windows' file engine did not start within {n} seconds; Explorer may have closed or hung. The operation may still finish: look at Windows' own window.").replace("{n}", &s.waited.as_secs().to_string());
     }
     format!("{err:#}")
 }
@@ -46,10 +46,10 @@ mod tests {
         // an operation our engine did part of is told as partly done, with the count
         let p: anyhow::Error = PartlyDone { op: Op::Move, left: Some(3) }.into();
         let text = op_failure_text(&p);
-        assert!(text.contains('3') && !text.contains("{n}") && text.contains("Geri kalan"), "{text}");
-        assert!(!text.contains("Hiçbir şey değiştirilmedi"), "{text}");
+        assert!(text.contains('3') && !text.contains("{n}") && text.contains("Everything else was done"), "{text}");
+        assert!(!text.contains("Nothing was changed"), "{text}");
         let d: anyhow::Error = PartlyDone { op: Op::PermanentDelete, left: None }.into();
-        assert!(op_failure_text(&d).contains("geri kalanı silindi"));
+        assert!(op_failure_text(&d).contains("the rest was deleted"));
         // anything else is its own text
         assert_eq!(op_failure_text(&anyhow::anyhow!("disk full")), "disk full");
     }

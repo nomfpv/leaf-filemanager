@@ -89,7 +89,7 @@ fn zip_text(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Option<Stri
 }
 
 fn open_zip(path: &Path) -> Result<zip::ZipArchive<std::fs::File>> {
-    zip::ZipArchive::new(std::fs::File::open(path)?).context("Belge açılamadı (zip değil)")
+    zip::ZipArchive::new(std::fs::File::open(path)?).context("Couldn't open the document (not a zip)")
 }
 
 // ---------------------------------------------------------------- Markdown writing
@@ -291,9 +291,9 @@ fn docx_blocks(parent: roxmltree::Node, out: &mut String) -> bool {
 
 fn docx(path: &Path) -> Result<String> {
     let mut zip = open_zip(path)?;
-    let xml = zip_text(&mut zip, "word/document.xml").context("Belgede metin bulunamadı")?;
-    let doc = roxmltree::Document::parse(&xml).context("Belge okunamadı")?;
-    let Some(body) = doc.descendants().find(|n| n.tag_name().name() == "body") else { bail!("Belgede metin bulunamadı") };
+    let xml = zip_text(&mut zip, "word/document.xml").context("No text found in the document")?;
+    let doc = roxmltree::Document::parse(&xml).context("Couldn't read the document")?;
+    let Some(body) = doc.descendants().find(|n| n.tag_name().name() == "body") else { bail!("No text found in the document") };
     let mut out = String::new();
     docx_blocks(body, &mut out);
     Ok(end(out))
@@ -310,7 +310,7 @@ const SHEET_ROWS: usize = 500;
 const SHEET_COLS: usize = 40;
 
 fn xlsx_sheet(xml: &str, shared: &[String]) -> Result<(Vec<Vec<String>>, bool)> {
-    let doc = roxmltree::Document::parse(xml).context("Sayfa okunamadı")?;
+    let doc = roxmltree::Document::parse(xml).context("Couldn't read the sheet")?;
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut cut = false;
     for row in doc.descendants().filter(|n| n.tag_name().name() == "row") {
@@ -349,7 +349,7 @@ fn xlsx(path: &Path) -> Result<String> {
     // the texts of the cells are kept once, apart from the sheets
     let shared: Vec<String> = match zip_text(&mut zip, "xl/sharedStrings.xml") {
         Some(xml) => {
-            let doc = roxmltree::Document::parse(&xml).context("Çalışma kitabı okunamadı")?;
+            let doc = roxmltree::Document::parse(&xml).context("Couldn't read the workbook")?;
             doc.descendants()
                 .filter(|n| n.tag_name().name() == "si")
                 .map(|si| {
@@ -380,7 +380,7 @@ fn xlsx(path: &Path) -> Result<String> {
         }
     }
     if out.is_empty() {
-        bail!("Çalışma kitabında sayfa bulunamadı");
+        bail!("No sheet found in the workbook");
     }
     Ok(end(out))
 }
@@ -392,7 +392,7 @@ fn pptx(path: &Path) -> Result<String> {
     let mut out = String::new();
     for i in 1..=2000usize {
         let Some(xml) = zip_text(&mut zip, &format!("ppt/slides/slide{i}.xml")) else { break };
-        let doc = roxmltree::Document::parse(&xml).context("Slayt okunamadı")?;
+        let doc = roxmltree::Document::parse(&xml).context("Couldn't read the slide")?;
         let mut lines: Vec<String> = Vec::new();
         for p in doc.descendants().filter(|n| n.tag_name().name() == "p") {
             let text: String = p.descendants().filter(|t| t.tag_name().name() == "t").filter_map(|t| t.text()).collect();
@@ -409,7 +409,7 @@ fn pptx(path: &Path) -> Result<String> {
         push_block(&mut out, &rest.join("\n"));
     }
     if out.is_empty() {
-        bail!("Sunuda slayt bulunamadı");
+        bail!("No slide found in the presentation");
     }
     Ok(end(out))
 }
@@ -418,8 +418,8 @@ fn pptx(path: &Path) -> Result<String> {
 
 fn odf(path: &Path) -> Result<String> {
     let mut zip = open_zip(path)?;
-    let xml = zip_text(&mut zip, "content.xml").context("Belgede metin bulunamadı")?;
-    let doc = roxmltree::Document::parse(&xml).context("Belge okunamadı")?;
+    let xml = zip_text(&mut zip, "content.xml").context("No text found in the document")?;
+    let doc = roxmltree::Document::parse(&xml).context("Couldn't read the document")?;
     let mut out = String::new();
     for n in doc.descendants() {
         let name = n.tag_name().name();

@@ -86,7 +86,7 @@ pub fn init(cx: &mut App) {
     // run by themselves never opens the Settings page and would not learn that they stopped.
     if let Some(pr) = cx.global::<Organizer>().problem.clone() {
         let msg = problem_text(&pr);
-        crate::status_center::start(cx, t!("Dosya düzenleyici").to_string(), move |_| anyhow::bail!("{msg}"));
+        crate::status_center::start(cx, t!("File organizer").to_string(), move |_| anyhow::bail!("{msg}"));
     }
     auto::sync(cx);
 }
@@ -96,13 +96,13 @@ pub fn problem_text(p: &Problem) -> String {
     match p {
         Problem::Corrupt { moved_to: Some(to), reason } => format!(
             "{} {} ({}) {}",
-            t!("Kural dosyası okunamadı; silinmedi, şuraya taşındı:"),
+            t!("The rules file could not be read; it was not deleted but moved to:"),
             to.display(),
             reason,
-            t!("Kurallar boş bir listeyle başlıyor.")
+            t!("Rules start with an empty list.")
         ),
-        Problem::Corrupt { moved_to: None, reason } => format!("{} ({reason})", t!("Kural dosyası okunamadı ve yan yana alınamadı; kurallar kaydedilmeyecek. rustyfiles'ı yeniden başlatın.")),
-        Problem::Unreadable(reason) => format!("{} ({reason})", t!("Kural dosyası şu an okunamıyor; yazmak onu ezebileceğinden kurallar kaydedilmeyecek. rustyfiles'ı yeniden başlatın.")),
+        Problem::Corrupt { moved_to: None, reason } => format!("{} ({reason})", t!("The rules file could not be read or set aside; rules will not be saved. Restart rustyfiles.")),
+        Problem::Unreadable(reason) => format!("{} ({reason})", t!("The rules file cannot be read right now; writing could overwrite it, so rules will not be saved. Restart rustyfiles.")),
     }
 }
 
@@ -178,7 +178,7 @@ pub fn classify(ext: &str) -> FileKind {
 
 /// What `{kind}` becomes in a folder name.
 pub fn kind_labels() -> [String; 7] {
-    [t!("Resimler"), t!("Videolar"), t!("Sesler"), t!("Belgeler"), t!("Arşivler"), t!("Programlar"), t!("Diğer dosyalar")].map(String::from)
+    [t!("Pictures"), t!("Videos"), t!("Audio"), t!("Documents"), t!("Archives"), t!("Programs"), t!("Other files")].map(String::from)
 }
 
 /// The Windows folders and the app's own folders the organizer keeps away from.
@@ -285,7 +285,7 @@ pub fn starter_rule() -> Rule {
     use rf_core::organize::{Action, Condition};
     let pictures = dirs::picture_dir().or_else(|| home().map(|h| h.join("Pictures"))).unwrap_or_default();
     Rule {
-        name: t!("İndirilenler: resimler Resimler klasörüne").to_string(),
+        name: t!("Downloads: images go to Pictures").to_string(),
         folder: dirs::download_dir().or_else(|| home().map(|h| h.join("Downloads"))).unwrap_or_default(),
         conditions: vec![Condition::Kind { kinds: vec![FileKind::Image] }],
         action: Action::MoveToTemplate { template: pictures.join(r"{year}\{month}").to_string_lossy().into_owned() },
@@ -369,16 +369,16 @@ pub fn organize_folder(dir: PathBuf, window: &mut Window, cx: &mut App) {
         let key = norm(&dir);
         let switched_off = cx.global::<Organizer>().file.rules.iter().any(|r| norm(&r.folder) == key);
         let (title, body) = if switched_off {
-            (t!("Bu klasörün açık kuralı yok"), t!("Ayarlar'dan bu klasörün kurallarından birini açın ya da yeni bir kural ekleyin."))
+            (t!("No rule of this folder is switched on"), t!("Switch one of this folder's rules on in Settings, or add a new rule."))
         } else {
-            (t!("Bu klasör için kural yok"), t!("Dosyalarını kurallara göre düzenlemek için bu klasöre bir kural ekleyin."))
+            (t!("No rules for this folder"), t!("Add a rule for this folder to organize its files."))
         };
         crate::prompt::show(
             title,
             Some(body.to_string()),
             None,
             vec![
-                crate::prompt::Button::new(t!("Kural ekle"), crate::prompt::Kind::Primary, move |_, window, cx| {
+                crate::prompt::Button::new(t!("Add a rule"), crate::prompt::Kind::Primary, move |_, window, cx| {
                     let starter = blank_rule(d.clone());
                     // (the prompt closes itself after this returns; the editor opens on top of it)
                     window.defer(cx, move |window, cx| edit_rule(None, Some(starter), window, cx));
@@ -414,10 +414,10 @@ fn open_preview(title: String, rules: Vec<Rule>, source: Source, window: &mut Wi
 /// "Klasörü düzenle" where there is no folder (This PC, the Recycle Bin, a search, a settings tab).
 pub fn not_a_folder(window: &mut Window, cx: &mut App) {
     crate::prompt::show(
-        t!("Bu konum bir klasör değil"),
-        Some(t!("Dosyalarını kurallara göre düzenlemek için bir klasör açın.").to_string()),
+        t!("This location is not a folder"),
+        Some(t!("Open a folder to organize its files by rules.").to_string()),
         None,
-        vec![crate::prompt::Button::new(t!("Tamam"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
+        vec![crate::prompt::Button::new(t!("OK"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
         window,
         cx,
     );
@@ -449,7 +449,7 @@ pub fn start_run(spec: RunSpec, cx: &mut App) {
     let shared = result.clone();
     let id_cell = Rc::new(Cell::new(0u64));
     let id_for_done = id_cell.clone();
-    let title = format!("{} {label}", t!("Dosyalar düzenleniyor:"));
+    let title = format!("{} {label}", t!("Organizing files:"));
     let id = crate::status_center::start_with_id(
         cx,
         title,
@@ -471,7 +471,7 @@ pub fn start_run(spec: RunSpec, cx: &mut App) {
                 for f in &failed {
                     log::warn!("organizer: {}: {}", f.path.display(), f.message);
                 }
-                let count = plural(failed.len(), t!("1 dosya düzenlenemedi"), t!("{n} dosya düzenlenemedi"));
+                let count = plural(failed.len(), t!("1 file could not be organized"), t!("{n} files could not be organized"));
                 anyhow::bail!("{count} · {}: {}", first.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), first.message);
             }
             Ok(!cancelled)
@@ -490,14 +490,14 @@ pub fn start_run(spec: RunSpec, cx: &mut App) {
 /// "12 dosya düzenlendi · 3 dosya atlandı · 40 dosya sonraki çalıştırmada"
 fn result_title(rep: &rf_win::organize::Report) -> String {
     let n = rep.record.count();
-    let mut parts = vec![plural(n, t!("1 dosya düzenlendi"), t!("{n} dosya düzenlendi"))];
+    let mut parts = vec![plural(n, t!("1 file organized"), t!("{n} files organized"))];
     let skipped = rep.skipped.iter().filter(|s| !s.why.retry_later()).count();
     if skipped > 0 {
-        parts.push(plural(skipped, t!("1 dosya atlandı"), t!("{n} dosya atlandı")));
+        parts.push(plural(skipped, t!("1 file skipped"), t!("{n} files skipped")));
     }
     let waiting = rep.deferred_by_cap + rep.retry_later().len();
     if waiting > 0 {
-        parts.push(plural(waiting, t!("1 dosya sonraki çalıştırmada"), t!("{n} dosya sonraki çalıştırmada")));
+        parts.push(plural(waiting, t!("1 file left for the next run"), t!("{n} files left for the next run")));
     }
     parts.join(" · ")
 }
@@ -523,7 +523,7 @@ fn finish(id: u64, rep: &rf_win::organize::Report, automatic: bool, cx: &mut App
             let rec = rec.clone();
             move |cx: &mut App| undo_from_row(rec.clone(), id, title.clone(), cx)
         });
-        (t!("Geri al").to_string(), run)
+        (t!("Undo").to_string(), run)
     });
     crate::status_center::set_result(cx, id, Some(title), action);
     // Failures and skipped files of a run the user started are listed (a run by itself leaves them in
@@ -541,10 +541,10 @@ fn finish(id: u64, rep: &rf_win::organize::Report, automatic: bool, cx: &mut App
             }
             text.push_str(&line);
         }
-        let title = if rep.failed.is_empty() { t!("Bazı dosyalar atlandı") } else { t!("Bazı dosyalar düzenlenemedi") };
+        let title = if rep.failed.is_empty() { t!("Some files were skipped") } else { t!("Some files could not be organized") };
         if let Some(w) = cx.active_window() {
             let _ = w.update(cx, |_, window, cx| {
-                crate::prompt::show(title, Some(text), None, vec![crate::prompt::Button::new(t!("Tamam"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))], window, cx);
+                crate::prompt::show(title, Some(text), None, vec![crate::prompt::Button::new(t!("OK"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))], window, cx);
             });
         }
     }
@@ -599,17 +599,17 @@ fn mark_undone(token: u64) -> bool {
 /// the undo has really finished, and say so if it did not.
 fn undo_from_row(rec: Record, id: u64, title: String, cx: &mut App) {
     if was_undone(rec.token) {
-        crate::status_center::set_result(cx, id, Some(format!("{title} ({})", t!("zaten geri alınmıştı"))), None);
+        crate::status_center::set_result(cx, id, Some(format!("{title} ({})", t!("already undone"))), None);
         return;
     }
     // (the button goes away at once: a second click cannot start a second undo)
-    crate::status_center::set_result(cx, id, Some(format!("{title} ({})", t!("geri alınıyor…"))), None);
+    crate::status_center::set_result(cx, id, Some(format!("{title} ({})", t!("undoing…"))), None);
     // a run the user started is on the Ctrl+Z stack too: it comes off there, so Ctrl+Z does not undo it again
     let _ = crate::undo::forget_organized(rec.token);
     undo_run(
         rec,
         Some(Box::new(move |ok, cx| {
-            let word = if ok { t!("geri alındı") } else { t!("geri alınamadı: ayrıntı Durum Merkezi'nde") };
+            let word = if ok { t!("undone") } else { t!("could not be undone: details in the Status Center") };
             crate::status_center::set_result(cx, id, Some(format!("{title} ({word})")), None);
         })),
         cx,
@@ -623,7 +623,7 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
     if !mark_undone(rec.token) {
         return;
     }
-    crate::status_center::start_with(cx, t!("Geri alınıyor: dosya düzenleme").to_string(), move |_| {
+    crate::status_center::start_with(cx, t!("Undoing: file organizing").to_string(), move |_| {
         let u = rf_win::organize::undo_moves(&rec);
         let mut problems = u.failed.len();
         for f in &u.failed {
@@ -639,7 +639,7 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
                 rf_win::recycle::restore(&items)?;
             }
         }
-        anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 dosya geri alınamadı"), t!("{n} dosya geri alınamadı")));
+        anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 file could not be put back"), t!("{n} files could not be put back")));
         Ok(true)
     }, on_done);
 }
@@ -647,7 +647,7 @@ pub fn undo_run(rec: Record, on_done: Option<crate::status_center::OnDone>, cx: 
 /// Redo of a run (after an undo): the same moves, the same files to the Recycle Bin.
 pub fn redo_run(rec: Record, cx: &mut App) {
     UNDONE.lock().unwrap().retain(|t| *t != rec.token);
-    crate::status_center::start(cx, t!("Yineleniyor: dosya düzenleme").to_string(), move |tracker| {
+    crate::status_center::start(cx, t!("Redoing: file organizing").to_string(), move |tracker| {
         let r = rf_win::organize::redo_moves(&rec);
         let mut problems = r.failed.len();
         let present: Vec<PathBuf> = rec.recycled.iter().map(|(orig, _)| orig.clone()).filter(|p| rf_win::organize::exists(p)).collect();
@@ -656,7 +656,7 @@ pub fn redo_run(rec: Record, cx: &mut App) {
             // (`false`: to the Recycle Bin)
             rf_win::fileops::delete_tracked(&present, false, tracker)?;
         }
-        anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 dosya taşınamadı"), t!("{n} dosya taşınamadı")));
+        anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 file could not be moved"), t!("{n} files could not be moved")));
         Ok(true)
     });
 }

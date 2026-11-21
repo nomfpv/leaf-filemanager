@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use chrono::{Local, TimeZone};
 
-static ENGLISH: AtomicBool = AtomicBool::new(false);
 static DECIMAL: AtomicBool = AtomicBool::new(false);
 static DATE_STYLE: AtomicU8 = AtomicU8::new(0);
 /// How the system writes a local date and time (Windows' short date and time, set by the app at start: `set_system_format`).
@@ -48,20 +47,14 @@ pub fn set_decimal_sizes(on: bool) {
     DECIMAL.store(on, Ordering::Relaxed);
 }
 
-/// UI language switch for the few words in number formats: English uses "bytes" and a decimal
-/// point; the default (Turkish) uses "bayt" and a decimal comma.
-pub fn set_english(on: bool) {
-    ENGLISH.store(on, Ordering::Relaxed);
-}
-
-/// "0 bayt", "512 bayt", "1,2 KB", "34,5 MB", "1,02 GB" (Turkish decimal comma).
+/// "0 bytes", "512 bytes", "1.20 KB", "34.5 MB", "1.02 GB".
 pub fn size(bytes: u64) -> String {
-    size_with(bytes, ENGLISH.load(Ordering::Relaxed), DECIMAL.load(Ordering::Relaxed))
+    size_with(bytes, DECIMAL.load(Ordering::Relaxed))
 }
 
-fn size_with(bytes: u64, en: bool, decimal: bool) -> String {
+fn size_with(bytes: u64, decimal: bool) -> String {
     let base: f64 = if decimal { 1000.0 } else { 1024.0 };
-    let units: [&str; 6] = [if en { "bytes" } else { "bayt" }, "KB", "MB", "GB", "TB", "PB"];
+    let units: [&str; 6] = ["bytes", "KB", "MB", "GB", "TB", "PB"];
     if (bytes as f64) < base {
         return format!("{bytes} {}", units[0]);
     }
@@ -78,22 +71,21 @@ fn size_with(bytes: u64, en: bool, decimal: bool) -> String {
     } else {
         format!("{v:.2}")
     };
-    let s = if en { s } else { s.replace('.', ",") };
     format!("{s} {}", units[u])
 }
 
 /// A file time in the chosen [`DateStyle`].
 pub fn datetime(ms: i64) -> String {
     let now = chrono::Local::now().timestamp_millis();
-    datetime_with(ms, date_style(), now, ENGLISH.load(Ordering::Relaxed))
+    datetime_with(ms, date_style(), now)
 }
 
 /// Always the full local date-time "05.11.2026 03:51" (details, tooltips).
 pub fn datetime_full(ms: i64) -> String {
-    datetime_with(ms, DateStyle::Local, 0, false)
+    datetime_with(ms, DateStyle::Local, 0)
 }
 
-fn datetime_with(ms: i64, style: DateStyle, now: i64, en: bool) -> String {
+fn datetime_with(ms: i64, style: DateStyle, now: i64) -> String {
     if ms <= 0 {
         return String::new();
     }
@@ -103,15 +95,15 @@ fn datetime_with(ms: i64, style: DateStyle, now: i64, en: bool) -> String {
         DateStyle::Local => local(&dt),
         DateStyle::Relative => {
             let secs = (now - ms) / 1000;
-            let (n, tr, enu) = match secs {
+            let (n, unit) = match secs {
                 s if s < 0 => return local(&dt),
-                s if s < 45 => return (if en { "just now" } else { "az önce" }).to_string(),
-                s if s < 3600 => (((s + 30) / 60).max(1), "dakika önce", "min ago"),
-                s if s < 86_400 => (s / 3600, "saat önce", "h ago"),
-                s if s < 7 * 86_400 => (s / 86_400, "gün önce", "d ago"),
+                s if s < 45 => return "just now".to_string(),
+                s if s < 3600 => (((s + 30) / 60).max(1), "min ago"),
+                s if s < 86_400 => (s / 3600, "h ago"),
+                s if s < 7 * 86_400 => (s / 86_400, "d ago"),
                 _ => return local(&dt),
             };
-            if en { format!("{n} {enu}") } else { format!("{n} {tr}") }
+            format!("{n} {unit}")
         }
     }
 }
@@ -130,25 +122,25 @@ mod tests {
 
     #[test]
     fn sizes() {
-        assert_eq!(size(0), "0 bayt");
-        assert_eq!(size(1023), "1023 bayt");
-        assert_eq!(size(1024), "1,00 KB");
-        assert_eq!(size(1536), "1,50 KB");
-        assert_eq!(size(10 * 1024 * 1024 + 1), "10,0 MB");
+        assert_eq!(size(0), "0 bytes");
+        assert_eq!(size(1023), "1023 bytes");
+        assert_eq!(size(1024), "1.00 KB");
+        assert_eq!(size(1536), "1.50 KB");
+        assert_eq!(size(10 * 1024 * 1024 + 1), "10.0 MB");
         assert_eq!(size(500 * 1024 * 1024 * 1024), "500 GB");
     }
 
     #[test]
     fn relative_and_formats() {
         let now = 1_800_000_000_000i64;
-        assert_eq!(datetime_with(now - 10_000, DateStyle::Relative, now, false), "az önce");
-        assert_eq!(datetime_with(now - 5 * 60_000, DateStyle::Relative, now, false), "5 dakika önce");
-        assert_eq!(datetime_with(now - 3 * 3_600_000, DateStyle::Relative, now, true), "3 h ago");
-        assert_eq!(datetime_with(now - 2 * 86_400_000, DateStyle::Relative, now, false), "2 gün önce");
-        assert!(datetime_with(now - 30 * 86_400_000, DateStyle::Relative, now, false).contains('.'));
-        assert_eq!(datetime_with(now, DateStyle::Universal, now, false).len(), 16);
-        assert_eq!(size_with(1500, false, true), "1,50 KB");
-        assert_eq!(size_with(1500, false, false), "1,46 KB");
+        assert_eq!(datetime_with(now - 10_000, DateStyle::Relative, now), "just now");
+        assert_eq!(datetime_with(now - 5 * 60_000, DateStyle::Relative, now), "5 min ago");
+        assert_eq!(datetime_with(now - 3 * 3_600_000, DateStyle::Relative, now), "3 h ago");
+        assert_eq!(datetime_with(now - 2 * 86_400_000, DateStyle::Relative, now), "2 d ago");
+        assert!(datetime_with(now - 30 * 86_400_000, DateStyle::Relative, now).contains('.'));
+        assert_eq!(datetime_with(now, DateStyle::Universal, now).len(), 16);
+        assert_eq!(size_with(1500, true), "1.50 KB");
+        assert_eq!(size_with(1500, false), "1.46 KB");
     }
 
     #[test]

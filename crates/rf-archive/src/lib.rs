@@ -83,7 +83,7 @@ pub struct Cancelled;
 
 impl std::fmt::Display for Cancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("İptal edildi")
+        f.write_str("Cancelled")
     }
 }
 impl std::error::Error for Cancelled {}
@@ -101,8 +101,8 @@ pub enum PasswordError {
 impl std::fmt::Display for PasswordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            PasswordError::Required => "Bu arşiv parolalı",
-            PasswordError::Wrong => "Parola yanlış",
+            PasswordError::Required => "This archive is password protected",
+            PasswordError::Wrong => "Wrong password",
         })
     }
 }
@@ -397,7 +397,7 @@ fn unique_path(p: &Path, keep_ext: bool) -> PathBuf {
 pub fn smart_extract_dir(archive: &Path) -> PathBuf {
     let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let (stem, _) = split_name(&name);
-    let stem = if stem.is_empty() { "Arşiv" } else { stem };
+    let stem = if stem.is_empty() { "Archive" } else { stem };
     let dir = archive.parent().unwrap_or(Path::new("")).join(stem);
     unique_path(&dir, false)
 }
@@ -447,7 +447,7 @@ pub fn smart_dest(archive: &Path, into: &Path, entries: &[ArchiveEntry]) -> (Pat
 pub fn named_dir(archive: &Path, into: &Path) -> PathBuf {
     let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let (stem, _) = split_name(&name);
-    let stem = if stem.is_empty() { "Arşiv" } else { stem };
+    let stem = if stem.is_empty() { "Archive" } else { stem };
     unique_path(&into.join(stem), false)
 }
 
@@ -474,7 +474,7 @@ fn windows_safe(comp: &str) -> String {
 fn sanitize(name: &str) -> Result<Option<PathBuf>> {
     let n = name.replace('\\', "/");
     if n.starts_with('/') {
-        bail!("Güvensiz arşiv girdisi (mutlak yol): {name}");
+        bail!("Unsafe archive entry (absolute path): {name}");
     }
     let mut out = PathBuf::new();
     for comp in n.split('/') {
@@ -482,11 +482,11 @@ fn sanitize(name: &str) -> Result<Option<PathBuf>> {
             continue;
         }
         if comp == ".." || comp.contains(':') || comp.contains('\0') {
-            bail!("Güvensiz arşiv girdisi (yol geçişi): {name}");
+            bail!("Unsafe archive entry (path traversal): {name}");
         }
         // Win32 strips trailing dots/spaces, so ".. " would resolve to "..".
         if comp.trim_end_matches(['.', ' ']).is_empty() {
-            bail!("Güvensiz arşiv girdisi (geçersiz ad): {name}");
+            bail!("Unsafe archive entry (invalid name): {name}");
         }
         out.push(windows_safe(comp));
     }
@@ -510,7 +510,7 @@ impl<R: Read> Read for Counting<R> {
 
 /// Opens the (decompressed) byte stream of a tar / single-file archive.
 fn open_stream(kind: Kind, path: &Path, counter: Rc<Cell<u64>>) -> Result<Box<dyn Read>> {
-    let f = open_source(path).with_context(|| format!("Arşiv açılamadı: {}", path.display()))?;
+    let f = open_source(path).with_context(|| format!("Couldn't open the archive: {}", path.display()))?;
     let raw = BufReader::with_capacity(CHUNK, Counting { inner: f, n: counter });
     Ok(match kind {
         Kind::Tar => Box::new(raw),
@@ -556,7 +556,7 @@ fn sz_password(opts: &Options) -> sevenz_rust2::Password {
 
 /// Reads the 7z header. Header-encrypted archives need the password already here.
 fn open_7z_archive(path: &Path, opts: &Options) -> Result<sevenz_rust2::Archive> {
-    let mut src = BufReader::new(open_source(path).with_context(|| format!("Arşiv açılamadı: {}", path.display()))?);
+    let mut src = BufReader::new(open_source(path).with_context(|| format!("Couldn't open the archive: {}", path.display()))?);
     sevenz_rust2::Archive::read(&mut src, &sz_password(opts)).map_err(|e| map_7z_pw(e, opts))
 }
 
@@ -588,7 +588,7 @@ pub fn list(path: &Path) -> Result<Vec<ArchiveEntry>> {
 /// [`list`] with options (password). Zip names are never encrypted, so a zip lists without a
 /// password; a 7z with encrypted headers fails with [`PasswordError`] when none / a wrong one is given.
 pub fn list_with(path: &Path, opts: &Options) -> Result<Vec<ArchiveEntry>> {
-    let kind = kind_of(path).with_context(|| format!("Desteklenmeyen arşiv türü: {}", path.display()))?;
+    let kind = kind_of(path).with_context(|| format!("Unsupported archive type: {}", path.display()))?;
     match kind {
         Kind::Zip if rarchive::Archive::open(path).is_ok() => {
             // our own reader lists anything with a readable directory (split sets too)
@@ -606,10 +606,10 @@ pub fn list_with(path: &Path, opts: &Options) -> Result<Vec<ArchiveEntry>> {
                 .collect())
         }
         Kind::Zip => {
-            let mut za = zip::ZipArchive::new(BufReader::new(open_source(path)?)).context("Zip dosyası okunamadı")?;
+            let mut za = zip::ZipArchive::new(BufReader::new(open_source(path)?)).context("Couldn't read the zip file")?;
             let mut out = Vec::with_capacity(za.len());
             for i in 0..za.len() {
-                let f = za.by_index_raw(i).context("Zip girdisi okunamadı")?;
+                let f = za.by_index_raw(i).context("Couldn't read a zip entry")?;
                 out.push(ArchiveEntry {
                     path: f.name().map(|n| names::entry_name(f.name_raw(), n).into_owned()).unwrap_or_default(),
                     size: f.size(),
@@ -645,8 +645,8 @@ pub fn list_with(path: &Path, opts: &Options) -> Result<Vec<ArchiveEntry>> {
             let counter = Rc::new(Cell::new(0));
             let stream = open_stream(k, path, counter)?;
             let mut ar = tar::Archive::new(stream);
-            for e in ar.entries().context("Tar okunamadı")? {
-                let e = e.context("Tar girdisi okunamadı")?;
+            for e in ar.entries().context("Couldn't read the tar file")? {
+                let e = e.context("Couldn't read a tar entry")?;
                 let h = e.header();
                 let t = h.entry_type();
                 if !(t.is_file() || t.is_dir() || t.is_contiguous()) {
@@ -671,7 +671,7 @@ pub fn list_with(path: &Path, opts: &Options) -> Result<Vec<ArchiveEntry>> {
                 Kind::Gz => gzip_isize(path).unwrap_or(0),
                 _ => {
                     let mut s = open_stream(k, path, Rc::new(Cell::new(0)))?;
-                    io::copy(&mut s, &mut io::sink()).context("Sıkıştırılmış dosya okunamadı")?
+                    io::copy(&mut s, &mut io::sink()).context("Couldn't read the compressed file")?
                 }
             };
             Ok(vec![ArchiveEntry {
@@ -689,13 +689,13 @@ pub fn list_with(path: &Path, opts: &Options) -> Result<Vec<ArchiveEntry>> {
 /// Cheap probe: does reading this archive's content need a password? Zip: any encrypted entry
 /// (central directory only); 7z: encrypted header or an AES coder. Other formats: `false`.
 pub fn needs_password(path: &Path) -> Result<bool> {
-    let kind = kind_of(path).with_context(|| format!("Desteklenmeyen arşiv türü: {}", path.display()))?;
+    let kind = kind_of(path).with_context(|| format!("Unsupported archive type: {}", path.display()))?;
     match kind {
         Kind::Zip if own_zip(path, &Options::default()).is_some() => Ok(own_zip(path, &Options::default()).unwrap().needs_password()),
         Kind::Zip => {
-            let mut za = zip::ZipArchive::new(BufReader::new(open_source(path)?)).context("Zip dosyası okunamadı")?;
+            let mut za = zip::ZipArchive::new(BufReader::new(open_source(path)?)).context("Couldn't read the zip file")?;
             for i in 0..za.len() {
-                if za.by_index_raw(i).context("Zip girdisi okunamadı")?.encrypted() {
+                if za.by_index_raw(i).context("Couldn't read a zip entry")?.encrypted() {
                     return Ok(true);
                 }
             }
@@ -720,22 +720,22 @@ pub fn needs_password(path: &Path) -> Result<bool> {
 /// decrypts the start of the first protected entry instead (AES has a verifier, ZipCrypto a
 /// check byte — the rare false positive surfaces later as a CRC error mapped to `Wrong`).
 pub fn check_password(path: &Path, opts: &Options) -> Result<()> {
-    let kind = kind_of(path).with_context(|| format!("Desteklenmeyen arşiv türü: {}", path.display()))?;
+    let kind = kind_of(path).with_context(|| format!("Unsupported archive type: {}", path.display()))?;
     match kind {
         Kind::Zip if own_zip(path, opts).is_some() => {
             own_zip(path, opts).unwrap().verify_password().map_err(own::map_err)
         }
         Kind::Zip => {
             let Some(pw) = opts.password.as_deref() else { return Err(PasswordError::Required.into()) };
-            let mut za = zip::ZipArchive::new(BufReader::new(open_source(path)?)).context("Zip dosyası okunamadı")?;
+            let mut za = zip::ZipArchive::new(BufReader::new(open_source(path)?)).context("Couldn't read the zip file")?;
             for i in 0..za.len() {
-                if !za.by_index_raw(i).context("Zip girdisi okunamadı")?.encrypted() {
+                if !za.by_index_raw(i).context("Couldn't read a zip entry")?.encrypted() {
                     continue;
                 }
                 let mut f = match za.by_index_decrypt(i, pw.as_bytes()) {
                     Ok(f) => f,
                     Err(zip::result::ZipError::InvalidPassword) => return Err(PasswordError::Wrong.into()),
-                    Err(e) => return Err(e).context("Zip girdisi okunamadı"),
+                    Err(e) => return Err(e).context("Couldn't read a zip entry"),
                 };
                 let mut buf = [0u8; 4096];
                 return match f.read(&mut buf) {
@@ -762,11 +762,11 @@ fn gzip_isize(path: &Path) -> Option<u64> {
 fn single_name(path: &Path) -> String {
     let n = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let (stem, _) = split_name(&n);
-    if stem.is_empty() { "çıktı".to_string() } else { stem.to_string() }
+    if stem.is_empty() { "output".to_string() } else { stem.to_string() }
 }
 
 fn map_7z(e: sevenz_rust2::Error) -> anyhow::Error {
-    anyhow::Error::new(e).context("7z arşivi okunamadı")
+    anyhow::Error::new(e).context("Couldn't read the 7z archive")
 }
 
 // ---------------------------------------------------------------- extract
@@ -833,7 +833,7 @@ impl<'a> Extractor<'a> {
             return Ok(());
         }
         let target = self.dest.join(rel);
-        fs::create_dir_all(&target).with_context(|| format!("Klasör oluşturulamadı: {}", target.display()))?;
+        fs::create_dir_all(&target).with_context(|| format!("Couldn't create the folder: {}", target.display()))?;
         self.stats.dirs += 1;
         self.emit(display, false);
         Ok(())
@@ -843,12 +843,12 @@ impl<'a> Extractor<'a> {
         self.check_cancel()?;
         if !self.only.wants(rel) {
             // read past it: some readers (solid 7z) expect each member to be consumed
-            io::copy(r, &mut io::sink()).with_context(|| format!("Arşiv girdisi okunamadı: {display}"))?;
+            io::copy(r, &mut io::sink()).with_context(|| format!("Couldn't read the archive entry: {display}"))?;
             return Ok(());
         }
         let wanted = self.dest.join(rel);
         if let Some(parent) = wanted.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("Klasör oluşturulamadı: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("Couldn't create the folder: {}", parent.display()))?;
         }
         // Never overwrite: pick a free name; create_new closes the race window.
         let mut target = unique_path(&wanted, true);
@@ -856,7 +856,7 @@ impl<'a> Extractor<'a> {
             match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
                 Ok(f) => break f,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => target = unique_path(&wanted, true),
-                Err(e) => return Err(e).with_context(|| format!("Dosya oluşturulamadı: {}", target.display())),
+                Err(e) => return Err(e).with_context(|| format!("Couldn't create the file: {}", target.display())),
             }
         };
         if target != wanted {
@@ -872,13 +872,13 @@ impl<'a> Extractor<'a> {
                     Ok(k) => k,
                     Err(e) => {
                         self.read_failed = true;
-                        return Err(anyhow::Error::new(e).context(format!("Arşiv girdisi okunamadı: {display}")));
+                        return Err(anyhow::Error::new(e).context(format!("Couldn't read the archive entry: {display}")));
                     }
                 };
                 if k == 0 {
                     break;
                 }
-                w.write_all(&self.buf[..k]).with_context(|| format!("Yazılamadı: {}", target.display()))?;
+                w.write_all(&self.buf[..k]).with_context(|| format!("Couldn't write: {}", target.display()))?;
                 n += k as u64;
                 self.done += k as u64;
                 self.emit(display, false);
@@ -928,8 +928,8 @@ pub fn extract_with(
     progress: &mut dyn FnMut(Progress),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<ExtractStats> {
-    let kind = kind_of(archive).with_context(|| format!("Desteklenmeyen arşiv türü: {}", archive.display()))?;
-    fs::create_dir_all(dest_dir).with_context(|| format!("Klasör oluşturulamadı: {}", dest_dir.display()))?;
+    let kind = kind_of(archive).with_context(|| format!("Unsupported archive type: {}", archive.display()))?;
+    fs::create_dir_all(dest_dir).with_context(|| format!("Couldn't create the folder: {}", dest_dir.display()))?;
     match kind {
         Kind::Zip => extract_zip(archive, dest_dir, opts, progress, cancelled),
         Kind::SevenZ => extract_7z(archive, dest_dir, opts, progress, cancelled),
@@ -954,13 +954,13 @@ fn extract_zip(
         }
         return own::extract(a, dest, &Only::new(&opts.only), progress, cancelled);
     }
-    let mut za = zip::ZipArchive::new(BufReader::new(open_source(archive)?)).context("Zip dosyası okunamadı")?;
+    let mut za = zip::ZipArchive::new(BufReader::new(open_source(archive)?)).context("Couldn't read the zip file")?;
     // Validate every name first so a hostile archive writes nothing at all.
     let mut total = 0u64;
     let mut first_encrypted = None;
     for i in 0..za.len() {
-        let f = za.by_index_raw(i).context("Zip girdisi okunamadı")?;
-        sanitize(&names::entry_name(f.name_raw(), f.name().context("Zip girdi adı çözülemedi")?))?;
+        let f = za.by_index_raw(i).context("Couldn't read a zip entry")?;
+        sanitize(&names::entry_name(f.name_raw(), f.name().context("Couldn't decode a zip entry name")?))?;
         if f.encrypted() && !f.is_dir() && first_encrypted.is_none() {
             first_encrypted = Some(i);
         }
@@ -975,7 +975,7 @@ fn extract_zip(
     let mut ex = Extractor::new(dest, total, None, progress, cancelled).only(Only::new(&opts.only));
     for i in 0..za.len() {
         let mut f = zip_open(&mut za, i, pw)?;
-        let name = names::entry_name(f.name_raw(), f.name().context("Zip girdi adı çözülemedi")?).into_owned();
+        let name = names::entry_name(f.name_raw(), f.name().context("Couldn't decode a zip entry name")?).into_owned();
         let Some(rel) = sanitize(&name)? else { continue };
         let encrypted = f.encrypted();
         let r = if f.is_symlink() {
@@ -1042,7 +1042,7 @@ fn zip_open<'a, R: Read + Seek>(
         zip::result::ZipError::UnsupportedArchive(m) if m == zip::result::ZipError::PASSWORD_REQUIRED => {
             PasswordError::Required.into()
         }
-        e => anyhow::Error::new(e).context("Zip girdisi okunamadı"),
+        e => anyhow::Error::new(e).context("Couldn't read a zip entry"),
     })
 }
 
@@ -1120,8 +1120,8 @@ fn extract_tar(
     // small files are written by a pool while the stream keeps decoding (see parwrite)
     let pw = parwrite::ParWriter::new(parwrite::threads());
     let res = (|| -> Result<()> {
-        for e in ar.entries().context("Tar okunamadı")? {
-            let mut e = e.context("Tar girdisi okunamadı")?;
+        for e in ar.entries().context("Couldn't read the tar file")? {
+            let mut e = e.context("Couldn't read a tar entry")?;
             pw.check()?;
             let name = String::from_utf8_lossy(&e.path_bytes()).into_owned();
             let t = e.header().entry_type();
@@ -1142,7 +1142,7 @@ fn extract_tar(
                     let mut data = Vec::with_capacity(size as usize);
                     if let Err(err) = e.read_to_end(&mut data) {
                         ex.read_failed = true;
-                        return Err(anyhow::Error::new(err).context(format!("Arşiv girdisi okunamadı: {name}")));
+                        return Err(anyhow::Error::new(err).context(format!("Couldn't read the archive entry: {name}")));
                     }
                     ex.emit(&name, false);
                     pw.submit(dest.join(&rel), data, mt)?;
@@ -1182,7 +1182,7 @@ fn extract_single(
     let mut ex = Extractor::new(dest, source_len(archive)?, Some(counter.clone()), progress, cancelled);
     let mut s = open_stream(kind, archive, counter)?;
     let name = single_name(archive);
-    let rel = sanitize(&name)?.context("Geçersiz dosya adı")?;
+    let rel = sanitize(&name)?.context("Invalid file name")?;
     ex.file(&rel, &name, &mut s, meta.modified().ok())?;
     ex.emit("", true);
     Ok(ex.stats)
@@ -1227,7 +1227,7 @@ fn collect(sources: &[PathBuf], skip: &[PathBuf]) -> Result<Vec<Item>> {
 
     fn walk(dir: &Path, prefix: &str, items: &mut Vec<Item>, is_skipped: &dyn Fn(&Path) -> bool) -> Result<()> {
         let mut children: Vec<_> = fs::read_dir(dir)
-            .with_context(|| format!("Klasör okunamadı: {}", dir.display()))?
+            .with_context(|| format!("Couldn't read the folder: {}", dir.display()))?
             .filter_map(|e| e.ok())
             .collect();
         children.sort_by_key(|e| e.file_name());
@@ -1249,11 +1249,11 @@ fn collect(sources: &[PathBuf], skip: &[PathBuf]) -> Result<Vec<Item>> {
     }
 
     for src in sources {
-        let m = fs::symlink_metadata(src).with_context(|| format!("Kaynak bulunamadı: {}", src.display()))?;
+        let m = fs::symlink_metadata(src).with_context(|| format!("Source not found: {}", src.display()))?;
         if is_reparse(&m) || is_skipped(src) {
             continue;
         }
-        let base = src.file_name().map(|n| n.to_string_lossy().into_owned()).context("Geçersiz kaynak yolu")?;
+        let base = src.file_name().map(|n| n.to_string_lossy().into_owned()).context("Invalid source path")?;
         // Unique top-level names so two sources called "a" do not collide inside the archive.
         let mut name = base.clone();
         let mut n = 2;
@@ -1301,7 +1301,7 @@ impl Read for Feed<'_, '_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if (self.ctx.cancelled)() {
             self.ctx.was_cancelled = true;
-            return Err(io::Error::other("iptal"));
+            return Err(io::Error::other("cancelled"));
         }
         let n = self.file.read(buf)?;
         self.ctx.done += n as u64;
@@ -1343,11 +1343,11 @@ pub fn compress_with(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CompressStats> {
     if sources.is_empty() {
-        bail!("Sıkıştırılacak öğe yok");
+        bail!("Nothing to compress");
     }
     let password = opts.password.as_deref().filter(|p| !p.is_empty());
     if password.is_some() && !format.encrypts() {
-        bail!("Bu biçim parolayı desteklemiyor");
+        bail!("This format doesn't support passwords");
     }
     let level = level.min(9);
     let volume = opts.volume_size.filter(|v| *v > 0);
@@ -1386,7 +1386,7 @@ pub fn compress_with(
                     }
                 },
                 _ => {
-                    fs::rename(&part, &final_path).with_context(|| format!("Arşiv kaydedilemedi: {}", final_path.display()))?;
+                    fs::rename(&part, &final_path).with_context(|| format!("Couldn't save the archive: {}", final_path.display()))?;
                     final_path.clone()
                 }
             };
@@ -1442,12 +1442,12 @@ fn split_into_volumes(part: &Path, final_path: &Path, size: u64, cancelled: &dyn
         let mut n = 1u32;
         while done < total {
             let path = name(n);
-            let mut out = File::create(&path).with_context(|| format!("Arşiv kaydedilemedi: {}", path.display()))?;
+            let mut out = File::create(&path).with_context(|| format!("Couldn't save the archive: {}", path.display()))?;
             written.push(path);
             let mut left = size.min(total - done);
             while left > 0 {
                 if cancelled() {
-                    bail!("iptal");
+                    bail!("cancelled");
                 }
                 let want = (buf.len() as u64).min(left) as usize;
                 src.read_exact(&mut buf[..want])?;
@@ -1477,7 +1477,7 @@ fn split_into_volumes(part: &Path, final_path: &Path, size: u64, cancelled: &dyn
 fn feed<'a, 'b>(item: &Item, ctx: &'a mut CompressCtx<'b>) -> Result<Feed<'a, 'b>> {
     ctx.current = item.name.clone();
     ctx.emit(true);
-    let file = File::open(&item.path).with_context(|| format!("Dosya açılamadı: {}", item.path.display()))?;
+    let file = File::open(&item.path).with_context(|| format!("Couldn't open the file: {}", item.path.display()))?;
     Ok(Feed { file, ctx })
 }
 
@@ -1491,7 +1491,7 @@ fn zip_put<W: Write + Seek>(
     use zip::write::SimpleFileOptions;
     if (ctx.cancelled)() {
         ctx.was_cancelled = true;
-        bail!("iptal");
+        bail!("cancelled");
     }
     let method = if level == 0 { zip::CompressionMethod::Stored } else { zip::CompressionMethod::Deflated };
     let mut opts = SimpleFileOptions::default().compression_method(method);
@@ -1515,7 +1515,7 @@ fn zip_put<W: Write + Seek>(
         }
         let src = feed(item, ctx)?;
         io::copy(&mut BufReader::with_capacity(CHUNK, src), zw)
-            .with_context(|| format!("Eklenemedi: {}", item.path.display()))?;
+            .with_context(|| format!("Couldn't add: {}", item.path.display()))?;
     }
     Ok(())
 }
@@ -1565,15 +1565,15 @@ fn sz_put<W: Write + Seek>(sw: &mut sevenz_rust2::ArchiveWriter<W>, item: &Item,
     use sevenz_rust2::ArchiveEntry;
     if (ctx.cancelled)() {
         ctx.was_cancelled = true;
-        bail!("iptal");
+        bail!("cancelled");
     }
     let entry = ArchiveEntry::from_path(&item.path, item.name.clone());
     if item.is_dir {
-        sw.push_archive_entry::<&[u8]>(entry, None).map_err(|e| anyhow::Error::new(e).context("7z'ye eklenemedi"))?;
+        sw.push_archive_entry::<&[u8]>(entry, None).map_err(|e| anyhow::Error::new(e).context("Couldn't add to the 7z archive"))?;
     } else {
         let src = feed(item, ctx)?;
         sw.push_archive_entry(entry, Some(src))
-            .map_err(|e| anyhow::Error::new(e).context(format!("7z'ye eklenemedi: {}", item.path.display())))?;
+            .map_err(|e| anyhow::Error::new(e).context(format!("Couldn't add to the 7z archive: {}", item.path.display())))?;
     }
     Ok(())
 }
@@ -1597,11 +1597,11 @@ impl Read for LazySource<'_, '_> {
             let mut c = self.ctx.borrow_mut();
             if (c.cancelled)() {
                 c.was_cancelled = true;
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "iptal"));
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
             }
         }
         if self.file.is_none() {
-            let f = File::open(&self.path).map_err(|e| io::Error::new(e.kind(), format!("Dosya açılamadı: {}: {e}", self.path.display())))?;
+            let f = File::open(&self.path).map_err(|e| io::Error::new(e.kind(), format!("Couldn't open the file: {}: {e}", self.path.display())))?;
             self.file = Some(f);
             self.ctx.borrow_mut().current = self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         }
@@ -1639,16 +1639,16 @@ const SOLID_BLOCK: u64 = 1 << 30;
 
 fn write_7z(items: &[Item], part: &Path, level: u32, password: Option<&str>, dict: Option<u64>, ctx: &mut CompressCtx) -> Result<()> {
     use sevenz_rust2::{ArchiveEntry, SourceReader};
-    let mut sw = sevenz_rust2::ArchiveWriter::create(part).map_err(|e| anyhow::Error::new(e).context("7z oluşturulamadı"))?;
+    let mut sw = sevenz_rust2::ArchiveWriter::create(part).map_err(|e| anyhow::Error::new(e).context("Couldn't create the 7z archive"))?;
     sw.set_content_methods(sz_content_methods_mt(level, password, true, dict));
     // folders and empty files carry no data
     for item in items.iter().filter(|i| i.is_dir || i.size == 0) {
         if (ctx.cancelled)() {
             ctx.was_cancelled = true;
-            bail!("iptal");
+            bail!("cancelled");
         }
         let entry = ArchiveEntry::from_path(&item.path, item.name.clone());
-        sw.push_archive_entry::<&[u8]>(entry, None).map_err(|e| anyhow::Error::new(e).context("7z'ye eklenemedi"))?;
+        sw.push_archive_entry::<&[u8]>(entry, None).map_err(|e| anyhow::Error::new(e).context("Couldn't add to the 7z archive"))?;
     }
     // the rest solid (like 7-Zip), in blocks; LZMA2 compresses each block on several threads
     let files: Vec<&Item> = items.iter().filter(|i| !i.is_dir && i.size > 0).collect();
@@ -1667,9 +1667,9 @@ fn write_7z(items: &[Item], part: &Path, level: u32, password: Option<&str>, dic
             block.iter().map(|i| SourceReader::new(LazySource { path: i.path.clone(), file: None, finished: false, ctx: &cell })).collect();
         let r = sw.push_archive_entries(entries, readers);
         if cell.borrow().was_cancelled {
-            bail!("iptal");
+            bail!("cancelled");
         }
-        r.map_err(|e| anyhow::Error::new(e).context("7z'ye eklenemedi"))?;
+        r.map_err(|e| anyhow::Error::new(e).context("Couldn't add to the 7z archive"))?;
         start = end;
     }
     sw.finish()?.flush()?;
@@ -1679,9 +1679,9 @@ fn write_7z(items: &[Item], part: &Path, level: u32, password: Option<&str>, dic
 fn tar_put<W: Write>(tb: &mut tar::Builder<W>, item: &Item, ctx: &mut CompressCtx) -> Result<()> {
     if (ctx.cancelled)() {
         ctx.was_cancelled = true;
-        bail!("iptal");
+        bail!("cancelled");
     }
-    let meta = fs::metadata(&item.path).with_context(|| format!("Okunamadı: {}", item.path.display()))?;
+    let meta = fs::metadata(&item.path).with_context(|| format!("Couldn't read: {}", item.path.display()))?;
     let mut h = tar::Header::new_gnu();
     h.set_metadata(&meta);
     if item.is_dir {
@@ -1693,7 +1693,7 @@ fn tar_put<W: Write>(tb: &mut tar::Builder<W>, item: &Item, ctx: &mut CompressCt
         h.set_size(item.size);
         let src = feed(item, ctx)?;
         tb.append_data(&mut h, &item.name, BufReader::with_capacity(CHUNK, src))
-            .with_context(|| format!("Eklenemedi: {}", item.path.display()))?;
+            .with_context(|| format!("Couldn't add: {}", item.path.display()))?;
     }
     Ok(())
 }
@@ -1948,7 +1948,7 @@ mod tests {
         }
         let dest = out.join("hedef");
         let err = extract(&arch, &dest, &mut |_| {}, &|| false).unwrap_err();
-        assert!(err.to_string().contains("Güvensiz"), "{err}");
+        assert!(err.to_string().contains("Unsafe"), "{err}");
         assert!(!out.join("evil.txt").exists());
         assert!(!dest.join("iyi.txt").exists(), "doğrulama yazmadan önce yapılmalı");
         let _ = fs::remove_dir_all(&out);
@@ -2118,7 +2118,7 @@ mod tests {
         let out = tmp("pwz");
         let co = CompressOptions { password: Some("x".into()), ..Default::default() };
         let e = compress_with(&[root.clone()], &out.join("a.tar.zst"), Format::TarZst, 5, &co, &mut |_| {}, &|| false).unwrap_err();
-        assert!(e.to_string().contains("parolayı desteklemiyor"));
+        assert!(e.to_string().contains("doesn't support passwords"));
         assert!(!out.join("a.tar.zst").exists());
         compress(&[root.clone()], &out.join("a.7z"), Format::SevenZ, 3, &mut |_| {}, &|| false).unwrap();
         compress(&[root.clone()], &out.join("a.zip"), Format::Zip, 3, &mut |_| {}, &|| false).unwrap();
@@ -2406,7 +2406,7 @@ mod tests {
         fs::write(out.join("kotu.rar"), b"bu bir rar degil").unwrap();
         assert!(list(&out.join("kotu.rar")).is_err());
         let e = extract(&out.join("kotu.rar"), &out.join("d"), &mut |_| {}, &|| false).unwrap_err();
-        assert!(e.to_string().contains("arşiv değil"), "{e}");
+        assert!(e.to_string().contains("not an archive"), "{e}");
         let _ = fs::remove_dir_all(&out);
     }
 
@@ -2421,7 +2421,7 @@ mod tests {
         }
         let dest = out.join("d");
         let e = extract(&out.join("vol.part1.rar"), &dest, &mut |_| {}, &|| false).unwrap_err();
-        assert!(e.to_string().contains("parçası eksik"), "{e}");
+        assert!(e.to_string().contains("is missing"), "{e}");
         assert!(!dest.exists() || fs::read_dir(&dest).unwrap().next().is_none(), "nothing written");
         // the names still list
         assert!(!list(&out.join("vol.part1.rar")).unwrap().is_empty());
@@ -2711,7 +2711,7 @@ mod tests {
         std::io::Write::write_all(&mut enc, &data).unwrap();
         enc.finish().unwrap();
         assert!(is_supported(&arch));
-        let out = d.join("çıktı");
+        let out = d.join("output");
         extract(&arch, &out, &mut |_| {}, &|| false).unwrap();
         assert_eq!(fs::read(out.join("not defteri.txt")).unwrap(), data);
         let _ = fs::remove_dir_all(&d);
@@ -2795,9 +2795,9 @@ mod tests {
             let p = out.join(f);
             assert!(!is_editable(&p), "{f}");
             let e = add(&p, &[src.clone()], "", &Options::default(), &mut |_| {}, &|| false).unwrap_err();
-            assert!(e.to_string().contains("düzenlenemez"), "{f}: {e}");
+            assert!(e.to_string().contains("can't be edited"), "{f}: {e}");
             let e = delete(&p, &["a".into()], &Options::default(), &mut |_| {}, &|| false).unwrap_err();
-            assert!(e.to_string().contains("düzenlenemez"), "{f}: {e}");
+            assert!(e.to_string().contains("can't be edited"), "{f}: {e}");
         }
         assert!(is_editable(Path::new("x.zip")) && is_editable(Path::new("x.TAR.XZ")) && is_editable(Path::new("x.7z")));
         let _ = fs::remove_dir_all(&out);

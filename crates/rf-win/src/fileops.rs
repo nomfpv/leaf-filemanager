@@ -394,10 +394,10 @@ mod tests {
         }
         let d = std::env::temp_dir().join(format!("rf-uniq-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
-        let a = new_folder(&d, "Yeni klasör").unwrap();
-        let b = new_folder(&d, "Yeni klasör").unwrap();
-        assert!(a.ends_with("Yeni klasör"));
-        assert!(b.ends_with("Yeni klasör (2)"));
+        let a = new_folder(&d, "New folder").unwrap();
+        let b = new_folder(&d, "New folder").unwrap();
+        assert!(a.ends_with("New folder"));
+        assert!(b.ends_with("New folder (2)"));
         let f = new_text_file(&d, "Yeni Metin Belgesi").unwrap();
         assert!(rename(&f, "x.txt").unwrap());
         assert!(d.join("x.txt").exists());

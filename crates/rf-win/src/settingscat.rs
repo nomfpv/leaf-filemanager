@@ -474,10 +474,10 @@ mod tests {
     fn table(r: &str) -> Option<String> {
         Some(
             match r {
-                "@{windows?ms-resource://A/SearchResources/SettingsPageInstalledApps/Description}" => "Yüklü uygulamalar",
+                "@{windows?ms-resource://A/SearchResources/SettingsPageInstalledApps/Description}" => "Installed apps",
                 "@{windows?ms-resource://A/SearchResources/SettingsPageInstalledApps/HighKeywords}" => "uygulama kaldır;program kaldır",
                 "@uninstall" => "Uygulama kaldır",
-                "@devmgr.dll,-4" => "Aygıt Yöneticisi",
+                "@devmgr.dll,-4" => "Device Manager",
                 "@a.dll,-1" => "donanım;sürücü",
                 "@b.dll,-2" => "device;driver",
                 "@defender" => "Fidye yazılımı koruması",
@@ -519,10 +519,10 @@ mod tests {
     fn names_are_resolved_settings_carry_their_pages_name_and_what_does_not_resolve_is_left_out() {
         let entries = build(&parse(SAMPLE), &table);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["Yüklü uygulamalar", "Uygulama kaldır", "Aygıt Yöneticisi", "Plain & simple"], "the unresolved shell entry and the Defender page are out");
+        assert_eq!(names, ["Installed apps", "Uygulama kaldır", "Device Manager", "Plain & simple"], "the unresolved shell entry and the Defender page are out");
         assert_eq!(entries[0].place, "", "a page itself");
         assert_eq!(entries[0].keywords, "uygulama kaldır;program kaldır");
-        assert_eq!(entries[1].place, "Yüklü uygulamalar", "a setting says which page it is on");
+        assert_eq!(entries[1].place, "Installed apps", "a setting says which page it is on");
         assert_eq!(entries[1].launch, Launch::Page("SettingsPageInstalledApps".into()), "and opens that page");
         assert_eq!(entries[2].keywords, "donanım;sürücü;device;driver", "several references are joined");
         assert!(entries[2].launch.is_classic() && !entries[0].launch.is_classic());

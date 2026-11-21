@@ -634,7 +634,7 @@ impl PropsView {
         }
         if self.locked {
             // every write of this window is below this line
-            self.error = Some(t!("Bu pencere kilitli: değişiklikler uygulanmaz").into());
+            self.error = Some(t!("This window is locked: changes are not applied").into());
             cx.notify();
             return;
         }
@@ -714,7 +714,7 @@ impl PropsView {
             if let Some(l) = &label {
                 // (a fixed drive needs an administrator: Windows says "access denied", we never elevate)
                 rf_win::volume::set_label(&paths[0], l).map_err(|e| match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => t!("Bu sürücünün etiketini değiştirmek yönetici izni ister").to_string(),
+                    std::io::ErrorKind::PermissionDenied => t!("Changing this drive's label needs administrator rights").to_string(),
                     _ => named(&paths[0], &e),
                 })?;
             }
@@ -731,7 +731,7 @@ impl PropsView {
                 let from = paths[0].clone();
                 let to = from.with_file_name(&n);
                 if to.exists() && !n.eq_ignore_ascii_case(&file_name(&from)) {
-                    return Err(t!("Bu adla bir öğe zaten var").to_string());
+                    return Err(t!("An item with this name already exists").to_string());
                 }
                 std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
                 renamed = Some((from, to.clone()));
@@ -854,29 +854,29 @@ impl PropsView {
     }
 
     fn pages(&self) -> Vec<(Page, &'static str)> {
-        let mut pages = vec![(Page::General, t!("Genel"))];
+        let mut pages = vec![(Page::General, t!("General"))];
         let Some(path) = self.single() else { return pages };
         let Some(Ok(info)) = &self.info else { return pages };
         if self.link.is_some() {
-            pages.push((Page::Shortcut, t!("Kısayol")));
+            pages.push((Page::Shortcut, t!("Shortcut")));
         }
         if self.compat_exe.is_some() {
-            pages.push((Page::Compat, t!("Uyumluluk")));
+            pages.push((Page::Compat, t!("Compatibility")));
         }
-        pages.push((Page::Security, t!("Güvenlik")));
+        pages.push((Page::Security, t!("Security")));
         if !info.is_dir {
-            pages.push((Page::Details, t!("Ayrıntılar")));
+            pages.push((Page::Details, t!("Details")));
         }
         if self.signatures.is_some() {
-            pages.push((Page::Signatures, t!("Dijital imzalar")));
+            pages.push((Page::Signatures, t!("Digital signatures")));
         }
         if info.is_dir {
-            pages.push((Page::Sharing, t!("Paylaşım")));
+            pages.push((Page::Sharing, t!("Sharing")));
             if self.drive.is_none() && !is_root(path) {
-                pages.push((Page::Customize, t!("Özelleştir")));
+                pages.push((Page::Customize, t!("Customize")));
             }
         } else {
-            pages.push((Page::Hashes, t!("Karmalar")));
+            pages.push((Page::Hashes, t!("Hashes")));
         }
         pages
     }
@@ -891,49 +891,49 @@ impl PropsView {
         let mut card1 = Vec::new();
         if let Some(path) = self.single() {
             match &self.info {
-                None => card1.push(row(p, t!("Durum"), t!("Yükleniyor…").into())),
-                Some(Err(e)) => card1.push(row(p, t!("Hata"), e.clone())),
+                None => card1.push(row(p, t!("Status"), t!("Loading…").into())),
+                Some(Err(e)) => card1.push(row(p, t!("Error"), e.clone())),
                 Some(Ok(i)) => {
                     if let Some(e) = self.entry() {
                         let ext = ext_of(path);
                         let label = crate::icons::type_label(&e).to_string();
                         let label = if i.is_dir || ext.is_empty() { label } else { format!("{label} (.{ext})") };
-                        card1.push(row(p, t!("Tür"), label));
+                        card1.push(row(p, t!("Type"), label));
                     }
                     // a program or shortcut runs itself: Windows shows its description there
                     let runs = matches!(ext_of(path).as_str(), "exe" | "com" | "scr" | "lnk" | "bat" | "cmd" | "msi" | "url");
                     if let Some(d) = self.pe.as_ref().and_then(|pe| pe.description.clone()).filter(|_| runs) {
-                        card1.push(row(p, t!("Açıklama"), d));
+                        card1.push(row(p, t!("Description"), d));
                     }
                     if !i.is_dir && !runs {
-                        let app = i.opens_with.clone().unwrap_or_else(|| t!("Seçilmedi").to_string());
+                        let app = i.opens_with.clone().unwrap_or_else(|| t!("Not chosen").to_string());
                         card1.push(row_with(
                             p,
-                            t!("Birlikte açılır"),
+                            t!("Opens with"),
                             app,
-                            link_button(p, "change-app", L::AppWindow, t!("Değiştir…")).on_click(cx.listener(|v, _, window, cx| v.change_app(window, cx))).into_any_element(),
+                            link_button(p, "change-app", L::AppWindow, t!("Change…")).on_click(cx.listener(|v, _, window, cx| v.change_app(window, cx))).into_any_element(),
                         ));
                     }
                     let loc = path.parent().map(|d| breakable(&d.to_string_lossy())).unwrap_or_default();
-                    card1.push(row(p, t!("Konum"), loc));
+                    card1.push(row(p, t!("Location"), loc));
                     if i.is_dir {
                         let (size, contents) = match &self.folder {
                             Some(Some(fs)) => (
-                                format!("{} ({} {})", format::size(fs.bytes), group(fs.bytes), t!("bayt")),
-                                format!("{} {}, {} {}", group(fs.files), t!("dosya"), group(fs.dirs), t!("klasör")),
+                                format!("{} ({} {})", format::size(fs.bytes), group(fs.bytes), t!("bytes")),
+                                format!("{} {}, {} {}", group(fs.files), t!("files"), group(fs.dirs), t!("folders")),
                             ),
-                            Some(None) if self.folder.is_some() => (t!("Hesaplanıyor…").into(), t!("Hesaplanıyor…").into()),
+                            Some(None) if self.folder.is_some() => (t!("Calculating…").into(), t!("Calculating…").into()),
                             _ => ("—".into(), "—".into()),
                         };
-                        card1.push(row(p, t!("Boyut"), size));
+                        card1.push(row(p, t!("Size"), size));
                         if let Some(d) = self.folder.as_ref().and_then(|f| f.as_ref()).and_then(|fs| fs.allocated) {
-                            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{} ({} {})", format::size(d), group(d), t!("bayt"))));
+                            card1.push(row(p, t!("Size on disk"), format!("{} ({} {})", format::size(d), group(d), t!("bytes"))));
                         }
-                        card1.push(row(p, t!("İçerik"), contents));
+                        card1.push(row(p, t!("Contains"), contents));
                     } else {
-                        card1.push(row(p, t!("Boyut"), format!("{} ({} {})", format::size(i.size), group(i.size), t!("bayt"))));
+                        card1.push(row(p, t!("Size"), format!("{} ({} {})", format::size(i.size), group(i.size), t!("bytes"))));
                         if let Some(d) = i.size_on_disk {
-                            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{} ({} {})", format::size(d), group(d), t!("bayt"))));
+                            card1.push(row(p, t!("Size on disk"), format!("{} ({} {})", format::size(d), group(d), t!("bytes"))));
                         }
                     }
                 }
@@ -941,18 +941,18 @@ impl PropsView {
         } else if let Some(t) = &self.totals {
             let dir = self.paths[0].parent().map(|d| breakable(&d.to_string_lossy())).unwrap_or_default();
             let sel_files = (self.paths.len() as u64).saturating_sub(t.sel_dirs);
-            card1.push(row(p, t!("Seçim"), format!("{} {}, {} {}", group(sel_files), t!("dosya"), group(t.sel_dirs), t!("klasör"))));
+            card1.push(row(p, t!("Selection"), format!("{} {}, {} {}", group(sel_files), t!("files"), group(t.sel_dirs), t!("folders"))));
             let kind = match (&t.same_ext, t.sel_dirs) {
-                (Some(Some(e)), 0) if !e.is_empty() => format!("{} .{e}", t!("Tümü şu türde:")),
-                (_, d) if d as usize == self.paths.len() => t!("Tümü klasör").to_string(),
-                _ => t!("Birden çok tür").to_string(),
+                (Some(Some(e)), 0) if !e.is_empty() => format!("{} .{e}", t!("All of type")),
+                (_, d) if d as usize == self.paths.len() => t!("All folders").to_string(),
+                _ => t!("Multiple types").to_string(),
             };
-            card1.push(row(p, t!("Tür"), kind));
-            card1.push(row(p, t!("Konum"), format!("{} {dir}", t!("Tümü şurada:"))));
-            let suffix = if t.done { String::new() } else { format!(" — {}", t!("hesaplanıyor…")) };
-            card1.push(row(p, t!("Boyut"), format!("{} ({} {}){suffix}", format::size(t.bytes), group(t.bytes), t!("bayt"))));
-            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{} ({} {}){suffix}", format::size(t.on_disk), group(t.on_disk), t!("bayt"))));
-            card1.push(row(p, t!("İçerik"), format!("{} {}, {} {}", group(t.files), t!("dosya"), group(t.dirs), t!("klasör"))));
+            card1.push(row(p, t!("Type"), kind));
+            card1.push(row(p, t!("Location"), format!("{} {dir}", t!("All in"))));
+            let suffix = if t.done { String::new() } else { format!(" — {}", t!("calculating…")) };
+            card1.push(row(p, t!("Size"), format!("{} ({} {}){suffix}", format::size(t.bytes), group(t.bytes), t!("bytes"))));
+            card1.push(row(p, t!("Size on disk"), format!("{} ({} {}){suffix}", format::size(t.on_disk), group(t.on_disk), t!("bytes"))));
+            card1.push(row(p, t!("Contains"), format!("{} {}, {} {}", group(t.files), t!("files"), group(t.dirs), t!("folders"))));
         }
         out.push(card(p, card1));
 
@@ -960,9 +960,9 @@ impl PropsView {
             out.push(card(
                 p,
                 vec![
-                    row(p, t!("Oluşturulma"), format::datetime_full(i.created_ms)),
-                    row(p, t!("Değiştirilme"), format::datetime_full(i.modified_ms)),
-                    row(p, t!("Erişim"), format::datetime_full(i.accessed_ms)),
+                    row(p, t!("Created"), format::datetime_full(i.created_ms)),
+                    row(p, t!("Modified"), format::datetime_full(i.modified_ms)),
+                    row(p, t!("Accessed"), format::datetime_full(i.accessed_ms)),
                 ],
             ));
         }
@@ -974,9 +974,9 @@ impl PropsView {
             out.push(card(
                 p,
                 vec![
-                    section(p, t!("Güvenlik")),
-                    note(p, t!("Bu dosya başka bir bilgisayardan geldi. Windows, bilgisayarınızı korumak için onu engelleyebilir.")),
-                    check_row(p, "unblock", t!("Engellemeyi kaldır"), Some(on), cx.listener(move |v, _, _, cx| {
+                    section(p, t!("Security")),
+                    note(p, t!("This file came from another computer and might be blocked to help protect this computer.")),
+                    check_row(p, "unblock", t!("Unblock"), Some(on), cx.listener(move |v, _, _, cx| {
                         v.unblock = !on;
                         cx.notify();
                     })),
@@ -984,7 +984,7 @@ impl PropsView {
             ));
         }
         out.push(
-            link_button(p, "win-props", L::ExternalLink, t!("Windows özellikleri (önceki sürümler ve diğerleri)…"))
+            link_button(p, "win-props", L::ExternalLink, t!("Windows properties (previous versions and more)…"))
                 .on_click(cx.listener(|v, _, _, _| v.windows_properties()))
                 .into_any_element(),
         );
@@ -1008,9 +1008,9 @@ impl PropsView {
             }))
         };
         let mut rows = vec![
-            section(p, t!("Öznitelikler")),
-            flag("ro", if dir { t!("Salt okunur (yalnızca klasördeki dosyalar için geçerlidir)") } else { t!("Salt okunur") }, a.readonly, |a| &mut a.readonly, cx),
-            flag("hid", t!("Gizli"), a.hidden, |a| &mut a.hidden, cx),
+            section(p, t!("Attributes")),
+            flag("ro", if dir { t!("Read-only (only applies to files in folder)") } else { t!("Read-only") }, a.readonly, |a| &mut a.readonly, cx),
+            flag("hid", t!("Hidden"), a.hidden, |a| &mut a.hidden, cx),
         ];
         let open = self.advanced_open;
         rows.push(
@@ -1024,7 +1024,7 @@ impl PropsView {
                 .cursor_pointer()
                 .hover(|s| s.opacity(0.8))
                 .child(Icon::new(if open { L::ChevronDown } else { L::ChevronRight }).size(px(14.)))
-                .child(t!("Gelişmiş öznitelikler"))
+                .child(t!("Advanced attributes"))
                 .on_click(cx.listener(move |v, _, _, cx| {
                     v.advanced_open = !open;
                     cx.notify();
@@ -1032,24 +1032,24 @@ impl PropsView {
                 .into_any_element(),
         );
         if open {
-            rows.push(flag("arch", if dir { t!("Klasör arşivlenmeye hazır") } else { t!("Dosya arşivlenmeye hazır") }, a.archive, |a| &mut a.archive, cx));
+            rows.push(flag("arch", if dir { t!("Folder is ready for archiving") } else { t!("File is ready for archiving") }, a.archive, |a| &mut a.archive, cx));
             rows.push(flag(
                 "idx",
-                if dir { t!("Bu klasördeki dosyaların içeriğinin dizinlenmesine izin ver") } else { t!("Bu dosyanın içeriğinin dizinlenmesine izin ver") },
+                if dir { t!("Allow files in this folder to have contents indexed") } else { t!("Allow this file to have contents indexed") },
                 a.indexed,
                 |a| &mut a.indexed,
                 cx,
             ));
             if self.caps.0 {
-                rows.push(flag("comp", t!("Disk alanından tasarruf etmek için içeriği sıkıştır"), a.compressed, |a| &mut a.compressed, cx));
+                rows.push(flag("comp", t!("Compress contents to save disk space"), a.compressed, |a| &mut a.compressed, cx));
             }
             if self.caps.1 {
-                rows.push(flag("enc", t!("Verileri korumak için içeriği şifrele"), a.encrypted, |a| &mut a.encrypted, cx));
+                rows.push(flag("enc", t!("Encrypt contents to secure data"), a.encrypted, |a| &mut a.encrypted, cx));
             }
         }
         if dir && self.attrs.changed() {
             let on = self.recurse;
-            rows.push(check_row(p, "recurse", t!("Değişiklikleri alt klasörlere ve dosyalara da uygula"), Some(on), cx.listener(move |v, _, _, cx| {
+            rows.push(check_row(p, "recurse", t!("Apply changes to subfolders and files too"), Some(on), cx.listener(move |v, _, _, cx| {
                 v.recurse = !on;
                 cx.notify();
             })));
@@ -1060,22 +1060,22 @@ impl PropsView {
     fn render_drive(&self, d: &rf_win::drives::Drive, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use rf_win::drives::DriveKind;
         let kind = match d.kind {
-            DriveKind::Removable => t!("Çıkarılabilir disk"),
-            DriveKind::Network => t!("Ağ sürücüsü"),
-            DriveKind::Optical => t!("CD/DVD sürücüsü"),
-            _ => t!("Yerel Disk"),
+            DriveKind::Removable => t!("Removable disk"),
+            DriveKind::Network => t!("Network drive"),
+            DriveKind::Optical => t!("CD/DVD drive"),
+            _ => t!("Local Disk"),
         };
         let used = d.total.saturating_sub(d.free);
         let frac = d.used_fraction().clamp(0.0, 1.0);
-        let bytes = |n: u64| format!("{} ({} {})", format::size(n), group(n), t!("bayt"));
+        let bytes = |n: u64| format!("{} ({} {})", format::size(n), group(n), t!("bytes"));
         let swatch = |c: Hsla| div().size(px(12.)).rounded(px(3.)).bg(c).flex_shrink_0();
         let full = frac > 0.9;
         let used_color = if full { p.danger } else { p.accent };
         let mut out = vec![card(
             p,
             vec![
-                row(p, t!("Tür"), kind.to_string()),
-                row(p, t!("Dosya sistemi"), if d.fs.is_empty() { "—".into() } else { d.fs.clone() }),
+                row(p, t!("Type"), kind.to_string()),
+                row(p, t!("File system"), if d.fs.is_empty() { "—".into() } else { d.fs.clone() }),
                 match &self.label_input {
                     Some(input) => h_flex()
                         .w_full()
@@ -1083,20 +1083,20 @@ impl PropsView {
                         .items_center()
                         .py(px(4.))
                         .text_sm()
-                        .child(div().w(px(150.)).flex_shrink_0().text_color(p.text_secondary).child(t!("Etiket")))
+                        .child(div().w(px(150.)).flex_shrink_0().text_color(p.text_secondary).child(t!("Tag")))
                         .child(text_field(p, input))
                         .into_any_element(),
-                    None => row(p, t!("Etiket"), if d.label.is_empty() { "—".into() } else { d.label.clone() }),
+                    None => row(p, t!("Tag"), if d.label.is_empty() { "—".into() } else { d.label.clone() }),
                 },
             ],
         )];
         out.push(card(
             p,
             vec![
-                h_flex().gap_3().py(px(7.)).text_sm().items_center().child(swatch(used_color)).child(div().w(px(120.)).text_color(p.text_secondary).child(t!("Kullanılan alan"))).child(bytes(used)).into_any_element(),
-                h_flex().gap_3().py(px(7.)).text_sm().items_center().child(swatch(p.hover)).child(div().w(px(120.)).text_color(p.text_secondary).child(t!("Boş alan"))).child(bytes(d.free)).into_any_element(),
+                h_flex().gap_3().py(px(7.)).text_sm().items_center().child(swatch(used_color)).child(div().w(px(120.)).text_color(p.text_secondary).child(t!("Used space"))).child(bytes(used)).into_any_element(),
+                h_flex().gap_3().py(px(7.)).text_sm().items_center().child(swatch(p.hover)).child(div().w(px(120.)).text_color(p.text_secondary).child(t!("Free space"))).child(bytes(d.free)).into_any_element(),
                 div().h(px(1.)).my_1().bg(p.divider).into_any_element(),
-                h_flex().gap_3().py(px(7.)).text_sm().items_center().child(div().size(px(12.))).child(div().w(px(120.)).text_color(p.text_secondary).child(t!("Kapasite"))).child(bytes(d.total)).into_any_element(),
+                h_flex().gap_3().py(px(7.)).text_sm().items_center().child(div().size(px(12.))).child(div().w(px(120.)).text_color(p.text_secondary).child(t!("Capacity"))).child(bytes(d.total)).into_any_element(),
                 // how full: a bar like the sidebar's, larger
                 div()
                     .mt_2()
@@ -1109,13 +1109,13 @@ impl PropsView {
                     .border_color(p.border)
                     .child(div().h_full().rounded(px(7.)).bg(used_color).w(relative(frac)))
                     .into_any_element(),
-                div().text_xs().text_color(p.text_secondary).child(format!("{} %{:.0}", t!("Dolu:"), frac * 100.0)).into_any_element(),
+                div().text_xs().text_color(p.text_secondary).child(format!("{} %{:.0}", t!("Full:"), frac * 100.0)).into_any_element(),
             ],
         ));
         if d.kind != DriveKind::Network && d.kind != DriveKind::Optical {
             let letter = d.letter;
             out.push(
-                link_button(p, "cleanup", L::Eraser, t!("Disk Temizleme…"))
+                link_button(p, "cleanup", L::Eraser, t!("Disk Cleanup…"))
                     .on_click(move |_, _, _| {
                         // cleanmgr runs as the user; only its "system files" button asks for more
                         let _ = std::process::Command::new("cleanmgr.exe").arg(format!("/d{letter}")).spawn();
@@ -1124,7 +1124,7 @@ impl PropsView {
             );
         }
         out.push(
-            link_button(p, "win-props", L::ExternalLink, t!("Windows özellikleri (araçlar, donanım, kota)…"))
+            link_button(p, "win-props", L::ExternalLink, t!("Windows properties (tools, hardware, quota)…"))
                 .on_click(cx.listener(|v, _, _, _| v.windows_properties()))
                 .into_any_element(),
         );
@@ -1135,14 +1135,14 @@ impl PropsView {
         let (Some(d), Some(inp)) = (&self.link, &self.link_inputs) else { return vec![] };
         let target = PathBuf::from(rf_win::localized::expand_env(&d.target));
         let target_type = if d.target.is_empty() {
-            t!("Kabuk öğesi").to_string()
+            t!("Shell item").to_string()
         } else if target.is_dir() {
-            t!("Dosya klasörü").to_string()
+            t!("File folder").to_string()
         } else {
             match ext_of(&target).as_str() {
-                "exe" | "com" | "bat" | "cmd" => t!("Uygulama").to_string(),
-                "" => t!("Dosya").to_string(),
-                e => format!("{} (.{e})", t!("Dosya")),
+                "exe" | "com" | "bat" | "cmd" => t!("Application").to_string(),
+                "" => t!("File").to_string(),
+                e => format!("{} (.{e})", t!("File")),
             }
         };
         let target_dir = target.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1158,7 +1158,7 @@ impl PropsView {
                 .into_any_element()
         };
         let show = d.show;
-        const RUN: [(i32, &str); 3] = [(1, "Normal pencere"), (7, "Simge durumunda"), (3, "Ekranı kaplamış")];
+        const RUN: [(i32, &str); 3] = [(1, "Normal window"), (7, "Minimized"), (3, "Maximized")];
         let current = RUN.iter().find(|(v, _)| *v == show).map_or(RUN[0].1, |(_, l)| l);
         let me = cx.entity().downgrade();
         let run_box = select_box("lnk-run", p, crate::i18n::t(current), move |_| {
@@ -1178,11 +1178,11 @@ impl PropsView {
         });
         let admin = d.run_as_admin;
         let icon_start = if d.icon.is_empty() { (d.target.clone(), 0) } else { (d.icon.clone(), d.icon_index) };
-        let icon_text = if d.icon.is_empty() { t!("Hedefin simgesi").to_string() } else { format!("{}, {}", file_name(Path::new(&d.icon)), d.icon_index) };
+        let icon_text = if d.icon.is_empty() { t!("The target's icon").to_string() } else { format!("{}, {}", file_name(Path::new(&d.icon)), d.icon_index) };
         let hotkey_row = {
             let me = cx.entity().downgrade();
             let focus = self.hotkey.focus.clone();
-            crate::hotkey_field::row(p, &self.hotkey, t!("Kısayol tuşu"), d.hotkey, move |window, cx| {
+            crate::hotkey_field::row(p, &self.hotkey, t!("Shortcut key"), d.hotkey, move |window, cx| {
                 let me = me.clone();
                 crate::hotkey_field::arm(&focus, std::rc::Rc::new(move |dec, _, cx| { let _ = me.update(cx, |v, cx| v.hotkey_decided(dec, cx)); }), window, cx);
             })
@@ -1192,17 +1192,17 @@ impl PropsView {
             card(
                 p,
                 vec![
-                    row(p, t!("Hedef türü"), target_type),
-                    row(p, t!("Hedef konumu"), if target_dir.is_empty() { "—".into() } else { target_dir }),
+                    row(p, t!("Target type"), target_type),
+                    row(p, t!("Target location"), if target_dir.is_empty() { "—".into() } else { target_dir }),
                 ],
             ),
             card(
                 p,
                 vec![
-                    field(t!("Hedef"), &inp.target),
-                    field(t!("Bağımsız değişkenler"), &inp.args),
-                    field(t!("Başlangıç yeri"), &inp.dir),
-                    field(t!("Açıklama"), &inp.comment),
+                    field(t!("Target"), &inp.target),
+                    field(t!("Arguments"), &inp.args),
+                    field(t!("Start in"), &inp.dir),
+                    field(t!("Description"), &inp.comment),
                     hotkey_row,
                     h_flex()
                         .w_full()
@@ -1210,10 +1210,10 @@ impl PropsView {
                         .items_center()
                         .py(px(6.))
                         .text_sm()
-                        .child(div().w(px(130.)).flex_shrink_0().text_color(p.text_secondary).child(t!("Çalıştır")))
+                        .child(div().w(px(130.)).flex_shrink_0().text_color(p.text_secondary).child(t!("Run")))
                         .child(div().flex_1().min_w_0().child(run_box))
                         .into_any_element(),
-                    check_row(p, "lnk-admin", t!("Yönetici olarak çalıştır"), Some(admin), cx.listener(move |v, _, _, cx| {
+                    check_row(p, "lnk-admin", t!("Run as administrator"), Some(admin), cx.listener(move |v, _, _, cx| {
                         if let Some(d) = &mut v.link {
                             d.run_as_admin = !admin;
                         }
@@ -1224,12 +1224,12 @@ impl PropsView {
             card(
                 p,
                 vec![
-                    row(p, t!("Simge"), icon_text),
+                    row(p, t!("Icon"), icon_text),
                     h_flex()
                         .gap_4()
                         .py_1()
-                        .child(link_button(p, "lnk-icon", L::Palette, t!("Simge değiştir…")).on_click(cx.listener(move |v, _, window, cx| v.pick_icon(icon_start.clone(), true, window, cx))))
-                        .child(link_button(p, "lnk-open", L::FolderOpen, t!("Dosya konumunu aç")).on_click(move |_, _, cx| {
+                        .child(link_button(p, "lnk-icon", L::Palette, t!("Change icon…")).on_click(cx.listener(move |v, _, window, cx| v.pick_icon(icon_start.clone(), true, window, cx))))
+                        .child(link_button(p, "lnk-open", L::FolderOpen, t!("Open file location")).on_click(move |_, _, cx| {
                             let dir = t2.parent().map(Path::to_path_buf).unwrap_or_else(|| t2.clone());
                             crate::workspace::route_ipc(dir.to_string_lossy().into_owned(), cx);
                         }))
@@ -1273,8 +1273,8 @@ impl PropsView {
         let color_box = {
             let set = set.clone();
             let label = |c: Color| match c {
-                Color::C256 => t!("8 bit (256) renk"),
-                Color::C16Bit => t!("16 bit (65536) renk"),
+                Color::C256 => t!("8-bit (256) color"),
+                Color::C16Bit => t!("16-bit (65536) color"),
             };
             select_box("compat-color", p, label(color.unwrap_or(Color::C256)), move |_| {
                 [Color::C256, Color::C16Bit].iter().map(|k| {
@@ -1287,9 +1287,9 @@ impl PropsView {
         let dpi_box = {
             let set = set.clone();
             let label = |d: Dpi| match d {
-                Dpi::Application => t!("Uygulama"),
-                Dpi::System => t!("Sistem"),
-                Dpi::SystemEnhanced => t!("Sistem (Gelişmiş)"),
+                Dpi::Application => t!("Application"),
+                Dpi::System => t!("System"),
+                Dpi::SystemEnhanced => t!("System (Enhanced)"),
             };
             select_box("compat-dpi", p, label(dpi.unwrap_or(Dpi::Application)), move |_| {
                 [Dpi::Application, Dpi::System, Dpi::SystemEnhanced].iter().map(|k| {
@@ -1301,43 +1301,43 @@ impl PropsView {
         let indent = |e: AnyElement, on: bool| div().pl(px(30.)).pb_1().when(!on, |d| d.opacity(0.5)).child(e).into_any_element();
         let mut out = Vec::new();
         if self.link.is_some() {
-            out.push(note(p, &format!("{} {}", t!("Bu ayarlar kısayolun hedefi için geçerlidir:"), breakable(&exe.to_string_lossy()))));
+            out.push(note(p, &format!("{} {}", t!("These settings apply to the shortcut's target:"), breakable(&exe.to_string_lossy()))));
         }
         out.push(card(
             p,
             vec![
-                section(p, t!("Uyumluluk modu")),
-                toggle("c-mode", t!("Bu programı şunun için uyumluluk modunda çalıştır:"), mode.is_some(), |c| c.mode = if c.mode.is_some() { None } else { Some(Mode::Win8) }, cx),
+                section(p, t!("Compatibility mode")),
+                toggle("c-mode", t!("Run this program in compatibility mode for:"), mode.is_some(), |c| c.mode = if c.mode.is_some() { None } else { Some(Mode::Win8) }, cx),
                 indent(mode_box, mode.is_some()),
             ],
         ));
         out.push(card(
             p,
             vec![
-                section(p, t!("Ayarlar")),
-                toggle("c-color", t!("Azaltılmış renk modu"), color.is_some(), |c| c.color = if c.color.is_some() { None } else { Some(Color::C256) }, cx),
+                section(p, t!("Settings")),
+                toggle("c-color", t!("Reduced color mode"), color.is_some(), |c| c.color = if c.color.is_some() { None } else { Some(Color::C256) }, cx),
                 indent(color_box, color.is_some()),
-                toggle("c-640", t!("640 × 480 ekran çözünürlüğünde çalıştır"), c.res_640, |c| c.res_640 = !c.res_640, cx),
-                toggle("c-fso", t!("Tam ekran iyileştirmelerini devre dışı bırak"), c.disable_fso, |c| c.disable_fso = !c.disable_fso, cx),
-                toggle("c-admin", t!("Bu programı yönetici olarak çalıştır"), c.run_as_admin, |c| c.run_as_admin = !c.run_as_admin, cx),
-                toggle("c-restart", t!("Bu programı yeniden başlatma için kaydet"), c.register_restart, |c| c.register_restart = !c.register_restart, cx),
-                toggle("c-icc", t!("Eski görüntü ICC renk yönetimini kullan"), c.legacy_icc, |c| c.legacy_icc = !c.legacy_icc, cx),
+                toggle("c-640", t!("Run in 640 × 480 screen resolution"), c.res_640, |c| c.res_640 = !c.res_640, cx),
+                toggle("c-fso", t!("Disable fullscreen optimizations"), c.disable_fso, |c| c.disable_fso = !c.disable_fso, cx),
+                toggle("c-admin", t!("Run this program as an administrator"), c.run_as_admin, |c| c.run_as_admin = !c.run_as_admin, cx),
+                toggle("c-restart", t!("Register this program for restart"), c.register_restart, |c| c.register_restart = !c.register_restart, cx),
+                toggle("c-icc", t!("Use legacy display ICC color management"), c.legacy_icc, |c| c.legacy_icc = !c.legacy_icc, cx),
             ],
         ));
         out.push(card(
             p,
             vec![
-                section(p, t!("Yüksek DPI")),
-                toggle("c-dpi", t!("Yüksek DPI ölçeklendirme davranışını geçersiz kıl. Ölçeklendirmeyi yapan:"), dpi.is_some(), |c| c.dpi = if c.dpi.is_some() { None } else { Some(Dpi::Application) }, cx),
+                section(p, t!("High DPI")),
+                toggle("c-dpi", t!("Override high DPI scaling behavior. Scaling performed by:"), dpi.is_some(), |c| c.dpi = if c.dpi.is_some() { None } else { Some(Dpi::Application) }, cx),
                 indent(dpi_box, dpi.is_some()),
             ],
         ));
         out.push(note(
             p,
             if self.compat_all_users {
-                t!("Ayarlar yalnızca sizin hesabınız için kaydedilir. Bu program için tüm kullanıcılara ait ayarlar da var; onları Windows özelliklerinden değiştirebilirsiniz.")
+                t!("Settings are saved for your account only. This program also has settings for all users; you can change those in Windows properties.")
             } else {
-                t!("Ayarlar yalnızca sizin hesabınız için kaydedilir.")
+                t!("Settings are saved for your account only.")
             },
         ));
         out
@@ -1346,25 +1346,25 @@ impl PropsView {
     fn render_security(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use rf_win::security::{RIGHTS, Right};
         let s = match &self.security {
-            None => return vec![note(p, t!("Yükleniyor…"))],
-            Some(Err(e)) => return vec![card(p, vec![row(p, t!("Hata"), e.clone())]), self.win_props_link(p, cx)],
+            None => return vec![note(p, t!("Loading…"))],
+            Some(Err(e)) => return vec![card(p, vec![row(p, t!("Error"), e.clone())]), self.win_props_link(p, cx)],
             Some(Ok(s)) => s,
         };
         let is_dir = self.is_dir();
         let mut out = vec![card(
             p,
             vec![
-                row(p, t!("Nesne adı"), breakable(&self.paths[0].to_string_lossy())),
-                row(p, t!("Sahip"), s.owner.clone().unwrap_or_else(|| "—".into())),
+                row(p, t!("Object name"), breakable(&self.paths[0].to_string_lossy())),
+                row(p, t!("Owner"), s.owner.clone().unwrap_or_else(|| "—".into())),
             ],
         )];
         if s.null_dacl {
-            out.push(note(p, t!("Bu öğenin izin listesi yok: herkes her şeyi yapabilir.")));
+            out.push(note(p, t!("This item has no permission list: everyone can do everything.")));
             out.push(self.win_props_link(p, cx));
             return out;
         }
         let sel = self.sec_sel.min(s.entries.len().saturating_sub(1));
-        let mut list = vec![section(p, t!("Grup veya kullanıcı adları"))];
+        let mut list = vec![section(p, t!("Group or user names"))];
         for (k, e) in s.entries.iter().enumerate() {
             let on = k == sel;
             let group = e.sid.starts_with("S-1-5-32-") || e.sid == "S-1-1-0" || e.sid == "S-1-5-11" || e.sid.starts_with("S-1-15-");
@@ -1405,9 +1405,9 @@ impl PropsView {
                     .py(px(5.))
                     .text_xs()
                     .text_color(p.text_secondary)
-                    .child(div().flex_1().min_w_0().truncate().child(format!("{} {}", e.name, t!("için izinler"))))
-                    .child(div().w(px(70.)).flex().justify_center().child(t!("İzin ver")))
-                    .child(div().w(px(70.)).flex().justify_center().child(t!("Reddet")))
+                    .child(div().flex_1().min_w_0().truncate().child(format!("{} {}", e.name, t!("permissions"))))
+                    .child(div().w(px(70.)).flex().justify_center().child(t!("Allow")))
+                    .child(div().w(px(70.)).flex().justify_center().child(t!("Deny")))
                     .into_any_element(),
             ];
             for r in RIGHTS {
@@ -1415,13 +1415,13 @@ impl PropsView {
                     continue;
                 }
                 let label = match r {
-                    Right::Full => t!("Tam denetim"),
-                    Right::Modify => t!("Değiştirme"),
-                    Right::ReadExecute => t!("Okuma ve yürütme"),
-                    Right::List => t!("Klasör içeriğini listeleme"),
-                    Right::Read => t!("Okuma"),
-                    Right::Write => t!("Yazma"),
-                    Right::Special => t!("Özel izinler"),
+                    Right::Full => t!("Full control"),
+                    Right::Modify => t!("Modified"),
+                    Right::ReadExecute => t!("Read & execute"),
+                    Right::List => t!("List folder contents"),
+                    Right::Read => t!("Read"),
+                    Right::Write => t!("Write"),
+                    Right::Special => t!("Special permissions"),
                 };
                 rows.push(
                     h_flex()
@@ -1437,15 +1437,15 @@ impl PropsView {
             out.push(card(p, rows));
         }
         if s.protected {
-            out.push(note(p, t!("Bu öğe izinlerini üst klasörden devralmıyor.")));
+            out.push(note(p, t!("This item does not inherit permissions from its parent folder.")));
         }
-        out.push(note(p, t!("İzinleri değiştirmek için Windows'un Güvenlik penceresini kullanın (yönetici izni isteyebilir).")));
+        out.push(note(p, t!("To change permissions, use Windows' Security window (it may ask for administrator permission).")));
         out.push(self.win_props_link(p, cx));
         out
     }
 
     fn win_props_link(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        link_button(p, "win-props2", L::ExternalLink, t!("Windows özellikleri…")).on_click(cx.listener(|v, _, _, _| v.windows_properties())).into_any_element()
+        link_button(p, "win-props2", L::ExternalLink, t!("Windows properties…")).on_click(cx.listener(|v, _, _, _| v.windows_properties())).into_any_element()
     }
 
     fn render_details(&self, p: &Palette) -> Vec<AnyElement> {
@@ -1465,13 +1465,13 @@ impl PropsView {
             out.push(card(
                 p,
                 vec![
-                    section(p, t!("Açıklama")),
-                    field(t!("Başlık"), &inputs[0]),
-                    field(t!("Konu"), &inputs[1]),
-                    field(t!("Etiketler"), &inputs[2]),
-                    field(t!("Yorumlar"), &inputs[3]),
-                    field(t!("Yazarlar"), &inputs[4]),
-                    note(p, t!("Dosyanın içine yazılır; birden çok etiket ya da yazar noktalı virgülle ayrılır.")),
+                    section(p, t!("Description")),
+                    field(t!("Title"), &inputs[0]),
+                    field(t!("Subject"), &inputs[1]),
+                    field(t!("Tags"), &inputs[2]),
+                    field(t!("Comments"), &inputs[3]),
+                    field(t!("Authors"), &inputs[4]),
+                    note(p, t!("Written into the file; several tags or authors are separated by semicolons.")),
                 ],
             ));
         }
@@ -1482,21 +1482,21 @@ impl PropsView {
                     rows.push(row(p, k, v.clone()));
                 }
             };
-            add(t!("Dosya açıklaması"), &pe.description);
-            add(t!("Dosya sürümü"), &pe.version);
-            add(t!("Ürün adı"), &pe.product);
-            add(t!("Ürün sürümü"), &pe.product_version);
-            add(t!("Şirket"), &pe.company);
-            add(t!("Telif hakkı"), &pe.copyright);
-            add(t!("Ticari markalar"), &pe.trademarks);
-            add(t!("Dil"), &pe.language);
-            add(t!("Özgün dosya adı"), &pe.original_filename);
-            add(t!("İç ad"), &pe.internal_name);
-            rows.push(row(p, t!("Mimari"), pe.arch.to_string()));
+            add(t!("File description"), &pe.description);
+            add(t!("File version"), &pe.version);
+            add(t!("Product name"), &pe.product);
+            add(t!("Product version"), &pe.product_version);
+            add(t!("Company"), &pe.company);
+            add(t!("Copyright"), &pe.copyright);
+            add(t!("Trademarks"), &pe.trademarks);
+            add(t!("Language"), &pe.language);
+            add(t!("Original filename"), &pe.original_filename);
+            add(t!("Internal name"), &pe.internal_name);
+            rows.push(row(p, t!("Architecture"), pe.arch.to_string()));
             out.push(card(p, rows));
         }
         if !self.media.is_empty() {
-            let mut rows = vec![section(p, t!("İçerik"))];
+            let mut rows = vec![section(p, t!("Contains"))];
             rows.extend(self.media.iter().map(|(k, v)| row(p, crate::i18n::t(k), v.clone())));
             out.push(card(p, rows));
         }
@@ -1508,28 +1508,28 @@ impl PropsView {
                 }
             }
             let mut rows = vec![
-                section(p, t!("Dosya")),
-                row(p, t!("Ad"), file_name(path)),
-                row(p, t!("Klasör yolu"), path.parent().map(|d| breakable(&d.to_string_lossy())).unwrap_or_default()),
-                row(p, t!("Oluşturulma"), format::datetime_full(i.created_ms)),
-                row(p, t!("Değiştirilme"), format::datetime_full(i.modified_ms)),
-                row(p, t!("Boyut"), format::size(i.size)),
-                row(p, t!("Öznitelikler"), if letters.is_empty() { "—".into() } else { letters }),
+                section(p, t!("File")),
+                row(p, t!("Name"), file_name(path)),
+                row(p, t!("Folder path"), path.parent().map(|d| breakable(&d.to_string_lossy())).unwrap_or_default()),
+                row(p, t!("Created"), format::datetime_full(i.created_ms)),
+                row(p, t!("Modified"), format::datetime_full(i.modified_ms)),
+                row(p, t!("Size"), format::size(i.size)),
+                row(p, t!("Attributes"), if letters.is_empty() { "—".into() } else { letters }),
             ];
             if let Some(Ok(s)) = &self.security {
                 if let Some(o) = &s.owner {
-                    rows.push(row(p, t!("Sahip"), o.clone()));
+                    rows.push(row(p, t!("Owner"), o.clone()));
                 }
             }
             if let Ok(pc) = std::env::var("COMPUTERNAME") {
-                rows.push(row(p, t!("Bilgisayar"), format!("{pc} ({})", t!("bu bilgisayar"))));
+                rows.push(row(p, t!("Computer"), format!("{pc} ({})", t!("this PC"))));
             }
             out.push(card(p, rows));
         }
         if !self.streams.is_empty() {
-            let mut rows = vec![section(p, t!("Veri akışları"))];
+            let mut rows = vec![section(p, t!("Data streams"))];
             rows.extend(self.streams.iter().map(|(name, size)| row_dyn(p, name.clone(), format::size(*size))));
-            rows.push(note(p, t!("Dosyanın içeriğinin yanında tutulan adlandırılmış akışlar (NTFS). İndirilen dosyalardaki Zone.Identifier bunlardan biridir.")));
+            rows.push(note(p, t!("Named streams kept beside the file's content (NTFS). The Zone.Identifier of downloaded files is one of them.")));
             out.push(card(p, rows));
         }
         out
@@ -1539,8 +1539,8 @@ impl PropsView {
         let Some(s) = &self.signatures else { return vec![] };
         let mut out = Vec::new();
         let (ok_icon, color, text) = match &s.verdict {
-            Ok(()) => (L::ShieldCheck, hsla(140. / 360., 0.6, 0.45, 1.), t!("Bu dijital imza geçerli.").to_string()),
-            Err(e) => (L::ShieldAlert, p.danger, format!("{} ({})", t!("Bu dijital imza geçerli değil."), verdict_reason(e))),
+            Ok(()) => (L::ShieldCheck, hsla(140. / 360., 0.6, 0.45, 1.), t!("This digital signature is OK.").to_string()),
+            Err(e) => (L::ShieldAlert, p.danger, format!("{} ({})", t!("This digital signature is not valid."), verdict_reason(e))),
         };
         out.push(
             h_flex()
@@ -1563,9 +1563,9 @@ impl PropsView {
                 .py(px(5.))
                 .text_xs()
                 .text_color(p.text_secondary)
-                .child(div().flex_1().child(t!("İmzalayan")))
-                .child(div().w(px(70.)).child(t!("Özet")))
-                .child(div().w(px(130.)).child(t!("Zaman damgası")))
+                .child(div().flex_1().child(t!("Signer")))
+                .child(div().w(px(70.)).child(t!("Digest")))
+                .child(div().w(px(130.)).child(t!("Timestamp")))
                 .into_any_element(),
         ];
         for (k, g) in s.list.iter().enumerate() {
@@ -1582,7 +1582,7 @@ impl PropsView {
                     .hover(|d| d.bg(p.hover))
                     .child(div().flex_1().min_w_0().truncate().child(g.signer.clone()))
                     .child(div().w(px(70.)).child(g.digest.clone()))
-                    .child(div().w(px(130.)).child(g.timestamp_ms.map(format::datetime_full).unwrap_or_else(|| t!("Yok").to_string())))
+                    .child(div().w(px(130.)).child(g.timestamp_ms.map(format::datetime_full).unwrap_or_else(|| t!("None").to_string())))
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.sig_sel = k;
                         cx.notify();
@@ -1595,11 +1595,11 @@ impl PropsView {
             out.push(card(
                 p,
                 vec![
-                    section(p, t!("İmza ayrıntıları")),
-                    row(p, t!("İmzalayan"), g.signer.clone()),
-                    row(p, t!("Veren"), g.issuer.clone()),
-                    row(p, t!("Özet algoritması"), g.digest.clone()),
-                    row(p, t!("İmzalanma zamanı"), g.timestamp_ms.map(format::datetime_full).unwrap_or_else(|| t!("Zaman damgası yok").to_string())),
+                    section(p, t!("Signature details")),
+                    row(p, t!("Signer"), g.signer.clone()),
+                    row(p, t!("Issued by"), g.issuer.clone()),
+                    row(p, t!("Digest algorithm"), g.digest.clone()),
+                    row(p, t!("Signing time"), g.timestamp_ms.map(format::datetime_full).unwrap_or_else(|| t!("Not timestamped").to_string())),
                 ],
             ));
         }
@@ -1607,17 +1607,17 @@ impl PropsView {
     }
 
     fn render_sharing(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut rows = vec![section(p, t!("Ağ dosya ve klasör paylaşımı"))];
+        let mut rows = vec![section(p, t!("Network file and folder sharing"))];
         match &self.share {
             Some(s) => {
-                rows.push(row(p, t!("Durum"), t!("Paylaşılıyor").to_string()));
-                rows.push(row(p, t!("Ağ yolu"), s.clone()));
+                rows.push(row(p, t!("Status"), t!("Shared").to_string()));
+                rows.push(row(p, t!("Network path"), s.clone()));
             }
-            None => rows.push(row(p, t!("Durum"), t!("Paylaşılmıyor").to_string())),
+            None => rows.push(row(p, t!("Status"), t!("Not shared").to_string())),
         }
         vec![
             card(p, rows),
-            note(p, t!("Paylaşımı açmak ya da değiştirmek yönetici izni gerektirir; Windows'un Paylaşım penceresinden yapılır.")),
+            note(p, t!("Turning sharing on or changing it needs administrator permission; it is done in Windows' Sharing window.")),
             self.win_props_link(p, cx),
         ]
     }
@@ -1625,7 +1625,7 @@ impl PropsView {
     fn render_customize(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let current = match &self.folder_icon {
             Some((f, i)) => format!("{}, {i}", file_name(Path::new(f))),
-            None => t!("Varsayılan").to_string(),
+            None => t!("Default").to_string(),
         };
         let start = self.folder_icon.clone().unwrap_or_else(|| (r"%SystemRoot%\System32\shell32.dll".to_string(), 3));
         let custom = self.folder_icon.is_some();
@@ -1633,14 +1633,14 @@ impl PropsView {
             card(
                 p,
                 vec![
-                    section(p, t!("Klasör simgesi")),
-                    row(p, t!("Simge"), current),
+                    section(p, t!("Folder icon")),
+                    row(p, t!("Icon"), current),
                     h_flex()
                         .gap_4()
                         .py_1()
-                        .child(link_button(p, "dir-icon", L::Palette, t!("Simge değiştir…")).on_click(cx.listener(move |v, _, window, cx| v.pick_icon(start.clone(), false, window, cx))))
+                        .child(link_button(p, "dir-icon", L::Palette, t!("Change icon…")).on_click(cx.listener(move |v, _, window, cx| v.pick_icon(start.clone(), false, window, cx))))
                         .when(custom, |d| {
-                            d.child(link_button(p, "dir-icon-reset", L::RotateCcw, t!("Varsayılana geri yükle")).on_click(cx.listener(|v, _, _, cx| {
+                            d.child(link_button(p, "dir-icon-reset", L::RotateCcw, t!("Restore default")).on_click(cx.listener(|v, _, _, cx| {
                                 v.folder_icon = None;
                                 cx.notify();
                             })))
@@ -1648,7 +1648,7 @@ impl PropsView {
                         .into_any_element(),
                 ],
             ),
-            note(p, t!("Simge, klasöre bir desktop.ini dosyası yazılarak ayarlanır; Dosya Gezgini de aynı simgeyi gösterir.")),
+            note(p, t!("The icon is set by writing a desktop.ini file into the folder; File Explorer shows the same icon.")),
         ]
     }
 }
@@ -1704,21 +1704,21 @@ fn load_one(p: &Path) -> Loaded {
 fn verdict_reason(e: &str) -> String {
     let l = e.to_ascii_lowercase();
     let k = if l.contains("does not match") {
-        t!("imza dosyayla uyuşmuyor")
+        t!("the signature does not match the file")
     } else if l.contains("distrust") {
-        t!("sertifika açıkça engellenmiş")
+        t!("the certificate is explicitly distrusted")
     } else if l.contains("not trusted") {
-        t!("sertifikaya güvenilmiyor")
+        t!("the certificate is not trusted")
     } else if l.contains("expired") {
-        t!("sertifikanın süresi dolmuş")
+        t!("the certificate has expired")
     } else if l.contains("chain") {
-        t!("sertifika zinciri kurulamadı")
+        t!("the certificate chain could not be built")
     } else if l.contains("no signature") {
-        t!("imza yok")
+        t!("no signature")
     } else if l.contains("revoked") {
-        t!("sertifika iptal edilmiş")
+        t!("the certificate has been revoked")
     } else if l.contains("code signing") {
-        t!("sertifika kod imzalamak için geçerli değil")
+        t!("the certificate is not valid for code signing")
     } else {
         return e.to_string();
     };
@@ -1912,9 +1912,9 @@ impl Render for PropsView {
             }
         }
         let title = match (self.single(), &self.drive) {
-            (_, Some(d)) => format!("{} — {}", d.display_name(), t!("Özellikler")),
-            (Some(path), None) => format!("{} — {}", file_name(path), t!("Özellikler")),
-            (None, None) => format!("{} — {}", crate::i18n::items(self.paths.len()), t!("Özellikler")),
+            (_, Some(d)) => format!("{} — {}", d.display_name(), t!("Properties")),
+            (Some(path), None) => format!("{} — {}", file_name(path), t!("Properties")),
+            (None, None) => format!("{} — {}", crate::i18n::items(self.paths.len()), t!("Properties")),
         };
         window.set_window_title(&title);
 
@@ -2059,10 +2059,10 @@ impl Render for PropsView {
                     .border_t_1()
                     .border_color(p.divider)
                     .child(div().flex_1().min_w_0().text_xs().text_color(p.danger).children(self.error.clone()))
-                    .child(button("ok", t!("Tamam"), true).on_click(cx.listener(|v, _, window, cx| v.apply(true, window, cx))))
-                    .child(button("cancel", t!("İptal"), false).on_click(|_, window, _| window.remove_window()))
+                    .child(button("ok", t!("OK"), true).on_click(cx.listener(|v, _, window, cx| v.apply(true, window, cx))))
+                    .child(button("cancel", t!("Cancel"), false).on_click(|_, window, _| window.remove_window()))
                     .child(
-                        button("apply", t!("Uygula"), false)
+                        button("apply", t!("Apply"), false)
                             .when(!dirty, |d| d.opacity(0.5))
                             .on_click(cx.listener(|v, _, window, cx| v.apply(false, window, cx))),
                     ),

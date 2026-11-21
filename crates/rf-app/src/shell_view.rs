@@ -9,8 +9,8 @@ use crate::t;
 
 /// A short message in the Status Center: what was asked for cannot be done in a shell folder.
 pub fn read_only_notice(cx: &mut gpui_kit::App) {
-    crate::status_center::start(cx, t!("Bu klasör salt okunur").to_string(), |_| {
-        Err(anyhow::anyhow!(t!("Telefon gibi cihazlardaki öğeler burada değiştirilemez; kopyalayıp başka bir klasöre yapıştırabilirsiniz.")))
+    crate::status_center::start(cx, t!("This folder is read-only").to_string(), |_| {
+        Err(anyhow::anyhow!(t!("Items on devices such as phones cannot be changed here; copy them and paste into another folder.")))
     });
 }
 
@@ -30,7 +30,7 @@ pub fn copy_items(cx: &mut gpui_kit::App, items: Vec<ShellChild>) {
         let _ = tx.send(rf_win::clipboard::sequence());
     });
     let names = items.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ");
-    let title = format!("{} {}", t!("Cihazdan kopyalanıyor:"), names);
+    let title = format!("{} {}", t!("Copying from device:"), names);
     crate::status_center::start(cx, title, move |_| {
         let seq = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(0);
         let real = copy_to_temp(&items)?;
@@ -95,7 +95,7 @@ fn copy_to_temp(items: &[ShellChild]) -> anyhow::Result<Vec<PathBuf>> {
         return Ok(out);
     }
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let dest = crate::archive_view::temp_root().join(format!("cihaz-{stamp:x}"));
+    let dest = crate::archive_view::temp_root().join(format!("device-{stamp:x}"));
     std::fs::create_dir_all(&dest)?;
     if !rf_win::shellfolder::copy_out(&virtual_items, &dest)? {
         return Ok(Vec::new());

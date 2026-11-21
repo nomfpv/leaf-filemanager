@@ -23,10 +23,10 @@ pub fn quitting() -> bool {
 fn labels() -> rf_win::tray::Labels {
     rf_win::tray::Labels {
         tooltip: "rustyfiles".into(),
-        open: t!("rustyfiles'ı aç").into(),
-        new_window: t!("Yeni pencere").into(),
-        settings: t!("Ayarlar").into(),
-        quit: t!("Çıkış").into(),
+        open: t!("Open rustyfiles").into(),
+        new_window: t!("New window").into(),
+        settings: t!("Settings").into(),
+        quit: t!("Exit").into(),
     }
 }
 
@@ -117,8 +117,8 @@ pub fn op_finished(ops: &Entity<Ops>, id: u64, cx: &mut App) {
         return;
     }
     let (head, body) = match phase {
-        OpPhase::Done => (t!("İşlem tamamlandı"), title),
-        OpPhase::Failed(e) => (t!("İşlem başarısız oldu"), format!("{title}\n{e}")),
+        OpPhase::Done => (t!("Operation finished"), title),
+        OpPhase::Failed(e) => (t!("Operation failed"), format!("{title}\n{e}")),
         OpPhase::Cancelled | OpPhase::Running => return,
     };
     rf_win::tray::notify(head, &body);

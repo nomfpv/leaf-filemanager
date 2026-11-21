@@ -24,7 +24,6 @@ mod prompt;
 mod prop_chooser;
 mod hash_panel;
 mod i18n;
-mod i18n_en;
 mod folder_history;
 mod folder_view;
 mod icons;

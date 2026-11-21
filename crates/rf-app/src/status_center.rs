@@ -617,7 +617,7 @@ pub fn start_with_id(
                     for e in evs {
                         match e {
                             Ev::Ask(list, reply) => {
-                                op.current = Some(t!("Hedefte aynı adlı öğeler var").to_string());
+                                op.current = Some(t!("Items with the same name exist at the destination").to_string());
                                 // shared with the dialog: the strip or card of any window can answer too, the first answer wins
                                 let reply = std::rc::Rc::new(std::cell::RefCell::new(Some(reply)));
                                 op.question = Some(Question { count: list.len(), list: list.clone(), reply: reply.clone() });
@@ -694,7 +694,7 @@ pub fn start_with_id(
             // worker died without reporting (panic / spawn failure): don't spin forever
             let _ = entity.update(cx, |ops, cx| {
                 if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
-                    op.phase = OpPhase::Failed(t!("İşlem beklenmedik şekilde sonlandı").into());
+                    op.phase = OpPhase::Failed(t!("The operation ended unexpectedly").into());
                     op.ended = Some(Instant::now());
                     op.question = None;
                 }
@@ -760,8 +760,8 @@ pub fn paste_virtual(cx: &mut App, dest: std::path::PathBuf, after: impl FnOnce(
     if crate::archive_view::split(&dest).is_some() {
         return;
     }
-    let title = format!("{}: {}", t!("Yapıştırılıyor"), short(&dest));
-    let unread = t!("Kaynaktan okunamadı").to_string();
+    let title = format!("{}: {}", t!("Pasting"), short(&dest));
+    let unread = t!("Could not be read from the source").to_string();
     let arrived = Arc::new(std::sync::Mutex::new(Vec::new()));
     let out = arrived.clone();
     start_with(
@@ -814,8 +814,8 @@ fn transfer_inner(
         return;
     }
     let verb = match kind {
-        Transfer::Copy => t!("Kopyalanıyor"),
-        Transfer::Move => t!("Taşınıyor"),
+        Transfer::Copy => t!("Copying"),
+        Transfer::Move => t!("Moving"),
     };
     let title = format!("{verb}: {} → {}", crate::i18n::items(sources.len()), short(&dest));
     let s = cx.global::<crate::settings::Settings>();
@@ -827,8 +827,8 @@ fn transfer_inner(
     let on_done: Option<OnDone> = after.map(|f| -> OnDone { Box::new(move |_, cx: &mut App| f(std::mem::take(&mut *arrived.lock().unwrap()), cx)) });
     // the strip's sentence, what the finished card opens, and the mark that tells its "Geri al" which undo record is its own
     let words = match kind {
-        Transfer::Copy => t!("{items} kopyalanıyor: {dest}"),
-        Transfer::Move => t!("{items} taşınıyor: {dest}"),
+        Transfer::Copy => t!("Copying {items}: {dest}"),
+        Transfer::Move => t!("Moving {items}: {dest}"),
     }
     .replace("{items}", &crate::i18n::items(sources.len()))
     .replace("{dest}", &short(&dest));
@@ -901,16 +901,16 @@ pub fn offer_resume(cx: &mut App) {
 fn ask_resume(job: rf_win::fastcopy::Interrupted, window: &mut gpui_kit::Window, cx: &mut App) {
     use crate::prompt::{Button, Kind};
     let title = match job.kind {
-        Transfer::Copy => t!("Yarıda kalan bir kopyalama var"),
-        Transfer::Move => t!("Yarıda kalan bir taşıma var"),
+        Transfer::Copy => t!("A copy was cut off"),
+        Transfer::Move => t!("A move was cut off"),
     };
     let what = format!("{} → {}", crate::i18n::items(job.sources.len()), short(&job.dest));
     let msg = format!(
         "{what}\n{} / {} {}\n\n{}",
         job.done.min(job.files),
         job.files,
-        t!("dosya tamamlandı"),
-        t!("Kaldığı yerden devam edilsin mi? Tamamlanan dosyalar kaynaklarıyla yeniden karşılaştırılır, yarım kalanlar baştan kopyalanır.")
+        t!("files done"),
+        t!("Carry on where it stopped? Files already done are checked against their sources again; partly copied ones are copied again.")
     );
     let (j1, j2) = (job.clone(), job.clone());
     crate::prompt::show(
@@ -918,18 +918,18 @@ fn ask_resume(job: rf_win::fastcopy::Interrupted, window: &mut gpui_kit::Window,
         Some(msg),
         None,
         vec![
-            Button::new(t!("Devam et"), Kind::Primary, move |_, _, cx| {
+            Button::new(t!("Resume"), Kind::Primary, move |_, _, cx| {
                 resume_job(cx, j1.clone());
                 offer_resume(cx);
                 Ok(())
             }),
-            Button::new(t!("Vazgeç"), Kind::Normal, move |_, _, cx| {
+            Button::new(t!("Discard"), Kind::Normal, move |_, _, cx| {
                 // what was copied stays where it is
                 rf_win::fastcopy::discard(&j2.journal);
                 offer_resume(cx);
                 Ok(())
             }),
-            Button::new(t!("Sonra"), Kind::Normal, |_, _, _| Ok(())),
+            Button::new(t!("Later"), Kind::Normal, |_, _, _| Ok(())),
         ],
         window,
         cx,
@@ -939,8 +939,8 @@ fn ask_resume(job: rf_win::fastcopy::Interrupted, window: &mut gpui_kit::Window,
 /// Carries a cut-off job on in the Status Center, with its original plan.
 pub fn resume_job(cx: &mut App, job: rf_win::fastcopy::Interrupted) {
     let verb = match job.kind {
-        Transfer::Copy => t!("Kopyalanıyor"),
-        Transfer::Move => t!("Taşınıyor"),
+        Transfer::Copy => t!("Copying"),
+        Transfer::Move => t!("Moving"),
     };
     let title = format!("{verb}: {} → {}", crate::i18n::items(job.sources.len()), short(&job.dest));
     let limit = u64::from(cx.global::<crate::settings::Settings>().copy_speed_limit) << 20;
@@ -1009,7 +1009,7 @@ pub fn extract_pick(cx: &mut App, archives: Vec<std::path::PathBuf>) {
         return;
     }
     let (tx, rx) = futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
-    let title = t!("Çıkarılacak klasör").to_string();
+    let title = t!("Folder to extract to").to_string();
     rf_win::sta::run(move |owner| {
         let _ = tx.send(rf_win::dialogs::pick(owner, &title, rf_win::dialogs::Pick::Folder));
     });
@@ -1048,8 +1048,8 @@ fn ask_then_extract(cx: &mut App, mut rest: Vec<std::path::PathBuf>, to: Extract
 
 fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
     let title = match &to {
-        ExtractTo::Into(d) | ExtractTo::SmartInto(d) => format!("{} {} → {}", t!("Çıkarılıyor:"), short(&archive), short(d)),
-        _ => format!("{} {}", t!("Çıkarılıyor:"), short(&archive)),
+        ExtractTo::Into(d) | ExtractTo::SmartInto(d) => format!("{} {} → {}", t!("Extracting:"), short(&archive), short(d)),
+        _ => format!("{} {}", t!("Extracting:"), short(&archive)),
     };
     // the folder holding the result, when it is a new one: opened afterwards if the user wants
     let made = Arc::new(parking_lot::Mutex::new(None::<std::path::PathBuf>));
@@ -1109,7 +1109,7 @@ fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
 
 /// Creates an archive with options: a password, a 7z dictionary size, parts of a given size.
 pub fn compress_opts(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path::PathBuf, format: rf_archive::Format, level: u32, opts: rf_archive::CompressOptions) {
-    let title = format!("{} {} → {}", t!("Sıkıştırılıyor:"), crate::i18n::items(sources.len()), short(&dest));
+    let title = format!("{} {} → {}", t!("Compressing:"), crate::i18n::items(sources.len()), short(&dest));
     start(cx, title, move |t| {
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
@@ -1123,7 +1123,7 @@ pub fn compress_opts(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::
 
 /// RAR through WinRAR's Rar.exe (`level` 0…9).
 pub fn compress_rar(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path::PathBuf, level: u32, password: Option<String>) {
-    let title = format!("{} {} → {}", t!("Sıkıştırılıyor:"), crate::i18n::items(sources.len()), short(&dest));
+    let title = format!("{} {} → {}", t!("Compressing:"), crate::i18n::items(sources.len()), short(&dest));
     start(cx, title, move |t| {
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
@@ -1141,7 +1141,7 @@ pub fn compress(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path:
 
 /// `level`: 0 store … 9 smallest.
 pub fn compress_level(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path::PathBuf, format: rf_archive::Format, level: u32) {
-    let title = format!("{} {} → {}", t!("Sıkıştırılıyor:"), crate::i18n::items(sources.len()), short(&dest));
+    let title = format!("{} {} → {}", t!("Compressing:"), crate::i18n::items(sources.len()), short(&dest));
     start(cx, title, move |t| {
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
@@ -1163,9 +1163,9 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
         crate::places::pins_follow(cx, p, None);
     }
     let title = if permanent {
-        format!("{} {}", t!("Kalıcı olarak siliniyor:"), crate::i18n::items(paths.len()))
+        format!("{} {}", t!("Permanently deleting:"), crate::i18n::items(paths.len()))
     } else {
-        format!("{} {}", t!("Geri dönüşüm kutusuna taşınıyor:"), crate::i18n::items(paths.len()))
+        format!("{} {}", t!("Moving to Recycle Bin:"), crate::i18n::items(paths.len()))
     };
     let fast = cx.global::<crate::settings::Settings>().fast_file_ops;
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
@@ -1233,7 +1233,7 @@ pub fn render_button(ops: &Entity<Ops>, p: &Palette, cx: &App) -> AnyElement {
     div()
         .id("status-center")
         // no tooltip while the flyout is open: it would sit on top of the flyout
-        .when(!open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Durum Merkezi")).build(w, cx)))
+        .when(!open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Status Center")).build(w, cx)))
         .relative()
         .size(px(32.))
         .flex_shrink_0()
@@ -1321,7 +1321,7 @@ pub fn render_flyout(ops: &Entity<Ops>, p: &Palette, top: Pixels, cx: &App) -> O
             .justify_center()
             .text_sm()
             .text_color(p.text_secondary)
-            .child(t!("Devam eden dosya işlemleri yok"))
+            .child(t!("No ongoing file operations"))
             .into_any_element()
     } else {
         div().id("sc-list").max_h(px(460.)).overflow_y_scroll().child(list).into_any_element()
@@ -1362,7 +1362,7 @@ pub fn render_flyout(ops: &Entity<Ops>, p: &Palette, top: Pixels, cx: &App) -> O
                             .pt_2()
                             .pb_2()
                             .items_center()
-                            .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Durum Merkezi")))
+                            .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Status Center")))
                             .child(
                                 div()
                                     .id("sc-clear")
@@ -1378,7 +1378,7 @@ pub fn render_flyout(ops: &Entity<Ops>, p: &Palette, top: Pixels, cx: &App) -> O
                                             .active(|s| s.bg(p.pressed))
                                             .on_click(move |_, _, cx| clear_e.update(cx, |o, cx| o.clear_finished(cx)))
                                     })
-                                    .child(t!("Tamamlananları temizle")),
+                                    .child(t!("Clear completed")),
                             ),
                     )
                     .children(update)
@@ -1394,28 +1394,28 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
     let running = op.phase == OpPhase::Running;
     let (ops_e, op_id) = (ops.clone(), op.id);
     let (status, color, icon) = match &op.phase {
-        OpPhase::Running if is_paused => (t!("Duraklatıldı").to_string(), p.text_secondary, L::Pause),
+        OpPhase::Running if is_paused => (t!("Paused").to_string(), p.text_secondary, L::Pause),
         OpPhase::Running => {
             let elapsed = op.started.elapsed().as_secs_f32();
             // speed and time left from the moving average of the last few seconds
             let pace = op.stats.pace(op.secs(), (op.done, op.total), op.bytes.get());
             let text = if op.total == 0 {
-                format!("{} {}", elapsed as u64, t!("sn"))
+                format!("{} {}", elapsed as u64, t!("s"))
             } else {
                 let mut text = crate::i18n::pct(frac * 100.0);
                 if let Some(v) = pace.speed.filter(|v| *v >= 1.0) {
                     text = format!("{text} · {}", crate::transfer_view::speed_text(v));
                 }
                 match pace.eta_secs {
-                    Some(r) => format!("{text} · {} {}", fmt_duration(r as f32), t!("kaldı")),
-                    None => format!("{text} · {} {}", elapsed as u64, t!("sn")),
+                    Some(r) => format!("{text} · {} {}", fmt_duration(r as f32), t!("left")),
+                    None => format!("{text} · {} {}", elapsed as u64, t!("s")),
                 }
             };
             (text, p.text_secondary, L::LoaderCircle)
         }
-        OpPhase::Done => (t!("Tamamlandı").to_string(), p.accent, L::CircleCheck),
-        OpPhase::Cancelled => (t!("İptal edildi").to_string(), p.text_secondary, L::CircleSlash),
-        OpPhase::Failed(e) => (format!("{} {}", t!("Hata:"), crate::i18n::td(e)), p.danger, L::CircleAlert),
+        OpPhase::Done => (t!("Completed").to_string(), p.accent, L::CircleCheck),
+        OpPhase::Cancelled => (t!("Cancelled").to_string(), p.text_secondary, L::CircleSlash),
+        OpPhase::Failed(e) => (format!("{} {}", t!("Error:"), crate::i18n::td(e)), p.danger, L::CircleAlert),
     };
     let icon_color = match &op.phase {
         OpPhase::Running => p.accent,
@@ -1488,7 +1488,7 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
                     .justify_center()
                     .rounded(theme::RADIUS_SM)
                     .text_color(p.text_secondary)
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(if is_paused { t!("Devam et") } else { t!("Duraklat") }).build(w, cx))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(if is_paused { t!("Resume") } else { t!("Pause") }).build(w, cx))
                     .hover(|s| s.bg(p.pressed))
                     .child(Icon::new(if is_paused { L::Play } else { L::Pause }).size(px(12.)))
                     .on_click({
@@ -1508,7 +1508,7 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
                 .rounded(theme::RADIUS_SM)
                 .text_color(p.text_secondary)
                 .tooltip(move |w, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(if running { t!("İptal") } else { t!("Kapat") }).build(w, cx)
+                    gpui_kit::component::tooltip::Tooltip::new(if running { t!("Cancel") } else { t!("Close") }).build(w, cx)
                 })
                 .hover(|s| s.bg(p.pressed))
                 .child(Icon::new(L::X).size(px(12.)))
@@ -1528,7 +1528,7 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
 
 /// "~45 sn", "~3 dk", "~1 sa 5 dk" (rounded; it is an estimate).
 pub(crate) fn fmt_duration(secs: f32) -> String {
-    fmt_duration_with(secs, (crate::t!("sn"), crate::t!("dk"), crate::t!("sa")))
+    fmt_duration_with(secs, (crate::t!("s"), crate::t!("min"), crate::t!("h")))
 }
 
 /// Unit labels are parameters so the formatting is testable without the global language.
@@ -1559,12 +1559,12 @@ mod tests {
 
     #[test]
     fn durations() {
-        let u = ("sn", "dk", "sa");
-        assert_eq!(fmt_duration_with(0.2, u), "~1 sn");
-        assert_eq!(fmt_duration_with(45.0, u), "~45 sn");
-        assert_eq!(fmt_duration_with(150.0, u), "~3 dk");
-        assert_eq!(fmt_duration_with(3580.0, u), "~1 sa 0 dk");
-        assert_eq!(fmt_duration_with(3900.0, u), "~1 sa 5 dk");
+        let u = ("s", "min", "h");
+        assert_eq!(fmt_duration_with(0.2, u), "~1 s");
+        assert_eq!(fmt_duration_with(45.0, u), "~45 s");
+        assert_eq!(fmt_duration_with(150.0, u), "~3 min");
+        assert_eq!(fmt_duration_with(3580.0, u), "~1 h 0 min");
+        assert_eq!(fmt_duration_with(3900.0, u), "~1 h 5 min");
     }
 
     fn ago(ms: u64) -> Instant {
@@ -1952,7 +1952,7 @@ fn panel(ops: &Entity<Ops>, p: &Palette, cx: &App) -> Div {
     let body: AnyElement = if o.ops.is_empty() && update.is_some() {
         div().into_any_element()
     } else if o.ops.is_empty() {
-        div().py_6().flex().justify_center().text_sm().text_color(p.text_secondary).child(t!("Devam eden dosya işlemleri yok")).into_any_element()
+        div().py_6().flex().justify_center().text_sm().text_color(p.text_secondary).child(t!("No ongoing file operations")).into_any_element()
     } else {
         div().id("sc-list").max_h(px(460.)).overflow_y_scroll().child(list).into_any_element()
     };
@@ -1965,7 +1965,7 @@ fn panel(ops: &Entity<Ops>, p: &Palette, cx: &App) -> Div {
                 .pt_2()
                 .pb_2()
                 .items_center()
-                .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Durum Merkezi")))
+                .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Status Center")))
                 .child(
                     div()
                         .id("sc-clear")
@@ -1979,7 +1979,7 @@ fn panel(ops: &Entity<Ops>, p: &Palette, cx: &App) -> Div {
                         .when(any_finished, |d| {
                             d.hover(|s| s.bg(p.hover)).active(|s| s.bg(p.pressed)).on_click(move |_, _, cx| clear_e.update(cx, |o, cx| o.clear_finished(cx)))
                         })
-                        .child(t!("Tamamlananları temizle")),
+                        .child(t!("Clear completed")),
                 ),
         )
         .children(update)
@@ -1991,8 +1991,8 @@ fn panel(ops: &Entity<Ops>, p: &Palette, cx: &App) -> Div {
 fn update_row(p: &Palette) -> Option<AnyElement> {
     use crate::installer::State;
     let (title, detail, pct, ready) = match crate::installer::state() {
-        State::Downloading(v, pct) => (t!("rustyfiles {v} indiriliyor").replace("{v}", &v), format!("%{pct}"), Some(pct), false),
-        State::Ready(v) => (t!("rustyfiles {v} hazır").replace("{v}", &v), t!("Yeniden başlatınca kurulur").to_string(), None, true),
+        State::Downloading(v, pct) => (t!("Downloading rustyfiles {v}").replace("{v}", &v), format!("%{pct}"), Some(pct), false),
+        State::Ready(v) => (t!("rustyfiles {v} is ready").replace("{v}", &v), t!("Installs when you restart").to_string(), None, true),
         _ => return None,
     };
     Some(
@@ -2031,7 +2031,7 @@ fn update_row(p: &Palette) -> Option<AnyElement> {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .cursor_pointer()
                                 .hover(|s| s.opacity(0.9))
-                                .child(t!("Yeniden başlat"))
+                                .child(t!("Restart"))
                                 .on_click(|_, _, _| {
                                     std::thread::spawn(crate::installer::restart_to_update);
                                 }),
@@ -2061,9 +2061,9 @@ pub fn update_toast(p: &Palette, picker: bool) -> Option<AnyElement> {
     let important = crate::installer::is_important(&v);
     let (edge, sign) = if important { (p.danger, L::TriangleAlert) } else { (p.accent, L::RefreshCw) };
     let (title, line) = if important {
-        (t!("Önemli güncelleme: rustyfiles {v}").replace("{v}", &v), t!("Önemli düzeltmeler içeriyor. Şimdi yeniden başlatın.").to_string())
+        (t!("Important update: rustyfiles {v}").replace("{v}", &v), t!("It brings important fixes. Restart now.").to_string())
     } else {
-        (t!("rustyfiles {v} hazır").replace("{v}", &v), t!("Yeniden başlatınca kurulur").to_string())
+        (t!("rustyfiles {v} is ready").replace("{v}", &v), t!("Installs when you restart").to_string())
     };
     Some(
         div()
@@ -2107,7 +2107,7 @@ pub fn update_toast(p: &Palette, picker: bool) -> Option<AnyElement> {
                             .font_weight(FontWeight::SEMIBOLD)
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.9))
-                            .child(t!("Yeniden başlat"))
+                            .child(t!("Restart"))
                             .on_click(|_, _, _| {
                                 std::thread::spawn(crate::installer::restart_to_update);
                             }),
@@ -2122,7 +2122,7 @@ pub fn update_toast(p: &Palette, picker: bool) -> Option<AnyElement> {
                             .text_color(p.text_secondary)
                             .cursor_pointer()
                             .hover(|s| s.bg(p.hover))
-                            .child(t!("Sonra"))
+                            .child(t!("Later"))
                             .on_click(move |_, window, _| {
                                 *TOAST_CLOSED.lock().unwrap() = Some(ver.clone());
                                 window.refresh();

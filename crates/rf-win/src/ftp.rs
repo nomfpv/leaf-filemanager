@@ -79,16 +79,16 @@ impl Drop for Handle {
 /// WinINet codes live in wininet.dll's message table, which `io::Error` cannot format.
 fn wininet_message(code: i32) -> Option<&'static str> {
     Some(match code {
-        12002 => "zaman aşımı",
-        12007 => "sunucu adı çözülemedi",
-        12013 => "kullanıcı adı yanlış",
-        12014 => "parola yanlış",
-        12015 => "oturum açılamadı",
-        12029 => "sunucuya bağlanılamadı",
-        12030 => "bağlantı kesildi",
-        12031 => "bağlantı sunucu tarafından sıfırlandı",
-        12003 => "sunucu isteği reddetti",
-        12111 => "FTP oturumu iptal edildi",
+        12002 => "timed out",
+        12007 => "server name not resolved",
+        12013 => "wrong user name",
+        12014 => "wrong password",
+        12015 => "couldn't log in",
+        12029 => "couldn't connect to the server",
+        12030 => "the connection was closed",
+        12031 => "the connection was reset by the server",
+        12003 => "the server refused the request",
+        12111 => "the FTP session was cancelled",
         _ => return None,
     })
 }
@@ -120,14 +120,14 @@ fn connect(u: &FtpUrl) -> std::io::Result<(Handle, Handle)> {
         InternetConnectW(session.0, PCWSTR(host.as_ptr()), u.port, p(&user), p(&pass), INTERNET_SERVICE_FTP, INTERNET_FLAG_PASSIVE, None)
     });
     if conn.0.is_null() {
-        return Err(last_err("FTP bağlantısı"));
+        return Err(last_err("FTP connection"));
     }
     Ok((session, conn))
 }
 
 /// Lists a remote directory.
 pub fn list(url: &str) -> std::io::Result<Vec<Entry>> {
-    let u = FtpUrl::parse(url).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "geçersiz FTP adresi"))?;
+    let u = FtpUrl::parse(url).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid FTP address"))?;
     let (_s, conn) = connect(&u)?;
     let pattern = wide(if u.path == "/" { "/*".to_string() } else { format!("{}/*", u.path) });
     let mut data = WIN32_FIND_DATAW::default();
@@ -141,7 +141,7 @@ pub fn list(url: &str) -> std::io::Result<Vec<Entry>> {
         if e.raw_os_error() == Some(18) {
             return Ok(out);
         }
-        return Err(std::io::Error::new(e.kind(), format!("FTP listeleme: {}", describe(e))));
+        return Err(std::io::Error::new(e.kind(), format!("FTP listing: {}", describe(e))));
     }
     loop {
         if let Some(e) = crate::listing::to_entry(&data) {
@@ -156,7 +156,7 @@ pub fn list(url: &str) -> std::io::Result<Vec<Entry>> {
 
 /// Downloads `url` (a file) to `dest`.
 pub fn download(url: &str, dest: &Path) -> std::io::Result<()> {
-    let u = FtpUrl::parse(url).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "geçersiz FTP adresi"))?;
+    let u = FtpUrl::parse(url).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid FTP address"))?;
     let (_s, conn) = connect(&u)?;
     let remote = wide(&u.path);
     let local = wide(dest);
@@ -171,19 +171,19 @@ pub fn download(url: &str, dest: &Path) -> std::io::Result<()> {
             None,
         )
     }
-    .map_err(|e| std::io::Error::other(format!("FTP indirme: {}", describe(std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF)))))
+    .map_err(|e| std::io::Error::other(format!("FTP download: {}", describe(std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF)))))
 }
 
 /// Uploads a local file into the remote directory `dir_url`.
 pub fn upload(local: &Path, dir_url: &str) -> std::io::Result<()> {
-    let u = FtpUrl::parse(dir_url).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "geçersiz FTP adresi"))?;
-    let name = local.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "dosya adı yok"))?;
+    let u = FtpUrl::parse(dir_url).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid FTP address"))?;
+    let name = local.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?;
     let (_s, conn) = connect(&u)?;
     let remote_path = if u.path == "/" { format!("/{}", name.to_string_lossy()) } else { format!("{}/{}", u.path, name.to_string_lossy()) };
     let remote = wide(&remote_path);
     let l = wide(local);
     unsafe { FtpPutFileW(conn.0, PCWSTR(l.as_ptr()), PCWSTR(remote.as_ptr()), FTP_TRANSFER_TYPE_BINARY, None) }
-        .map_err(|e| std::io::Error::other(format!("FTP yükleme: {}", describe(std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF)))))
+        .map_err(|e| std::io::Error::other(format!("FTP upload: {}", describe(std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF)))))
 }
 
 #[cfg(test)]

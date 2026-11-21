@@ -109,15 +109,15 @@ impl Location {
 
     pub fn title(&self) -> String {
         match self {
-            Location::Home => "Ana Sayfa".into(),
-            Location::RecycleBin => "Geri Dönüşüm Kutusu".into(),
-            Location::Settings => "Ayarlar".into(),
-            Location::Tag(_) => "Etiket".into(),
-            Location::Search { query, .. } => format!("Arama: {query}"),
+            Location::Home => "Home".into(),
+            Location::RecycleBin => "Recycle Bin".into(),
+            Location::Settings => "Settings".into(),
+            Location::Tag(_) => "Tag".into(),
+            Location::Search { query, .. } => format!("Search: {query}"),
             Location::Library { name, .. } => name.clone(),
             Location::Shell { parsing, name } if name.is_empty() => shell_last_segment(parsing).to_string(),
             Location::Shell { name, .. } => name.clone(),
-            Location::DiskUsage(p) => format!("Disk kullanımı — {}", display_name(p)),
+            Location::DiskUsage(p) => format!("Disk usage — {}", display_name(p)),
             Location::Downloads => "HyperDownload".into(),
             Location::Path(p) => display_name(p),
         }

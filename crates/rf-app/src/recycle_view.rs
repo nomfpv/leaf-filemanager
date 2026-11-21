@@ -204,7 +204,7 @@ impl RecycleView {
             Some(recycle_text::delete_message(facts, name.as_deref())),
             None,
             vec![
-                crate::prompt::Button::new(t!("Kalıcı olarak sil"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                crate::prompt::Button::new(t!("Delete permanently"), crate::prompt::Kind::Danger, move |_, _, cx| {
                     let _ = me.update(cx, |v, cx| v.delete_now(keys.clone(), cx));
                     Ok(())
                 }),
@@ -245,8 +245,8 @@ impl RecycleView {
             let BinDialogEvent::Closed(saved) = ev;
             this.settings = None;
             this.status = match saved {
-                Some(rf_core::recycle_bin::SaveOutcome::Saved { .. }) => Some((t!("Geri Dönüşüm Kutusu ayarları kaydedildi").to_string(), false)),
-                Some(rf_core::recycle_bin::SaveOutcome::Unchanged) => Some((t!("Ayarlarda değişiklik yok").to_string(), false)),
+                Some(rf_core::recycle_bin::SaveOutcome::Saved { .. }) => Some((t!("Recycle Bin settings saved").to_string(), false)),
+                Some(rf_core::recycle_bin::SaveOutcome::Unchanged) => Some((t!("No settings changed").to_string(), false)),
                 None => this.status.take(),
             };
             window.focus(&this.focus, cx);
@@ -274,7 +274,7 @@ impl RecycleView {
         {
             let me = me.clone();
             items.push(
-                Item::action(t!("Geri yükle"), MenuIcon::Lucide(L::Undo2), move |_, cx| {
+                Item::action(t!("Restore"), MenuIcon::Lucide(L::Undo2), move |_, cx| {
                     let _ = me.update(cx, |v, cx| v.restore_selected(cx));
                 })
                 .enabled(has_sel),
@@ -283,7 +283,7 @@ impl RecycleView {
         {
             let me = me.clone();
             items.push(
-                Item::action(t!("Kalıcı olarak sil"), MenuIcon::Lucide(L::TrashOff), move |window, cx| {
+                Item::action(t!("Delete permanently"), MenuIcon::Lucide(L::TrashOff), move |window, cx| {
                     let _ = me.update(cx, |v, cx| v.delete_selected(window, cx));
                 })
                 .hint("Shift+Del")
@@ -291,7 +291,7 @@ impl RecycleView {
             );
         }
         items.push(Item::Separator);
-        items.push(Item::action(t!("Geri Dönüşüm Kutusu ayarları…"), MenuIcon::Lucide(L::Settings), move |window, cx| {
+        items.push(Item::action(t!("Recycle Bin settings…"), MenuIcon::Lucide(L::Settings), move |window, cx| {
             let _ = me.update(cx, |v, cx| v.open_settings(window, cx));
         }));
         fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
@@ -346,7 +346,7 @@ impl Render for RecycleView {
         let search = match &self.search {
             Some(s) => s.clone(),
             None => {
-                let s = cx.new(|cx| InputState::new(window, cx).placeholder(t!("Kutuda ara")));
+                let s = cx.new(|cx| InputState::new(window, cx).placeholder(t!("Search the bin")));
                 self._search_sub = Some(cx.subscribe(&s, |this, _, ev: &InputEvent, cx| {
                     if let InputEvent::Change = ev {
                         this.rearrange(cx);
@@ -383,10 +383,10 @@ impl Render for RecycleView {
             .border_color(p.divider)
             // (the width of a row's icon)
             .child(div().w(px(16.)).flex_shrink_0())
-            .child(col_head("rb-h-name", t!("Ad"), Col::Name).flex_1().min_w_0())
-            .child(col_head("rb-h-loc", t!("Özgün konum"), Col::Location).w(px(260.)).flex_shrink_0())
-            .child(col_head("rb-h-del", t!("Silinme tarihi"), Col::Deleted).w(px(130.)).flex_shrink_0())
-            .child(col_head("rb-h-size", t!("Boyut"), Col::Size).w(px(90.)).flex_shrink_0().justify_end());
+            .child(col_head("rb-h-name", t!("Name"), Col::Name).flex_1().min_w_0())
+            .child(col_head("rb-h-loc", t!("Original location"), Col::Location).w(px(260.)).flex_shrink_0())
+            .child(col_head("rb-h-del", t!("Date deleted"), Col::Deleted).w(px(130.)).flex_shrink_0())
+            .child(col_head("rb-h-size", t!("Size"), Col::Size).w(px(90.)).flex_shrink_0().justify_end());
         let header = h_flex()
             .px_4()
             .py_3()
@@ -398,7 +398,7 @@ impl Render for RecycleView {
             .child(
                 v_flex()
                     .flex_1()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Geri Dönüşüm Kutusu")))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Recycle Bin")))
                     .child(div().text_xs().text_color(p.text_secondary).child(if filtered {
                         format!("{} / {} · {}", self.order.len(), crate::i18n::items(self.items.len()), format::size(total))
                     } else {
@@ -421,23 +421,23 @@ impl Render for RecycleView {
                     .child(Input::new(&search).appearance(false).cleanable(true)),
             )
             .child(
-                button("rb-restore", L::Undo2, t!("Geri yükle"), has_sel && !self.busy, &p)
+                button("rb-restore", L::Undo2, t!("Restore"), has_sel && !self.busy, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.restore_selected(cx))),
             )
             .child(
-                button("rb-delete", L::TrashOff, t!("Kalıcı olarak sil"), has_sel && !self.busy, &p)
+                button("rb-delete", L::TrashOff, t!("Delete permanently"), has_sel && !self.busy, &p)
                     .on_click(cx.listener(|this, _, window, cx| this.delete_selected(window, cx))),
             )
             .child(
-                button("rb-empty", L::Trash, t!("Kutuyu boşalt"), !self.items.is_empty() && !self.busy, &p)
+                button("rb-empty", L::Trash, t!("Empty Recycle Bin"), !self.items.is_empty() && !self.busy, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.empty_bin(cx))),
             )
             .child(
-                button("rb-settings", L::Settings, t!("Ayarlar"), true, &p).on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+                button("rb-settings", L::Settings, t!("Settings"), true, &p).on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             );
 
         let body: AnyElement = if self.loading && self.items.is_empty() {
-            div().p_6().text_sm().text_color(p.text_secondary).child(t!("Yükleniyor…")).into_any_element()
+            div().p_6().text_sm().text_color(p.text_secondary).child(t!("Loading…")).into_any_element()
         } else if self.items.is_empty() {
             v_flex()
                 .flex_1()
@@ -445,10 +445,10 @@ impl Render for RecycleView {
                 .justify_center()
                 .gap_2()
                 .child(Icon::new(L::Trash).size(px(40.)).text_color(p.text_tertiary))
-                .child(div().text_color(p.text_secondary).child(t!("Geri dönüşüm kutusu boş")))
+                .child(div().text_color(p.text_secondary).child(t!("The Recycle Bin is empty")))
                 .into_any_element()
         } else if self.order.is_empty() {
-            div().p_6().text_sm().text_color(p.text_secondary).child(t!("Eşleşen öğe yok")).into_any_element()
+            div().p_6().text_sm().text_color(p.text_secondary).child(t!("No matching items")).into_any_element()
         } else {
             let n = self.order.len();
             let images = self.images.clone();
@@ -582,7 +582,7 @@ mod tests {
         assert!(matches!(row_icon(&z), L::FileImage));
         z.name = "README".into();
         assert!(matches!(row_icon(&z), L::File));
-        z.name = "klasör".into();
+        z.name = "folders".into();
         z.is_dir = true;
         assert!(matches!(row_icon(&z), L::Folder));
     }

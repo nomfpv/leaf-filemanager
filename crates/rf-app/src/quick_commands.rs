@@ -61,11 +61,11 @@ impl QuickCommand {
             match token.to_str() {
                 Some("{folder}") => {
                     uses_paths = true;
-                    arguments.push(folder.ok_or_else(|| anyhow::anyhow!("{}", tx("Önce bir klasör açın.", "Open a folder first.")))?.as_os_str().to_owned());
+                    arguments.push(folder.ok_or_else(|| anyhow::anyhow!("{}", tx("Open a folder first.")))?.as_os_str().to_owned());
                 }
                 Some("{selection}" | "%sel%") => {
                     uses_paths = true;
-                    anyhow::ensure!(!selected.is_empty(), "{}", tx("Önce dosyaları seçin.", "Select files first."));
+                    anyhow::ensure!(!selected.is_empty(), "{}", tx("Select files first."));
                     arguments.extend(selected.iter().map(|p| p.as_os_str().to_owned()));
                 }
                 _ => arguments.push(token),
@@ -100,7 +100,7 @@ pub(crate) fn run(command: QuickCommand, folder: Option<PathBuf>, selection: Vec
             } else {
                 let line = rf_core::addrcmd::CommandLine { program, args: String::new() };
                 rf_win::runfind::find(&[line], Path::new(""))
-                    .ok_or_else(|| anyhow::anyhow!("{}", tx("Program bulunamadı.", "Program not found.")))?.exe
+                    .ok_or_else(|| anyhow::anyhow!("{}", tx("Program not found.")))?.exe
             };
             launch(exe, arguments, uses_paths, folder)
         };
@@ -122,13 +122,13 @@ pub(crate) fn edit(index: Option<usize>, window: &mut Window, cx: &mut App) {
     let initial = current.clone().unwrap_or(QuickCommand {
         label: String::new(), program: String::new(), arguments: String::new(), icon: None, tooltip: String::new(), in_menu: false,
     });
-    let label = cx.new(|cx| InputState::new(window, cx).default_value(initial.label).placeholder(tx("Düğme adı", "Button label")));
+    let label = cx.new(|cx| InputState::new(window, cx).default_value(initial.label).placeholder(tx("Button label")));
     let tooltip = cx.new(|cx| InputState::new(window, cx).default_value(initial.tooltip)
-        .placeholder(tx("Düğme veya program adı", "Button or program name")));
+        .placeholder(tx("Button or program name")));
     let program = cx.new(|cx| InputState::new(window, cx).default_value(initial.program).placeholder(r"C:\Tools\tool.exe"));
     let args = cx.new(|cx| InputState::new(window, cx).default_value(initial.arguments).placeholder("--input {selection}"));
     let icon = cx.new(|cx| InputState::new(window, cx).default_value(initial.icon.unwrap_or_default())
-        .placeholder(tx("Program simgesini kullan", "Use the program's icon")));
+        .placeholder(tx("Use the program's icon")));
     let error: Entity<Option<String>> = cx.new(|_| None);
     let in_menu = cx.new(|_| initial.in_menu);
     let initial_focus = std::cell::Cell::new(true);
@@ -143,30 +143,29 @@ pub(crate) fn edit(index: Option<usize>, window: &mut Window, cx: &mut App) {
         let palette = crate::theme::Palette::for_window(window);
         let browse = {
             let icon = icon.clone();
-            crate::settings_view::button("browse-command-icon", &palette, tx("Gözat…", "Browse…"), move |window, cx| pick_icon(icon.clone(), window, cx))
+            crate::settings_view::button("browse-command-icon", &palette, tx("Browse…"), move |window, cx| pick_icon(icon.clone(), window, cx))
         };
         dialog
-            .title(tx("Araç çubuğu komutu", "Toolbar command"))
+            .title(tx("Toolbar command"))
             .bg(palette.card_bg)
             .width(px(500.))
             .show_cancel(true)
             .child(v_flex().gap_2()
                 .child(h_flex().gap_2()
                     .child(v_flex().gap_2().flex_1().min_w_0()
-                        .child(tx("Düğme adı (isteğe bağlı)", "Button label (optional)"))
+                        .child(tx("Button label (optional)"))
                         .child(Input::new(&label)))
                     .child(v_flex().gap_2().flex_1().min_w_0()
-                        .child(tx("Araç ipucu (isteğe bağlı)", "Tooltip (optional)"))
+                        .child(tx("Tooltip (optional)"))
                         .child(Input::new(&tooltip))))
-                .child(tx("Program yolu veya PATH üzerindeki adı", "Program path or name on PATH"))
+                .child(tx("Program path or name on PATH"))
                 .child(Input::new(&program))
-                .child(tx("Bağımsız değişkenler (isteğe bağlı)", "Arguments (optional)"))
+                .child(tx("Arguments (optional)"))
                 .child(Input::new(&args))
                 .child(div().text_sm().child(tx(
-                    "{folder} açık klasörü, {selection} seçilen her yolu ayrı bir bağımsız değişken olarak ekler.",
                     "{folder} passes the current folder. {selection} passes each selected path as a separate argument.",
                 )))
-                .child(tx("Simge (isteğe bağlı)", "Icon (optional)"))
+                .child(tx("Icon (optional)"))
                 .child(h_flex().items_center().gap_2().child(div().flex_1().min_w_0().child(Input::new(&icon))).child(browse))
                 .child(h_flex()
                     .w_full()
@@ -174,7 +173,7 @@ pub(crate) fn edit(index: Option<usize>, window: &mut Window, cx: &mut App) {
                     .items_center()
                     .justify_between()
                     .gap_3()
-                    .child(div().text_sm().text_color(palette.text).child(tx("Açılır menüde göster", "Show in menu")))
+                    .child(div().text_sm().text_color(palette.text).child(tx("Show in menu")))
                     .child(crate::settings_view::switch("command-in-menu", &palette, *in_menu.read(cx), move |_, cx| {
                         menu_flag.update(cx, |value, cx| {
                             *value = !*value;
@@ -188,9 +187,9 @@ pub(crate) fn edit(index: Option<usize>, window: &mut Window, cx: &mut App) {
                 let program = program_in.read(cx).value().trim().trim_matches('"').to_owned();
                 let icon = icon_in.read(cx).value().trim().trim_matches('"').to_owned();
                 let message = if !valid_program(&program) {
-                    Some(tx("Programın adını veya tam yolunu girin.", "Enter a program name or absolute path."))
+                    Some(tx("Enter a program name or absolute path."))
                 } else if !icon.is_empty() && !Path::new(&expand_path(&icon)).is_absolute() {
-                    Some(tx("Simge dosyasının tam yolunu girin.", "Enter the full path to an icon file."))
+                    Some(tx("Enter the full path to an icon file."))
                 } else {
                     None
                 };
@@ -220,8 +219,8 @@ pub(crate) fn edit(index: Option<usize>, window: &mut Window, cx: &mut App) {
 fn pick_icon(input: Entity<InputState>, window: &Window, cx: &mut App) {
     let window = window.window_handle();
     let (send, receive) = futures::channel::oneshot::channel();
-    let title = tx("Simge seçin", "Choose an icon");
-    let files = tx("Simge dosyaları", "Icon files");
+    let title = tx("Choose an icon");
+    let files = tx("Icon files");
     rf_win::sta::run(move |owner| {
         let _ = send.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::File { filters: &[(files, "*.ico;*.png;*.exe;*.lnk")] }));
     });
@@ -237,8 +236,8 @@ fn pick_icon(input: Entity<InputState>, window: &Window, cx: &mut App) {
 pub(crate) fn controls(index: usize, command: QuickCommand, p: &crate::theme::Palette) -> impl IntoElement {
     use crate::settings_view::button;
     h_flex().gap_2()
-        .child(button(("edit-quick-command", index), p, tx("Düzenle", "Edit"), move |window, cx| edit(Some(index), window, cx)))
-        .child(button(("remove-quick-command", index), p, tx("Kaldır", "Remove"), move |_, cx| {
+        .child(button(("edit-quick-command", index), p, tx("Edit"), move |window, cx| edit(Some(index), window, cx)))
+        .child(button(("remove-quick-command", index), p, tx("Remove"), move |_, cx| {
             settings::update(cx, |s| {
                 if s.toolbar_commands.get(index) == Some(&command) {
                     s.toolbar_commands.remove(index);

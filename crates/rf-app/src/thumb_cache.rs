@@ -100,13 +100,13 @@ pub fn clear_all(cx: &mut App) -> Cleared {
 pub fn cards(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
     let current = thumbcache::limit_mb(s.thumb_cache_mb);
     let (bytes, images, caches) = totals(cx);
-    let mut now = format!("{} {} · {}", images, t!("görsel"), rf_core::format::size(bytes as u64));
+    let mut now = format!("{} {} · {}", images, t!("pictures"), rf_core::format::size(bytes as u64));
     if caches > 1 {
         // (each window has its own cache with its own share of the limit: the sum can pass it)
-        now = format!("{now} · {caches} {}", t!("önbellek toplamı"));
+        now = format!("{now} · {caches} {}", t!("caches in total"));
     }
     if let Some(c) = cx.try_global::<Registry>().and_then(|r| r.last_clear) {
-        now = format!("{now}. {}: {} {} · {}", t!("Son temizlik"), c.images, t!("görsel"), rf_core::format::size(c.bytes as u64));
+        now = format!("{now}. {}: {} {} · {}", t!("Last clear"), c.images, t!("pictures"), rf_core::format::size(c.bytes as u64));
     }
     let mut choices: Vec<u32> = thumbcache::CHOICES_MB.to_vec();
     if !choices.contains(&current) {
@@ -118,8 +118,8 @@ pub fn cards(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         card(
             p,
             L::Image,
-            t!("Küçük resim önbelleği"),
-            Some(t!("Küçük resimler ve simgeler yalnızca bellekte tutulur; sınır her pencerenin kendi önbelleği içindir ve aşılınca en eskiden kullanılanlar atılır. Windows'un kendi küçük resim önbelleğine dokunulmaz.")),
+            t!("Thumbnail cache"),
+            Some(t!("Thumbnails and icons are kept in memory only; the limit is for each window's own cache and when it is passed the least recently used go. Windows' own thumbnail cache is left alone.")),
             select_box("thumb-limit", p, format!("{current} MB"), move |_| {
                 choices
                     .iter()
@@ -134,9 +134,9 @@ pub fn cards(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         card(
             p,
             L::Eraser,
-            t!("Önbellekte şu an"),
+            t!("In the cache now"),
             Some(now.as_str()),
-            button("thumb-clear", p, t!("Önbelleği temizle"), |window, cx| {
+            button("thumb-clear", p, t!("Clear cache"), |window, cx| {
                 clear_all(cx);
                 window.refresh();
             }),

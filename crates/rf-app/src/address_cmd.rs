@@ -107,7 +107,7 @@ impl Workspace {
             Outcome::Started => {}
             Outcome::Failed(why) => {
                 use crate::prompt::{Button, Kind};
-                crate::prompt::show(t!("Program başlatılamadı"), Some(why), None, vec![Button::new(t!("Tamam"), Kind::Primary, |_, _, _| Ok(()))], window, cx);
+                crate::prompt::show(t!("The program could not be started"), Some(why), None, vec![Button::new(t!("OK"), Kind::Primary, |_, _, _| Ok(()))], window, cx);
             }
         }
         cx.notify();

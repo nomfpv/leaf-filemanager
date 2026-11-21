@@ -52,7 +52,7 @@ pub fn next_orientation(cur: u16, clockwise: bool) -> u16 {
 
 /// Rotates one image by 90° (clockwise or counter-clockwise).
 pub fn rotate(path: &Path, clockwise: bool) -> anyhow::Result<()> {
-    anyhow::ensure!(can_rotate(path), "Bu dosya türü döndürülemez");
+    anyhow::ensure!(can_rotate(path), "This file type can't be rotated");
     ensure_com();
     if uses_orientation_tag(path) {
         match rotate_by_tag(path, clockwise) {
@@ -94,7 +94,7 @@ fn rotate_pixels(path: &Path, clockwise: bool) -> anyhow::Result<()> {
             let f: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
             let src = wide(path);
             let dec = f.CreateDecoderFromFilename(PCWSTR(src.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnLoad)?;
-            anyhow::ensure!(dec.GetFrameCount()? == 1, "Çok kareli (animasyonlu) resimler döndürülemez");
+            anyhow::ensure!(dec.GetFrameCount()? == 1, "Multi-frame (animated) images can't be rotated");
             let container = dec.GetContainerFormat()?;
             let frame = dec.GetFrame(0)?;
             let rot = f.CreateBitmapFlipRotator()?;
@@ -135,7 +135,7 @@ fn rotate_pixels(path: &Path, clockwise: bool) -> anyhow::Result<()> {
     let r = unsafe { ReplaceFileW(PCWSTR(pw.as_ptr()), PCWSTR(tw.as_ptr()), PCWSTR::null(), REPLACEFILE_IGNORE_MERGE_ERRORS, None, None) };
     if let Err(e) = r {
         let _ = std::fs::remove_file(&tmp);
-        anyhow::bail!("Resim değiştirilemedi: {e}");
+        anyhow::bail!("Couldn't change the image: {e}");
     }
     Ok(())
 }

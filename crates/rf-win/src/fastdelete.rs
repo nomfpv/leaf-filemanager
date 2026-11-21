@@ -253,7 +253,7 @@ mod tests {
         perm.set_readonly(true);
         std::fs::set_permissions(&ro, perm).unwrap();
         // a junction inside the victim pointing at the folder we must keep (no admin needed)
-        let j = victim.join("bağlantı");
+        let j = victim.join("connections");
         let st = std::process::Command::new("cmd")
             .args(["/c", "mklink", "/J"])
             .arg(&j)

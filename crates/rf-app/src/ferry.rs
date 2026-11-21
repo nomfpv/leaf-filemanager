@@ -276,7 +276,7 @@ fn on_event(ev: Ev, cx: &mut App) {
             let dest = inbox_of(cx.global::<Settings>());
             cx.global_mut::<Ferry>().incoming.insert(offer.transfer, offer.from_name.clone());
             incoming_started(&offer, cx);
-            track(cx, offer.transfer, format!("{}: {}", t!("Ferry ile alınıyor"), offer.from_name), Some(dest));
+            track(cx, offer.transfer, format!("{}: {}", t!("Receiving with Ferry"), offer.from_name), Some(dest));
         }
         Ev::Progress(transfer, done, total) => {
             if let Some(tx) = cx.global::<Ferry>().transfers.get(&transfer) {
@@ -375,19 +375,19 @@ fn failure_text(error: Option<&str>) -> String {
     let e = error.unwrap_or_default();
     let has = |s: &str| e.contains(s);
     if has("only takes files from its trusted devices") {
-        t!("O cihaz yalnızca güvenilir cihazlarından dosya alıyor. Önce eşleştirin.").to_string()
+        t!("That device only takes files from its trusted devices. Pair with it first.").to_string()
     } else if has("declined") {
-        t!("Karşı taraf reddetti.").to_string()
+        t!("The other device declined.").to_string()
     } else if has("did not answer") || has("no answer") || has("timed out") {
-        t!("Cihaz yanıt vermedi.").to_string()
+        t!("The device did not answer.").to_string()
     } else if has("busy with another speed test") {
-        t!("O cihazla az önce hız ölçüldü; birkaç saniye sonra yeniden deneyin.").to_string()
+        t!("The speed to that device was just tested; try again in a few seconds.").to_string()
     } else if has("busy with other offers") {
-        t!("O cihazda yanıt bekleyen bir teklifiniz zaten var.").to_string()
+        t!("You already have an offer waiting on that device.").to_string()
     } else if has("arrived damaged") {
-        t!("Bir dosya bozuk geldi. Yeniden gönderin: kalan kısım kaldığı yerden gelir.").to_string()
+        t!("A file arrived damaged. Send again: the rest picks up where it stopped.").to_string()
     } else if e.is_empty() {
-        t!("Aktarım yarıda kaldı.").to_string()
+        t!("The transfer stopped partway.").to_string()
     } else {
         e.to_string()
     }
@@ -422,7 +422,7 @@ fn answer(q: &Question, yes: bool, cx: &mut App) {
             let dest = inbox_of(cx.global::<Settings>());
             n.accept(o.id, dest.to_string_lossy().into_owned());
             cx.global_mut::<Ferry>().incoming.insert(o.transfer, o.from_name.clone());
-            track(cx, o.transfer, format!("{}: {}", t!("Ferry ile alınıyor"), o.from_name), Some(dest));
+            track(cx, o.transfer, format!("{}: {}", t!("Receiving with Ferry"), o.from_name), Some(dest));
         }
         Question::Offer(o) => n.reject(o.id),
         Question::Pair { peer, .. } => n.confirm_pairing(peer.clone(), yes),
@@ -450,21 +450,21 @@ fn texts(q: &Question) -> (String, Vec<String>, Option<String>, &'static str, &'
             let what = match o.names.len() {
                 0 => crate::i18n::items(o.file_count as usize),
                 1 => o.names[0].clone(),
-                n => format!("{} {} {}", o.names[0], t!("ve"), crate::i18n::items(n - 1)),
+                n => format!("{} {} {}", o.names[0], t!("and"), crate::i18n::items(n - 1)),
             };
             let mut lines = vec![format!("{} · {}", what, rf_core::format::size(o.total_bytes))];
             // (a device that was never paired can call itself anything)
             if !o.trusted {
-                lines.push(t!("Eşleşmemiş cihaz: adı doğrulanamaz").to_string());
+                lines.push(t!("Unpaired device: its name can't be verified").to_string());
             }
-            (format!("{} {}", o.from_name, t!("dosya göndermek istiyor")), lines, None, t!("Reddet"), t!("Kabul et"))
+            (format!("{} {}", o.from_name, t!("wants to send you files")), lines, None, t!("Deny"), t!("Accept"))
         }
         Question::Pair { name, code, .. } => (
-            format!("{}: {name}", t!("Eşleştir")),
-            vec![t!("İki cihazda da aynı kodun göründüğünden emin olun. Eşleşen cihazlar birbirine sormadan dosya gönderebilir.").to_string()],
+            format!("{}: {name}", t!("Pair")),
+            vec![t!("Make sure both devices show the same code. Paired devices can send each other files without asking.").to_string()],
             Some(format!("{} {}", &code[..3.min(code.len())], &code[3.min(code.len())..])),
-            t!("İptal"),
-            t!("Eşleştir"),
+            t!("Cancel"),
+            t!("Pair"),
         ),
     }
 }
@@ -482,7 +482,7 @@ fn toast_question(q: &Question, cx: &App) -> bool {
     let Some(tx) = cx.global::<Ferry>().events.clone() else { return false };
     let key = q.key();
     let (title, lines, code, no, yes) = texts(q);
-    let mut all: Vec<String> = code.map(|c| format!("{} {c}", t!("Kod:"))).into_iter().collect();
+    let mut all: Vec<String> = code.map(|c| format!("{} {c}", t!("Code:"))).into_iter().collect();
     all.extend(lines);
     let refs: Vec<&str> = all.iter().map(String::as_str).collect();
     let buttons = [
@@ -529,12 +529,12 @@ fn incoming_started(offer: &Offer, cx: &mut App) {
     let what = match offer.names.len() {
         0 => crate::i18n::items(offer.file_count as usize),
         1 => offer.names[0].clone(),
-        n => format!("{} {} {}", offer.names[0], t!("ve"), crate::i18n::items(n - 1)),
+        n => format!("{} {} {}", offer.names[0], t!("and"), crate::i18n::items(n - 1)),
     };
     let line = format!("{what} · {}", rf_core::format::size(offer.total_bytes));
     let shown = toasts_usable()
         && cx.global::<Ferry>().events.clone().is_some_and(|tx| {
-            let title = format!("{} {}", offer.from_name, t!("dosya gönderiyor"));
+            let title = format!("{} {}", offer.from_name, t!("is sending you files"));
             let lines = [line.as_str()];
             let toast = rf_win::toast_post::Toast { tag: &format!("in-{}", offer.transfer), title: &title, lines: &lines, launch: "ferry:none:", buttons: &[], stays: false };
             rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
@@ -563,9 +563,9 @@ fn arrived(transfer: u64, from: String, paths: Vec<String>, cx: &mut App) {
     }
     let Some(tx) = cx.global::<Ferry>().events.clone() else { return };
     let name = std::path::Path::new(&first).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let what = if paths.len() == 1 { name } else { format!("{name} {} {}", t!("ve"), crate::i18n::items(paths.len() - 1)) };
-    let title = format!("{from} {}", t!("dosya gönderdi"));
-    let lines = [what.as_str(), t!("Görmek için tıklayın")];
+    let what = if paths.len() == 1 { name } else { format!("{name} {} {}", t!("and"), crate::i18n::items(paths.len() - 1)) };
+    let title = format!("{from} {}", t!("sent you files"));
+    let lines = [what.as_str(), t!("Click to see them")];
     let toast = rf_win::toast_post::Toast { tag: &format!("got-{transfer}"), title: &title, lines: &lines, launch: &format!("ferry:open:{first}"), buttons: &[], stays: false };
     if let Err(e) = rf_win::toast_post::show(crate::installer::APP_ID, &toast, move |arg| {
         let _ = tx.unbounded_send(Ev::Toast(arg));
@@ -761,10 +761,10 @@ pub(crate) fn menu_items(paths: &[PathBuf], cx: &App) -> Vec<Item> {
         })
         .collect();
     if v.is_empty() {
-        v.push(Item::action(t!("Yakında cihaz yok"), MenuIcon::Lucide(L::Wifi), |_, _| {}).enabled(false));
+        v.push(Item::action(t!("No devices nearby"), MenuIcon::Lucide(L::Wifi), |_, _| {}).enabled(false));
     }
     v.push(Item::Separator);
-    v.push(Item::action(t!("Ferry ayarları…"), MenuIcon::Lucide(L::Settings), |_, cx| open_settings(cx)));
+    v.push(Item::action(t!("Ferry settings…"), MenuIcon::Lucide(L::Settings), |_, cx| open_settings(cx)));
     v
 }
 
@@ -776,7 +776,7 @@ pub(crate) fn open_settings(cx: &mut App) {
 fn send(peer: &Peer, paths: Vec<PathBuf>, cx: &mut App) {
     let Some(n) = cx.global::<Ferry>().nearby.clone() else { return };
     match n.send(peer.id.clone(), paths.iter().map(|p| p.to_string_lossy().into_owned()).collect()) {
-        Ok(transfer) => track(cx, transfer, format!("{}: {}", t!("Ferry ile gönderiliyor"), peer.name), None),
+        Ok(transfer) => track(cx, transfer, format!("{}: {}", t!("Sending with Ferry"), peer.name), None),
         Err(e) => log::warn!("ferry: cannot send to {}: {e}", peer.name),
     }
 }
@@ -790,8 +790,8 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     let mut v = vec![card(
         p,
         L::Send,
-        t!("Ferry'yi kullan"),
-        Some(t!("Aynı ağdaki rustyfiles'lar birbirini bulur; dosyalar şifreli olarak doğrudan cihazdan cihaza gider, sunucu ya da hesap yok. Açınca Windows Güvenlik Duvarı rustyfiles'ın ağı kullanmasına izin vermenizi isteyebilir: özel ağlar için izin verin.")),
+        t!("Use Ferry"),
+        Some(t!("rustyfiles on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, Windows Firewall may ask you to let rustyfiles use the network: allow it for private networks.")),
         switch("ferry-on", p, on, move |_, cx| settings::update(cx, |s| s.ferry_enabled = !on)),
     )];
     if !on {
@@ -799,21 +799,21 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     }
     let (nearby, peers, problem) = cx.try_global::<Ferry>().map(|f| (f.nearby.clone(), f.peers.clone(), f.problem.clone())).unwrap_or_default();
     if let Some(problem) = problem {
-        v.push(card(p, L::TriangleAlert, t!("Yakındaki cihazlar aranamıyor"), Some(problem.as_str()), div().into_any_element()));
+        v.push(card(p, L::TriangleAlert, t!("Can't look for nearby devices"), Some(problem.as_str()), div().into_any_element()));
     }
     v.push(card(
         p,
         L::Eye,
-        t!("Bu bilgisayarı kimler görebilir"),
-        Some(t!("Herkes seçeneği 10 dakika sürer, sonra yalnız güvenilir cihazlara döner. Eşleşmemiş bir cihazdan dosya almak ya da onunla eşleşmek için Herkes seçili olmalı.")),
+        t!("Who can see this PC"),
+        Some(t!("Everyone lasts 10 minutes, then it goes back to trusted devices only. To take files from a device you haven't paired with, or to pair with one, choose Everyone.")),
         dropdown(
             "ferry-vis",
             p,
             s.ferry_visibility,
             vec![
-                (FerryVisibility::Off, t!("Hiç kimse").to_string()),
-                (FerryVisibility::Trusted, t!("Yalnız güvenilir cihazlar").to_string()),
-                (FerryVisibility::Everyone, t!("Herkes (10 dakika)").to_string()),
+                (FerryVisibility::Off, t!("No one").to_string()),
+                (FerryVisibility::Trusted, t!("Trusted devices only").to_string()),
+                (FerryVisibility::Everyone, t!("Everyone (10 minutes)").to_string()),
             ],
             |s, v| {
                 s.ferry_visibility = v;
@@ -825,18 +825,18 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     v.push(card(
         p,
         L::Pencil,
-        t!("Cihaz adı"),
+        t!("Device name"),
         Some(name.as_str()),
-        button("ferry-name", p, t!("Değiştir…"), move |window, cx| {
-            let ok = crate::prompt::Button::new(t!("Kaydet"), crate::prompt::Kind::Primary, |text, _, cx| {
+        button("ferry-name", p, t!("Change…"), move |window, cx| {
+            let ok = crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |text, _, cx| {
                 let text = text.unwrap_or_default().trim().to_string();
                 settings::update(cx, |s| s.ferry_name = text);
                 Ok(())
             });
             let current = cx.global::<Settings>().ferry_name.clone();
             crate::prompt::show(
-                t!("Cihaz adı"),
-                Some(t!("Diğer cihazlar bu bilgisayarı bu adla görür. Boş bırakırsanız bilgisayarın adı kullanılır.").to_string()),
+                t!("Device name"),
+                Some(t!("Other devices see this PC by this name. Leave it empty to use the computer's name.").to_string()),
                 Some((current, std::env::var("COMPUTERNAME").unwrap_or_default())),
                 vec![ok, crate::prompt::Button::cancel()],
                 window,
@@ -849,14 +849,14 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     v.push(card(
         p,
         L::FolderDown,
-        t!("Gelen dosyalar"),
+        t!("Received files"),
         Some(inbox.as_str()),
         h_flex()
             .gap_2()
-            .children(custom.then(|| button("ferry-inbox-reset", p, t!("Varsayılan"), |_, cx| settings::update(cx, |s| s.ferry_inbox.clear()))))
-            .child(button("ferry-inbox", p, t!("Değiştir…"), |_, cx| {
+            .children(custom.then(|| button("ferry-inbox-reset", p, t!("Default"), |_, cx| settings::update(cx, |s| s.ferry_inbox.clear()))))
+            .child(button("ferry-inbox", p, t!("Change…"), |_, cx| {
                 let (tx, rx) = futures::channel::oneshot::channel::<Option<PathBuf>>();
-                let title = t!("Gelen dosyaların klasörünü seçin");
+                let title = t!("Choose the folder for received files");
                 rf_win::sta::run(move |owner| {
                     let _ = tx.send(rf_win::dialogs::pick(owner, title, rf_win::dialogs::Pick::Folder));
                 });
@@ -873,22 +873,22 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     v.push(card(
         p,
         L::ShieldCheck,
-        t!("Güvenilir cihazlardan sormadan al"),
-        Some(t!("Eşleştirdiğiniz cihazların gönderdikleri doğrudan Gelen dosyalar klasörüne iner; diğer cihazlar her seferinde sorulur.")),
+        t!("Take files from trusted devices without asking"),
+        Some(t!("Files from devices you paired with go straight to the Received files folder; other devices are asked about every time.")),
         switch("ferry-auto", p, auto, move |_, cx| settings::update(cx, |s| s.ferry_auto_accept_trusted = !auto)),
     ));
 
-    v.push(section(p, t!("Yakındaki cihazlar")));
+    v.push(section(p, t!("Nearby devices")));
     let everyone = s.ferry_visibility == FerryVisibility::Everyone;
     v.push(card(
         p,
         L::RefreshCw,
-        t!("Cihazları yeniden ara"),
-        Some(t!("Ağdaki cihazlar kendiliğinden bulunur; yeni açılan bir cihaz görünmüyorsa yeniden arayın.")),
+        t!("Look for devices again"),
+        Some(t!("Devices on the network are found by themselves; if one that just came on doesn't show up, look again.")),
         h_flex()
             .gap_2()
-            .children((!everyone).then(|| button("ferry-everyone", p, t!("10 dakika herkese görün"), |_, cx| settings::update(cx, |s| s.ferry_visibility = FerryVisibility::Everyone))))
-            .child(button("ferry-refresh", p, t!("Yenile"), |_, cx| {
+            .children((!everyone).then(|| button("ferry-everyone", p, t!("Show to everyone for 10 minutes"), |_, cx| settings::update(cx, |s| s.ferry_visibility = FerryVisibility::Everyone))))
+            .child(button("ferry-refresh", p, t!("Refresh"), |_, cx| {
                 if let Some(n) = cx.global::<Ferry>().nearby.clone() {
                     n.refresh();
                 }
@@ -899,8 +899,8 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         v.push(card(
             p,
             L::Wifi,
-            t!("Henüz cihaz yok"),
-            Some(t!("Diğer cihazda rustyfiles açık ve Ferry'si açık olmalı. İki cihaz henüz eşleşmediyse en az birinin görünürlüğü Herkes olmalı.")),
+            t!("No devices yet"),
+            Some(t!("rustyfiles must be open on the other device, with Ferry on. If the two haven't paired yet, at least one must be visible to Everyone.")),
             div().into_any_element(),
         ));
     }
@@ -908,7 +908,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         let (measuring, last) = cx.try_global::<Ferry>().map(|f| (f.measuring.contains(&peer.id), f.speeds.get(&peer.id).cloned())).unwrap_or_default();
         let mut desc = os_name(&peer.os).to_string();
         if peer.trusted {
-            desc = format!("{desc} · {}", t!("Güvenilir"));
+            desc = format!("{desc} · {}", t!("Trusted"));
         }
         if let Some(speed) = speed_text(peer, measuring, last.as_ref()) {
             desc = format!("{desc} · {speed}");
@@ -916,10 +916,10 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         let id = peer.id.clone();
         let control = h_flex()
             .gap_2()
-            .child(button(("ferry-speed", i), p, if measuring { t!("Ölçülüyor…") } else { t!("Hızı ölç") }, move |_, cx| measure(id.clone(), cx)))
+            .child(button(("ferry-speed", i), p, if measuring { t!("Measuring…") } else { t!("Test speed") }, move |_, cx| measure(id.clone(), cx)))
             .children((!peer.trusted).then(|| {
                 let id = peer.id.clone();
-                button(("ferry-pair", i), p, t!("Eşleştir"), move |_, cx| pair(id.clone(), cx))
+                button(("ferry-pair", i), p, t!("Pair"), move |_, cx| pair(id.clone(), cx))
             }))
             .into_any_element();
         v.push(card(p, if peer.trusted { L::ShieldCheck } else { L::Monitor }, &peer.name, Some(desc.as_str()), control));
@@ -927,7 +927,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
 
     let trusted = nearby.map(|n| n.trusted()).unwrap_or_default();
     if !trusted.is_empty() {
-        v.push(section(p, t!("Güvenilir cihazlar")));
+        v.push(section(p, t!("Trusted devices")));
         for (i, peer) in trusted.iter().enumerate() {
             let id = peer.id.clone();
             v.push(card(
@@ -935,7 +935,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 L::ShieldCheck,
                 &peer.name,
                 None,
-                button(("ferry-forget", i), p, t!("Unut"), move |_, cx| {
+                button(("ferry-forget", i), p, t!("Forget"), move |_, cx| {
                     if let Some(n) = cx.global::<Ferry>().nearby.clone()
                         && let Err(e) = n.forget(id.clone())
                     {
@@ -1023,11 +1023,11 @@ fn os_name(os: &str) -> &str {
 fn speed_text(peer: &Peer, measuring: bool, last: Option<&SpeedResult>) -> Option<String> {
     let per_s = |bps: u64| format!("{}/s", rf_core::format::size(bps));
     if measuring {
-        return Some(t!("hız ölçülüyor…").to_string());
+        return Some(t!("testing speed…").to_string());
     }
     match last {
         Some(r) if r.ok => return Some(format!("↑ {} · ↓ {} · {} ms", per_s(r.up_bps), per_s(r.down_bps), r.rtt_ms)),
-        Some(r) => return Some(format!("{}: {}", t!("Ölçülemedi"), failure_text(r.error.as_deref()))),
+        Some(r) => return Some(format!("{}: {}", t!("Couldn't measure"), failure_text(r.error.as_deref()))),
         None => {}
     }
     match peer.estimate_source {
@@ -1036,7 +1036,7 @@ fn speed_text(peer: &Peer, measuring: bool, last: Option<&SpeedResult>) -> Optio
             let link = match peer.link_kind {
                 LinkKind::Wifi => "Wi-Fi",
                 LinkKind::Ethernet => "Ethernet",
-                _ => t!("ağ"),
+                _ => t!("network"),
             };
             Some(format!("≈ {} ({link})", per_s(peer.estimate_bps)))
         }

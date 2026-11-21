@@ -15,7 +15,7 @@ pub fn open(hwnd: isize, paths: Vec<PathBuf>, cx: &mut App) {
     }
     let title = match paths.as_slice() {
         [one] => one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-        many => format!("{} {}", many.len(), t!("öğe")),
+        many => format!("{} {}", many.len(), t!("items")),
     };
     let ready = cx.background_executor().spawn(async move { rf_win::share::prepare(&paths) });
     cx.spawn(async move |_| match ready.await {

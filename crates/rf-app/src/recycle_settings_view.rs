@@ -77,7 +77,7 @@ impl BinSettingsDialog {
         for (i, v) in edit.volumes.iter().enumerate() {
             let text = v.size_text.clone();
             let input = cx.new(|cx| {
-                let mut st = InputState::new(window, cx).placeholder(t!("Varsayılan"));
+                let mut st = InputState::new(window, cx).placeholder(t!("Default"));
                 st.set_value(text, window, cx);
                 st
             });
@@ -174,7 +174,7 @@ impl Render for BinSettingsDialog {
         let mut body = v_flex().gap_3();
         if let (Some(now), Some(edit)) = (&self.now, &self.edit) {
             if now.volumes.is_empty() {
-                body = body.child(div().text_sm().text_color(p.text_secondary).child(t!("Geri Dönüşüm Kutusu olan sürücü bulunamadı")));
+                body = body.child(div().text_sm().text_color(p.text_secondary).child(t!("No drive with a Recycle Bin was found")));
             }
             for (i, v) in now.volumes.iter().enumerate() {
                 let e = &edit.volumes[i];
@@ -199,7 +199,7 @@ impl Render for BinSettingsDialog {
                                 .text_sm()
                                 .cursor_pointer()
                                 .child(radio(&p, !nuke))
-                                .child(div().flex_1().child(t!("Özel boyut (en çok, MB)")))
+                                .child(div().flex_1().child(t!("Custom size (maximum, MB)")))
                                 .child(
                                     div()
                                         .w(px(120.))
@@ -230,7 +230,7 @@ impl Render for BinSettingsDialog {
                                 .text_sm()
                                 .cursor_pointer()
                                 .child(radio(&p, nuke))
-                                .child(div().flex_1().child(t!("Dosyaları Geri Dönüşüm Kutusu'na taşıma; silinir silinmez kaldır")))
+                                .child(div().flex_1().child(t!("Do not move files to the Recycle Bin; remove them immediately when deleted")))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(e) = this.edit.as_mut().and_then(|e| e.volumes.get_mut(i)) {
                                         e.remove_immediately = true;
@@ -264,7 +264,7 @@ impl Render for BinSettingsDialog {
                             .when(!confirm, |d| d.border_1().border_color(p.text_secondary))
                             .when(confirm, |d| d.child(Icon::new(L::Check).size(px(12.)).text_color(p.accent_text))),
                     )
-                    .child(div().flex_1().child(if locked { t!("Silme onayını göster (bir ilke tarafından belirlenmiş)") } else { t!("Silme onayını göster") }))
+                    .child(div().flex_1().child(if locked { t!("Display delete confirmation (set by a policy)") } else { t!("Display delete confirmation") }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !locked && let Some(e) = this.edit.as_mut() {
                             e.confirm_delete = !e.confirm_delete;
@@ -275,7 +275,7 @@ impl Render for BinSettingsDialog {
         } else if let Some(e) = &self.error {
             body = body.child(div().text_sm().text_color(p.danger).child(e.clone()));
         } else {
-            body = body.child(div().text_sm().text_color(p.text_secondary).child(t!("Yükleniyor…")));
+            body = body.child(div().text_sm().text_color(p.text_secondary).child(t!("Loading…")));
         }
         let ready = self.edit.is_some() && !self.saving;
         let button = |id: &'static str, label: &'static str, primary: bool, enabled: bool| {
@@ -326,7 +326,7 @@ impl Render for BinSettingsDialog {
                         v_flex()
                             .p_6()
                             .gap_3()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Geri Dönüşüm Kutusu ayarları")))
+                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Recycle Bin settings")))
                             .child(body)
                             .children(self.error.clone().filter(|_| self.edit.is_some()).map(|e| div().text_xs().text_color(p.danger).child(e))),
                     )
@@ -339,8 +339,8 @@ impl Render for BinSettingsDialog {
                             .bg(p.hover)
                             .border_t_1()
                             .border_color(p.divider)
-                            .child(button("bin-save", t!("Kaydet"), true, ready).on_click(cx.listener(|this, _, _, cx| this.save(cx))))
-                            .child(button("bin-cancel", t!("İptal"), false, true).on_click(cx.listener(|this, _, _, cx| this.close(None, cx)))),
+                            .child(button("bin-save", t!("Save"), true, ready).on_click(cx.listener(|this, _, _, cx| this.save(cx))))
+                            .child(button("bin-cancel", t!("Cancel"), false, true).on_click(cx.listener(|this, _, _, cx| this.close(None, cx)))),
                     ),
             )
     }

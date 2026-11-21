@@ -418,7 +418,7 @@ mod tests {
         let base = table("a = 1\n");
         assert_eq!(save_with(&p, &base, &table("a = 2\n")), Saved::ReplacedBroken);
         assert_eq!(table(&std::fs::read_to_string(&p).unwrap()), table("a = 2\n"));
-        let kept = std::fs::read_dir(p.parent().unwrap()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().contains(".bozuk-")).count();
+        let kept = std::fs::read_dir(p.parent().unwrap()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().contains(".corrupt-")).count();
         assert_eq!(kept, 1, "the broken file is kept for repair");
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }

@@ -41,10 +41,10 @@ pub fn set_wallpaper(path: &Path) -> anyhow::Result<()> {
 /// `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, registers it under HKCU and tells running apps.
 /// Returns the installed copy.
 pub fn install_font_for_user(path: &Path) -> anyhow::Result<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA").ok_or_else(|| anyhow::anyhow!("LOCALAPPDATA yok"))?;
+    let base = std::env::var_os("LOCALAPPDATA").ok_or_else(|| anyhow::anyhow!("LOCALAPPDATA is not set"))?;
     let dir = PathBuf::from(base).join("Microsoft").join("Windows").join("Fonts");
     std::fs::create_dir_all(&dir)?;
-    let name = path.file_name().ok_or_else(|| anyhow::anyhow!("geçersiz ad"))?;
+    let name = path.file_name().ok_or_else(|| anyhow::anyhow!("invalid name"))?;
     let dest = dir.join(name);
     if !dest.exists() {
         std::fs::copy(path, &dest)?;

@@ -50,7 +50,7 @@ fn software_root(classes_root: &str) -> &str {
 pub fn register_app(exe: &str, classes_root: &str) -> anyhow::Result<()> {
     let base = CURRENT_USER.create(classes_root)?;
     let p = base.create(PROGID)?;
-    p.set_string("", "Sıkıştırılmış arşiv")?;
+    p.set_string("", "Compressed archive")?;
     // the zip folder icon, not ours: archives must still look like archives
     base.create(format!(r"{PROGID}\DefaultIcon"))?.set_expand_string("", r"%SystemRoot%\system32\zipfldr.dll")?;
     // a plain command: `DelegateExecute` (needed above to beat HKLM's) would make Windows list
@@ -69,7 +69,7 @@ pub fn register_app(exe: &str, classes_root: &str) -> anyhow::Result<()> {
     let caps_path = format!(r"{root}\rustyfiles\Capabilities");
     let caps = CURRENT_USER.create(&caps_path)?;
     caps.set_string("ApplicationName", "rustyfiles")?;
-    caps.set_string("ApplicationDescription", "Hızlı dosya yöneticisi")?;
+    caps.set_string("ApplicationDescription", "Fast file manager")?;
     let fa = caps.create("FileAssociations")?;
     for e in ARCHIVE_EXTS {
         fa.set_string(e, PROGID)?;

@@ -87,8 +87,8 @@ fn rows_of(all: &[Folded], q: &str, lift: &dyn Fn(&Target) -> i32) -> Vec<Item> 
         let target = Target::Setting { launch: f.entry.launch.encode(), name: f.entry.name.clone() };
         let detail = match where_of(&f.entry) {
             Where::Page(page) => page,
-            Where::ControlPanel => t!("Denetim Masası").to_string(),
-            Where::Settings => t!("Ayarlar").to_string(),
+            Where::ControlPanel => t!("Control Panel").to_string(),
+            Where::Settings => t!("Settings").to_string(),
         };
         out.push(Item { score: s + lift(&target), title: f.entry.name.clone(), detail, section: Section::Settings, target });
         if out.len() == MAX_SETTINGS {

@@ -7,9 +7,9 @@
 //! * [`store`]: the versioned rules file.
 //! * [`summary`]: a rule said in words.
 
-/// Marks a user-facing Turkish text in this module. It is the identity; a test in rf-app finds
-/// every `T!("...")` in these files and checks that the English pair exists (the texts are
-/// translated where they are drawn, with the app's own i18n).
+/// Marks a user-facing text in this module (English). It is the identity; a test in rf-app finds
+/// every `T!("...")` in these files and checks that it is English (the texts go through the app's
+/// own i18n hook where they are drawn).
 macro_rules! T {
     ($s:literal) => {
         $s

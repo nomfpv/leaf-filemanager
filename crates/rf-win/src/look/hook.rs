@@ -179,7 +179,7 @@ pub fn start(on_event: impl Fn(LookEvent) + Send + 'static) -> HookHandle {
             // Gönderici burada düşer: dağıtım iş parçacığı biter.
             let st = STATE.with(|s| s.borrow_mut().take());
             if let Some((n, max)) = st.and_then(|s| s.trace) {
-                eprintln!("look-hook: {n} olay, en uzun {:?}", max);
+                eprintln!("look-hook: {n} events, longest {:?}", max);
             }
         })
         .expect("look hook thread");

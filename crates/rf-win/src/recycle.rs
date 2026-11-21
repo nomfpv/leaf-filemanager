@@ -211,7 +211,7 @@ pub fn restore(items: &[RecycleItem]) -> anyhow::Result<()> {
                 }
             }
         }
-        anyhow::ensure!(!found.is_empty(), "Öğeler Geri Dönüşüm Kutusu'nda bulunamadı");
+        anyhow::ensure!(!found.is_empty(), "Items were not found in the Recycle Bin");
         let raw: Vec<*const ITEMIDLIST> = found.iter().map(|p| p.0 as *const _).collect();
         let cm: IContextMenu = folder.GetUIObjectOf(HWND::default(), &raw, None)?;
         let menu = CreatePopupMenu()?;
@@ -266,7 +266,7 @@ pub fn delete_by_keys(keys: &[String]) -> anyhow::Result<()> {
     refuse_without_shell(crate::engine_guard::Op::DeleteFromBin)?;
     let folder = bin_folder()?;
     let found = find_by_keys(&folder, keys)?;
-    anyhow::ensure!(!found.is_empty(), "Öğeler Geri Dönüşüm Kutusu'nda bulunamadı");
+    anyhow::ensure!(!found.is_empty(), "Items were not found in the Recycle Bin");
     anyhow::ensure!(found.len() <= keys.len(), "more items matched than were asked for");
     unsafe {
         let raw: Vec<*const ITEMIDLIST> = found.iter().map(|p| p.0 as *const _).collect();

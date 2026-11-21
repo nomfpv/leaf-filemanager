@@ -563,7 +563,7 @@ mod tests {
     fn labels() {
         assert_eq!(clean_label("&Open"), ("Open".to_string(), None));
         assert_eq!(clean_label("Save && Close\tCtrl+S"), ("Save & Close".to_string(), Some("Ctrl+S".to_string())));
-        assert_eq!(clean_label("  Gönder  "), ("Gönder".to_string(), None));
+        assert_eq!(clean_label("  Send to  "), ("Send to".to_string(), None));
     }
 
     fn dump(items: &[ShellItem], depth: usize) {

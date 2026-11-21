@@ -2,9 +2,9 @@
 //! (sessiz bir dosyayla çalıştırın).
 
 fn main() -> anyhow::Result<()> {
-    let path = std::env::args().nth(1).expect("dosya");
+    let path = std::env::args().nth(1).expect("files");
     let sink = rf_player::wasapi_sink()?;
-    println!("aygıt: {} Hz, {} kanal", sink.sample_rate(), sink.channels());
+    println!("device: {} Hz, {} channels", sink.sample_rate(), sink.channels());
     let mut p = rf_player::Player::new(rf_player::open(std::path::Path::new(&path))?, sink);
     p.play();
     for _ in 0..6 {
