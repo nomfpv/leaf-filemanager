@@ -17,8 +17,11 @@ use crate::FsError;
 /// How one try of a user name and password went.
 pub enum Tried {
     Worked,
-    /// The server said the name or the password is wrong.
+    /// The server said the name or the password is wrong: a saved one is deleted, the dialog asks again.
     Wrong,
+    /// The server refused the login for another reason (no rights to the share, logon hours): the dialog asks again, but a
+    /// saved password stays in the keyring (it may be right).
+    Denied,
     /// Something else went wrong (the server is not there, ...): no more tries.
     Failed(FsError),
 }
@@ -63,12 +66,13 @@ impl Login {
         if self.share == "ipc$" { format!(r"\\{}", self.host) } else { format!(r"\\{}\{}", self.host, self.share) }
     }
 
-    /// The next user name and password to try. `wrong`: the one given last was refused (a saved one is deleted from the
-    /// keyring then). The saved one comes first, once, without asking; then the dialog. `None`: the user cancelled.
-    /// The secret of a saved one is marked "Remember" (it was ticked when it was saved).
-    pub fn next(&mut self, wrong: bool) -> Option<(String, Secret)> {
+    /// The next user name and password to try. `wrong`: the one given last was refused; `bad`: as a wrong password (a saved
+    /// one is deleted from the keyring then). The saved one comes first, once, without asking; then the dialog. `None`: the
+    /// user cancelled. The secret of a saved one is marked "Remember" (it was ticked when it was saved).
+    pub fn next(&mut self, wrong: bool, bad: bool) -> Option<(String, Secret)> {
         if let Some((id, s, _)) = self.last.take()
             && wrong
+            && bad
         {
             self.vault.refused(&id, &s);
         }
@@ -105,15 +109,16 @@ impl Login {
     /// Tries with `connect` until one works, the user cancels, or something other than a wrong password goes wrong.
     /// Blocks (the dialog waits for the user): a worker thread only.
     pub fn log_in(&mut self, connect: &mut dyn FnMut(&str, &Secret) -> Tried) -> Result<(), FsError> {
-        let mut wrong = false;
+        let (mut wrong, mut bad) = (false, false);
         loop {
-            let (user, secret) = self.next(wrong).ok_or(FsError::Cancelled)?;
+            let (user, secret) = self.next(wrong, bad).ok_or(FsError::Cancelled)?;
             match connect(&user, &secret) {
                 Tried::Worked => {
                     self.worked();
                     return Ok(());
                 }
-                Tried::Wrong => wrong = true,
+                Tried::Wrong => (wrong, bad) = (true, true),
+                Tried::Denied => (wrong, bad) = (true, false),
                 Tried::Failed(e) => return Err(e),
             }
         }
@@ -189,7 +194,8 @@ pub fn log_in_unc(path: &std::path::Path) -> Result<(), FsError> {
     let remote = format!(r"\\{host}\{share}");
     Login::new(&host, &share, None).log_in(&mut |user, secret| match leaf_sys::network::connect_share(&remote, user, secret.as_str(), secret.wants_remember()) {
         Ok(()) => Tried::Worked,
-        Err(e) if leaf_sys::network::is_login_refused(&e) => Tried::Wrong,
+        Err(e) if leaf_sys::network::is_bad_password(&e) => Tried::Wrong,
+        Err(e) if leaf_sys::network::is_login_refused(&e) => Tried::Denied,
         // ERROR_SESSION_CREDENTIAL_CONFLICT: Windows is logged in to this server as another user already
         Err(e) if e.raw_os_error() == Some(1219) => {
             Tried::Failed(FsError::Auth("Windows is logged in to this server as another user already. Disconnect it first (Disconnect on the host)".into()))
@@ -211,7 +217,8 @@ pub(crate) fn mount_with_login(v: &crate::VPath, uri: &str) -> Result<std::path:
                 found = Some(p);
                 Tried::Worked
             }
-            Err(e) if leaf_sys::network::is_login_refused(&e) => Tried::Wrong,
+            Err(e) if leaf_sys::network::is_bad_password(&e) => Tried::Wrong,
+            Err(e) if leaf_sys::network::is_login_refused(&e) => Tried::Denied,
             Err(e) => Tried::Failed(FsError::Offline(e.to_string())),
         }
     })?;
@@ -279,6 +286,13 @@ mod tests {
         assert!(matches!(r, Err(FsError::Offline(_))), "{r:?}");
         assert!(user.asked.lock().unwrap().is_empty(), "no dialog after a failure that is no refusal");
         assert_eq!(store.saved.lock().unwrap().get(&id).map(String::as_str), Some("s3cret"), "a failure that is no refusal never deletes it");
+        // ... and a refusal that is no wrong password (no rights to the share, logon hours): asked again, kept
+        *user.answers.lock().unwrap() = vec![None];
+        let mut l = Login::with("nas", "photos", None, vault.clone(), user.clone());
+        assert!(matches!(l.log_in(&mut |_, _| Tried::Denied), Err(FsError::Cancelled)));
+        assert_eq!(*user.asked.lock().unwrap(), [r"\\nas\photos retry=true"]);
+        assert_eq!(store.saved.lock().unwrap().get(&id).map(String::as_str), Some("s3cret"), "a denied login keeps the saved password");
+        user.asked.lock().unwrap().clear();
 
         // 3. the server refuses the saved one now: deleted from the keyring, then the dialog asks; Cancel ends it (no loop)
         *user.answers.lock().unwrap() = vec![None];

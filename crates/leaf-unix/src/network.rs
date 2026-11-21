@@ -270,6 +270,13 @@ pub fn is_login_refused(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::PermissionDenied
 }
 
+/// Whether the refusal says the password is wrong (a saved one is deleted then). gio does not tell a wrong password from
+/// other refusals, and [`mount_path_login`] calls it refused only when the question came again or gio named the login: the
+/// same as [`is_login_refused`].
+pub fn is_bad_password(e: &std::io::Error) -> bool {
+    is_login_refused(e)
+}
+
 impl GioOut {
     fn ok_then_path(self) -> Option<PathBuf> {
         self.ok.then(|| parse_local_path(&self.text)).flatten()

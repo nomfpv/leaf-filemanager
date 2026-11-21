@@ -199,6 +199,14 @@ pub fn is_login_refused(e: &std::io::Error) -> bool {
     matches!(e.raw_os_error(), Some(5 | 86 | 1244 | 1326 | 1327 | 2202))
 }
 
+/// Whether a share's error says the user name or the password itself is wrong (ERROR_INVALID_PASSWORD, ERROR_LOGON_FAILURE,
+/// NERR_BadUsername): only then is a saved password deleted. Access denied (the account lost its rights to the share), an
+/// account restriction (logon hours, this PC not allowed) or a login that is needed are refusals too, but the password may
+/// be right: asked again, the saved one kept.
+pub fn is_bad_password(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(86 | 1326 | 2202))
+}
+
 /// Windows' "Disconnect network drive" dialog.
 pub fn disconnect_drive_dialog(owner: isize) {
     use windows::Win32::Foundation::HWND;
