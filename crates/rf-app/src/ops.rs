@@ -11,6 +11,7 @@ use leaf_sys::ctxmenu::MenuOutcome;
 use leaf_sys::fileops::{self, Transfer};
 
 use crate::folder_view::FolderView;
+use rf_core::copy_path::CopyPathKind;
 use leaf_sys::ctxmenu::ExtraItem;
 
 const MENU_NEW_TAB: u32 = 1;
@@ -224,6 +225,25 @@ impl FolderView {
             paths.iter().map(|p| q(p.display().to_string())).collect::<Vec<_>>().join("\r\n")
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    /// "Copy path as": one variant of the selected items' paths (the folder's when nothing is selected), one per line.
+    pub fn copy_path_as(&mut self, kind: CopyPathKind, cx: &mut Context<Self>) {
+        let mut paths = self.selection_paths();
+        if paths.is_empty() {
+            paths.extend(self.current_dir());
+        }
+        let items: Vec<(String, Option<String>)> = paths
+            .iter()
+            .map(|p| {
+                let root = if matches!(kind, CopyPathKind::Relative | CopyPathKind::At) { rf_core::copy_path::repo_root(p) } else { None };
+                (p.display().to_string(), root.map(|r| r.display().to_string()))
+            })
+            .collect();
+        if let Some(text) = rf_core::copy_path::format_all(kind, &items, "
+") {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
     }
 
     /// Files' "Rotate left / right" on the selected images (JPEG: orientation tag only, others

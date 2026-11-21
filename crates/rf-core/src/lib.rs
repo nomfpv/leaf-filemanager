@@ -1,6 +1,7 @@
 //! rf-core: platform-independent model for leaf (entries, sorting, filtering, navigation).
 
 pub mod addrcmd;
+pub mod copy_path;
 pub mod entry;
 pub mod format;
 pub mod history;

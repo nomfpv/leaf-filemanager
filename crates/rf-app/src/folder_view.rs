@@ -17,6 +17,7 @@ use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use rf_core::copy_path::CopyPathKind;
 use rf_core::entry::Filter;
 use rf_core::{Entry, History, Location, SortDir, SortKey, SortSpec, format};
 
@@ -5683,6 +5684,13 @@ impl Render for FolderView {
             .on_action(cx.listener(|this, _: &NewTextFile, _, cx| this.create_new(false, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
             .on_action(cx.listener(|this, _: &CopyPathQuoted, _, cx| this.copy_path_with(true, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathName, _, cx| this.copy_path_as(CopyPathKind::Name, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathFolder, _, cx| this.copy_path_as(CopyPathKind::Folder, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathSlashes, _, cx| this.copy_path_as(CopyPathKind::Slashes, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathRelative, _, cx| this.copy_path_as(CopyPathKind::Relative, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathAt, _, cx| this.copy_path_as(CopyPathKind::At, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathWsl, _, cx| this.copy_path_as(CopyPathKind::Wsl, cx)))
+            .on_action(cx.listener(|this, _: &CopyPathUrl, _, cx| this.copy_path_as(CopyPathKind::Url, cx)))
             .on_action(cx.listener(|this, _: &RotateRight, window, cx| this.rotate_selection(true, window, cx)))
             .on_action(cx.listener(|this, _: &RotateLeft, window, cx| this.rotate_selection(false, window, cx)))
             .on_action(cx.listener(|this, _: &Redo, _, cx| {

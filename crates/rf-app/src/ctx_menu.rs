@@ -235,6 +235,7 @@ impl FolderView {
         v.push(Item::Separator);
         if mp.copy_path {
             v.push(Item::action(t!("Copy item path"), icon(L::ClipboardCopy), act(me, |v, _, cx| v.copy_path(cx))).hint("Ctrl+Shift+C"));
+            v.push(Item::sub(t!("Copy path as"), icon(L::ClipboardCopy), copy_path_items(me, items)));
         }
         if !in_archive {
             v.push(Item::action(t!("Duplicate"), icon(L::CopyPlus), act(me, |v, _, cx| v.duplicate_selected(cx))).hint("Ctrl+Alt+D"));
@@ -1310,4 +1311,29 @@ fn wallpaper_file(p: &std::path::Path) -> Option<std::path::PathBuf> {
     let to = dir.join(p.file_name()?);
     std::fs::copy(&extracted, &to).ok()?;
     Some(to)
+}
+
+/// "Copy path as" submenu: the variants of `rf_core::copy_path` for the items (repository one only inside a
+/// repository, WSL only on Windows).
+fn copy_path_items(me: &Me, items: &[PathBuf]) -> Vec<Item> {
+    use rf_core::copy_path::CopyPathKind as K;
+    let in_repo = items.first().is_some_and(|p| rf_core::copy_path::repo_root(p).is_some());
+    let mut rows: Vec<(String, K)> = vec![
+        (t!("Full path").into(), K::Full),
+        (t!("Name only").into(), K::Name),
+        (t!("Folder path").into(), K::Folder),
+        (t!("With forward slashes").into(), K::Slashes),
+    ];
+    if in_repo {
+        rows.push((t!("Relative to repository").into(), K::Relative));
+    }
+    rows.push(("@path".into(), K::At));
+    if cfg!(windows) {
+        rows.push((t!("WSL path").into(), K::Wsl));
+    }
+    rows.push((t!("File URL").into(), K::Url));
+    rows.push((t!("Quoted").into(), K::Quoted));
+    rows.into_iter()
+        .map(|(label, kind)| Item::action(label, icon(L::ClipboardCopy), act(me, move |v, _, cx| v.copy_path_as(kind, cx))))
+        .collect()
 }
