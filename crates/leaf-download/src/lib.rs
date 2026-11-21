@@ -3,6 +3,7 @@
 //! retries with backoff, a speed limit, a queue, and a final rename only when the file is complete. Blocking threads only: no
 //! async runtime. The caller (leaf's Status Center) supplies the progress sink and the answer to "that name exists".
 
+mod headers;
 mod host;
 mod http;
 mod name;
@@ -20,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+pub use headers::Headers;
 pub use host::set_host_cap;
 pub use name::{file_name, percent_decode, sanitize};
 
@@ -59,11 +61,15 @@ pub struct Options {
     pub read_timeout: Duration,
     /// The SHA-256 (64 hex digits) the finished file must have; a different one fails the download and keeps the partial file.
     pub sha256: Option<String>,
+    /// Request headers for this download only (a browser's Cookie, Authorization, Referer, User-Agent). Memory only: never in the
+    /// part state or any file, never logged (the type shows only the names). Cookie and Authorization are dropped when a redirect
+    /// leaves the address's host.
+    pub headers: Headers,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None }
+        Self { segments: 16, max_segments: 32, retries: 6, backoff: Duration::from_secs(1), user_agent: "leaf".into(), connect_timeout: Duration::from_secs(15), read_timeout: Duration::from_secs(30), sha256: None, headers: Headers::default() }
     }
 }
 
@@ -364,7 +370,7 @@ pub fn download(url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn
 }
 
 fn run(agent: &ureq::Agent, url: &str, dir: &Path, opts: &Options, ctl: &Control, host: &dyn Host) -> Result<Outcome, Error> {
-    let probe = with_retries(opts, ctl, || http::probe(agent, url))?;
+    let probe = with_retries(opts, ctl, || http::probe(agent, url, &opts.headers))?;
     let mut name = name::file_name(probe.disposition.as_deref(), url);
     if name == "download" && probe.disposition.is_none() {
         name = name::file_name(None, &probe.uri);

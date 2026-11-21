@@ -1,5 +1,6 @@
 //! The download list that survives a restart: what was running, paused or waiting (to be started again, each resuming from its
-//! own `.leaf-part.state`) and the last finished or failed ones. A small JSON file; addresses with a password never get here.
+//! own `.leaf-part.state`) and the last finished or failed ones. A small JSON file; addresses with a password never get here, nor
+//! a browser's cookies or sign-in headers (see [`Saved::browser`]).
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,10 @@ pub struct Saved {
     /// It was paused (it comes back paused; the others come back waiting for their turn).
     #[serde(default)]
     pub paused: bool,
+    /// It came from the browser with the browser's sign-in (Cookie / Authorization). Those are never written here: after a
+    /// restart it has to be started from the browser again.
+    #[serde(default)]
+    pub browser: bool,
 }
 
 /// A download that ended.

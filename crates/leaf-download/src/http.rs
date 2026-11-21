@@ -5,17 +5,54 @@ use std::time::Duration;
 
 use ureq::ResponseExt;
 
-use crate::{Error, Options};
+use crate::{Error, Headers, Options};
+
+/// Redirects followed by hand (with headers of the caller's own).
+const MAX_REDIRECTS: usize = 10;
 
 pub fn agent(o: &Options) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .user_agent(o.user_agent.clone())
+    let ua = o.headers.get("user-agent").map_or_else(|| o.user_agent.clone(), str::to_string);
+    let mut b = ureq::Agent::config_builder()
+        .user_agent(ua)
         .timeout_connect(Some(o.connect_timeout))
         .timeout_per_read(Some(o.read_timeout))
         .http_status_as_error(false)
-        .max_idle_connections_per_host(32)
-        .build()
-        .into()
+        .max_idle_connections_per_host(32);
+    // headers of the caller's own: redirects are followed in `probe`, which drops Cookie and Authorization when one leaves the host
+    if !o.headers.is_empty() {
+        b = b.max_redirects(0);
+    }
+    b.build().into()
+}
+
+fn with_headers<B>(mut req: ureq::RequestBuilder<B>, h: &Headers) -> ureq::RequestBuilder<B> {
+    for (n, v) in h.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("user-agent")) {
+        req = req.header(n, v);
+    }
+    req
+}
+
+/// `location` (a redirect's target) made absolute against `base`.
+fn resolve(base: &str, location: &str) -> String {
+    let loc = location.trim();
+    let lower = loc.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return loc.to_string();
+    }
+    let (scheme, rest) = base.split_once("://").unwrap_or(("https", base));
+    if let Some(r) = loc.strip_prefix("//") {
+        return format!("{scheme}://{r}");
+    }
+    let auth_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let origin = format!("{scheme}://{}", &rest[..auth_end]);
+    if loc.starts_with('/') {
+        return format!("{origin}{loc}");
+    }
+    let path = &rest[auth_end..];
+    let path = &path[..path.find(['?', '#']).unwrap_or(path.len())];
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let dir = if dir.is_empty() { "/" } else { dir };
+    format!("{origin}{dir}{loc}")
 }
 
 /// What the server told about the file.
@@ -30,6 +67,8 @@ pub struct Probe {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub disposition: Option<String>,
+    /// The caller's headers as they are sent to `uri` (without Cookie and Authorization when a redirect left the first host).
+    pub send: Headers,
 }
 
 fn header(resp: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
@@ -61,11 +100,34 @@ pub fn map_err(e: ureq::Error) -> Error {
 
 /// One request for the size, the range support and the validators: a range of the first byte, so a server that ignores ranges is
 /// told apart from one that honours them.
-pub fn probe(agent: &ureq::Agent, url: &str) -> Result<Probe, Error> {
-    let resp = agent.get(url).header("Range", "bytes=0-0").call().map_err(map_err)?;
+pub fn probe(agent: &ureq::Agent, url: &str, headers: &Headers) -> Result<Probe, Error> {
+    let first_host = crate::host::host_of(url);
+    let mut send = headers.clone();
+    let mut at = url.to_string();
+    let mut hops = 0;
+    let resp = loop {
+        let resp = with_headers(agent.get(&at), &send).header("Range", "bytes=0-0").call().map_err(map_err)?;
+        let s = resp.status().as_u16();
+        // (only with headers of the caller's own: otherwise the agent followed the redirects itself)
+        if headers.is_empty() || !matches!(s, 301 | 302 | 303 | 307 | 308) {
+            break resp;
+        }
+        let Some(loc) = header(&resp, "location") else { break resp };
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            return Err(Error::BadUrl("too many redirects".into()));
+        }
+        at = resolve(&at, &loc);
+        if !crate::is_http_url(&at) {
+            return Err(Error::BadUrl("a redirect to an address that is not http(s)".into()));
+        }
+        if crate::host::host_of(&at) != first_host {
+            send = send.without_credentials();
+        }
+    };
     let status = resp.status().as_u16();
-    let uri = resp.get_uri().to_string();
-    let mut p = Probe { uri, etag: header(&resp, "etag"), last_modified: header(&resp, "last-modified"), disposition: header(&resp, "content-disposition"), ..Probe::default() };
+    let uri = if headers.is_empty() { resp.get_uri().to_string() } else { at };
+    let mut p = Probe { uri, etag: header(&resp, "etag"), last_modified: header(&resp, "last-modified"), disposition: header(&resp, "content-disposition"), send, ..Probe::default() };
     match status {
         206 => {
             p.ranges = true;
@@ -89,7 +151,7 @@ pub fn probe(agent: &ureq::Agent, url: &str) -> Result<Probe, Error> {
 /// The body of `bytes=start-(end-1)` of `uri`, or of the whole thing (`whole`). `Err(Changed)` when the server no longer has what
 /// the probe saw.
 pub fn open_range(agent: &ureq::Agent, uri: &str, start: u64, end: u64, whole: bool, p: &Probe) -> Result<Box<dyn Read + Send>, Error> {
-    let mut req = agent.get(uri);
+    let mut req = with_headers(agent.get(uri), &p.send);
     if !whole {
         req = req.header("Range", format!("bytes={start}-{}", end - 1));
         // (a file that changed meanwhile answers with the whole new file: the validator turns that into a 200)

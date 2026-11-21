@@ -199,7 +199,7 @@ fn a_saved_queue_comes_back_and_resumes_byte_identical() {
     assert!(download(&url(&srv, "/f.bin"), &dir, &opts(0), &ctl, &host(Resolve::KeepBoth)).is_err());
     let file = dir.join("downloads.json");
     let mut store = store::Store::default();
-    store.active.push(store::Saved { key: 7, url: url(&srv, "/f.bin"), dest: dir.clone(), sha256: None, verify: false, paused: true });
+    store.active.push(store::Saved { key: 7, url: url(&srv, "/f.bin"), dest: dir.clone(), sha256: None, verify: false, paused: true, browser: false });
     for i in 0..60 {
         store.remember(store::Past { url: format!("http://h/{i}"), dest: dir.clone(), ok: i % 2 == 0, when: i });
     }
@@ -250,5 +250,33 @@ fn a_finished_download_leaves_no_part_files() {
     assert!(matches!(out, Outcome::Saved(_)));
     let left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert_eq!(left, vec!["f.bin".to_string()], "nothing but the file: {left:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn browser_credentials_never_reach_a_file() {
+    const COOKIE: &str = "session=cookie-secret-7f3a";
+    const AUTH: &str = "Bearer auth-secret-91bc";
+    let body = data(4 << 20);
+    let srv = serve(body);
+    let dir = tmp("credentials");
+    let mut headers = Headers::default();
+    headers.set("Cookie", COOKIE);
+    headers.set("Authorization", AUTH);
+    headers.set("Referer", "https://example.com/page");
+    let o = Options { headers: headers.clone(), ..opts(0) };
+    // cut part-way with no retries: the part file and its state stay behind, as after a crash
+    srv.cut_after.store(200 << 10, Ordering::SeqCst);
+    let u = url(&srv, "/c.bin");
+    assert!(download(&u, &dir, &o, &Control::default(), &host(Resolve::KeepBoth)).is_err());
+    let state = std::fs::read_to_string(dir.join("c.bin.leaf-part.state")).expect("the part state is written");
+    // the saved list entry leaf writes for the same download
+    let saved = store::Store { active: vec![store::Saved { key: 1, url: u.clone(), dest: dir.clone(), sha256: None, verify: false, paused: false, browser: true }], history: Vec::new() };
+    let saved = serde_json::to_string(&saved).unwrap();
+    let shown = format!("{headers:?} {headers} {:?}", o.headers);
+    for text in [&state, &saved, &shown] {
+        assert!(!text.contains("cookie-secret") && !text.contains("auth-secret"), "a credential leaked into: {text}");
+    }
+    assert!(shown.contains("Cookie") && shown.contains("Authorization"), "the names are still shown");
     let _ = std::fs::remove_dir_all(&dir);
 }
