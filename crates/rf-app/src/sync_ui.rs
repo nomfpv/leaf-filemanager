@@ -658,6 +658,34 @@ pub fn edit(current: Option<Job>, left: String, right: String, after: Option<Rc<
 /// A plan the preview page should show next (handed over by the Run question's "Preview").
 static NEXT_PREVIEW: Mutex<Option<Plan>> = Mutex::new(None);
 
+/// A side is missing or empty although the last run saw files there. The refusal stays; for this one manual run the user may say
+/// it is meant: "Run anyway" makes the plan without that check and shows it as a preview first (its Run button starts it).
+fn side_gone(job: Job, e: &leaf_sync::Error, window: &mut Window, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let go = Button::new(t!("Run anyway"), Kind::Danger, move |_, window, cx| {
+        let job = job.clone();
+        let work = cx.background_spawn(async move {
+            let (l, r) = job.sides()?;
+            let (lf, rf) = (side_fs(&l)?, side_fs(&r)?);
+            leaf_sync::plan_anyway(&job, &*lf, &*rf, &state_dir(), &|| false)
+        });
+        window
+            .spawn(cx, async move |cx| {
+                let got = work.await;
+                let _ = cx.update(|window, cx| match got {
+                    Ok(plan) => show_preview_of(plan, window, cx),
+                    Err(e) => crate::prompt::notice(t!("The sync job cannot run"), error_text(&e), window, cx),
+                });
+            })
+            .detach();
+        Ok(())
+    });
+    let message = format!("{}
+
+{}", error_text(e), t!("If this side is empty on purpose, Run anyway shows what the run would do first; you start it from that preview. Only this run is affected."));
+    crate::prompt::show(t!("The sync job cannot run"), Some(message), None, vec![go, Button::cancel()], window, cx);
+}
+
 fn show_preview_of(plan: Plan, window: &mut Window, cx: &mut App) {
     if let Ok(mut g) = NEXT_PREVIEW.lock() {
         *g = Some(plan);
@@ -730,6 +758,7 @@ impl SyncView {
             return refuse_running(cx);
         }
         self.busy = Some(job.id.clone());
+        let job_again = job.clone();
         let work = cx.background_spawn(async move { make_plan(&job, &AtomicBool::new(false)) });
         self._run_task = Some(cx.spawn_in(window, async move |this, cx| {
             let got = work.await;
@@ -737,6 +766,7 @@ impl SyncView {
                 v.busy = None;
                 match got {
                     Ok(p) => confirm_and_run(p, false, window, cx),
+                    Err(e) if e.side_gone => side_gone(job_again, &e, window, cx),
                     Err(e) => crate::prompt::notice(t!("The sync job cannot run"), error_text(&e), window, cx),
                 }
                 cx.notify();
