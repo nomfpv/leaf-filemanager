@@ -615,13 +615,18 @@ fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     if !matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
         return Err(e);
     }
-    let claim = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(to)?;
-    let ino = claim.metadata()?.ino();
-    drop(claim);
+    // a folder is claimed with an empty folder (a rename of a folder over an empty one works, over a file it does not)
+    let is_dir = std::fs::symlink_metadata(from).is_ok_and(|m| m.is_dir());
+    if is_dir {
+        std::fs::DirBuilder::new().mode(0o700).create(to)?;
+    } else {
+        drop(std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(to)?);
+    }
+    let ino = std::fs::symlink_metadata(to)?.ino();
     std::fs::rename(from, to).inspect_err(|_| {
         // (only our placeholder: a name someone put there meanwhile is theirs)
-        if std::fs::symlink_metadata(to).is_ok_and(|m| m.ino() == ino && m.len() == 0) {
-            let _ = std::fs::remove_file(to);
+        if std::fs::symlink_metadata(to).is_ok_and(|m| m.ino() == ino && if is_dir { m.is_dir() } else { m.len() == 0 }) {
+            let _ = if is_dir { std::fs::remove_dir(to) } else { std::fs::remove_file(to) };
         }
     })
 }
@@ -1012,7 +1017,7 @@ fn copy_new(job: &mut Job, kind_of_job: Transfer, src: &Path, sm: &std::fs::Meta
             // the user chose to replace this file: a plain rename replaces it in one step
             std::fs::rename(src, &dst)
         } else {
-            crate::fileops::renameat2(src, &dst, libc::RENAME_NOREPLACE)
+            rename_noreplace(src, &dst)
         };
         match r {
             Ok(()) => {
@@ -1689,6 +1694,25 @@ mod tests {
         assert_eq!(std::fs::read(root.join("dest/b.txt")).unwrap(), b"old");
         assert_eq!(std::fs::read(root.join("p")).unwrap(), b"part");
         NO_RENAME2.with(|f| f.set(false));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_move_without_rename_flags_claims_the_name_and_never_replaces() {
+        let root = std::env::temp_dir().join(format!("leaf-unix-fastcopy-move-norename2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/dir")).unwrap();
+        std::fs::create_dir_all(root.join("dest")).unwrap();
+        std::fs::write(root.join("src/dir/in.txt"), b"in").unwrap();
+        std::fs::write(root.join("src/f.txt"), b"new").unwrap();
+        std::fs::write(root.join("dest/f.txt"), b"old").unwrap();
+        NO_RENAME2.with(|f| f.set(true));
+        let r = run(Transfer::Move, &[root.join("src/dir"), root.join("src/f.txt")], &root.join("dest"), quiet(), false, Start::New(None));
+        NO_RENAME2.with(|f| f.set(false));
+        assert!(r.unwrap());
+        assert_eq!(std::fs::read(root.join("dest/dir/in.txt")).unwrap(), b"in", "a folder moved through the placeholder");
+        assert_eq!(std::fs::read(root.join("dest/f.txt")).unwrap(), b"old", "not replaced");
+        assert_eq!(std::fs::read(root.join("dest/f (2).txt")).unwrap(), b"new");
+        assert!(!root.join("src/dir").exists() && !root.join("src/f.txt").exists(), "moved, not copied");
         std::fs::remove_dir_all(&root).unwrap();
     }
     #[test]
