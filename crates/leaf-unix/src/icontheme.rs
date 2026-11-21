@@ -358,10 +358,32 @@ fn picture_of(names: &[String], size: u32) -> Option<Bgra> {
     None
 }
 
+/// The theme's own icon name for the XDG user folders (Documents, Downloads, Pictures, ...) and the home folder: `Some` only for those
+/// exact folders (the paths `user-dirs.dirs` names).
+fn special_folder_icon(path: &Path) -> Option<&'static str> {
+    let same = |d: Option<PathBuf>| d.is_some_and(|d| d == path);
+    let table: [(Option<PathBuf>, &'static str); 8] = [
+        (dirs::document_dir(), "folder-documents"),
+        (dirs::download_dir(), "folder-download"),
+        (dirs::picture_dir(), "folder-pictures"),
+        (dirs::audio_dir(), "folder-music"),
+        (dirs::video_dir(), "folder-videos"),
+        (dirs::desktop_dir(), "user-desktop"),
+        (dirs::public_dir(), "folder-publicshare"),
+        (dirs::template_dir(), "folder-templates"),
+    ];
+    if dirs::home_dir().is_some_and(|h| h == path) {
+        return Some("user-home");
+    }
+    table.into_iter().find(|(d, _)| same(d.clone())).map(|(_, n)| n)
+}
+
 /// The system icon of a file or folder at `size` pixels; `None` when the theme has nothing for it.
 pub fn icon_for(path: &Path, size: u32) -> Option<Bgra> {
     let names: Vec<String> = if path.is_dir() {
-        vec!["inode-directory".into(), "folder".into()]
+        let mut v: Vec<String> = special_folder_icon(path).map(|n| vec![n.to_string()]).unwrap_or_default();
+        v.extend(["inode-directory".into(), "folder".into()]);
+        v
     } else {
         let name = path.file_name()?.to_string_lossy();
         let mime = globs().mime_of(&name).unwrap_or("application/octet-stream");
