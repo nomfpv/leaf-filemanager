@@ -248,6 +248,10 @@ pub enum FolderEvent {
     AddToShelf(Vec<PathBuf>),
     /// Dual pane: copy/move the items into the other pane's folder.
     ToOtherPane(leaf_sys::fileops::Transfer, Vec<PathBuf>),
+    /// Dual pane: download items of a server into the other pane's (local) folder.
+    DownloadToOtherPane(Vec<(rf_core::vpath::VPath, bool)>),
+    /// "Copy to..." in a folder on a server (the workspace knows the other pane's folder to offer).
+    CopyRemoteTo(Vec<(rf_core::vpath::VPath, bool)>),
     /// Dual pane: show a folder in the other pane.
     OpenInOtherPane(Location),
     OpenInNewWindow(Location),
@@ -1069,6 +1073,7 @@ impl FolderView {
                     )
                     .when_some(self.path_of(ei), |d, path| file_drop_target(d, path, is_dir, &p))
                     .when_some(self.drag_out_value(ei), drag_out_row)
+                    .when_some(self.remote_drag_value(ei), |d, val| d.on_drag(val, |d: &crate::remote::RemoteDrag, _, _, cx| cx.new(|_| d.clone())))
                     // Settings → "Select files and folders on hover"
                     .when(hover_select, |d| d.on_hover(cx.listener(move |this, on: &bool, _, cx| this.hover_row(vi, *on, cx))))
                     .into_any_element(),
@@ -3248,6 +3253,7 @@ impl FolderView {
                     )
                     .when_some(self.path_of(ei), |d, path| file_drop_target(d, path, e.is_dir(), &p))
                     .when_some(self.drag_out_value(ei), drag_out_row)
+                    .when_some(self.remote_drag_value(ei), |d, val| d.on_drag(val, |d: &crate::remote::RemoteDrag, _, _, cx| cx.new(|_| d.clone())))
                     // Settings → "Select files and folders on hover"; in a sliced row also the tile's fill (`grid_hover`)
                     .when(hover_select || part.is_some(), |d| {
                         let sliced = part.is_some();
@@ -3680,6 +3686,57 @@ impl FolderView {
                 return;
             }
         }
+    }
+
+    /// The selection in a folder on a server: each address with whether it is a folder (links are left out: not followed).
+    pub(crate) fn selection_remote(&self) -> Vec<(rf_core::vpath::VPath, bool)> {
+        let Location::Remote(dir) = self.location() else { return Vec::new() };
+        let mut v: Vec<u32> = self.selected.iter().copied().collect();
+        v.sort_unstable();
+        v.into_iter()
+            .filter_map(|i| self.entries.get(i as usize))
+            .filter(|e| !e.link)
+            .map(|e| (dir.join(&e.name), e.is_dir()))
+            .collect()
+    }
+
+    /// A local folder that downloads may go into (not an archive, FTP, a server's share list or any other special place).
+    pub(crate) fn download_dir(&self) -> Option<PathBuf> {
+        match self.location() {
+            Location::Path(p) if !leaf_sys::ftp::is_ftp(p) && leaf_sys::network::server_root(p).is_none() && crate::archive_view::split(p).is_none() => Some(p.clone()),
+            _ => None,
+        }
+    }
+
+    /// The file under the cursor in a folder on a server (for leaf-look: fetched first), with its size.
+    pub(crate) fn remote_look_target(&self) -> Option<(rf_core::vpath::VPath, u64)> {
+        let Location::Remote(dir) = self.location() else { return None };
+        let e = self.entries.get(self.cursor_entry()? as usize).filter(|e| !e.is_dir() && !e.link)?;
+        Some((dir.join(&e.name), e.size))
+    }
+
+    /// Selects what a download brought into `dir`, if this view still shows that folder then.
+    pub(crate) fn select_arrived(&self, dir: PathBuf, cx: &mut Context<Self>) -> Box<dyn FnOnce(Vec<PathBuf>, &mut App)> {
+        let this = cx.entity().downgrade();
+        Box::new(move |arrived, cx| {
+            let names: Vec<String> = arrived.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+            let _ = this.update(cx, |v, cx| {
+                if v.current_dir().as_deref() == Some(dir.as_path()) {
+                    v.select_when_listed(names, cx);
+                }
+            });
+        })
+    }
+
+    /// What a drag started on row `ei` of a folder on a server carries: the selection when the row is in it, else the row.
+    fn remote_drag_value(&self, ei: u32) -> Option<crate::remote::RemoteDrag> {
+        let Location::Remote(dir) = self.location() else { return None };
+        if self.selected.contains(&ei) {
+            let items = self.selection_remote();
+            return (!items.is_empty()).then_some(crate::remote::RemoteDrag(items));
+        }
+        let e = self.entries.get(ei as usize).filter(|e| !e.link)?;
+        Some(crate::remote::RemoteDrag(vec![(dir.join(&e.name), e.is_dir())]))
     }
 
     pub fn selection_paths(&self) -> Vec<PathBuf> {
@@ -4139,7 +4196,8 @@ impl FolderView {
             return;
         }
         if let Location::Remote(dir) = self.location() {
-            // a remote folder opens here (or in a new tab); files and links are not opened yet (no fetch to a cache copy yet)
+            // a remote folder opens here (or in a new tab); a file is fetched to a cache copy and that is opened; links are not
+            // followed
             let e = &self.entries[ei as usize];
             if e.is_dir() && !e.link {
                 let loc = Location::Remote(dir.join(&e.name));
@@ -4148,6 +4206,8 @@ impl FolderView {
                 } else {
                     self.navigate(loc, cx);
                 }
+            } else if !e.link {
+                crate::remote::open_file(cx, dir.join(&e.name), e.size);
             }
             return;
         }
@@ -4905,6 +4965,7 @@ impl FolderView {
                 )
                 .when_some(self.path_of(ei), |d, path| file_drop_target(d, path, e.is_dir(), &p))
                 .when_some(self.drag_out_value(ei), drag_out_row)
+                .when_some(self.remote_drag_value(ei), |d, val| d.on_drag(val, |d: &crate::remote::RemoteDrag, _, _, cx| cx.new(|_| d.clone())))
                 .on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -5269,6 +5330,13 @@ impl FolderView {
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                         if let Some(dir) = this.current_dir() {
                             crate::workspace::drop_files(paths, dir, cx);
+                        }
+                    }))
+                    // items dragged from a folder on a server: downloaded into this local folder
+                    .on_drop(cx.listener(|this, d: &crate::remote::RemoteDrag, _, cx| {
+                        if let Some(dir) = this.download_dir() {
+                            let after = this.select_arrived(dir.clone(), cx);
+                            crate::remote::download(cx, d.0.clone(), dir, Some(after));
                         }
                     }))
                     .child(body)

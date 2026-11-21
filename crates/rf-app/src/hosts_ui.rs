@@ -1,6 +1,6 @@
 //! Saved hosts in the app (W1b): the list from `hosts.toml` in the config folder, shared by the Settings page "Hosts", the
-//! sidebar section and the Home widget (both only while there are hosts). Opening a host goes to its address as a remote place;
-//! with no backend for its scheme yet (SFTP comes in its own lane) the pane says that connecting is not built yet.
+//! sidebar section and the Home widget (both only while there are hosts). Opening a host goes to its address as a remote place
+//! (SFTP through `leaf-remote`); a scheme with no backend yet says that connecting is not built yet.
 //!
 //! The file never holds a password or another secret (see `rf_core::hosts`).
 
@@ -43,16 +43,19 @@ fn change(cx: &mut App, f: impl FnOnce(&mut Hosts)) {
     cx.refresh_windows();
 }
 
-/// Where opening the host goes: its start folder as a remote place.
+/// Where opening the host goes: its start folder as a remote place; an SFTP host without one opens in the user's home
+/// folder on the server (`/~`).
 pub fn location(h: &Host) -> Option<Location> {
-    VPath::parse(&h.address()).ok().map(Location::Remote)
+    let v = VPath::parse(&h.address()).ok()?;
+    let v = if h.start_path.is_none() && h.scheme.eq_ignore_ascii_case("sftp") { v.with_path("/~") } else { v };
+    Some(Location::Remote(v))
 }
 
 /// The second line of a host's row: `user@host:port` and its start folder.
 pub fn subtitle(h: &Host) -> String {
     let mut s = h.address();
     if let Some(j) = &h.jump {
-        s.push_str(&format!("  ({} {j})", t!("via")));
+        s.push_str(&format!("  ({} {j}: {})", t!("via"), t!("jump hosts are not supported yet")));
     }
     s
 }
@@ -147,7 +150,9 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     v.push(
         v_flex()
             .pt_3()
-            .child(div().text_xs().text_color(p.text_tertiary).child(t!("Connecting is not built yet: opening a host shows where it will go.")))
+            .child(div().text_xs().text_color(p.text_tertiary).child(t!(
+                "Servers are checked against ~/.ssh/known_hosts: a new one is asked about, one whose key changed is refused. Logging in tries your SSH agent, the key file, then asks for a password; passphrases and passwords stay in memory until leaf closes. Browsing, opening and copying to this PC work; uploading, renaming and deleting on a server come next."
+            )))
             .into_any_element(),
     );
     v

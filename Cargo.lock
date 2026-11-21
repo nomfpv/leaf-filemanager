@@ -7300,6 +7300,7 @@ dependencies = [
  "image",
  "leaf-decode",
  "leaf-dev",
+ "leaf-remote",
  "leaf-sys",
  "leaf-vfs",
  "log",

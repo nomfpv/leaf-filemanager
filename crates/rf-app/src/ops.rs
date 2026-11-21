@@ -189,6 +189,11 @@ impl FolderView {
             crate::shell_view::copy_items(cx, self.selection_shell());
             return;
         }
+        if matches!(self.location(), rf_core::Location::Remote(_)) {
+            // items on a server: Paste in a local folder downloads them; cut becomes copy (nothing is removed from a server yet)
+            crate::remote::copy_to_clipboard(self.selection_remote(), cx);
+            return;
+        }
         let paths = self.selection_paths();
         if paths.is_empty() {
             return;
@@ -360,6 +365,14 @@ impl FolderView {
     }
 
     pub(crate) fn paste_to(&mut self, dir: PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
+        // items copied in a folder on a server (and nothing copied since): downloaded here
+        if let Some(items) = crate::remote::clipboard_items(cx) {
+            if !leaf_sys::ftp::is_ftp(&dir) && crate::archive_view::split(&dir).is_none() {
+                let after = self.select_arrived(dir.clone(), cx);
+                crate::remote::download(cx, items, dir, Some(after));
+            }
+            return;
+        }
         // what was cut is on its way: no longer greyed
         if crate::cut_marks::any() {
             crate::cut_marks::clear();
@@ -472,6 +485,14 @@ impl FolderView {
             return;
         }
         if self.current_dir().is_some_and(|d| crate::archive_view::split(&d).is_some()) {
+            return;
+        }
+        if matches!(self.location(), rf_core::Location::Remote(_)) {
+            // from a server: copied down (moving would delete on the server, which is not built yet)
+            let items = self.selection_remote();
+            if kind == Transfer::Copy && !items.is_empty() {
+                cx.emit(crate::folder_view::FolderEvent::DownloadToOtherPane(items));
+            }
             return;
         }
         let paths = self.selection_paths();

@@ -1106,6 +1106,21 @@ impl Workspace {
                     }
                 }
             }
+            FolderEvent::DownloadToOtherPane(items) => {
+                if let Some(other) = this.other_pane(emitter) {
+                    match other.read(cx).download_dir() {
+                        Some(dest) => {
+                            let after = other.update(cx, |v, cx| v.select_arrived(dest.clone(), cx));
+                            crate::remote::download(cx, items.clone(), dest, Some(after));
+                        }
+                        None => crate::prompt::notice(t!("Copy to other pane"), t!("The other pane shows no folder on this PC; uploading to a server is coming next.").to_string(), window, cx),
+                    }
+                }
+            }
+            FolderEvent::CopyRemoteTo(items) => {
+                let initial = this.other_pane(emitter).and_then(|o| o.read(cx).download_dir());
+                crate::remote::copy_to_dialog(items.clone(), initial, window, cx);
+            }
             FolderEvent::OpenInOtherPane(loc) => {
                 if let Some(other) = this.other_pane(emitter) {
                     other.update(cx, |v, cx| v.navigate(loc.clone(), cx));
@@ -1617,6 +1632,16 @@ impl Workspace {
     /// Boşluk: leaf-look'a (ayrı süreç) aç/kapat iletisi. leaf-look kapalıyken bir şey yapmaz.
     fn toggle_quick_look(&mut self, cx: &mut Context<Self>) {
         use std::sync::atomic::Ordering;
+        // a file on a server: a copy is fetched (up to 64 MB), then leaf-look shows that
+        if cx.global::<crate::settings::Settings>().look_enabled
+            && !crate::folder_view::QUICK_LOOK_OPEN.load(Ordering::Relaxed)
+            && let Some((v, size)) = self.active_tab().read(cx).remote_look_target()
+        {
+            crate::remote::look(v, size);
+            crate::folder_view::QUICK_LOOK_OPEN.store(true, Ordering::Relaxed);
+            cx.notify();
+            return;
+        }
         // Settings › leaf-look › "Space opens QuickLook": the file goes to QuickLook (a file inside an archive has no path it can open)
         if cx.global::<crate::settings::Settings>().space_quicklook {
             match self.active_tab().read(cx).preview_target() {

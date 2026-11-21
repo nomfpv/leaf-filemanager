@@ -314,21 +314,32 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
 }
 
 impl FolderView {
-    /// The menu in a folder on a server (`Location::Remote`): opening and refreshing work; copy, move, paste, delete and rename
-    /// are not wired to servers yet and say so.
+    /// The menu in a folder on a server (`Location::Remote`): opening, copying down to this PC and refreshing work; moving,
+    /// pasting onto the server, renaming and deleting are not built yet and say so.
     fn show_remote_menu(&mut self, background: bool, window: &mut Window, cx: &mut Context<Self>) {
         let me = cx.entity().downgrade();
-        let one_dir = !background && self.selected_is_single_dir();
+        let chosen = if background { Vec::new() } else { self.selection_remote() };
         let mut items = Vec::new();
-        if one_dir {
-            items.push(Item::action(t!("Open"), icon(L::FolderOpen), act(&me, |v, _, cx| {
+        if !background && self.cursor_entry().is_some() && self.selected.len() == 1 {
+            let dir = self.selected_is_single_dir();
+            items.push(Item::action(t!("Open"), icon(if dir { L::FolderOpen } else { L::SquareArrowOutUpRight }), act(&me, |v, _, cx| {
                 if let Some(ei) = v.cursor_entry() {
                     v.open_entry(ei, cx);
                 }
             })));
             items.push(Item::Separator);
         }
-        let off = [(t!("Cut"), L::Scissors), (t!("Copy"), L::Copy), (t!("Paste"), L::Clipboard), (t!("Rename"), L::PencilLine), (t!("Delete"), L::Trash)];
+        if !chosen.is_empty() {
+            let c = chosen.clone();
+            items.push(Item::action(t!("Copy"), icon(L::Copy), act(&me, move |_, _, cx| crate::remote::copy_to_clipboard(c.clone(), cx))).hint("Ctrl+C"));
+            let c = chosen.clone();
+            items.push(Item::action(t!("Copy to..."), icon(L::FolderInput), act(&me, move |_, _, cx| cx.emit(FolderEvent::CopyRemoteTo(c.clone())))));
+            if self.dual {
+                let c = chosen.clone();
+                items.push(Item::action(t!("Copy to other pane"), icon(L::CopyPlus), act(&me, move |_, _, cx| cx.emit(FolderEvent::DownloadToOtherPane(c.clone())))).hint("Shift+F5"));
+            }
+        }
+        let off = [(t!("Cut"), L::Scissors), (t!("Paste"), L::Clipboard), (t!("Rename"), L::PencilLine), (t!("Delete"), L::Trash)];
         for (label, l) in off {
             items.push(Item::action(label, icon(l), |_, _| {}).enabled(false));
         }

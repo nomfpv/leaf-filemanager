@@ -386,6 +386,8 @@ pub fn main() {
         .format_timestamp_millis()
         .init();
     start_mark("logging");
+    // sftp:// (cheap: nothing connects until a server is opened; before the command line, which may name one)
+    remote::register();
     // a bulk rename that did not end (crash, power loss) left its journal: logged and kept, the files are not touched
     if let Some(dir) = rename_exec::journal_dir() {
         std::thread::spawn(move || rename_exec::report_journals(&dir));
@@ -638,6 +640,8 @@ pub fn main() {
         })
         .detach();
         cx.set_global(status_center::OpsGlobal(ops));
+        // the questions of server connections (host key, passphrase, password) become dialogs
+        remote::init_ui(cx);
         actions::bind(cx);
         actions::bind_user(cx);
         features_page::init(cx);
