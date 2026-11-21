@@ -496,8 +496,23 @@ impl Fs for SftpFs {
     }
 
     fn mkdir(&self, p: &VPath) -> Result<(), FsError> {
-        match self.with(p, &|| false, async |c| c.sftp.mkdir(spath(&c, p), FileAttributes::empty()).await.map(|_| ())) {
-            Ok(()) => Ok(()),
+        // the first try without the retry of `with`: a folder there afterwards is then told apart from one there before
+        let c = self.conn_of(p)?;
+        match run(&c, self.cfg.op_timeout, c.sftp.mkdir(spath(&c, p), FileAttributes::empty())) {
+            Ok(_) => Ok(()),
+            Err(FsError::Offline(_)) => {
+                // the line broke (or the answer was late): the folder may have been made and the answer lost; tried again
+                // (`with` connects anew when the line is gone; a live connection other jobs use is left alone), and a folder
+                // that is there then counts as made
+                match self.with(p, &|| false, async |c| c.sftp.mkdir(spath(&c, p), FileAttributes::empty()).await.map(|_| ())) {
+                    Ok(()) => Ok(()),
+                    Err(e) => match self.stat(p) {
+                        Ok(m) if m.kind == Kind::Dir => Ok(()),
+                        Ok(_) => Err(FsError::Exists),
+                        Err(_) => Err(e),
+                    },
+                }
+            }
             // most servers answer a plain "failure" for a name that is taken
             Err(e) => match self.stat(p) {
                 Ok(_) => Err(FsError::Exists),
