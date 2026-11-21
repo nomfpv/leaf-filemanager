@@ -1,0 +1,226 @@
+# Canopy: frosted sheets over the window backdrop (Mica, Acrylic or glass). The default theme.
+# Values from the mockup direction-2-canopy.html (Standard at the top of each mode, what High changes under it).
+name = "Canopy"
+description = "Frosted glass: translucent sheets over the window backdrop, soft borders."
+
+backdrop = true
+radius = 14
+control_radius = 8
+row_radius = 8
+row_height = 32
+marker_width = 0
+focus_width = 1
+tab_marker = 0
+tag_dot = 6
+name_weight = 400
+font_ui = "Segoe UI Variable Text"
+font_mono = "Cascadia Mono"
+mono_numbers = false
+
+selection = "accent/0.24"
+row_selection = "accent/0.24"
+selection_border = "accent/0.38"
+cursor = "accent/0.85"
+focus = "accent/0.55"
+titlebar = "#00000000"
+toolbar = "#00000000"
+sidebar = "#00000000"
+status = "#00000000"
+stripe = "#00000000"
+
+[dark]
+window = "#060c0a61"
+content = "#101916"
+tab_active = "#101916"
+sheet_opacity = 0.62
+raised = "#1a2521"
+field = "#0000003d"
+field_border = "#ffffff17"
+tile = "#ffffff0f"
+tile_hover = "#ffffff1a"
+status_text = "#eef5f0"
+status_text_secondary = "#c4d1c9"
+border = "#ffffff1a"
+divider = "#ffffff0f"
+border_strong = "#ffffff2b"
+text = "#eef5f0"
+text_secondary = "#c4d1c9"
+text_tertiary = "#a1b2a8"
+text_disabled = "#eef5f04d"
+hover = "#ffffff0f"
+pressed = "#ffffff1a"
+row_selection_text = "#eef5f0"
+danger = "#ff958a"
+warning = "#f2c066"
+success = "#7fdc9b"
+kind_folder = "#d7c491"
+kind_image = "#7fd0e3"
+kind_video = "#d8a2ea"
+kind_document = "#a2b8f5"
+kind_code = "#f0b57a"
+kind_text = "#bfcbc3"
+kind_archive = "#e6d27c"
+kind_app = "#94dcb0"
+solid_window = "#0c1210"
+solid_sheet = "#16201c"
+solid_raised = "#1e2a25"
+
+[light]
+window = "#ffffff38"
+content = "#fafcfb"
+tab_active = "#fafcfb"
+sheet_opacity = 0.64
+raised = "#ffffff"
+field = "#ffffff99"
+field_border = "#142d201f"
+tile = "#142d200f"
+tile_hover = "#142d201a"
+status_text = "#0f1a14"
+status_text_secondary = "#33433a"
+border = "#142d201c"
+divider = "#142d2012"
+border_strong = "#142d202e"
+text = "#0f1a14"
+text_secondary = "#33433a"
+text_tertiary = "#4b5c53"
+text_disabled = "#0f1a1452"
+hover = "#142d200f"
+pressed = "#142d201a"
+row_selection_text = "#0f1a14"
+danger = "#b0302a"
+warning = "#875800"
+success = "#23753f"
+kind_folder = "#86703a"
+kind_image = "#1b7488"
+kind_video = "#88479e"
+kind_document = "#3758b3"
+kind_code = "#a25612"
+kind_text = "#55625a"
+kind_archive = "#806c12"
+kind_app = "#2a744b"
+solid_window = "#dde5e0"
+solid_sheet = "#f6f8f7"
+solid_raised = "#ffffff"
+
+# High: sheets nearly opaque, the backdrop can no longer cost contrast; lines doubled, text tighter.
+[dark_high]
+window = "#060c0a8c"
+content = "#0e1613"
+tab_active = "#0e1613"
+sheet_opacity = 0.88
+raised = "#16201c"
+field = "#00000059"
+field_border = "#ffffff38"
+tile = "#ffffff1a"
+tile_hover = "#ffffff26"
+status_text = "#f7fbf8"
+status_text_secondary = "#dbe6df"
+border = "#ffffff33"
+divider = "#ffffff1f"
+border_strong = "#ffffff4d"
+text = "#f7fbf8"
+text_secondary = "#dbe6df"
+text_tertiary = "#bccbc2"
+text_disabled = "#f7fbf866"
+hover = "#ffffff1a"
+pressed = "#ffffff26"
+selection = "accent/0.30"
+row_selection = "accent/0.30"
+selection_border = "accent/0.70"
+row_selection_text = "#f7fbf8"
+cursor = "accent"
+focus = "accent"
+focus_width = 2
+tag_dot = 8
+name_weight = 500
+kind_folder = "#e0cf9e"
+kind_image = "#93dcef"
+kind_video = "#e2b2f2"
+kind_document = "#b3c6fa"
+kind_code = "#f6c290"
+kind_text = "#ccd8d0"
+kind_archive = "#eedd8c"
+kind_app = "#a8e6c0"
+solid_sheet = "#121b17"
+solid_raised = "#1b2621"
+
+[light_high]
+window = "#ffffff73"
+content = "#fcfdfc"
+tab_active = "#fcfdfc"
+sheet_opacity = 0.90
+raised = "#ffffff"
+field = "#ffffffe6"
+field_border = "#142d2052"
+tile = "#142d2014"
+tile_hover = "#142d201f"
+status_text = "#08110c"
+status_text_secondary = "#22312a"
+border = "#142d2045"
+divider = "#142d2026"
+border_strong = "#142d2057"
+text = "#08110c"
+text_secondary = "#22312a"
+text_tertiary = "#3a4a41"
+text_disabled = "#08110c66"
+hover = "#142d2014"
+pressed = "#142d201f"
+selection = "accent/0.30"
+row_selection = "accent/0.30"
+selection_border = "accent/0.70"
+row_selection_text = "#08110c"
+cursor = "accent"
+focus = "accent"
+focus_width = 2
+tag_dot = 8
+name_weight = 500
+kind_folder = "#6c5a28"
+kind_image = "#135f70"
+kind_video = "#6e3584"
+kind_document = "#28489c"
+kind_code = "#85440c"
+kind_text = "#43514a"
+kind_archive = "#65550c"
+kind_app = "#1d5f3e"
+
+[[accents]]
+name = "Mint"
+dark = "#86e3b8"
+dark_text = "#05231a"
+light = "#1b7550"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Lagoon"
+dark = "#74cdf2"
+dark_text = "#04202e"
+light = "#17668f"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Sunset"
+dark = "#ffb877"
+dark_text = "#2b1503"
+light = "#a14f0d"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Lilac"
+dark = "#c9adff"
+dark_text = "#1d0d3b"
+light = "#6844b0"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Rose"
+dark = "#ff97ad"
+dark_text = "#33060f"
+light = "#ad3152"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Gold"
+dark = "#f0d070"
+dark_text = "#2a2003"
+light = "#7f6205"
+light_text = "#ffffff"

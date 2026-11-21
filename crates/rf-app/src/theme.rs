@@ -3,6 +3,10 @@
 
 use gpui_kit::*;
 
+/// Themes as data (the TOML files, user themes, resolution).
+#[allow(dead_code)]
+pub mod data;
+
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
 pub struct Palette {

@@ -1,0 +1,202 @@
+# Index: light first, dense and technical; a ruled table with zebra rows, a solid accent selection, monospace number columns
+# and an inverted status line. Values from the mockup direction-3-index.html (Standard at the top of each mode, what High changes).
+name = "Index"
+description = "Dense and technical: ruled rows, zebra stripes, solid selection, monospace numbers."
+
+backdrop = false
+sheet_opacity = 1
+radius = 3
+control_radius = 2
+row_radius = 0
+row_height = 28
+marker_width = 0
+focus_width = 3
+tab_marker = 0
+tag_dot = 6
+name_weight = 400
+font_ui = "Bahnschrift"
+font_mono = "Cascadia Mono"
+mono_numbers = true
+
+selection = "accent/0.30"
+row_selection = "accent"
+selection_border = "#00000000"
+row_selection_text = "accent_text"
+cursor = "accent_text"
+focus = "accent"
+titlebar = "#00000000"
+
+[light]
+window = "#e7eae4"
+sidebar = "#e7eae4"
+toolbar = "#f1f3ef"
+content = "#fbfcfa"
+tab_active = "#f1f3ef"
+raised = "#ffffff"
+field = "#ffffff"
+field_border = "#b7beb3"
+tile = "#fbfcfa"
+tile_hover = "#e9ede6"
+status = "#141914"
+status_text = "#eef1ea"
+status_text_secondary = "#c4cac1"
+stripe = "#f4f6f2"
+border = "#c5cbc1"
+divider = "#dde1d9"
+border_strong = "#a7afa3"
+text = "#111511"
+text_secondary = "#2e352d"
+text_tertiary = "#4f574e"
+text_disabled = "#9aa298"
+hover = "#e9ede6"
+pressed = "#e1e6de"
+danger = "#b02e25"
+warning = "#8a5800"
+success = "#22703f"
+kind_folder = "#7a6526"
+kind_image = "#12708a"
+kind_video = "#84358f"
+kind_document = "#2949a8"
+kind_code = "#a34a08"
+kind_text = "#4d564c"
+kind_archive = "#7b6608"
+kind_app = "#23704a"
+solid_window = "#e7eae4"
+solid_sheet = "#fbfcfa"
+solid_raised = "#ffffff"
+
+[dark]
+window = "#151817"
+sidebar = "#151817"
+toolbar = "#1a1d1c"
+content = "#1d201f"
+tab_active = "#1a1d1c"
+raised = "#252928"
+field = "#121413"
+field_border = "#3d4440"
+tile = "#1d201f"
+tile_hover = "#262a28"
+status = "#dfe3dc"
+status_text = "#111511"
+status_text_secondary = "#2e352d"
+stripe = "#202322"
+border = "#353b37"
+divider = "#2a2f2c"
+border_strong = "#4b534d"
+text = "#e6e9e4"
+text_secondary = "#c2c8c1"
+text_tertiary = "#99a199"
+text_disabled = "#5a615b"
+hover = "#262a28"
+pressed = "#2c312e"
+danger = "#f28b82"
+warning = "#e6b45a"
+success = "#76c98c"
+kind_folder = "#cbb67e"
+kind_image = "#6dbfd3"
+kind_video = "#cf94dc"
+kind_document = "#94abee"
+kind_code = "#eba467"
+kind_text = "#aab2a9"
+kind_archive = "#d6c167"
+kind_app = "#86cba0"
+solid_window = "#151817"
+solid_sheet = "#1d201f"
+solid_raised = "#252928"
+
+# High: darker rules, tighter text, a thicker focus band.
+[light_high]
+window = "#e3e7e0"
+sidebar = "#e3e7e0"
+hover = "#dfe4db"
+pressed = "#d6dcd2"
+tile_hover = "#dfe4db"
+stripe = "#f0f3ed"
+field_border = "#7d877a"
+border = "#98a194"
+divider = "#c4cbc0"
+border_strong = "#7d877a"
+text = "#050705"
+text_secondary = "#1c221b"
+text_tertiary = "#363e35"
+text_disabled = "#858d83"
+focus_width = 4
+tag_dot = 8
+name_weight = 500
+kind_folder = "#5e4c1b"
+kind_image = "#0b5a6c"
+kind_video = "#6c2a78"
+kind_document = "#1f3c92"
+kind_code = "#873b04"
+kind_text = "#3c443b"
+kind_archive = "#5f4f05"
+kind_app = "#195a3a"
+solid_window = "#e3e7e0"
+
+[dark_high]
+hover = "#2d322f"
+pressed = "#343a36"
+tile_hover = "#2d322f"
+stripe = "#232625"
+field_border = "#66706a"
+border = "#4d5550"
+divider = "#383e3a"
+border_strong = "#66706a"
+text = "#f5f7f3"
+text_secondary = "#d5dbd4"
+text_tertiary = "#c3cac2"
+text_disabled = "#6b736c"
+status_text_secondary = "#1c221b"
+focus_width = 4
+tag_dot = 8
+name_weight = 500
+kind_folder = "#d9c58f"
+kind_image = "#85cde0"
+kind_video = "#dba6e7"
+kind_document = "#a9bdf4"
+kind_code = "#f2b47c"
+kind_text = "#bfc6be"
+kind_archive = "#e2cf7c"
+kind_app = "#9ad6b0"
+
+[[accents]]
+name = "Leaf"
+dark = "#7fc46a"
+dark_text = "#0c1a08"
+light = "#2c6e35"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Signal"
+dark = "#f08a4b"
+dark_text = "#2a1003"
+light = "#ad4810"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Cobalt"
+dark = "#86a3f6"
+dark_text = "#08153a"
+light = "#2b53c4"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Magenta"
+dark = "#e383c5"
+dark_text = "#300a22"
+light = "#9c2a77"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Teal"
+dark = "#4cc5bb"
+dark_text = "#03201d"
+light = "#0e6a64"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Ink"
+dark = "#e8ebe6"
+dark_text = "#111511"
+light = "#151a15"
+light_text = "#ffffff"

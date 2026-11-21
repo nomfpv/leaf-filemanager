@@ -1,0 +1,230 @@
+# Stem: calm near-black with a green undertone; one thin accent line, the stem, marks where you are.
+# Values from the mockup direction-1-stem.html (Standard at the top of each mode, what High changes under it).
+name = "Stem"
+description = "Calm and solid: the frame one step darker than the content, a thin accent line marks the current place."
+
+backdrop = false
+sheet_opacity = 1
+radius = 10
+control_radius = 6
+row_radius = 4
+row_height = 32
+marker_width = 2
+focus_width = 2
+tab_marker = 2
+tag_dot = 6
+name_weight = 400
+font_ui = "Segoe UI Variable Text"
+font_mono = "Cascadia Mono"
+mono_numbers = false
+
+selection = "accent/0.17"
+row_selection = "accent/0.17"
+selection_border = "#00000000"
+cursor = "accent/0.70"
+focus = "accent"
+titlebar = "#00000000"
+stripe = "#00000000"
+
+[dark]
+window = "#090c0a"
+sidebar = "#0e120f"
+toolbar = "#131915"
+content = "#131915"
+tab_active = "#131915"
+raised = "#1b221d"
+field = "#0d110e"
+field_border = "#253028"
+tile = "#0e120f"
+tile_hover = "#d6ecd614"
+status = "#0e120f"
+status_text = "#e3e9e2"
+status_text_secondary = "#b3bfb2"
+border = "#232c25"
+divider = "#1b221d"
+border_strong = "#313d33"
+text = "#e3e9e2"
+text_secondary = "#b3bfb2"
+text_tertiary = "#8d9a8d"
+text_disabled = "#4f5a50"
+hover = "#d6ecd60d"
+pressed = "#d6ecd614"
+row_selection_text = "#e3e9e2"
+danger = "#f08a80"
+warning = "#e3b35c"
+success = "#6fc88a"
+kind_folder = "#c2b088"
+kind_image = "#71b8ca"
+kind_video = "#c693d8"
+kind_document = "#93aae8"
+kind_code = "#e2a66c"
+kind_text = "#a9b5a8"
+kind_archive = "#d5c26e"
+kind_app = "#8cc8a2"
+solid_window = "#090c0a"
+solid_sheet = "#131915"
+solid_raised = "#1b221d"
+
+[light]
+window = "#e3e7e0"
+sidebar = "#ecefe9"
+toolbar = "#f8f9f6"
+content = "#f8f9f6"
+tab_active = "#f8f9f6"
+raised = "#ffffff"
+field = "#ffffff"
+field_border = "#cfd6cb"
+tile = "#ffffff"
+tile_hover = "#182c1814"
+status = "#ecefe9"
+status_text = "#161c17"
+status_text_secondary = "#3c463d"
+border = "#dce1d8"
+divider = "#e9ece6"
+border_strong = "#c4ccc1"
+text = "#161c17"
+text_secondary = "#3c463d"
+text_tertiary = "#5a655a"
+text_disabled = "#a5ada3"
+hover = "#182c180d"
+pressed = "#182c1814"
+row_selection_text = "#161c17"
+danger = "#b3352c"
+warning = "#8a5a00"
+success = "#2c7a45"
+kind_folder = "#8c7642"
+kind_image = "#21798b"
+kind_video = "#8b4ba1"
+kind_document = "#3c5fb8"
+kind_code = "#a45814"
+kind_text = "#5d675d"
+kind_archive = "#857015"
+kind_app = "#2f7a50"
+solid_window = "#e3e7e0"
+solid_sheet = "#f8f9f6"
+solid_raised = "#ffffff"
+
+# High: tighter text, visible hairlines, a fuller selection tint and a thicker stem.
+[dark_high]
+window = "#070908"
+sidebar = "#0b0e0c"
+toolbar = "#111612"
+content = "#111612"
+tab_active = "#111612"
+raised = "#1c241e"
+field = "#0a0d0b"
+field_border = "#4a584c"
+tile = "#0b0e0c"
+tile_hover = "#d6ecd621"
+status = "#0b0e0c"
+status_text = "#f5f8f4"
+status_text_secondary = "#d6dfd5"
+border = "#405044"
+divider = "#2e3931"
+border_strong = "#5c6d60"
+text = "#f5f8f4"
+text_secondary = "#d6dfd5"
+text_tertiary = "#b7c3b6"
+text_disabled = "#6a766b"
+hover = "#d6ecd617"
+pressed = "#d6ecd621"
+selection = "accent/0.30"
+row_selection = "accent/0.30"
+row_selection_text = "#f5f8f4"
+cursor = "accent"
+marker_width = 3
+focus_width = 3
+tag_dot = 8
+name_weight = 500
+kind_folder = "#d9c99c"
+kind_image = "#8fd2e2"
+kind_video = "#dbadea"
+kind_document = "#adc0f4"
+kind_code = "#f1bc88"
+kind_text = "#c6d0c5"
+kind_archive = "#e6d687"
+kind_app = "#a6dcb9"
+solid_window = "#070908"
+solid_sheet = "#111612"
+solid_raised = "#1c241e"
+
+[light_high]
+window = "#dde2d9"
+sidebar = "#e6eae3"
+toolbar = "#fbfcfa"
+content = "#fbfcfa"
+tab_active = "#fbfcfa"
+field_border = "#8f9a8b"
+tile_hover = "#182c181f"
+status = "#e6eae3"
+status_text = "#0b0f0c"
+status_text_secondary = "#222a23"
+border = "#a9b3a5"
+divider = "#ccd3c8"
+border_strong = "#8a9586"
+text = "#0b0f0c"
+text_secondary = "#222a23"
+text_tertiary = "#3a453b"
+text_disabled = "#8a9488"
+hover = "#182c1814"
+pressed = "#182c181f"
+selection = "accent/0.30"
+row_selection = "accent/0.30"
+row_selection_text = "#0b0f0c"
+cursor = "accent"
+marker_width = 3
+focus_width = 3
+tag_dot = 8
+name_weight = 500
+kind_folder = "#6e5a2a"
+kind_image = "#135f6e"
+kind_video = "#6f3684"
+kind_document = "#2a4a9c"
+kind_code = "#87450c"
+kind_text = "#445044"
+kind_archive = "#66560c"
+kind_app = "#1f6040"
+solid_window = "#dde2d9"
+solid_sheet = "#fbfcfa"
+
+[[accents]]
+name = "Leaf"
+dark = "#8cc56f"
+dark_text = "#0d1a09"
+light = "#3d7a2c"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Amber"
+dark = "#e3aa55"
+dark_text = "#1f1304"
+light = "#8f5d08"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Lake"
+dark = "#79b1ea"
+dark_text = "#06182b"
+light = "#2b64a8"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Fern"
+dark = "#55c4b1"
+dark_text = "#04201b"
+light = "#16756a"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Orchid"
+dark = "#bea0f2"
+dark_text = "#1b0c33"
+light = "#6d46aa"
+light_text = "#ffffff"
+
+[[accents]]
+name = "Ember"
+dark = "#f0907a"
+dark_text = "#2a0d05"
+light = "#b2462c"
+light_text = "#ffffff"
