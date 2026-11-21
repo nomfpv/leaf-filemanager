@@ -1589,10 +1589,31 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
             };
             (text, p.text_secondary, L::LoaderCircle)
         }
-        OpPhase::Done => (t!("Completed").to_string(), p.accent, L::CircleCheck),
+        OpPhase::Done => {
+            // the history line of a finished job: what it moved and how long it took
+            let mut text = t!("Completed").to_string();
+            let total = op.bytes.get().1;
+            if total > 0 {
+                text = format!("{text} · {}", rf_core::format::size(total));
+            }
+            if let Some(e) = op.ended {
+                let ran = e.duration_since(op.started).as_secs_f32();
+                if ran >= 1.0 {
+                    text = format!("{text} · {}", fmt_duration(ran));
+                }
+            }
+            (text, p.accent, L::CircleCheck)
+        }
         OpPhase::Cancelled => (t!("Cancelled").to_string(), p.text_secondary, L::CircleSlash),
         OpPhase::Failed(e) => (format!("{} {}", t!("Error:"), crate::i18n::td(e)), p.danger, L::CircleAlert),
     };
+    // the speed graph of the last minute (bytes only; the engine's own units have no speed)
+    let graph = if running && !is_paused { op.stats.bars(op.secs()) } else { Vec::new() };
+    let graph = (graph.iter().any(|b| *b > 0.0)).then(|| {
+        h_flex().h(px(22.)).gap(px(1.)).items_end().children(graph.into_iter().map(|b| {
+            div().flex_1().max_w(px(6.)).h(px(22. * b.max(0.06))).rounded(px(1.)).bg(p.accent).opacity(0.35 + 0.65 * b)
+        }))
+    });
     let icon_color = match &op.phase {
         OpPhase::Running => p.accent,
         OpPhase::Done => gpui_kit::rgb(0x30D158).into(),
@@ -1625,6 +1646,7 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
                             .child(div().h_full().rounded_full().bg(p.accent).w(relative(if op.total == 0 { 0.15 } else { frac.max(0.02) }))),
                     )
                 })
+                .children(graph)
                 .child(
                     h_flex()
                         .gap_2()
