@@ -250,6 +250,7 @@ impl Ops {
     /// closes and fades and the button pulses once; a run that was over before anyone could see
     /// it leaves nothing behind.
     fn ended_one(&mut self) {
+        crate::recycle_view::bin_changed();
         if self.running() > 0 {
             return;
         }

@@ -210,6 +210,7 @@ pub struct Workspace {
     /// The Recycle Bin's item count for the sidebar, and when it was last asked for (the shell is asked again after a while).
     recycle_count: Option<u64>,
     recycle_asked: Option<std::time::Instant>,
+    recycle_epoch: u64,
     /// The free space under the status line: (the folder it is for, when it was read, the bytes).
     free_cache: Option<(PathBuf, std::time::Instant, Option<u64>)>,
     /// The sidebar's folder tree (empty unless the setting is on).
@@ -924,6 +925,7 @@ impl Workspace {
             sidebar_ext_drag: false,
             recycle_count: None,
             recycle_asked: None,
+            recycle_epoch: 0,
             free_cache: None,
             side_tree: Default::default(),
             viewport_w: 1300.,
@@ -4199,7 +4201,9 @@ impl Workspace {
     /// The Recycle Bin's item count for the sidebar, asked of the shell in the background at most every 15 seconds.
     fn recycle_items(&mut self, cx: &mut Context<Self>) -> Option<u64> {
         let now = std::time::Instant::now();
-        if self.recycle_asked.is_none_or(|at| now.duration_since(at) >= std::time::Duration::from_secs(15)) {
+        let epoch = crate::recycle_view::bin_epoch();
+        let changed = std::mem::replace(&mut self.recycle_epoch, epoch) != epoch;
+        if changed || self.recycle_asked.is_none_or(|at| now.duration_since(at) >= std::time::Duration::from_secs(15)) {
             self.recycle_asked = Some(now);
             cx.spawn(async move |this, cx| {
                 let got = cx.background_spawn(async move { leaf_sys::recycle::info().ok().map(|(n, _)| n) }).await;

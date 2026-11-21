@@ -109,6 +109,7 @@ impl RecycleView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        bin_changed();
         self.loading = true;
         let work = cx.background_spawn(async move {
             leaf_sys::shell::ensure_com();
@@ -118,6 +119,7 @@ impl RecycleView {
             let items = work.await;
             let _ = this.update(cx, |v, cx| {
                 v.items = items;
+                bin_changed();
                 v.rearrange(cx);
                 v.selected.clear();
                 v.loading = false;
@@ -623,4 +625,16 @@ mod tests {
         assert_eq!(arrange(&items, "iş", Col::Name, false), vec![1]);
         assert!(arrange(&items, "yok", Col::Name, false).is_empty());
     }
+}
+
+/// Bumped whenever leaf's own work may have changed the Recycle Bin (an operation ended, the page re-read the bin); the
+/// sidebar's count re-asks at once when it sees a new value, the 15-second timer stays for changes from outside.
+static BIN_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn bin_changed() {
+    BIN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn bin_epoch() -> u64 {
+    BIN_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
 }
