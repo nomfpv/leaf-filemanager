@@ -38,7 +38,7 @@ fn picture(path: &Path, size: u32) -> Option<Bgra> {
 /// A thumbnail for a picture file; there are no icons: `Kind::Icon`, and any file that is no picture, is an `Err`.
 pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
     match kind {
-        Kind::Thumbnail => picture(path, size).ok_or_else(|| anyhow::anyhow!("no picture for {}", path.display())),
+        Kind::Thumbnail | Kind::ThumbnailOnly => picture(path, size).ok_or_else(|| anyhow::anyhow!("no picture for {}", path.display())),
         Kind::Icon => anyhow::bail!("no icons on this system yet"),
     }
 }
