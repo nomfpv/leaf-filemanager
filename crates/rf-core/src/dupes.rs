@@ -129,7 +129,8 @@ pub fn folders_of(g: &DupGroup) -> Vec<PathBuf> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Plan {
     /// Go ahead with `delete`; `skipped` changed since they were hashed and stay.
-    Go { delete: Vec<PathBuf>, skipped: Vec<PathBuf> },
+    /// `kept_missing` are ticked files of groups where no unticked copy still stats as hashed: they stay too.
+    Go { delete: Vec<PathBuf>, skipped: Vec<PathBuf>, kept_missing: Vec<PathBuf> },
     /// Every file of this group (index) is ticked: nothing is deleted.
     LastCopy(usize),
 }
@@ -142,8 +143,13 @@ pub fn plan_delete(groups: &[DupGroup], ticked: &HashSet<PathBuf>, stat: impl Fn
             return Plan::LastCopy(i);
         }
     }
-    let (mut delete, mut skipped) = (Vec::new(), Vec::new());
+    let (mut delete, mut skipped, mut kept_missing) = (Vec::new(), Vec::new(), Vec::new());
     for g in groups {
+        let kept_ok = g.files.iter().any(|f| !ticked.contains(&f.path) && stat(&f.path) == Some((g.size, f.modified_ms)));
+        if !kept_ok {
+            kept_missing.extend(g.files.iter().filter(|f| ticked.contains(&f.path)).map(|f| f.path.clone()));
+            continue;
+        }
         for f in g.files.iter().filter(|f| ticked.contains(&f.path)) {
             if stat(&f.path) == Some((g.size, f.modified_ms)) {
                 delete.push(f.path.clone());
@@ -152,7 +158,7 @@ pub fn plan_delete(groups: &[DupGroup], ticked: &HashSet<PathBuf>, stat: impl Fn
             }
         }
     }
-    Plan::Go { delete, skipped }
+    Plan::Go { delete, skipped, kept_missing }
 }
 
 #[cfg(test)]
@@ -212,11 +218,15 @@ mod tests {
         // c changes after it was hashed: it is skipped, a goes
         std::fs::write(dir.join("c"), b"changed!").unwrap();
         let ticked: HashSet<PathBuf> = [dir.join("a"), dir.join("c")].into_iter().collect();
-        assert_eq!(plan_delete(&groups, &ticked, stat), Plan::Go { delete: vec![dir.join("a")], skipped: vec![dir.join("c")] });
+        assert_eq!(plan_delete(&groups, &ticked, stat), Plan::Go { delete: vec![dir.join("a")], skipped: vec![dir.join("c")], kept_missing: vec![] });
         // every file of a group ticked: refused
         let all: HashSet<PathBuf> = [dir.join("c"), dir.join("d")].into_iter().collect();
         assert_eq!(plan_delete(&groups, &all, stat), Plan::LastCopy(1));
         assert_eq!(ticks(&groups[0], &Keep::Newest).len(), 1);
+        // the one copy that would stay (b) is edited after the scan: a goes nowhere
+        std::fs::write(dir.join("b"), b"edited by someone").unwrap();
+        let only_a: HashSet<PathBuf> = [dir.join("a")].into_iter().collect();
+        assert_eq!(plan_delete(&groups, &only_a, stat), Plan::Go { delete: vec![], skipped: vec![], kept_missing: vec![dir.join("a")] });
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -256,9 +256,13 @@ impl DuplicatesView {
                     cx,
                 );
             }
-            Plan::Go { delete, skipped } => {
+            Plan::Go { delete, skipped, kept_missing } => {
                 if delete.is_empty() {
-                    let msg = if skipped.is_empty() { t!("Nothing is ticked.").to_string() } else { skipped_text(&skipped) };
+                    let mut msg = if skipped.is_empty() && kept_missing.is_empty() { t!("Nothing is ticked.").to_string() } else { skipped_text(&skipped) };
+                    if !kept_missing.is_empty() {
+                        msg = format!("{}
+{}", msg.trim(), kept_missing_text(&kept_missing));
+                    }
                     crate::prompt::notice(t!("Nothing to delete"), msg, window, cx);
                     return;
                 }
@@ -323,6 +327,11 @@ impl DuplicatesView {
             }
         }));
     }
+}
+
+fn kept_missing_text(files: &[PathBuf]) -> String {
+    let names: Vec<String> = files.iter().take(8).map(|p| rf_core::history::display_name(p)).collect();
+    format!("{} {}: {}", crate::i18n::items(files.len()), t!("not deleted: the copy that would be kept has changed or is gone"), names.join(", "))
 }
 
 fn skipped_text(skipped: &[PathBuf]) -> String {
