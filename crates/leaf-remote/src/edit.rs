@@ -23,9 +23,18 @@ pub struct Fetched {
     pub modified_ms: i64,
 }
 
+/// `Fetched::modified_ms` when the server's time of the new version could not be read after an upload: the next save then
+/// compares the size only (rather than calling the file changed when it is not).
+pub const UNKNOWN_TIME: i64 = i64::MIN;
+
 impl Fetched {
     pub fn of(m: &Meta) -> Fetched {
         Fetched { size: m.size, modified_ms: m.modified_ms }
+    }
+
+    /// Whether the server's file `now` is still this version.
+    pub fn same_as(&self, now: &Fetched) -> bool {
+        self.size == now.size && (self.modified_ms == UNKNOWN_TIME || self.modified_ms == now.modified_ms)
     }
 }
 
@@ -128,7 +137,7 @@ pub(crate) fn save_back_with(fs: &SftpFs, v: &VPath, local: &Path, fetched: &Fet
     if now.kind != Kind::File {
         return Err(SaveError::Fs(FsError::Other("This is not a regular file on the server any more".into())));
     }
-    if Fetched::of(&now) != *fetched {
+    if !fetched.same_as(&Fetched::of(&now)) {
         log::info!("remote: {} changed on the server since it was fetched; not uploaded", v.name());
         return Err(SaveError::Changed(Fetched::of(&now)));
     }
@@ -136,8 +145,16 @@ pub(crate) fn save_back_with(fs: &SftpFs, v: &VPath, local: &Path, fetched: &Fet
         return Err(SaveError::WouldEmpty);
     }
     let w = fs.open_write_keeping_backup(v, &backup_name(v.name()))?;
-    send(local, w, cancelled)?;
-    Ok(Fetched::of(&fs.stat(v)?))
+    let sent = send(local, w, cancelled)?;
+    // the upload is done: a failed look at the new version (tried twice) must not make the next save look like someone
+    // else's change; then its size is what was sent and its time unknown
+    match fs.stat(v).or_else(|_| fs.stat(v)) {
+        Ok(m) => Ok(Fetched::of(&m)),
+        Err(e) => {
+            log::info!("remote: uploaded {}, but its new state could not be read ({e})", v.name());
+            Ok(Fetched { size: sent, modified_ms: UNKNOWN_TIME })
+        }
+    }
 }
 
 pub(crate) fn save_as_copy_with(fs: &SftpFs, v: &VPath, local: &Path, cancelled: &dyn Fn() -> bool) -> Result<VPath, FsError> {
@@ -152,7 +169,7 @@ pub(crate) fn save_as_copy_with(fs: &SftpFs, v: &VPath, local: &Path, cancelled:
         let to = leaf_vfs::names::vchild(&parent, &cand).map_err(|why| FsError::Other(why.into()))?;
         match fs.open_write(&to, WriteOpts::CREATE_NEW) {
             Ok(w) => {
-                send(local, w, cancelled)?;
+                send(local, w, cancelled).map(|_| ())?;
                 return Ok(to);
             }
             Err(FsError::Exists) => continue,
@@ -163,9 +180,10 @@ pub(crate) fn save_as_copy_with(fs: &SftpFs, v: &VPath, local: &Path, cancelled:
 }
 
 /// The local file's bytes into `w`; only a finished upload takes the name (dropped on error or cancel).
-fn send(local: &Path, mut w: Box<dyn leaf_vfs::WriteSink>, cancelled: &dyn Fn() -> bool) -> Result<(), FsError> {
+fn send(local: &Path, mut w: Box<dyn leaf_vfs::WriteSink>, cancelled: &dyn Fn() -> bool) -> Result<u64, FsError> {
     let mut f = std::fs::File::open(local)?;
     let mut buf = vec![0u8; 256 * 1024];
+    let mut sent = 0u64;
     loop {
         if cancelled() {
             return Err(FsError::Cancelled);
@@ -177,6 +195,8 @@ fn send(local: &Path, mut w: Box<dyn leaf_vfs::WriteSink>, cancelled: &dyn Fn() 
             Err(e) => return Err(e.into()),
         };
         w.write_all(&buf[..n])?;
+        sent += n as u64;
     }
-    w.finish()
+    w.finish()?;
+    Ok(sent)
 }
