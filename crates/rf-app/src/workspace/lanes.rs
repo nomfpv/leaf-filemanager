@@ -144,6 +144,18 @@ impl Workspace {
         }
     }
 
+    /// "Discard lane…" of the sidebar: what is in the lane is read first (off the UI thread), and shown in the question.
+    pub(super) fn discard_lane(&mut self, lane: Lane, window: &mut Window, cx: &mut Context<Self>) {
+        let l = lane.clone();
+        let work = cx.background_spawn(async move { leaf_dev::lanes::end_info(&l.repo, &l.path, &l.base) });
+        window
+            .spawn(cx, async move |cx| {
+                let info = work.await;
+                let _ = cx.update(|window, cx| discard_dialog(lane, info, window, cx));
+            })
+            .detach();
+    }
+
     /// Reads what ending `lane` would meet (off the UI thread), then shows the choices.
     pub(super) fn end_lane_for(&mut self, lane: Lane, window: &mut Window, cx: &mut Context<Self>) {
         let l = lane.clone();
@@ -250,10 +262,7 @@ impl Workspace {
             Item::Separator,
             Item::action(t!("Review changes"), MenuIcon::Lucide(L::GitCompare), with(|ws, l, w, cx| ws.open_review(l.path, w, cx))),
             Item::action(t!("End lane…"), MenuIcon::Lucide(L::GitMerge), with(|ws, l, w, cx| ws.end_lane_for(l, w, cx))),
-            Item::action(t!("Discard lane…"), MenuIcon::Lucide(L::Trash), with(|_, l, w, cx| {
-                let me = cx.entity().downgrade();
-                discard_dialog(l, me, w, cx);
-            })),
+            Item::action(t!("Discard lane…"), MenuIcon::Lucide(L::Trash), with(|ws, l, w, cx| ws.discard_lane(l, w, cx))),
         ];
         crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
     }
@@ -416,27 +425,40 @@ fn end_dialog(lane: Lane, info: leaf_dev::lanes::EndInfo, me: WeakEntity<Workspa
         }
     });
     let discard = Button::new(t!("Discard…"), Kind::Danger, {
-        let (lane, me) = (lane.clone(), me.clone());
+        let (lane, info) = (lane.clone(), info.clone());
         move |_, window, cx| {
-            let (lane, me) = (lane.clone(), me.clone());
-            window.defer(cx, move |window, cx| discard_dialog(lane, me, window, cx));
+            let (lane, info) = (lane.clone(), info.clone());
+            window.defer(cx, move |window, cx| discard_dialog(lane, info, window, cx));
             Ok(())
         }
     });
     crate::prompt::show(format!("{} {}", t!("End lane"), lane.name), Some(msg), None, vec![review, merge, remove, discard, Button::cancel()], window, cx);
 }
 
-/// "Discard lane": asks for the lane's name typed, then a Status Center job moves the worktree folder to the Trash and prunes.
-fn discard_dialog(lane: Lane, _me: WeakEntity<Workspace>, window: &mut Window, cx: &mut App) {
+/// "Discard lane": what is in the lane, then the lane's name typed, then a Status Center job moves the worktree folder and git's
+/// record of it to the Trash.
+fn discard_dialog(lane: Lane, info: leaf_dev::lanes::EndInfo, window: &mut Window, cx: &mut App) {
     use crate::prompt::{Button, Kind};
-    let msg = format!(
-        "{}\n  {}\n{} {}\n\n{}",
+    let mut msg = format!(
+        "{}\n  {}\n{} {}",
         t!("Everything in the lane's folder goes to the Trash, also what is not committed:"),
         lane.path.display(),
         t!("Its branch is kept unless it is merged:"),
         lane.branch,
-        t!("Type the lane's name to discard it."),
     );
+    if let Some(now) = info.checked_out.as_deref().filter(|b| *b != lane.branch) {
+        msg.push_str(&format!("\n{} {now}", t!("The folder has checked out now:")));
+    }
+    if !info.ahead.is_empty() {
+        msg.push_str(&format!("\n\n{} ({}):{}", t!("Commits not in the base"), info.ahead.len(), listed(&info.ahead)));
+    }
+    if !info.uncommitted.is_empty() {
+        msg.push_str(&format!("\n\n{} ({}):{}", t!("Uncommitted files"), info.uncommitted.len(), listed(&info.uncommitted)));
+    }
+    if !info.ignored.is_empty() {
+        msg.push_str(&format!("\n\n{} ({}):{}", t!("Ignored files"), info.ignored.len(), listed(&info.ignored)));
+    }
+    msg.push_str(&format!("\n\n{}", t!("Type the lane's name to discard it.")));
     let name = lane.name.clone();
     let go = Button::new(t!("Discard"), Kind::Danger, move |text, _, cx| {
         if text.unwrap_or_default().trim() != lane.name {

@@ -263,9 +263,20 @@ pub struct EndInfo {
     pub uncommitted: Vec<String>,
     /// Ignored files and folders in the lane: Remove refuses while there are any.
     pub ignored: Vec<String>,
+    /// What the lane folder has checked out now: its branch (it may no longer be the lane's), or `detached <hash>`.
+    pub checked_out: Option<String>,
     /// The worktree that has the base branch checked out, and its uncommitted tracked files.
     pub base_dir: Option<PathBuf>,
     pub base_dirty: Vec<String>,
+}
+
+fn checked_out(dir: &Path) -> Option<String> {
+    let b = exec(dir, ["symbolic-ref", "--short", "-q", "HEAD"]).ok()?;
+    if b.ok && !b.stdout.trim().is_empty() {
+        return Some(b.stdout.trim().to_string());
+    }
+    let h = exec(dir, ["rev-parse", "--short", "--verify", "-q", "HEAD"]).ok()?;
+    (h.ok && !h.stdout.trim().is_empty()).then(|| format!("detached {}", h.stdout.trim()))
 }
 
 pub fn end_info(repo: &Path, dir: &Path, base: &str) -> EndInfo {
@@ -280,6 +291,7 @@ pub fn end_info(repo: &Path, dir: &Path, base: &str) -> EndInfo {
         behind: progress.behind,
         uncommitted: if dir.is_dir() { changes(dir, true).unwrap_or_default() } else { Vec::new() },
         ignored: if dir.is_dir() { ignored(dir).unwrap_or_default() } else { Vec::new() },
+        checked_out: if dir.is_dir() { checked_out(dir) } else { None },
         base_dir,
         base_dirty,
     }
