@@ -859,10 +859,16 @@ impl Conn {
         *self
             .family
             .get_or_init(|| async {
-                match self.exec(crate::hostkind::PROBE, crate::hostkind::ASK_LIMIT).await {
-                    Ok(o) => crate::hostkind::parse_probe(&o.stdout),
-                    Err(e) => {
+                // (all of it within a few seconds: a menu shell that never answers the exec request is no reason to wait)
+                let asked = tokio::time::timeout(crate::hostkind::ASK_LIMIT + Duration::from_secs(2), self.exec(crate::hostkind::PROBE, crate::hostkind::ASK_LIMIT)).await;
+                match asked {
+                    Ok(Ok(o)) => crate::hostkind::parse_probe(&o.stdout),
+                    Ok(Err(e)) => {
                         log::info!("remote: the server's kind is unknown ({e})");
+                        crate::hostkind::HostFamily::Unknown
+                    }
+                    Err(_) => {
+                        log::info!("remote: the server did not answer about its kind");
                         crate::hostkind::HostFamily::Unknown
                     }
                 }
