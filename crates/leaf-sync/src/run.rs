@@ -164,6 +164,27 @@ fn ensure_root(side: &Side) -> Result<(), String> {
     Ok(())
 }
 
+/// Everything in `dir` (all levels down) that is not a folder: files, links, part files.
+fn count_files(fs: &dyn Fs, dir: &VPath, cancelled: &dyn Fn() -> bool) -> Result<u64, FsError> {
+    let (mut n, mut stack) = (0u64, vec![dir.clone()]);
+    while let Some(d) = stack.pop() {
+        let mut dirs = Vec::new();
+        fs.list(&d, 500, cancelled, &mut |batch| {
+            for e in batch {
+                if e.is_dir() && !e.link && !e.is_symlink() {
+                    dirs.push(e.name.to_string());
+                } else {
+                    n += 1;
+                }
+            }
+        })?;
+        for name in dirs {
+            stack.push(names::vchild(&d, &name).map_err(|_| FsError::NotFound)?);
+        }
+    }
+    Ok(n)
+}
+
 fn root_ok(side: &Side) -> bool {
     side.fs.stat(side.root).is_ok_and(|m| m.kind == Kind::Dir)
 }
@@ -355,6 +376,15 @@ impl Runner<'_, '_> {
                 Err(FsError::NotEmpty) => Err(String::new()),
                 Err(e) => Err(err_text("the folder could not be removed", &e)),
             };
+        }
+        if info.dir {
+            // a folder taken as a whole goes with all that is in it: only when that is what the preview showed
+            let cancelled = || (self.ctl.cancelled)();
+            match count_files(side.fs, &p, &cancelled) {
+                Ok(n) if n == row.files => {}
+                Ok(_) => return Err("it changed since the preview (other files are in it now); preview again".into()),
+                Err(e) => return Err(err_text("it could not be read", &e)),
+            }
         }
         self.trash(on_left, &p, rel).map(|_| ())
     }

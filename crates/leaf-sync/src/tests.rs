@@ -299,3 +299,23 @@ fn a_local_side_whose_trash_refuses_keeps_the_files_in_the_sync_trash() {
     assert!(!r.join(TRASH_DIR).exists());
     assert_eq!(std::fs::read(r.join("a.txt")).unwrap(), b"new");
 }
+
+#[test]
+fn a_folder_taken_whole_that_got_a_new_file_is_not_removed() {
+    let state = temp("whole");
+    let no = || false;
+    let fs = MemFs::new();
+    fs.put_file(&v("mem://t/l/keep.txt"), b"k".to_vec(), T0);
+    fs.put_file(&v("mem://t/r/keep.txt"), b"k".to_vec(), T0);
+    fs.put_file(&v("mem://t/r/old/a.txt"), b"a".to_vec(), T0);
+    let job = Job::new("w", "mem://t/l", "mem://t/r");
+    let p = plan(&job, &fs, &fs, &state, &no).unwrap();
+    assert!(p.rows.len() == 1 && p.rows[0].whole && p.rows[0].files == 1, "{:?}", p.rows);
+    // saved into it after the preview: the plan never showed this file
+    fs.put_file(&v("mem://t/r/old/sub/new.txt"), b"saved later".to_vec(), T0 + 5_000);
+    let rep = go(&p, &fs, &fs, &state, &no_trash);
+    assert_eq!(rep.removed, 0, "{rep:?}");
+    assert!(rep.failed.len() == 1 && rep.failed[0].1.contains("changed since the preview"), "{rep:?}");
+    assert_eq!(read(&fs, "mem://t/r/old/sub/new.txt").as_deref(), Some(&b"saved later"[..]));
+    assert_eq!(read(&fs, "mem://t/r/old/a.txt").as_deref(), Some(&b"a"[..]));
+}
