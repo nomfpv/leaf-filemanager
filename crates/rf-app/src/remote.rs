@@ -677,9 +677,10 @@ pub fn copy_to_dialog(items: Vec<(VPath, bool)>, initial: Option<PathBuf>, windo
 /// Uploads of one file at least this big offer "Verify on server" when they are done.
 const VERIFY_MIN: u64 = 64 << 20;
 
-/// Whether the place of `v` can be written to (uploads, new folders, renames, deletes).
+/// Whether the place of `v` can be written to (uploads, new folders, renames, deletes). `sftp://` only for now: the writes
+/// of other backends (rclone) have not been reviewed, so leaf does not offer them.
 pub fn writable(v: &VPath) -> bool {
-    leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
+    v.scheme() == "sftp" && leaf_vfs::fs_for(v.scheme()).is_ok_and(|f| f.caps().write)
 }
 
 /// A server's address as people read it in a title (`host:/path`, no user, never a secret: addresses carry none).
