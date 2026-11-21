@@ -974,12 +974,16 @@ impl Writer {
     }
 
     /// Removes the temporary file (best effort, off this thread: the server may be slow).
-    fn drop_temp(&self) {
+    fn drop_temp(&self, running: Option<std::thread::JoinHandle<Result<(), FsError>>>) {
         if self.in_place {
             return;
         }
         let (inner, t, temp) = (self.inner.clone(), self.t.clone(), self.temp.clone());
         std::thread::spawn(move || {
+            // (a cut PUT may still be running: a server that keeps partial PUTs would store the file after the DELETE)
+            if let Some(h) = running {
+                let _ = h.join();
+            }
             let _ = inner.delete(&t, &temp);
         });
     }
@@ -1026,7 +1030,7 @@ impl WriteSink for Writer {
         if let Err(e) = uploaded {
             // (a 412 here is the name taken: nothing was stored; anything else may have left a part)
             if e != FsError::Exists {
-                self.drop_temp();
+                self.drop_temp(None);
             }
             return Err(e);
         }
@@ -1037,7 +1041,7 @@ impl WriteSink for Writer {
         match self.inner.move_to(&self.t, &self.temp, &self.target, self.replace) {
             Ok(()) => Ok(()),
             Err(e) => {
-                self.drop_temp();
+                self.drop_temp(None);
                 Err(e)
             }
         }
@@ -1048,8 +1052,8 @@ impl Drop for Writer {
     fn drop(&mut self) {
         if !self.done {
             // dropped without `finish`: the streamed request fails (no end was sent) and the temporary file goes
-            self.stream.take();
-            self.drop_temp();
+            let running = self.stream.take().map(|s| s.thread);
+            self.drop_temp(running);
         }
     }
 }
