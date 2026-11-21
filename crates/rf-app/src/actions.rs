@@ -116,6 +116,7 @@ gpui_kit::actions!(
         ToggleHideIgnored,
         FindBuildJunk,
         ShowChanges,
+        FollowRemoteFile,
         ShowWorktrees,
         OpenDocker,
         NewWorktree,

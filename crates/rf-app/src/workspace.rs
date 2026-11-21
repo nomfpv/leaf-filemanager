@@ -6051,6 +6051,11 @@ impl Render for Workspace {
                     ),
                 }
             }))
+            .on_action(cx.listener(|this, _: &FollowRemoteFile, _, cx| {
+                this.active_tab().clone().update(cx, |v, _| {
+                    v.toggle_remote_follow();
+                });
+            }))
             .on_action(cx.listener(|this, _: &ShowWorktrees, window, cx| this.show_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.new_worktree(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleHideIgnored, window, cx| {

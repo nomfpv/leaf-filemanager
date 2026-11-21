@@ -605,6 +605,8 @@ pub struct FolderView {
     junk: Option<Entity<crate::junk_view::JunkView>>,
     /// The project brain page of this tab.
     brain: Option<Entity<crate::brain_view::BrainView>>,
+    /// Follow mode (Alt+F) on a file of a server: its tail is read again every 2 seconds while this tab lives.
+    remote_tail: Option<crate::remote::Tail>,
     /// The change feed's page of this tab.
     changes: Option<Entity<crate::changes_view::ChangesView>>,
     /// How many git-ignored items the list leaves out now ("Hide git-ignored files"), and the matching in flight.
@@ -820,6 +822,7 @@ impl FolderView {
             dups: None,
             junk: None,
             brain: None,
+            remote_tail: None,
             ignored_n: 0,
             ignore_on: false,
             ignore_serial: 0,
@@ -3833,6 +3836,17 @@ impl FolderView {
         let Location::Remote(dir) = self.location() else { return None };
         let e = self.entries.get(self.cursor_entry()? as usize).filter(|e| !e.is_dir() && !e.link)?;
         Some((dir.join(&e.name), e.size))
+    }
+
+    /// Alt+F in a folder on a server: follows the file under the cursor (a log), or stops following. Returns false when there is
+    /// no such file here.
+    pub(crate) fn toggle_remote_follow(&mut self) -> bool {
+        if self.remote_tail.take().is_some() {
+            return true;
+        }
+        let Some((v, size)) = self.remote_look_target() else { return false };
+        self.remote_tail = Some(crate::remote::follow(v, size));
+        true
     }
 
     /// Selects what a download brought into `dir`, if this view still shows that folder then.

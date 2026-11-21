@@ -400,6 +400,90 @@ pub fn look(v: VPath, size: u64) {
     });
 }
 
+// ------------------------------------------------------------------------------------------------ following a file (H7)
+
+/// A file of a server being followed: its newest bytes are read again every [`TAIL_EVERY`] from the last offset (the same
+/// `open_read` with an offset a resumed download uses; nothing runs on the server) into a copy in the cache folder, which
+/// leaf-look shows. Dropping it (the tab closed, Alt+F again) ends the reading.
+pub struct Tail(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for Tail {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+const TAIL_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+/// How much of the end of a file is taken when following starts, and the most one look adds.
+const TAIL_START: u64 = 1 << 20;
+const TAIL_STEP: u64 = 8 << 20;
+
+/// Starts following `v` (`size` as the listing showed it) and shows its tail in leaf-look.
+pub fn follow(v: VPath, size: u64) -> Tail {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = stop.clone();
+    std::thread::Builder::new()
+        .name("rf-remote-tail".into())
+        .spawn(move || {
+            let mut shown = false;
+            let mut offset = None::<u64>;
+            let mut local = tail_path(&v);
+            while !flag.load(Ordering::Relaxed) {
+                match tail_step(&v, size, &mut local, &mut offset) {
+                    Ok(()) if !shown => {
+                        shown = true;
+                        crate::look::ipc::send(crate::look::ipc::Msg::Toggle(local.clone()), true);
+                    }
+                    Ok(()) => {}
+                    Err(e) => log::warn!("remote: following {v}: {e}"),
+                }
+                let mut waited = std::time::Duration::ZERO;
+                while waited < TAIL_EVERY && !flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    waited += std::time::Duration::from_millis(100);
+                }
+            }
+        })
+        .ok();
+    Tail(stop)
+}
+
+/// The tail copy of a server's file (its own folder: the whole-file copy of `fetch` is not touched).
+fn tail_path(v: &VPath) -> PathBuf {
+    let p = cache_path(v);
+    let dir = p.parent().map(|d| d.with_file_name(format!("{}-tail", d.file_name().map(|n| n.to_string_lossy()).unwrap_or_default())));
+    dir.map_or(p.clone(), |d| d.join(p.file_name().unwrap_or_default()))
+}
+
+/// One look: the first one writes the end of the file, later ones add what grew past `offset`; a file that got smaller is
+/// started over.
+fn tail_step(v: &VPath, _size: u64, local: &mut PathBuf, offset: &mut Option<u64>) -> Result<(), FsError> {
+    use std::io::{Read as _, Write as _};
+    let fs = leaf_vfs::fs_for(v.scheme())?;
+    let now = fs.stat(v)?;
+    if now.kind != leaf_vfs::Kind::File {
+        return Err(FsError::Other("This is not a regular file on the server".into()));
+    }
+    let (from, fresh) = match *offset {
+        Some(o) if now.size >= o => (o, false),
+        _ => (now.size.saturating_sub(TAIL_START), true),
+    };
+    if !fresh && now.size == from {
+        return Ok(());
+    }
+    make_cache_dir(local)?;
+    let mut out = if fresh {
+        std::fs::File::create(&*local)?
+    } else {
+        std::fs::OpenOptions::new().append(true).open(&*local)?
+    };
+    let mut src = fs.open_read(v, from)?.take(now.size.saturating_sub(from).min(TAIL_STEP));
+    let n = std::io::copy(&mut src, &mut out)?;
+    out.flush()?;
+    *offset = Some(from + n);
+    Ok(())
+}
+
 // ------------------------------------------------------------------------------------------------ downloads
 
 /// What Copy put on the clipboard from a server: the addresses (also on the clipboard as text, so a later copy of anything
