@@ -1,16 +1,32 @@
-//! Linux backend of rf_win::rotate. Status: REAL for JPEG only
+//! Linux backend of rf_win::rotate. Status: REAL for JPEG, PNG, BMP, TIFF and WebP
 //!
 //! A JPEG turns by its EXIF orientation tag (`leaf_common::exif_orient`): the picture data is never re-encoded. The file is written
-//! to a temp name beside it, synced, and renamed over the original only when complete; the mode and the modified time stay. Other
-//! picture formats are not offered (turning their pixels would mean writing them again, which Windows does through WIC).
+//! to a temp name beside it, synced, and renamed over the original only when complete; the mode and the modified time stay.
 
 use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
 
+fn ext(p: &Path) -> String {
+    p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
+}
+
+fn is_jpeg(p: &Path) -> bool {
+    matches!(ext(p).as_str(), "jpg" | "jpeg" | "jfif" | "jpe")
+}
+
+fn pixel_format(p: &Path) -> Option<image::ImageFormat> {
+    match ext(p).as_str() {
+        "png" => Some(image::ImageFormat::Png),
+        "bmp" => Some(image::ImageFormat::Bmp),
+        "tif" | "tiff" => Some(image::ImageFormat::Tiff),
+        "webp" => Some(image::ImageFormat::WebP),
+        _ => None,
+    }
+}
+
 pub fn can_rotate(p: &Path) -> bool {
-    let e = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    matches!(e.as_str(), "jpg" | "jpeg" | "jfif" | "jpe")
+    is_jpeg(p) || pixel_format(p).is_some()
 }
 
 pub fn rotate(path: &Path, clockwise: bool) -> Result<()> {
@@ -19,18 +35,33 @@ pub fn rotate(path: &Path, clockwise: bool) -> Result<()> {
     let real = std::fs::canonicalize(path).with_context(|| format!("{}", path.display()))?;
     let meta = std::fs::metadata(&real)?;
     let src = std::fs::read(&real)?;
-    let out = leaf_common::exif_orient::rotate_jpeg(&src, clockwise)?;
+    let out = if is_jpeg(&real) {
+        leaf_common::exif_orient::rotate_jpeg(&src, clockwise)?
+    } else {
+        let fmt = pixel_format(&real).context("This file type can't be rotated")?;
+        let img = image::load_from_memory_with_format(&src, fmt)?;
+        let img = if clockwise { img.rotate90() } else { img.rotate270() };
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, fmt)?;
+        buf.into_inner()
+    };
+    replace(&real, &meta, &out, |a, b| std::fs::rename(a, b))
+}
+
+/// `out` goes to a temp file beside `real`, then `rename` puts it over `real`; on any failure the temp file is removed and `real`
+/// is as it was.
+fn replace(real: &Path, meta: &std::fs::Metadata, out: &[u8], rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>) -> Result<()> {
     let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = real.with_file_name(format!(".{name}.leaf-rotate-{}", std::process::id()));
     let write = || -> Result<()> {
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        f.write_all(&out)?;
+        f.write_all(out)?;
         f.set_permissions(meta.permissions())?;
         if let Ok(m) = meta.modified() {
             let _ = f.set_modified(m);
         }
         f.sync_all()?;
-        std::fs::rename(&tmp, &real)?;
+        rename(&tmp, real)?;
         Ok(())
     };
     let r = write();
@@ -43,6 +74,7 @@ pub fn rotate(path: &Path, clockwise: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -71,6 +103,24 @@ mod tests {
         assert!(before.len() < after.len() + 40);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp file is left");
         assert!(image::open(&f).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_original_and_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("leaf-rot-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.png");
+        image::RgbImage::from_fn(6, 3, |x, y| image::Rgb([x as u8, y as u8, 7])).save(&f).unwrap();
+        let before = std::fs::read(&f).unwrap();
+        let meta = std::fs::metadata(&f).unwrap();
+        let r = replace(&f, &meta, b"new bytes", |_, _| Err(std::io::Error::other("disk full")));
+        assert!(r.is_err());
+        assert_eq!(std::fs::read(&f).unwrap(), before);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        rotate(&f, true).unwrap();
+        assert_eq!(image::open(&f).unwrap().dimensions(), (3, 6));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
