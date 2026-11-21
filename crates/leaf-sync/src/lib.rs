@@ -138,7 +138,16 @@ impl Job {
             VPath::parse(s.trim()).map_err(|e| Error::new(format!("The {which} side is not a valid address"), format!("{s}: {e}")))
         };
         let (l, r) = (parse("left", &self.left)?, parse("right", &self.right)?);
-        if l.scheme() == r.scheme() && l.authority() == r.authority() && (l.starts_with(&r) || r.starts_with(&l)) {
+        // local folders on Windows (and macOS) ignore case: C:/Data and c:/data/backup are one inside the other
+        let fold = |v: &VPath| {
+            if plan::folds(&l, &r) && v.scheme() == "file" {
+                VPath::new(v.scheme(), &v.authority().to_lowercase(), &v.path().to_lowercase()).unwrap_or_else(|_| v.clone())
+            } else {
+                v.clone()
+            }
+        };
+        let (fl, fr) = (fold(&l), fold(&r));
+        if fl.scheme() == fr.scheme() && fl.authority() == fr.authority() && (fl.starts_with(&fr) || fr.starts_with(&fl)) {
             return Err(Error::new("The two sides are the same folder, or one is inside the other", format!("{l}  {r}")));
         }
         Ok((l, r))
