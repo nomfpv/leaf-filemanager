@@ -37,8 +37,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE};
-use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile};
-use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, PeekNamedPipe};
+use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile};
+use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, PeekNamedPipe};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::core::{HRESULT, PCWSTR};
 
@@ -411,12 +411,18 @@ pub fn serve_with(app: &str, gate: &'static Gate, on_message: impl Fn(String, Ac
         .spawn(move || {
             let w = wide(&pipe_name);
             let mut refused = 0u32;
+            // The first instance of the pipe is made with FILE_FLAG_FIRST_PIPE_INSTANCE: a pipe of this name that another process made
+            // first (another user squatting the name while leaf was not running) makes it fail instead of joining that pipe. Only
+            // when that goes on for the whole wait (an older copy of leaf still going down) is the pipe made without the flag;
+            // `ask` checks the server's user before it writes anything, so a squatted pipe never gets a capture's cookies.
+            let mut first = true;
             loop {
+                let first_flag = if first && refused <= 60 { FILE_FLAG_FIRST_PIPE_INSTANCE } else { FILE_FLAGS_AND_ATTRIBUTES(0) };
                 let pipe = unsafe {
                     CreateNamedPipeW(
                         PCWSTR(w.as_ptr()),
-                        PIPE_ACCESS_DUPLEX,
-                        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                        PIPE_ACCESS_DUPLEX | first_flag,
+                        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                         PIPE_UNLIMITED_INSTANCES,
                         4096,
                         64 * 1024,
@@ -428,7 +434,10 @@ pub fn serve_with(app: &str, gate: &'static Gate, on_message: impl Fn(String, Ac
                     // an instance of the same name made by an older copy that is still going down has another mode, and Windows refuses a
                     // second kind of instance: look again for a few seconds before giving up
                     refused += 1;
-                    if refused > 60 {
+                    if refused == 61 {
+                        log::warn!("single instance pipe: the name is taken, made without the first-instance flag");
+                    }
+                    if refused > 120 {
                         log::warn!("single instance pipe failed");
                         return;
                     }
@@ -436,6 +445,7 @@ pub fn serve_with(app: &str, gate: &'static Gate, on_message: impl Fn(String, Ac
                     continue;
                 }
                 refused = 0;
+                first = false;
                 unsafe {
                     let _ = ConnectNamedPipe(pipe, None);
                 }
@@ -506,6 +516,21 @@ enum Sent {
     Failed(Why),
     /// No pipe to talk to (not up yet, gone, or all instances busy).
     NoPipe,
+}
+
+/// The process serving the pipe `h` runs as the same user as this one.
+fn server_is_this_user(h: HANDLE) -> bool {
+    use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    let mut pid = 0u32;
+    unsafe { GetNamedPipeServerProcessId(h, &mut pid) }.is_ok() && runs_as_this_user(pid)
+}
+
+/// Process `pid` runs as the user this process runs as (false when it cannot be told).
+pub(crate) fn runs_as_this_user(pid: u32) -> bool {
+    match (crate::kit::process_sid(pid), crate::kit::current_sid()) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn open_pipe(w: &[u16], access: u32) -> Result<HANDLE, HRESULT> {
@@ -657,6 +682,14 @@ pub fn ask(message: &str, wait: Duration) -> Result<Vec<String>, String> {
     let (_, pipe_name) = names_for(&instance_name());
     let w = wide(&pipe_name);
     let h = open_pipe(&w, GENERIC_READ.0 | GENERIC_WRITE.0).map_err(|_| "leaf is not running".to_string())?;
+    // a pipe of leaf's name served by a process of another user (the name squatted): nothing is written to it
+    if !server_is_this_user(h) {
+        unsafe {
+            let _ = CloseHandle(h);
+        }
+        trace("ask: the pipe's server is not this user's, nothing sent");
+        return Err("leaf is not running".into());
+    }
     grant_foreground(h);
     let mut bytes = message.as_bytes().to_vec();
     bytes.push(b'\n');
@@ -793,6 +826,14 @@ mod tests {
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
+    }
+
+    #[test]
+    fn a_pipe_server_of_another_user_is_not_trusted() {
+        // this process is this user's; the System process (pid 4) and a pid that does not exist are not
+        assert!(runs_as_this_user(std::process::id()));
+        assert!(!runs_as_this_user(4));
+        assert!(!runs_as_this_user(u32::MAX - 3));
     }
 
     #[test]

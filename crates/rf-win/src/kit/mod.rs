@@ -109,6 +109,25 @@ pub fn current_sid() -> Option<String> {
     }
 }
 
+/// The text of the SID of the user another process runs as; `None` when that process cannot be asked (gone, or not ours to look at).
+pub fn process_sid(pid: u32) -> Option<String> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::TOKEN_QUERY;
+    use windows::Win32::System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut token = HANDLE::default();
+        let opened = OpenProcessToken(process, TOKEN_QUERY, &mut token).is_ok();
+        let _ = CloseHandle(process);
+        if !opened {
+            return None;
+        }
+        let sid = sid_of_token(token);
+        let _ = CloseHandle(token);
+        sid
+    }
+}
+
 unsafe fn sid_of_token(token: windows::Win32::Foundation::HANDLE) -> Option<String> {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::Security::Authorization::ConvertSidToStringSidW;

@@ -68,11 +68,26 @@ pub(crate) fn paths_for(app: &str) -> (PathBuf, PathBuf) {
     (base.join(format!("{app}{suffix}.lock")), base.join(format!("{app}{suffix}.sock")))
 }
 
-/// Makes the folder of the group (0700) and returns it.
+/// Makes the folder of the group (0700) and says whether it is fit to use: a real folder (not a link) of this user. The temp-dir
+/// fallback `/tmp/leaf-<uid>` can have been made by another user first; then nothing of leaf's goes in or comes out of it.
 fn ensure_dir(file: &std::path::Path) -> bool {
     let Some(dir) = file.parent() else { return false };
     let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_ok()
+    dir_is_ours(dir) && std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_ok()
+}
+
+/// `dir` is a folder (not a link to one) owned by the user of this process.
+fn dir_is_ours(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && m.uid() == unsafe { libc::getuid() })
+}
+
+/// The process at the other end of `s` runs as this user (`SO_PEERCRED`), the twin of rf-win's check of the pipe server's SID.
+pub(crate) fn peer_is_this_user(s: &UnixStream) -> bool {
+    let mut cred = libc::ucred { pid: 0, uid: u32::MAX, gid: u32::MAX };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let r = unsafe { libc::getsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len) };
+    r == 0 && len as usize == std::mem::size_of::<libc::ucred>() && cred.uid == unsafe { libc::getuid() }
 }
 
 /// Takes the group's lock: Some when this process is the first instance, None when another holds it.
@@ -101,8 +116,14 @@ impl Mode600 for std::fs::OpenOptions {
 }
 
 /// Connects to the running instance of `app` (None when nobody answers: no socket, or a stale one).
+/// The folder must be this user's and the process serving the socket must run as this user, or nothing is written to it.
 pub(crate) fn connect(app: &str) -> Option<UnixStream> {
-    UnixStream::connect(paths_for(app).1).ok()
+    let sock = paths_for(app).1;
+    if !sock.parent().is_some_and(dir_is_ours) {
+        return None;
+    }
+    let s = UnixStream::connect(sock).ok()?;
+    peer_is_this_user(&s).then_some(s)
 }
 
 /// Writes one message (with the activation token of this launch, when the compositor gave one) and says whether it was written.
@@ -141,7 +162,9 @@ pub(crate) fn read_request(r: &mut impl BufRead) -> Option<String> {
 /// made) a file that still answers is left alone.
 fn bind(app: &str, have_lock: bool) -> Option<UnixListener> {
     let (_, sock) = paths_for(app);
-    ensure_dir(&sock);
+    if !ensure_dir(&sock) {
+        return None;
+    }
     if !have_lock && UnixStream::connect(&sock).is_ok() {
         return None;
     }
@@ -252,5 +275,25 @@ mod tests {
         // the first ends: its lock goes, the socket file stays (stale); the next launch is the first
         drop(guard);
         assert!(matches!(acquire_app(app, "again"), Role::Primary(_)));
+    }
+
+    #[test]
+    fn a_socket_folder_or_peer_of_another_user_is_not_trusted() {
+        // a peer of this process is this user's
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert!(peer_is_this_user(&a));
+        // a folder of another user (/ is root's; the tests never run as root) and a link to our own folder are refused
+        assert!(unsafe { libc::getuid() } != 0);
+        assert!(!dir_is_ours(std::path::Path::new("/")));
+        let dir = std::env::temp_dir().join(format!("leaf-si-own-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(dir_is_ours(&dir));
+        let link = dir.with_extension("link");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(!dir_is_ours(&link));
+        assert!(!ensure_dir(&link.join("leaf.sock")));
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
