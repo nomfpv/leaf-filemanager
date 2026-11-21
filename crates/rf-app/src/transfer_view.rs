@@ -251,6 +251,12 @@ fn bar(p: &Palette, frac: Option<f32>, color: Hsla, w: Option<f32>) -> Div {
         )
 }
 
+/// Two thin upright strokes in a 12 px box (the mockups' pause icon: lines at 5.5 and 10.5 of 16, from 3.5 to 12.5).
+fn pause_mark(color: Hsla) -> Div {
+    let bar = |x: f32| div().absolute().left(px(x)).top(px(2.6)).w(px(1.)).h(px(6.8)).rounded_full().bg(color);
+    div().relative().size(px(12.)).child(bar(3.6)).child(bar(7.4))
+}
+
 fn icon_button(id: impl Into<ElementId>, p: &Palette, icon: L, tip: &'static str, on_click: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {
     div()
         .id(id)
@@ -440,13 +446,26 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, cx: &App) -> Opt
     let text = if v.paused { format!("{} · {}", v.words, t!("Paused")) } else { v.words.clone() };
     let pause = {
         let ops = ops.clone();
-        icon_button(
-            ("strip-pause", id as usize),
-            p,
-            if v.paused { L::Play } else { L::Pause },
-            if v.paused { t!("Resume") } else { t!("Pause") },
-            move |_, cx| ops.update(cx, |o, cx| o.toggle_pause(id, cx)),
-        )
+        let paused = v.paused;
+        div()
+            .id(("strip-pause", id as usize))
+            .size(px(24.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme::RADIUS_SM)
+            .text_color(p.text_secondary)
+            .cursor_pointer()
+            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(if paused { t!("Resume") } else { t!("Pause") }).build(w, cx))
+            .hover(|s| s.bg(p.pressed).text_color(p.text))
+            // (the mockups' pause mark: two thin strokes, not the icon set's two blocks)
+            .map(|d| if paused { d.child(Icon::new(L::Play).size(px(12.))) } else { d.child(pause_mark(p.text_secondary)) })
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                ops.update(cx, |o, cx| o.toggle_pause(id, cx))
+            })
+            .into_any_element()
     };
     let cancel = {
         let ops = ops.clone();
