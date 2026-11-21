@@ -26,6 +26,8 @@ pub enum LaneError {
     BaseUncommitted(Vec<String>),
     /// Submodules of the lane (paths) with commits that no remote has: their repositories live in git's record of the lane.
     SubmoduleWork(Vec<String>),
+    /// Another worktree of the repository lies inside the lane folder (its path).
+    HoldsWorktree(String),
     /// Ignored files and folders in the lane (`git worktree remove` would delete them for good; Discard keeps them in the Trash).
     Ignored(Vec<String>),
     /// Commits of the lane that the base branch does not have (`abc1234 subject`).
@@ -47,6 +49,7 @@ impl fmt::Display for LaneError {
             LaneError::BaseUncommitted(v) => write!(f, "{} uncommitted files in the base worktree", v.len()),
             LaneError::Ignored(v) => write!(f, "{} ignored entries in the lane", v.len()),
             LaneError::SubmoduleWork(v) => write!(f, "{} submodules with commits no remote has", v.len()),
+            LaneError::HoldsWorktree(p) => write!(f, "another worktree lies inside the lane: {p}"),
             LaneError::Unmerged(v) => write!(f, "{} commits not in the base branch", v.len()),
             LaneError::Conflicts(v) => write!(f, "the merge would conflict in {} files", v.len()),
             LaneError::BaseNotCheckedOut(b) => write!(f, "the base branch {b} is not checked out in any worktree"),
@@ -482,6 +485,10 @@ pub fn discard(repo: &Path, dir: &Path, name: &str, branch: &str, put_away: &dyn
     }
     if within(&main, dir) {
         return Err(LaneError::NotALane(format!("{} holds the main worktree", dir.display())));
+    }
+    // another worktree inside the lane folder would go to the Trash with it
+    if let Some(w) = list.iter().skip(1).find(|w| !same_path(&w.path, dir) && within(&w.path, dir)) {
+        return Err(LaneError::HoldsWorktree(w.path.display().to_string()));
     }
     if meta.is_ok() {
         if !own_worktree(repo, &list, dir) {
