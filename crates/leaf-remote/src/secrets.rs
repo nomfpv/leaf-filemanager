@@ -362,7 +362,7 @@ impl SecretStore for Keyring {
 fn saved_ids_read_back_from_their_keyring_names() {
     let ids = [
         SecretId::password("sftp", "alice", "example.org", 22),
-        SecretId::password("ftps", "a@b.c", "10.0.0.1", 990),
+        SecretId::password("ftps", "a@b.c", "192.0.2.1", 990),
         SecretId::password("sftp", "bob", "[::1]", 2222),
         SecretId::passphrase(std::path::Path::new("C:/Users/x/.ssh/id_ed25519")),
         SecretId::passphrase(std::path::Path::new("/home/x/keys/a:b.key")),
