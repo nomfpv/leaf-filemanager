@@ -1,9 +1,13 @@
 "use strict";
 
-// The popup: "Browse through Mullvad" on and off (the work is in background.js) and leaf's VPN state.
+// The popup: "Browse through Mullvad" on, "Turn off (browse without VPN)" (the work is in background.js), and leaf's VPN state.
+// The switch never turns itself off: only the button here does.
 
 const api = globalThis.browser ?? globalThis.chrome;
 const box = document.getElementById("mullvad");
+const onRow = document.getElementById("onRow");
+const offRow = document.getElementById("offRow");
+const off = document.getElementById("off");
 const state = document.getElementById("state");
 const note = document.getElementById("note");
 
@@ -12,7 +16,10 @@ function ask(type) {
 }
 
 function show(r, problem) {
-  box.checked = !!r?.on;
+  const on = !!r?.on;
+  box.checked = false;
+  onRow.hidden = on;
+  offRow.hidden = !on;
   const vpn = r?.vpn;
   let text;
   let good = false;
@@ -22,10 +29,11 @@ function show(r, problem) {
     good = true;
   } else if (vpn.state === "connecting") text = "leaf's VPN is connecting.";
   else text = "leaf's VPN is off.";
-  if (r?.on && good) text = `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}.`;
+  if (on && good && !r?.note) text = `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}.`;
+  else if (on) good = false;
   state.textContent = text;
   state.className = good ? "ok" : "bad";
-  note.textContent = problem || r?.note || (!r?.on && r?.why) || "";
+  note.textContent = problem || r?.note || (!on && r?.why) || "";
 }
 
 async function refresh(problem) {
@@ -33,10 +41,18 @@ async function refresh(problem) {
 }
 
 box.addEventListener("change", async () => {
+  if (!box.checked) return;
   box.disabled = true;
-  const r = await ask(box.checked ? "mullvad-on" : "mullvad-off");
+  const r = await ask("mullvad-on");
   box.disabled = false;
   await refresh(r?.ok ? "" : (r?.why ?? "It did not work."));
+});
+
+off.addEventListener("click", async () => {
+  off.disabled = true;
+  await ask("mullvad-off");
+  off.disabled = false;
+  await refresh("");
 });
 
 document.getElementById("options").addEventListener("click", (e) => {

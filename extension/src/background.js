@@ -168,8 +168,8 @@ api.downloads.onCreated.addListener((item) => {
 //
 // The browser's proxy is set to leaf's SOCKS5 proxy (Settings > VPN > Let other programs use the VPN), which sends everything
 // through leaf's VPN and looks names up through it (remote DNS). leaf's proxy refuses every connection while the VPN is not up,
-// so pages then fail instead of loading directly. When leaf says the VPN is off (or leaf is gone), the switch turns itself off,
-// the browser's own proxy setting comes back and a notice says so. WebRTC is kept to the proxy while it is on.
+// so pages then fail instead of loading directly. When leaf says the VPN is off (or leaf is gone, or late), the proxy stays set,
+// the badge turns red and one notice says so; only the user turns the switch off. WebRTC is kept to the proxy while it is on.
 
 const VPN_ALARM = "leaf-vpn";
 // (Chromium's shortest alarm period)
@@ -177,7 +177,7 @@ const VPN_EVERY_MIN = 0.5;
 // the browser's own network and local names never go to the proxy
 const BYPASS_CHROMIUM = ["<local>", "localhost", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "[::1]", "*.local"];
 const BYPASS_FIREFOX = "localhost, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, [::1], .local";
-const VPN_DEFAULTS = { mullvad: false, mullvadProxy: null, mullvadNote: "", mullvadCountry: "" };
+const VPN_DEFAULTS = { mullvad: false, mullvadProxy: null, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" };
 const badge = api.action ?? api.browserAction;
 
 // Firefox, when the proxy setting cannot be used (a password, or the add-on is not allowed in private windows): the proxy is
@@ -293,57 +293,67 @@ async function mullvadOn() {
     return { ok: false, why: `The browser did not take the proxy setting (${e?.message ?? e}).` };
   }
   await webRtcThroughProxy(true);
-  await api.storage.local.set({ mullvad: true, mullvadProxy: vpn.proxy, mullvadNote: "", mullvadCountry: vpn.country ?? "" });
+  await api.storage.local.set({ mullvad: true, mullvadProxy: vpn.proxy, mullvadNote: "", mullvadAlerted: false, mullvadCountry: vpn.country ?? "" });
   showBadge("VPN", `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}`);
   api.alarms.create(VPN_ALARM, { periodInMinutes: VPN_EVERY_MIN });
   return { ok: true, country: vpn.country ?? "" };
 }
 
-async function mullvadOff(note) {
+// only the user turns it off (the popup's "Turn off (browse without VPN)")
+async function mullvadOff() {
   await clearProxy();
   await webRtcThroughProxy(false);
-  await api.storage.local.set({ mullvad: false, mullvadProxy: null, mullvadNote: note ?? "", mullvadCountry: "" });
+  await api.storage.local.set({ mullvad: false, mullvadProxy: null, mullvadNote: "", mullvadAlerted: false, mullvadCountry: "" });
   await quietly(api.alarms.clear(VPN_ALARM));
   showBadge("", "leaf");
-  if (note) notify(note);
 }
 
-const GONE = "Browse through Mullvad was turned off: {why}. Until this was noticed, pages failed rather than loading directly; from now on they load directly, without Mullvad.";
+// The switch never turns itself off: whatever goes wrong, the browser's proxy stays pointed at leaf's (leaf refuses while its VPN
+// is not up, a closed port fails; neither falls back to direct), so pages fail until the VPN is back or the user turns it off.
+const HELD = "Pages fail until leaf's VPN is back or you turn Browse through Mullvad off ({why}).";
+
+// one notice per outage, the red badge and the popup's note
+async function hold(why) {
+  const cfg = await vpnConfig();
+  const note = HELD.replace("{why}", why);
+  showBadge("!", note);
+  await api.storage.local.set({ mullvadNote: note, mullvadAlerted: true });
+  if (!cfg.mullvadAlerted) notify(note);
+}
 
 // looks at leaf's VPN again (every half minute while on, and when the browser starts)
 async function checkVpn() {
   const cfg = await vpnConfig();
   if (!cfg.mullvad) return;
   const vpn = await vpnState();
-  if (!vpn) return mullvadOff(GONE.replace("{why}", "leaf is not running"));
-  if (!vpn.proxy) return mullvadOff(GONE.replace("{why}", "leaf's proxy for other programs was turned off"));
-  if (vpn.state === "off" || vpn.state === "failed") return mullvadOff(GONE.replace("{why}", "leaf's VPN is not connected any more"));
-  if (!IS_FIREFOX && vpn.proxy.user) return mullvadOff(GONE.replace("{why}", "leaf's proxy now asks for a password, which this browser cannot give"));
+  if (!vpn) return hold("leaf is not running or did not answer");
+  if (!vpn.proxy) return hold("leaf's proxy for other programs is turned off");
   // a new port or password in leaf (or Firefox restarted and the per-request proxy is gone): set again
   if (!sameProxy(vpn.proxy, cfg.mullvadProxy) || (IS_FIREFOX && cfg.mullvadProxy?.user && !perRequest)) {
     try {
       await setProxy(vpn.proxy);
+      await api.storage.local.set({ mullvadProxy: vpn.proxy });
     } catch {
-      return mullvadOff(GONE.replace("{why}", "the browser did not take leaf's new proxy address"));
+      return hold("the browser did not take leaf's new proxy address");
     }
-    await api.storage.local.set({ mullvadProxy: vpn.proxy });
   }
-  if (vpn.state === "connecting") {
-    // (the proxy stays: leaf refuses everything meanwhile, so nothing loads directly)
-    showBadge("…", "leaf's VPN is reconnecting: pages fail until it is back");
-    await api.storage.local.set({ mullvadNote: "leaf's VPN is reconnecting: pages fail until it is back (nothing loads directly)." });
-  } else {
-    showBadge("VPN", `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}`);
-    await api.storage.local.set({ mullvadNote: "", mullvadCountry: vpn.country ?? "" });
-  }
+  if (!IS_FIREFOX && vpn.proxy.user) return hold("leaf's proxy asks for a password, which this browser cannot give");
+  if (vpn.state === "off" || vpn.state === "failed") return hold("leaf's VPN is not connected");
+  if (vpn.state === "connecting") return hold("leaf's VPN is connecting");
+  showBadge("VPN", `Browsing through Mullvad${vpn.country ? ` (${vpn.country})` : ""}`);
+  await api.storage.local.set({ mullvadNote: "", mullvadAlerted: false, mullvadCountry: vpn.country ?? "" });
 }
 
 api.alarms.onAlarm.addListener((a) => {
   if (a.name === VPN_ALARM) checkVpn();
 });
-api.runtime.onStartup?.addListener(() => checkVpn());
-// (Firefox's background page, or the service worker, has just started: the per-request proxy and the badge are set again)
-checkVpn();
+// (Firefox's background page, or the service worker, has just started, also at the browser's start before leaf runs: the alarm,
+// the per-request proxy and the badge are set again; the proxy setting itself stays the browser's across restarts)
+vpnConfig().then((cfg) => {
+  if (!cfg.mullvad) return;
+  api.alarms.get(VPN_ALARM).then((a) => a || api.alarms.create(VPN_ALARM, { periodInMinutes: VPN_EVERY_MIN }), () => {});
+  checkVpn();
+});
 
 // the options page asks whether leaf can be reached; the popup turns Browse through Mullvad on and off
 api.runtime.onMessage.addListener((msg, _sender, reply) => {
@@ -357,7 +367,7 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     case "mullvad-on":
       return answer(mullvadOn());
     case "mullvad-off":
-      return answer(mullvadOff("").then(() => ({ ok: true })));
+      return answer(mullvadOff().then(() => ({ ok: true })));
     case "mullvad-state":
       return answer(
         (async () => {

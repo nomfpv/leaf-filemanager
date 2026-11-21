@@ -63,8 +63,10 @@ While it is on, WebRTC is kept to the proxy (`webRTCIPHandlingPolicy` = `disable
 address; turning it off puts the browser's own settings back.
 
 The extension asks leaf (through the native host, message `{"v":1,"type":"vpn"}`, leaf is not started for it) for the VPN's state and
-the proxy's address every half minute. While leaf's VPN reconnects, leaf's proxy refuses every connection: pages fail rather than load
-directly. When leaf says the VPN is off, or leaf is gone, the switch turns itself off with a notice: from then on pages load directly.
+the proxy's address every half minute. The switch never turns itself off: while leaf's VPN is off, connecting or failed, while leaf is
+not running or does not answer, and at the browser's start before leaf runs, the proxy stays pointed at leaf's (which refuses, or is
+closed), so pages fail rather than load directly; the badge turns red and one notice says so. Only the popup's "Turn off (browse
+without VPN)" puts the browser's own settings back. A new port or password in leaf is taken over.
 Chromium browsers cannot give a SOCKS proxy a password: with leaf's "Ask for a password" on, the switch works in Firefox only.
 
 New permissions for it:
