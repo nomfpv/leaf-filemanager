@@ -5,11 +5,13 @@ use super::*;
 #[test]
 fn kill_switch_refuses_a_direct_connection_while_the_tunnel_is_down() {
     // the routing rule: down + kill switch = refused; LAN always direct; down without it = direct
-    assert_eq!(route_with("example.com", false, true), Route::Blocked);
-    assert_eq!(route_with("example.com", false, false), Route::Direct);
-    assert_eq!(route_with("example.com", true, true), Route::Tunnel);
-    assert_eq!(route_with("192.168.1.5", false, true), Route::Direct);
-    assert_eq!(route_with("nas.local", true, true), Route::Direct);
+    assert_eq!(route_with("example.com", false, true, false), Route::Blocked);
+    assert_eq!(route_with("example.com", false, false, false), Route::Direct);
+    assert_eq!(route_with("example.com", true, true, false), Route::Tunnel);
+    assert_eq!(route_with("192.168.1.5", false, true, false), Route::Direct);
+    assert_eq!(route_with("nas.local", true, true, false), Route::Direct);
+    // connecting: held even without the kill switch (the user asked for the VPN)
+    assert_eq!(route_with("example.com", false, false, true), Route::Blocked);
 
     // and the real call, with no runtime given at all: the refusal comes before any socket is opened (the address is a
     // documentation one the test never reaches)

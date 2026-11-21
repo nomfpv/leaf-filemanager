@@ -291,7 +291,7 @@ pub struct Blocked;
 
 impl std::fmt::Display for Blocked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("leaf's VPN is not connected and the kill switch is on, so this connection waits instead of going out directly")
+        f.write_str("leaf's VPN is not connected (yet, or the kill switch is on), so this connection waits instead of going out directly")
     }
 }
 
@@ -328,19 +328,29 @@ pub enum Route {
 }
 
 pub fn route(host: &str) -> Route {
-    route_with(host, tunnel().is_some(), kill_switch())
+    let up = tunnel().is_some();
+    route_with(host, up, kill_switch(), !up && matches!(state(), State::Connecting { .. }))
 }
 
-fn route_with(host: &str, up: bool, kill: bool) -> Route {
+/// `connecting`: the user asked for the VPN and it is on its way (at start, a new place, a reconnect): what is set to use it
+/// waits those seconds whatever the kill switch says; without the kill switch it goes direct only when the VPN is off or failed.
+fn route_with(host: &str, up: bool, kill: bool, connecting: bool) -> Route {
     if route::is_lan_host(host) {
         Route::Direct
     } else if up {
         Route::Tunnel
-    } else if kill {
+    } else if kill || connecting {
         Route::Blocked
     } else {
         Route::Direct
     }
+}
+
+/// The VPN is about to be connected (at start, before the account is read): from now on [`route`] holds what is set to use it,
+/// as while connecting. [`connect`] or [`disconnect`] follows.
+pub fn hold() {
+    let generation = manager().generation;
+    set_state(generation, State::Connecting { place: String::new() });
 }
 
 /// A connection opened by [`dial`]: through the tunnel, or direct (LAN, or the VPN off without the kill switch).

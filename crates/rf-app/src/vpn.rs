@@ -123,6 +123,11 @@ pub fn init(cx: &mut App) {
     // (the keyring is opened at start only when there is a sign-in in it)
     if s.vpn_signed_in {
         let connect_now = s.vpn_connect_on_start && std::env::var_os("LEAF_MULTI_INSTANCE").is_none();
+        // (from here, what is set to use the VPN waits for it: restored downloads must not start direct while the account
+        // is read)
+        if connect_now {
+            leaf_vpn::hold();
+        }
         refresh_account(cx, connect_now);
     }
     cx.spawn(async move |cx| {
@@ -186,6 +191,9 @@ fn refresh_account(cx: &mut App, then_connect: bool) {
         }
         if then_connect && signed_in {
             let _ = cx.update(connect);
+        } else if then_connect {
+            // (nothing to connect with: the hold of `leaf_vpn::hold` ends)
+            leaf_vpn::disconnect();
         }
     })
     .detach();
@@ -370,7 +378,10 @@ pub fn settings_changed(before: &Settings, cx: &mut App) {
 
 /// The kill switch's words, for a transfer that waits.
 pub fn held_text() -> String {
-    t!("Waiting for leaf's VPN: it is not connected and the kill switch is on, so nothing goes out directly.").to_string()
+    match leaf_vpn::state() {
+        leaf_vpn::State::Connecting { .. } => t!("Waiting for leaf's VPN to connect.").to_string(),
+        _ => t!("Waiting for leaf's VPN: it is not connected and the kill switch is on, so nothing goes out directly.").to_string(),
+    }
 }
 
 /// Whether a connection to `host` that is set to use the VPN would be held by the kill switch now.
