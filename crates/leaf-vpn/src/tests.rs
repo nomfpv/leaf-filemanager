@@ -20,3 +20,16 @@ fn kill_switch_refuses_a_direct_connection_while_the_tunnel_is_down() {
     assert!(is_blocked(wrapped.as_ref()));
     set_kill_switch(false);
 }
+
+#[test]
+fn a_reset_through_the_tunnel_is_an_error_not_the_end_of_the_stream() {
+    use smoltcp::socket::tcp::State as S;
+    // closed without the other side's FIN: a reset or the stack's timeout
+    let e = tunnel::read_end(S::Closed, false).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::ConnectionReset);
+    // the other side's FIN, seen now or before the socket went on to Closed: the normal end
+    for s in [S::CloseWait, S::LastAck, S::TimeWait, S::Closing] {
+        assert!(tunnel::read_end(s, false).is_ok(), "{s:?}");
+    }
+    assert!(tunnel::read_end(S::Closed, true).is_ok());
+}

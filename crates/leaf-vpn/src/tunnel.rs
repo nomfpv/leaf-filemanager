@@ -180,8 +180,25 @@ struct Net {
     dns: SocketHandle,
     /// Streams that were dropped: removed once closed (or after a while).
     orphans: Vec<(SocketHandle, Instant)>,
-    /// The last task waiting on each socket: woken when the tunnel closes.
-    waiting: HashMap<SocketHandle, Waker>,
+    /// The tasks waiting on each socket, one reading and one writing: both are woken when the tunnel closes (the stack's own
+    /// wakers never fire again then).
+    waiting: HashMap<SocketHandle, (Option<Waker>, Option<Waker>)>,
+}
+
+impl Net {
+    fn park(&mut self, h: SocketHandle, w: &Waker, read: bool) {
+        let slot = self.waiting.entry(h).or_default();
+        let s = if read { &mut slot.0 } else { &mut slot.1 };
+        if !s.as_ref().is_some_and(|o| o.will_wake(w)) {
+            *s = Some(w.clone());
+        }
+    }
+
+    fn wake_all(&mut self) {
+        for (_, (r, w)) in self.waiting.drain() {
+            r.into_iter().chain(w).for_each(Waker::wake);
+        }
+    }
 }
 
 struct Shared {
@@ -286,9 +303,7 @@ impl Tunnel {
         for h in handles {
             n.sockets.get_mut::<tcp::Socket>(h).abort();
         }
-        for (_, w) in n.waiting.drain() {
-            w.wake();
-        }
+        n.wake_all();
         drop(n);
         self.shared.wake.notify_one();
     }
@@ -335,7 +350,7 @@ impl Tunnel {
                 }).collect::<Vec<_>>())),
                 Err(dns::GetQueryResultError::Pending) => {
                     s.register_query_waker(q, cx.waker());
-                    n.waiting.insert(h, cx.waker().clone());
+                    n.park(h, cx.waker(), true);
                     Poll::Pending
                 }
                 Err(dns::GetQueryResultError::Failed) => Poll::Ready(Err(io::Error::new(io::ErrorKind::NotFound, "the name has no address"))),
@@ -372,7 +387,7 @@ impl Tunnel {
             n.sockets.add(s)
         };
         self.shared.wake.notify_one();
-        let stream = TcpStream { shared: self.shared.clone(), handle };
+        let stream = TcpStream { shared: self.shared.clone(), handle, fin_seen: false };
         let shared = self.shared.clone();
         let wait = poll_fn(|cx| {
             if shared.closed.load(Ordering::Acquire) {
@@ -384,7 +399,7 @@ impl Tunnel {
                 tcp::State::Established => Poll::Ready(Ok(())),
                 tcp::State::SynSent | tcp::State::SynReceived => {
                     s.register_send_waker(cx.waker());
-                    n.waiting.insert(handle, cx.waker().clone());
+                    n.park(handle, cx.waker(), false);
                     Poll::Pending
                 }
                 _ => Poll::Ready(Err(io::Error::new(io::ErrorKind::ConnectionRefused, "the server refused the connection"))),
@@ -488,9 +503,7 @@ async fn drive(shared: Arc<Shared>, udp: UdpSocket, mut tunn: Tunn) {
     // (closed from here, or the server went silent: every stream gets an error now)
     shared.closed.store(true, Ordering::Release);
     let mut n = shared.lock();
-    for (_, w) in n.waiting.drain() {
-        w.wake();
-    }
+    n.wake_all();
     log::info!("vpn: tunnel closed");
 }
 
@@ -516,10 +529,27 @@ fn reap(n: &mut Net) {
 
 // ------------------------------------------------------------------------------------------------ a stream
 
+/// The other side sent its FIN (in these states; `Closed` can also be a reset).
+fn peer_finished(state: tcp::State) -> bool {
+    matches!(state, tcp::State::CloseWait | tcp::State::LastAck | tcp::State::TimeWait | tcp::State::Closing)
+}
+
+/// What a read gets once nothing more can come: the end of the stream after the other side's FIN (seen now, or before the
+/// socket went on to `Closed`), else a reset.
+pub(crate) fn read_end(state: tcp::State, fin_seen: bool) -> io::Result<()> {
+    if fin_seen || peer_finished(state) {
+        Ok(())
+    } else {
+        Err(io::Error::new(io::ErrorKind::ConnectionReset, "the connection through the VPN was reset"))
+    }
+}
+
 /// A TCP connection through the tunnel (tokio's `AsyncRead` + `AsyncWrite`).
 pub struct TcpStream {
     shared: Arc<Shared>,
     handle: SocketHandle,
+    /// The other side's FIN was seen (so a later `Closed` is the normal end, not a reset).
+    fin_seen: bool,
 }
 
 impl std::fmt::Debug for TcpStream {
@@ -540,25 +570,31 @@ impl Drop for TcpStream {
 
 impl AsyncRead for TcpStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        if self.shared.closed.load(Ordering::Acquire) {
+        let this = self.get_mut();
+        if this.shared.closed.load(Ordering::Acquire) {
             return Poll::Ready(Err(Shared::closed_err()));
         }
-        let mut n = self.shared.lock();
-        let s = n.sockets.get_mut::<tcp::Socket>(self.handle);
+        let shared = this.shared.clone();
+        let mut n = shared.lock();
+        let s = n.sockets.get_mut::<tcp::Socket>(this.handle);
+        if peer_finished(s.state()) {
+            this.fin_seen = true;
+        }
         if s.can_recv() {
             let k = s.recv_slice(buf.initialize_unfilled()).map_err(|e| io::Error::other(format!("{e:?}")))?;
             buf.advance(k);
             drop(n);
             // (the window opened: the driver tells the other side)
-            self.shared.wake.notify_one();
+            shared.wake.notify_one();
             return Poll::Ready(Ok(()));
         }
         if !s.may_recv() {
-            // the other side finished (FIN), or the connection was reset: the end of the stream
-            return Poll::Ready(Ok(()));
+            // the end of the stream only after the other side's FIN; a reset (or the stack's timeout) is an error, as with
+            // plain TCP, so a cut answer is never taken for a whole one
+            return Poll::Ready(read_end(s.state(), this.fin_seen));
         }
         s.register_recv_waker(cx.waker());
-        n.waiting.insert(self.handle, cx.waker().clone());
+        n.park(this.handle, cx.waker(), true);
         Poll::Pending
     }
 }
@@ -580,7 +616,7 @@ impl AsyncWrite for TcpStream {
             return Poll::Ready(Ok(k));
         }
         s.register_send_waker(cx.waker());
-        n.waiting.insert(self.handle, cx.waker().clone());
+        n.park(self.handle, cx.waker(), false);
         Poll::Pending
     }
 
