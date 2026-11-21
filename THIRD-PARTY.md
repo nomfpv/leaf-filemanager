@@ -11597,6 +11597,7 @@ Used by:
 - [quote 1.0.47](https://github.com/dtolnay/quote)
 - [ref-cast-impl 1.0.27](https://github.com/dtolnay/ref-cast)
 - [ref-cast 1.0.27](https://github.com/dtolnay/ref-cast)
+- [reflink-copy 0.1.33](https://github.com/cargo-bins/reflink-copy)
 - [rustix 1.1.6](https://github.com/bytecodealliance/rustix)
 - [rustversion 1.0.23](https://github.com/dtolnay/rustversion)
 - [semver 1.0.28](https://github.com/dtolnay/semver)
