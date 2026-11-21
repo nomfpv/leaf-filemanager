@@ -22,3 +22,7 @@ leaf is a fork of rustyfiles by Özer Güzel (MIT).
 ## Licence
 
 MIT, see [LICENSE](LICENSE).
+
+## Third-party licences
+
+The licences of everything leaf is built on, and of the bundled icons, are listed in [THIRD-PARTY.md](THIRD-PARTY.md); regenerate it with `tools\third-party.ps1`.
