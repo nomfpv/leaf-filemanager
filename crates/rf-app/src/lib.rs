@@ -11,6 +11,7 @@ mod nearby;
 mod archive_view;
 mod bulk_rename;
 mod command_palette;
+mod compare_mode;
 mod conflict_dialog;
 mod ctx_menu;
 mod cut_marks;

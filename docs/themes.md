@@ -86,6 +86,10 @@ followed by `/alpha` (`"accent/0.3"`, `"#ffffff/0.1"`). Numbers are pixels unles
 | `danger` | Delete, errors. |
 | `warning` | Warnings. |
 | `success` | Done, healthy. |
+| `compare_only` | Folder compare: the mark and tint of an item that is only in this pane. |
+| `compare_newer` | Folder compare: the mark and tint of an item newer than its twin in the other pane. |
+| `compare_older` | Folder compare: the mark and tint of an item older than its twin in the other pane. |
+| `compare_different` | Folder compare: the mark and tint of an item that has the same time as its twin but another size. |
 | `kind_folder` | Folder icons. |
 | `kind_image` | Picture icons. |
 | `kind_video` | Video and audio icons. |

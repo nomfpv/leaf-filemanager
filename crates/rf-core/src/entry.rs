@@ -103,6 +103,8 @@ pub struct Filter {
     pub folders_only: bool,
     /// The type bar: only items of one type are shown.
     pub kind: Option<KindFilter>,
+    /// Folder compare: only the items with these names (`pathkey::fold`ed) are shown.
+    pub only: Option<Arc<std::collections::HashSet<String>>>,
 }
 
 /// One type of item (a chip of the type bar): the folders, or the files with one of these extensions ("" for none).
@@ -120,6 +122,9 @@ impl KindFilter {
 
 impl Filter {
     pub fn accepts(&self, e: &Entry) -> bool {
+        if self.only.as_ref().is_some_and(|o| !o.contains(&crate::pathkey::fold(&e.name))) {
+            return false;
+        }
         if self.kind.as_ref().is_some_and(|k| !k.accepts(e)) {
             return false;
         }

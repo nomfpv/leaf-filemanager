@@ -164,6 +164,8 @@ pub struct Workspace {
     search: Entity<InputState>,
     /// Files' "Filter by" strip under the command bar (name filter for this folder).
     filter_bar: bool,
+    /// Folder compare of one tab's two panes (`compare_mode`).
+    compare: Option<crate::compare_mode::State>,
     filter_input: Entity<InputState>,
     sidebar_open: bool,
     sidebar_w: f32,
@@ -892,6 +894,7 @@ impl Workspace {
             _addr_task: None,
             search,
             filter_bar: false,
+            compare: None,
             filter_input,
             sidebar_open: prefs.sidebar_open,
             compact: None,
@@ -1206,6 +1209,54 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    /// Folder compare: on for the shown tab's two panes (a single pane is split first); off when it is on already.
+    fn toggle_compare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.compare.is_some() {
+            self.compare_stop(cx);
+            return;
+        }
+        if self.tabs[self.active].right.is_none() {
+            self.toggle_dual_pane(window, cx);
+        }
+        let t = &self.tabs[self.active];
+        if let Some(r) = &t.right {
+            self.compare = Some(crate::compare_mode::State::new(t.left.clone(), r.clone()));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn compare_stop(&mut self, cx: &mut Context<Self>) {
+        if let Some(st) = self.compare.take() {
+            st.clear(cx);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn compare_set_chip(&mut self, chip: crate::compare_mode::Chip, cx: &mut Context<Self>) {
+        if let Some(st) = &mut self.compare {
+            st.chip = if st.chip == chip { crate::compare_mode::Chip::All } else { chip };
+        }
+        cx.notify();
+    }
+
+    /// "Select differing": the differing items of the focused pane are selected, so the normal copy to the other pane works.
+    pub(crate) fn compare_select_differing(&mut self, cx: &mut Context<Self>) {
+        self.active_tab().clone().update(cx, |v, cx| v.select_differing(cx));
+    }
+
+    /// Keeps the compare right: it ends when its tab is no longer split into those two panes, else it compares again if a
+    /// listing or place changed.
+    fn compare_sync(&mut self, cx: &mut Context<Self>) {
+        let Some(mut st) = self.compare.take() else { return };
+        let alive = self.tabs.iter().any(|t| t.left == st.left && t.right.as_ref() == Some(&st.right));
+        if alive {
+            st.sync(cx);
+            self.compare = Some(st);
+        } else {
+            st.clear(cx);
+        }
     }
 
     /// Opens/closes the second pane of the current tab (it starts at the same folder).
@@ -4916,6 +4967,19 @@ impl Render for Workspace {
         let typebar = self.render_typebar(&p, cx);
         let commandbar = self.render_commandbar(&p, cx);
         let filter_strip = self.render_filter_bar(&p, window, cx);
+        // off-screen check (tools/TESTING.md): `LEAF_CHECK_COMPARE=<folder>` splits the first tab at that folder and compares
+        if let Ok(dir) = std::env::var("LEAF_CHECK_COMPARE") {
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) && !self.tabs.is_empty() {
+                self.open_second_pane(self.active, Location::Path(PathBuf::from(dir)), false, window, cx);
+                self.toggle_compare(window, cx);
+            }
+        }
+        self.compare_sync(cx);
+        let compare_bar = match (&self.compare, self.tabs.get(self.active)) {
+            (Some(st), Some(t)) if t.left == st.left => Some(crate::compare_mode::bar(st, &p, cx)),
+            _ => None,
+        };
         // the command bar acts on folder contents: not on Home, Settings, the Recycle Bin…
         let show_commandbar = matches!(self.active_tab().read(cx).location(), Location::Path(_) | Location::Search { .. } | Location::Library { .. } | Location::Tag(_) | Location::Shell { .. });
         // Adaptive layout (as Files does): a narrow window gives the list its room first by
@@ -5307,6 +5371,7 @@ impl Render for Workspace {
                 let dark = crate::theme::Palette::for_window(window).dark;
                 crate::settings::update(cx, |s| s.theme = if dark { ThemePref::Light } else { ThemePref::Dark });
             }))
+            .on_action(cx.listener(|this, _: &CompareFolders, window, cx| this.toggle_compare(window, cx)))
             .on_action(cx.listener(|this, _: &OrganizeFolder, window, cx| {
                 match this.active_tab().read(cx).location().path().map(Path::to_path_buf) {
                     Some(dir) => crate::organizer::organize_folder(dir, window, cx),
@@ -5448,6 +5513,7 @@ impl Render for Workspace {
                                 )
                             })
                             .children(filter_strip)
+                            .children(compare_bar)
                             .child(main_row)
                             // the floating card of a running operation (Settings → Aktarım ilerlemesi → Yüzen kart)
                             .children(cards),

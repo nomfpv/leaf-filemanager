@@ -484,6 +484,8 @@ pub struct FolderView {
     sorted_cache: Option<(SortSpec, u64, Arc<Vec<u32>>)>,
     /// Changes whenever `entries` do (cache key of `sorted_cache`).
     entries_gen: u64,
+    /// Folder compare: what each name of this pane is against the other pane (see `compare_mode`); None: not comparing.
+    pub(crate) compare: Option<Arc<std::collections::HashMap<String, crate::compare_mode::Look>>>,
     /// Whether any entry is a cloud file, for the entries generation it was worked out for (the
     /// Sync column; asked several times per frame).
     cloud_cache: std::cell::Cell<Option<(u64, bool)>>,
@@ -700,6 +702,7 @@ impl FolderView {
             entries: Vec::new(),
             sorted_cache: None,
             entries_gen: 0,
+            compare: None,
             cloud_cache: Default::default(),
             parents: Vec::new(),
             shell_items: Vec::new(),
@@ -4520,6 +4523,9 @@ impl FolderView {
                     }
                 }
             });
+            let cmp = self.compare_look(ei);
+            let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
+            let cmp_mark = cmp.and_then(|l| l.glyph()).zip(cmp_color).map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g));
             let row = h_flex()
                 .id(("row", vi))
                 .group("rowgrp")
@@ -4531,6 +4537,8 @@ impl FolderView {
                 .text_size(px(p.fs))
                 .relative()
                 .when(striped, |d| d.bg(p.stripe))
+                .when(!selected && cmp_color.is_some(), |d| d.bg(cmp_color.unwrap_or(p.stripe).opacity(0.14)))
+                .when(cmp == Some(crate::compare_mode::Look::Same), |d| d.opacity(0.55))
                 .when(selected && !inactive, |d| d.bg(p.row_selection).text_color(p.text).child(theme::selection_pill_joined(&p, sel_above, sel_below)))
                 .when(selected && inactive, |d| d.bg(p.selection_inactive))
                 .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
@@ -4633,6 +4641,7 @@ impl FolderView {
                         .children((e.attrs & rf_core::attrs::ENCRYPTED != 0).then(|| Icon::new(L::Lock).size(px(12.)).flex_shrink_0().text_color(p.text_secondary)))
                         .children(tag_dots)
                         .children(cut_mark)
+                        .children(cmp_mark)
                         .children(git_badge)
                         .child(div().flex_1())
                         .children(cloud_badge),
@@ -5717,6 +5726,35 @@ fn link_marked(icon: AnyElement, size: Pixels, link: bool, overlay: Option<Arc<g
 }
 
 impl FolderView {
+    /// The listing's generation: changes whenever the entries do.
+    pub(crate) fn entries_generation(&self) -> u64 {
+        self.entries_gen
+    }
+
+    /// Folder compare on or off for this pane: the looks of its names and the names it lists (None: all).
+    pub(crate) fn set_compare(&mut self, looks: Option<Arc<std::collections::HashMap<String, crate::compare_mode::Look>>>, only: Option<Arc<HashSet<String>>>, cx: &mut Context<Self>) {
+        let changed = self.filter.only != only;
+        self.compare = looks;
+        self.filter.only = only;
+        if changed {
+            self.rebuild_visible();
+        }
+        cx.notify();
+    }
+
+    /// The look of the item at entry index `ei` while comparing.
+    fn compare_look(&self, ei: u32) -> Option<crate::compare_mode::Look> {
+        let c = self.compare.as_ref()?;
+        c.get(&rf_core::pathkey::fold(&self.entries[ei as usize].name)).copied()
+    }
+
+    /// Folder compare: the shown items that differ from the other pane are the selection.
+    pub(crate) fn select_differing(&mut self, cx: &mut Context<Self>) {
+        let sel: HashSet<u32> = self.visible.iter().copied().filter(|&i| self.compare_look(i).is_some_and(|l| l != crate::compare_mode::Look::Same)).collect();
+        self.selected = sel;
+        cx.notify();
+    }
+
     /// Every shown item selected (the toolbar's "…" menu; Ctrl+A does the same through its action).
     pub(crate) fn select_all_items(&mut self, cx: &mut Context<Self>) {
         self.selected = self.visible.iter().copied().collect();

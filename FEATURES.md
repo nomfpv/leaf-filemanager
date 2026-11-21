@@ -140,6 +140,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Open in terminal | Opens a terminal in this folder. | `` Ctrl+Shift+` `` |
 | Open in Terminal as administrator | Opens an elevated terminal in this folder. (Windows only) |  |
 | Open in editor | Opens this folder in your code editor. |  |
+| Compare folders | Marks what differs between the two panes' folders: only here, newer, older, other size. |  |
 | Organize folder | Sorts the folder's files into folders by kind. |  |
 
 ## leaf itself

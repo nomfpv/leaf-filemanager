@@ -285,6 +285,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(OpenTerminal, Tools, "Open in terminal", "Opens a terminal in this folder.", SquareTerminal, [w("ctrl-shift-`")], keywords: &["console", "shell", "command prompt"]),
     c!(OpenTerminalAdmin, Tools, "Open in Terminal as administrator", "Opens an elevated terminal in this folder.", ShieldCheck, [], keywords: &["elevated", "admin"], platforms: Platforms::WINDOWS),
     c!(OpenInIde, Tools, "Open in editor", "Opens this folder in your code editor.", Code, [], keywords: &["ide", "vscode"]),
+    c!(CompareFolders, Tools, "Compare folders", "Marks what differs between the two panes' folders: only here, newer, older, other size.", Columns2, [], keywords: &["diff", "difference", "sync", "dual pane"], since: "0.9.5"),
     c!(OrganizeFolder, Tools, "Organize folder", "Sorts the folder's files into folders by kind.", WandSparkles, [], keywords: &["tidy", "sort", "clean up"]),
     c!(ToggleTheme, View, "Light / dark theme", "Switches between the light and the dark theme.", SunMoon, [w("ctrl-alt-t")], keywords: &["dark mode"]),
     c!(OpenInNewWindow, Tabs, "Open in new window", "Opens the selected folder in a new window.", AppWindow, [f("ctrl-alt-enter")]),

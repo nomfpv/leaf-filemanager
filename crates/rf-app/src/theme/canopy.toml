@@ -59,6 +59,10 @@ square_marks = false
 mono_chrome = false
 
 [dark]
+compare_only = "#6ab7ff"
+compare_newer = "#7fdc9b"
+compare_older = "#f2c066"
+compare_different = "#ff958a"
 toolbar = "#101916"
 sidebar = "#101916"
 status = "#101916"
@@ -107,6 +111,10 @@ solid_sheet = "#16201c"
 solid_raised = "#1e2a25"
 
 [light]
+compare_only = "#1a6fc2"
+compare_newer = "#23753f"
+compare_older = "#875800"
+compare_different = "#b0302a"
 toolbar = "#fafcfb"
 sidebar = "#fafcfb"
 status = "#fafcfb"
