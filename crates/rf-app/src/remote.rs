@@ -567,23 +567,35 @@ fn top_target(dest: &Path, name: &str) -> Result<PathBuf, &'static str> {
 }
 
 /// Files and bytes under `v` (links are not followed, as the copy does not follow them).
+/// Walks with its own stack (no recursion) and stops with an error below `copy::MAX_DEPTH` levels, as the copy does; names the
+/// copy would refuse are not followed; the sums saturate (the sizes are the server's word).
 fn count(fs: &dyn Fs, v: &VPath, is_dir: bool, cancelled: &dyn Fn() -> bool, files: &mut u64, bytes: &mut u64) -> Result<(), FsError> {
     if !is_dir {
-        *files += 1;
-        *bytes += fs.stat(v)?.size;
+        *files = files.saturating_add(1);
+        *bytes = bytes.saturating_add(fs.stat(v)?.size);
         return Ok(());
     }
-    let mut children = Vec::new();
-    fs.list(v, 1024, cancelled, &mut |b| children.extend(b))?;
-    for e in children {
-        if e.link {
-            continue;
+    let mut todo = vec![(v.clone(), 0usize)];
+    while let Some((dir, depth)) = todo.pop() {
+        if cancelled() {
+            return Err(FsError::Cancelled);
         }
-        if e.is_dir() {
-            count(fs, &v.join(&e.name), true, cancelled, files, bytes)?;
-        } else {
-            *files += 1;
-            *bytes += e.size;
+        if depth >= leaf_vfs::copy::MAX_DEPTH {
+            return Err(leaf_vfs::copy::too_deep());
+        }
+        let mut children = Vec::new();
+        fs.list(&dir, 1024, cancelled, &mut |b| children.extend(b))?;
+        for e in children {
+            if e.link {
+                continue;
+            }
+            let Ok(child) = leaf_vfs::names::vchild(&dir, &e.name) else { continue };
+            if e.is_dir() {
+                todo.push((child, depth + 1));
+            } else {
+                *files = files.saturating_add(1);
+                *bytes = bytes.saturating_add(e.size);
+            }
         }
     }
     Ok(())

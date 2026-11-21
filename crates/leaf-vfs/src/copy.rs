@@ -67,6 +67,16 @@ pub struct Copy<'a> {
     pub on_progress: &'a mut dyn FnMut(&Progress),
     pub on_conflict: &'a mut dyn FnMut(&VPath, &Meta) -> Conflict,
     report: CopyReport,
+    depth: usize,
+}
+
+/// Folders below the copied one are followed this deep at most (then the copy stops with an error): a hostile listing ends
+/// in an error, never in a stack overflow.
+pub const MAX_DEPTH: usize = 64;
+
+/// The error of a tree deeper than `MAX_DEPTH`.
+pub fn too_deep() -> FsError {
+    FsError::Other(format!("The folders go deeper than {MAX_DEPTH} levels (a folder that contains itself?); leaf stopped there"))
 }
 
 /// The temporary name a file is written under before it gets its own.
@@ -82,7 +92,7 @@ impl<'a> Copy<'a> {
         on_progress: &'a mut dyn FnMut(&Progress),
         on_conflict: &'a mut dyn FnMut(&VPath, &Meta) -> Conflict,
     ) -> Copy<'a> {
-        Copy { from_fs, to_fs, opts: CopyOpts::default(), cancelled, on_progress, on_conflict, report: CopyReport::default() }
+        Copy { from_fs, to_fs, opts: CopyOpts::default(), cancelled, on_progress, on_conflict, report: CopyReport::default(), depth: 0 }
     }
 
     /// Copies `from` (a file or a folder) to `to` (the new item's own path, not the folder it goes into). A folder that is
@@ -111,6 +121,18 @@ impl<'a> Copy<'a> {
     }
 
     fn dir(&mut self, from: &VPath, m: &Meta, to: &VPath) -> Result<(), FsError> {
+        // a server can list a folder inside itself forever (or a loop of mounts): stop at a fixed depth with an error, long
+        // before the stack runs out
+        if self.depth >= MAX_DEPTH {
+            return Err(too_deep());
+        }
+        self.depth += 1;
+        let r = self.dir_in(from, m, to);
+        self.depth -= 1;
+        r
+    }
+
+    fn dir_in(&mut self, from: &VPath, m: &Meta, to: &VPath) -> Result<(), FsError> {
         let to = match self.to_fs.stat(to) {
             Ok(t) if t.is_dir() => to.clone(),
             Ok(t) => match (self.on_conflict)(to, &t) {

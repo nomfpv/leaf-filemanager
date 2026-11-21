@@ -183,6 +183,11 @@ impl russh_sftp::server::Handler for Disk {
             let files = HOSTILE_PICS.iter().map(|&(n, d)| File::new(n, hostile_attrs(d, 5))).collect();
             return Ok(Handle { id, handle: self.handle(Open::Dir(files)) });
         }
+        if self.hostile && (path == "/loop" || path.starts_with("/loop/")) {
+            // a folder that contains itself, twice over: `a` without end, and `""` (the same folder again)
+            let files = vec![File::new("a", hostile_attrs(true, 0)), File::new("", hostile_attrs(true, 0))];
+            return Ok(Handle { id, handle: self.handle(Open::Dir(files)) });
+        }
         let dir = self.local(&path);
         let mut files = Vec::new();
         for e in std::fs::read_dir(&dir).map_err(io_status)? {
@@ -238,6 +243,9 @@ impl russh_sftp::server::Handler for Disk {
             // listed as a file, a folder now: the fetch must refuse it
             let dir = path == "/pics" || path == "/pics/invoice.pdf";
             return Ok(Attrs { id, attrs: hostile_attrs(dir, 5) });
+        }
+        if self.hostile && (path == "/loop" || path.starts_with("/loop/")) {
+            return Ok(Attrs { id, attrs: hostile_attrs(true, 0) });
         }
         let m = std::fs::symlink_metadata(self.local(&path)).map_err(io_status)?;
         Ok(Attrs { id, attrs: attrs_of(&m) })
@@ -608,4 +616,33 @@ fn hostile_names_stay_inside() {
     // a real file is fetched, and the cap counts the bytes that arrive
     leaf_vfs::copy::fetch_file(&fs, &pics.join("ok.txt"), &cache.join("ok.txt"), 1 << 20, None, &|| false, &mut |_, _| {}).unwrap();
     assert_eq!(std::fs::read(cache.join("ok.txt")).unwrap(), b"bytes");
+}
+
+/// Must-fix 3: a folder that lists itself (`""`) or a child without end (`a/a/a/...`) ends in an error at the depth cap, not in
+/// a stack overflow; the listing never hands on the `""` entry.
+#[test]
+fn self_containing_folder_ends_in_an_error() {
+    let tmp = Temp::new("loop");
+    let served = Temp::new("loop-served");
+    let password = format!("pw-{}-loop", std::process::id());
+    let server = TestServer::start_with(&served.0, &password, new_key().public_key().clone(), vec![new_key()], true);
+    let (fs, _) = trusted_fs(&tmp.0, &server, &password);
+    let lp = server.addr("/loop");
+    let mut listed = Vec::new();
+    fs.list(&lp, 10, &|| false, &mut |b| listed.extend(b.into_iter().map(|e| e.name.to_string()))).unwrap();
+    assert_eq!(listed, ["a"]);
+    let dest = Temp::new("loop-dest");
+    let mut progress = |_: &leaf_vfs::copy::Progress| {};
+    let mut conflict = |_: &VPath, _: &leaf_vfs::Meta| Conflict::Skip;
+    // on a thread with a small stack: the cap must hold long before the stack would run out
+    let to = LocalFs::address(&dest.0.join("loop"));
+    let r = std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn_scoped(s, || Copy::new(&fs, &LocalFs, &|| false, &mut progress, &mut conflict).run(&lp, &to))
+            .unwrap()
+            .join()
+            .unwrap()
+    });
+    assert_eq!(r, Err(leaf_vfs::copy::too_deep()));
 }
