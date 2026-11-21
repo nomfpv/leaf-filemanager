@@ -4519,6 +4519,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 6.0.0",
+ "image",
+ "kamadak-exif",
  "leaf-common",
  "leaf-decode",
  "libc",
