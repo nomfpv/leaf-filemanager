@@ -14,6 +14,7 @@
 .PARAMETER NoiseMs   Allowed settled-time difference against the baseline (default 50).
 .PARAMETER NoiseMB   Allowed private-memory difference against the baseline (default 2).
 .PARAMETER CopyRounds Rounds for copy_vs (default 3).
+.PARAMETER With10k   Also measure the 10,000-file folder (doubles the number of app launches). Off by default.
 .PARAMETER WithCopy  Also run the copy comparison (slow: Windows' own copy takes about a minute per round). Off by default; use it when copy code changed.
 #>
 [CmdletBinding()]
@@ -26,7 +27,8 @@ param(
     [double]$NoiseMs = 50,
     [double]$NoiseMB = 2,
     [int]$CopyRounds = 3,
-    [switch]$WithCopy
+    [switch]$WithCopy,
+    [switch]$With10k
 )
 
 $ErrorActionPreference = 'Continue'
@@ -92,7 +94,7 @@ function Ensure-Files([string]$dir, [int]$count) {
 $dir100k = Join-Path $DataDir 'files100k'
 $dir10k = Join-Path $DataDir 'files10k'
 Ensure-Files $dir100k 100000
-Ensure-Files $dir10k 10000
+if ($With10k) { Ensure-Files $dir10k 10000 }
 
 # copy source: 20,000 small files in 100 sub-folders
 $copySrc = Join-Path $DataDir 'copysrc'
@@ -169,7 +171,7 @@ function Measure-Set([string]$label, [string]$folder) {
 }
 
 $r100 = Measure-Set 'files100k' $dir100k
-$r10 = Measure-Set 'files10k' $dir10k
+$r10 = if ($With10k) { Measure-Set 'files10k' $dir10k } else { $null }
 
 # ---- copy ----
 # copy_vs prints "round R ours   : N ms" / "round R windows: N ms" and "median ours N ms, windows N ms"
@@ -204,12 +206,13 @@ function Budget-Check([string]$name, $value, [double]$limit, [string]$unit) {
 }
 Write-Host "bench: budgets"
 Budget-Check 'open 100k settled' $r100.New.settled_ms $Budget.Settled100k 'ms'
-Budget-Check 'open 10k settled' $r10.New.settled_ms $Budget.Settled10k 'ms'
+if ($r10) { Budget-Check 'open 10k settled' $r10.New.settled_ms $Budget.Settled10k 'ms' }
 Budget-Check 'private memory after 100k' $r100.New.private_mb $Budget.PrivateMB 'MB'
 if ($WithCopy) { if ($copy) { Budget-Check 'copy 20k files (ours)' $copy.ours_ms $Budget.CopyOursMs 'ms' } else { Check 'copy 20k files (ours)' $false 'no measurement' } }
 if ($Baseline) {
     Write-Host ("bench: against baseline (noise tolerance " + $NoiseMs + " ms, " + $NoiseMB + " MB)")
     foreach ($pair in @(@('100k', $r100), @('10k', $r10))) {
+        if (-not $pair[1]) { continue }
         $n = $pair[1].New; $b = $pair[1].Base
         if (-not $n -or -not $b) { Check ("baseline " + $pair[0]) $false 'no measurement'; continue }
         Check ("vs baseline " + $pair[0] + " settled") ($n.settled_ms -le $b.settled_ms + $NoiseMs) ("{0} ms vs {1} ms" -f $n.settled_ms, $b.settled_ms)
@@ -252,10 +255,10 @@ function Row($label, $s) {
 [void]$md.AppendLine("| Set | settled ms | window ms | CPU ms | private MB |")
 [void]$md.AppendLine("|---|---|---|---|---|")
 [void]$md.AppendLine((Row 'files100k' $r100.New))
-[void]$md.AppendLine((Row 'files10k' $r10.New))
+if ($r10) { [void]$md.AppendLine((Row 'files10k' $r10.New)) }
 if ($Baseline) {
     [void]$md.AppendLine((Row 'files100k (baseline)' $r100.Base))
-    [void]$md.AppendLine((Row 'files10k (baseline)' $r10.Base))
+    if ($r10) { [void]$md.AppendLine((Row 'files10k (baseline)' $r10.Base)) }
 }
 [void]$md.AppendLine("")
 if ($copy) {
