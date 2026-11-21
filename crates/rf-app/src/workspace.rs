@@ -204,10 +204,6 @@ pub struct Workspace {
     sidebar_ext_drag: bool,
     /// The sidebar's folder tree (empty unless the setting is on).
     side_tree: sidebar_tree::Holder,
-    /// This window answers another app's Open/Save dialog (see `picker`).
-    picker: Option<std::rc::Rc<crate::picker::PickSession>>,
-    /// Counts the dialog's size changes: only the last one is kept (`set_picker`).
-    picker_size_gen: u64,
     /// Window width from the last frame (breadcrumb collapsing).
     viewport_w: f32,
     /// The address box's width for the path as last laid out (logical px; 0 before the first layout): what the breadcrumb folds its
@@ -350,8 +346,7 @@ pub fn show_settings(cx: &mut App) -> bool {
         let Some(ws) = ws.upgrade() else { continue };
         let tab = {
             let w = ws.read(cx);
-            // (an Open/Save picker is another app's dialog, as in `route_ipc_shown`)
-            if w.picker.is_some() { None } else { w.tabs.iter().position(|t| matches!(t.view().read(cx).location(), Location::Settings)) }
+            w.tabs.iter().position(|t| matches!(t.view().read(cx).location(), Location::Settings))
         };
         let Some(tab) = tab else { continue };
         let shown = handle
@@ -484,9 +479,6 @@ fn step_quick_look(forward: bool, cx: &mut App) {
     let list = cx.try_global::<OpenWorkspaces>().map(|g| g.0.clone()).unwrap_or_default();
     for (handle, ws) in list.into_iter().rev() {
         let Some(ws) = ws.upgrade() else { continue };
-        if ws.read(cx).picker.is_some() {
-            continue;
-        }
         let done = handle
             .update(cx, |_, _, cx| {
                 let view = ws.read(cx).active_tab().clone();
@@ -510,9 +502,6 @@ pub fn save_all_sessions(cx: &mut App) {
     let list = cx.try_global::<OpenWorkspaces>().map(|g| g.0.clone()).unwrap_or_default();
     for (handle, ws) in list {
         let Some(ws) = ws.upgrade() else { continue };
-        if ws.read(cx).picker.is_some() {
-            continue;
-        }
         let _ = handle.update(cx, |_, window, cx| {
             ws.update(cx, |w, cx| w.save_session(window, cx));
         });
@@ -574,13 +563,12 @@ pub static START_SELECT: std::sync::Mutex<Option<String>> = std::sync::Mutex::ne
 /// DirectLook'a en son gönderilen dosya (seçim değişince yalnız yenisi gider).
 static LOOK_FOLLOWED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
-/// Whether any non-picker main browser window is currently open.
+/// Whether any main browser window is currently open.
 fn has_browser_window(cx: &App) -> bool {
     let open = cx.windows();
     cx.try_global::<OpenWorkspaces>().is_some_and(|g| {
         g.0.iter().any(|(h, ws)| {
-            ws.upgrade().is_some_and(|w| w.read(cx).picker.is_none())
-                && open.iter().any(|w| w.window_id() == h.window_id())
+            ws.upgrade().is_some() && open.iter().any(|w| w.window_id() == h.window_id())
         })
     })
 }
@@ -599,10 +587,6 @@ pub fn route_ipc(msg: String, cx: &mut App) {
 /// [`route_ipc`], saying whether the request is taken care of: false only when it needed a window and none could be made. The
 /// launch of a second process waits for this answer (see `rf_win::handover`) and shows the folder itself on false.
 pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
-    if let Some(pipe) = msg.strip_prefix(crate::picker::PICK_PREFIX) {
-        crate::picker::begin(pipe.to_string(), cx);
-        return true;
-    }
     match crate::look::ipc::ToApp::decode(&msg) {
         Some(crate::look::ipc::ToApp::LookClosed) => {
             crate::folder_view::QUICK_LOOK_OPEN.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -641,11 +625,6 @@ pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
     };
     for (handle, ws) in list.into_iter().rev() {
         let Some(ws) = ws.upgrade() else { continue };
-        // an Open/Save picker is another app's dialog: a launch never becomes one of its tabs
-        // (with only a picker open, rustyfiles started from the Start menu opened in it)
-        if ws.read(cx).picker.is_some() {
-            continue;
-        }
         let (target, sel) = (loc.clone(), select.clone());
         let ok = handle
             .update(cx, |_, window, cx| {
@@ -822,11 +801,8 @@ impl Workspace {
             // another window may have dragged the preview pane's height
             this.sync_preview_height(cx);
             let s = cx.global::<crate::settings::Settings>();
-            // a file dialog keeps its own preview state (`picker_preview_open`)
-            if this.picker.is_none() {
-                this.preview_open = s.preview_open;
-                this.sidebar_rail = s.sidebar_rail;
-            }
+            this.preview_open = s.preview_open;
+            this.sidebar_rail = s.sidebar_rail;
             this.sidebar_open = s.sidebar_open;
             cx.notify();
         })
@@ -843,9 +819,7 @@ impl Workspace {
         // destroy it before GPUI is able to update the workspace from its should-close callback.
         remember_placement(window, cx);
         cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
-            if this.picker.is_none() {
-                remember_placement(window, cx);
-            }
+            remember_placement(window, cx);
             this.preview.update(cx, |pv, _| pv.invalidate_host());
             cx.notify();
         })
@@ -926,8 +900,6 @@ impl Workspace {
             drag_hover_tab: None,
             sidebar_ext_drag: false,
             side_tree: Default::default(),
-            picker: None,
-            picker_size_gen: 0,
             viewport_w: 1300.,
             crumb_room: Default::default(),
             last_session: Vec::new(),
@@ -984,86 +956,17 @@ impl Workspace {
         this
     }
 
-    /// Open/Save dialog window: its answer, filter and session (see `picker`).
-    /// The preview pane on/off: the saved setting, or only this window when it is a file dialog.
+    /// The preview pane on/off (the saved setting).
     fn toggle_preview(&mut self, cx: &mut Context<Self>) {
         let v = !self.preview_open;
-        if self.picker.is_some() {
-            self.preview_open = v;
-            crate::settings::update(cx, |s| s.picker_preview_open = v);
-            cx.notify();
-        } else {
-            crate::settings::update(cx, |s| s.preview_open = v);
-        }
-    }
-
-    pub(crate) fn set_picker(&mut self, session: std::rc::Rc<crate::picker::PickSession>, window: &mut Window, cx: &mut Context<Self>) {
-        let (patterns, folders_only) = (session.patterns(), session.folders_only());
-        for t in &self.tabs {
-            for v in std::iter::once(&t.left).chain(t.right.as_ref()) {
-                v.update(cx, |v, cx| v.set_picking(patterns.clone(), folders_only, cx));
-            }
-        }
-        self.picker = Some(session);
-        cx.default_global::<MainPlacements>().0.remove(&window.window_handle().window_id());
-        // the dialog's size is kept once the user resized it, a moment after the last change (issue 89)
-        cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
-            let s = window.bounds().size;
-            let want = [f32::from(s.width).round() as u16, f32::from(s.height).round() as u16];
-            this.picker_size_gen += 1;
-            let generation = this.picker_size_gen;
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(std::time::Duration::from_millis(600)).await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.picker_size_gen == generation && cx.global::<crate::settings::Settings>().picker_size != Some(want) {
-                        crate::settings::update(cx, |s| s.picker_size = Some(want));
-                    }
-                });
-            })
-            .detach();
-        })
-        .detach();
-        // the preview pane helps picking (Windows' dialogs have one too): on until it is closed in a dialog, which the next dialogs
-        // remember (issue 87); the sidebar starts as a strip of icons (it opens over the list while hovered)
-        self.preview_open = cx.global::<crate::settings::Settings>().picker_preview_open;
-        self.sidebar_rail = true;
-        // closing the window (X, Alt+F4) cancels; it is not the user's session
-        let ws = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |window, cx| {
-            if let Some(ws) = ws.upgrade() {
-                ws.update(cx, |ws, _| crate::picker::answer_cancel(ws));
-            }
-            Self::release_preview_host(window);
-            true
-        });
-        cx.notify();
-    }
-
-    pub(crate) fn picker(&self) -> Option<std::rc::Rc<crate::picker::PickSession>> {
-        self.picker.clone()
+        crate::settings::update(cx, |s| s.preview_open = v);
     }
 
     pub(crate) fn active_view(&self) -> Entity<FolderView> {
         self.active_tab().clone()
     }
 
-    /// Open/Save dialog: another file type chosen (1-based).
-    pub(crate) fn set_pick_filter(&mut self, ix: u32, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pk) = self.picker.clone() else { return };
-        pk.filter_ix.set(ix);
-        let patterns = pk.patterns();
-        for t in &self.tabs {
-            for v in std::iter::once(&t.left).chain(t.right.as_ref()) {
-                v.update(cx, |v, cx| v.set_picking(patterns.clone(), pk.folders_only(), cx));
-            }
-        }
-        cx.notify();
-    }
-
     fn save_session(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.picker.is_some() {
-            return;
-        }
         let placement = MainPlacement::capture(window, cx);
         if let Some(placement) = &placement {
             cx.default_global::<MainPlacements>().0.insert(window.window_handle().window_id(), placement.clone());
@@ -1151,11 +1054,7 @@ impl Workspace {
         let places = self.places.clone();
         let images = self.images.clone();
         let tab = cx.new(|cx| FolderView::new(loc, places, images, cx));
-        if let Some(pk) = self.picker.clone() {
-            tab.update(cx, |v, cx| v.set_picking(pk.patterns(), pk.folders_only(), cx));
-        }
         let sub = cx.subscribe_in(&tab, window, |this, emitter, ev: &FolderEvent, window, cx| match ev {
-            FolderEvent::Picked(paths) => crate::picker::picked(this, paths.clone(), window, cx),
             FolderEvent::ToOtherPane(kind, paths) => {
                 if let Some(other) = this.other_pane(emitter) {
                     let dest = match other.read(cx).location() {
@@ -1908,8 +1807,8 @@ impl Workspace {
         );
         let tree_on = cx.global::<crate::settings::Settings>().sidebar_tree;
         items.push(Item::action(t!("Klasör ağacı"), MenuIcon::Lucide(L::FolderTree), |_, cx| crate::settings::update(cx, |s| s.sidebar_tree = !s.sidebar_tree)).checked(tree_on));
-        // where the preview pane sits (Alt+P shows and hides it); a file dialog's window keeps it at the right, so it has no choice to offer
-        if self.picker.is_none() {
+        // where the preview pane sits (Alt+P shows and hides it)
+        {
             let preview_pos = cx.global::<crate::settings::Settings>().preview_position;
             for (pos, label, icon) in [(rf_core::previewpane::PreviewPos::Right, t!("Önizleme sağda"), L::PanelRight), (rf_core::previewpane::PreviewPos::Bottom, t!("Önizleme altta"), L::PanelBottom)] {
                 items.push(Item::action(label, MenuIcon::Lucide(icon), move |_, cx| preview_dock::set_preview_position(cx, pos)).checked(preview_pos == pos));
@@ -2527,9 +2426,7 @@ impl Workspace {
             let rail = if self.sidebar_rail { w < RAIL_SNAP + 30. } else { w < RAIL_SNAP };
             if rail != self.sidebar_rail {
                 self.sidebar_rail = rail;
-                if self.picker.is_none() {
-                    cx.update_global::<crate::settings::Settings, _>(|s, _| s.sidebar_rail = rail);
-                }
+                cx.update_global::<crate::settings::Settings, _>(|s, _| s.sidebar_rail = rail);
                 cx.notify();
             }
             if rail {
@@ -4393,8 +4290,6 @@ impl Render for Workspace {
             self.focus_active(window, cx);
         }
         let p = Palette::for_window(window);
-        // (the Open / Save window is matte: see `Palette::matte`)
-        let p = if self.picker.is_some() { p.matte() } else { p };
         // Mica / frame follow the app's theme, not only the system one (re-applied when either
         // changes: GPUI resets it on a system theme switch)
         let prefs = cx.global::<crate::settings::Settings>();
@@ -4408,7 +4303,7 @@ impl Render for Workspace {
         );
         // Home and Settings have nothing to count: no empty strip at the bottom
         // where a running operation's progress is shown; a strip brings the status bar up on Home and Settings too
-        let surface = crate::transfer_view::surface(cx.global::<crate::settings::Settings>().transfer_progress, show_statusbar, self.picker.is_some());
+        let surface = crate::transfer_view::surface(cx.global::<crate::settings::Settings>().transfer_progress, show_statusbar, false);
         let strip_due = surface == crate::transfer_view::Surface::Strip && crate::transfer_view::strip_due(&self.ops, cx);
         let show_statusbar = show_statusbar && (strip_due || !matches!(self.active_tab().read(cx).location(), Location::Home | Location::Settings));
         use crate::settings::BackdropPref;
@@ -4426,7 +4321,7 @@ impl Render for Workspace {
         // (and it asks for no glass, Acrylic or tinted Mica of its own: the palette paints it; so does the pure black theme, whose
         // black must not let anything through)
         let black = crate::settings::theme_override() == crate::settings::ThemePref::Black;
-        let backdrop = if self.picker.is_some() || black { BackdropPref::Solid } else { backdrop };
+        let backdrop = if black { BackdropPref::Solid } else { backdrop };
         if self.applied_backdrop != Some(backdrop) {
             let was_glass = self.applied_backdrop == Some(BackdropPref::Glass);
             self.applied_backdrop = Some(backdrop);
@@ -4610,7 +4505,6 @@ impl Render for Workspace {
             .then(|| crate::transfer_view::cards(&self.ops, &p, if show_statusbar { 44.0 } else { 12.0 }, cx))
             .flatten();
         let status = self.render_statusbar(&p, strip_bar_w, cx);
-        let picker_footer = self.picker.clone().map(|pk| crate::picker::footer(self, &pk, &p, window, cx));
         // Taskbar title follows the active folder.
         let title = format!("{} — rustyfiles", self.active_tab().read(cx).title(cx));
         if title != self.last_title {
@@ -4620,7 +4514,7 @@ impl Render for Workspace {
         // Keep the saved session current (so it survives a crash or forced shutdown).
         let (session, panes) = self.session_now(cx);
         let key = session_key(&session, &panes);
-        if key != self.last_session && self.picker.is_none() {
+        if key != self.last_session {
             self.last_session = key;
             let active = self.active;
             cx.defer(move |cx| {
@@ -4981,14 +4875,13 @@ impl Render for Workspace {
                             .child(main_row)
                             // the floating card of a running operation (Settings → Aktarım ilerlemesi → Yüzen kart)
                             .children(cards)
-                            .when(show_statusbar, |d| d.child(status))
-                            .children(picker_footer),
+                            .when(show_statusbar, |d| d.child(status)),
                     ),
             )
             .child(div().h(px(8.)))
             // Last children = painted on top.
             .children(crate::status_center::render_flyout(&self.ops, &p, theme::TITLEBAR_H + px(44.), cx))
-            .children(crate::status_center::update_toast(&p, self.picker.is_some()))
+            .children(crate::status_center::update_toast(&p, false))
             .children(quick_look_layer)
             .children(self.palette.clone())
             .children(crate::fluent_menu::current(window, cx))

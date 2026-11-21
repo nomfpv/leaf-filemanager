@@ -102,7 +102,7 @@ pub(super) fn set_preview_position(cx: &mut App, pos: pp::PreviewPos) {
 impl Workspace {
     /// Whether this window puts the pane at the bottom: the setting says so, and it is not a file dialog's window.
     pub(super) fn preview_at_bottom(&self, cx: &App) -> bool {
-        self.picker.is_none() && cx.global::<crate::settings::Settings>().preview_position == pp::PreviewPos::Bottom
+        cx.global::<crate::settings::Settings>().preview_position == pp::PreviewPos::Bottom
     }
 
     /// The tab shows two file panes one above the other (the pane at the bottom then has two lists to leave room for).

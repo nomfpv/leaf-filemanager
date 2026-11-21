@@ -70,7 +70,7 @@ impl Workspace {
         let command_possible = command_possible(
             matches!(loc, Location::Path(_)),
             from_completion,
-            self.picker.is_some(),
+            false,
             cx.global::<crate::settings::Settings>().address_commands,
             &text,
             typed.is_relative() && open_dir.is_some(),

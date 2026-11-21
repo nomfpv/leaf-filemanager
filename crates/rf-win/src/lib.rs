@@ -17,7 +17,6 @@ pub mod complete;
 pub mod ctxmenu;
 pub mod default_fm;
 pub mod design;
-pub mod dialog_reg;
 pub mod dialogs;
 pub mod diskusage;
 pub mod elf;
@@ -101,7 +100,6 @@ pub mod sound;
 pub mod toast_post;
 pub mod tree_watch;
 pub mod wide;
-pub mod workfit;
 
 /// Held by tests that measure short times and by tests that load every core (the glass tests draw with the software renderer, which
 /// uses them all), so the two kinds never run at the same moment: with both in one parallel run the keyboard hook's "under one

@@ -254,8 +254,6 @@ pub enum FolderEvent {
     QuickLook,
     /// Browsing into a protected archive: (archive, the given password was wrong).
     NeedPassword(PathBuf, bool),
-    /// Open/Save dialog: files were opened (double click, Enter): they are the answer.
-    Picked(Vec<PathBuf>),
     /// Settings → "Typing filters this folder": a letter typed in the list opens the filter bar with it (issue 106).
     StartFilter(String),
 }
@@ -534,8 +532,6 @@ pub struct FolderView {
     reselect_many: Option<(Vec<String>, Instant)>,
     /// Begin inline rename on the next render (needs a Window).
     pending_rename: bool,
-    /// Shown by the Open/Save dialog: opening a file picks it instead.
-    picking: bool,
     /// A recent item of the Home page pressed with the left button, and where: moved far enough, it is dragged out (`drag_paths_out`).
     home_press: Option<(PathBuf, Point<Pixels>)>,
     /// Ctrl and the wheel turned so far toward the next size step (a touchpad turns in small pixel steps).
@@ -734,7 +730,6 @@ impl FolderView {
             rename_after_load: false,
             reselect_many: None,
             pending_rename: false,
-            picking: false,
             home_press: None,
             zoom_acc: 0.0,
             name_hit: false,
@@ -3215,7 +3210,7 @@ impl FolderView {
         }
         let Some(ch) = ev.keystroke.key_char.as_ref().filter(|c| !c.chars().any(|c| c.is_control())) else { return };
         // Settings → "Typing filters this folder" (OneCommander's way, issue 106): the letters go to the filter bar instead
-        if !ch.is_empty() && cx.global::<crate::settings::Settings>().type_to_filter && self.location().path().is_some() && !self.picking {
+        if !ch.is_empty() && cx.global::<crate::settings::Settings>().type_to_filter && self.location().path().is_some() {
             cx.emit(FolderEvent::StartFilter(ch.clone()));
             cx.stop_propagation();
             return;
@@ -3508,18 +3503,6 @@ impl FolderView {
         }
     }
 
-    /// Open/Save dialog mode: which files show (patterns like "*.txt;*.md", empty = all; none
-    /// when picking a folder), and opening a file picks it.
-    pub(crate) fn set_picking(&mut self, patterns: String, folders_only: bool, cx: &mut Context<Self>) {
-        self.picking = true;
-        if self.filter.patterns != patterns || self.filter.folders_only != folders_only {
-            self.filter.patterns = patterns;
-            self.filter.folders_only = folders_only;
-            self.rebuild_visible();
-            cx.notify();
-        }
-    }
-
     pub(crate) fn request_rename(&mut self) {
         self.pending_rename = true;
     }
@@ -3566,15 +3549,12 @@ impl FolderView {
                 return false;
             }
             // an item on a phone: the shell fetches it and opens it with its default app
-            // (a dialog asking for a file cannot be answered with one)
-            if !self.picking {
-                let parsing = child.parsing;
-                std::thread::spawn(move || {
-                    if let Err(e) = rf_win::shellfolder::open(&parsing) {
-                        log::warn!("open {parsing}: {e:#}");
-                    }
-                });
-            }
+            let parsing = child.parsing;
+            std::thread::spawn(move || {
+                if let Err(e) = rf_win::shellfolder::open(&parsing) {
+                    log::warn!("open {parsing}: {e:#}");
+                }
+            });
             return true;
         };
         if cx.global::<crate::settings::Settings>().open_folders_in_new_tab {
@@ -3613,8 +3593,6 @@ impl FolderView {
             } else {
                 self.navigate(Location::Path(path), cx);
             }
-        } else if self.picking {
-            cx.emit(FolderEvent::Picked(vec![path]));
         } else if is_lnk(&path) {
             self.open_shortcut(path, cx);
         } else {
@@ -3647,11 +3625,6 @@ impl FolderView {
         };
         if sel.len() == 1 {
             self.open_entry(sel[0], cx);
-        } else if self.picking {
-            let files: Vec<PathBuf> = sel.iter().filter(|&&i| !self.entries[i as usize].is_dir()).filter_map(|&i| self.path_of(i)).collect();
-            if !files.is_empty() {
-                cx.emit(FolderEvent::Picked(files));
-            }
         } else {
             let mut in_archive = Vec::new();
             for i in sel {
@@ -4814,20 +4787,10 @@ impl FolderView {
                             crate::ops::drag_paths_out(vec![path]);
                         }
                     }))
-                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.home_press = None;
                         if is_dir {
                             this.navigate(Location::Path(target.clone()), cx);
-                        } else if this.picking {
-                            // the Open dialog (the owner: "aç penceresinde ana sayfada son kullanılanlarda dosya seçilemiyor. direkt
-                            // açıyor"): a click shows the file selected in its folder, as a click in the list selects it; a double
-                            // click picks it, as in the list
-                            if ev.click_count() >= 2 {
-                                cx.emit(FolderEvent::Picked(vec![target.clone()]));
-                            } else if let (Some(dir), Some(name)) = (target.parent(), target.file_name()) {
-                                this.set_reselect(name.to_string_lossy().into_owned());
-                                this.navigate(Location::Path(dir.to_path_buf()), cx);
-                            }
                         } else {
                             open_in_background(target.clone(), cx);
                         }

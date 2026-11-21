@@ -32,17 +32,14 @@ pub fn startup() {
     let first = std::env::args().nth(1);
     VelopackApp::build()
         .set_auto_apply_on_startup(applies_update_at_start(first.as_deref()))
-        .on_after_install_fast_callback(|_| {
-            after_install_or_update();
-            dialogs_on_by_default();
-        })
+        .on_after_install_fast_callback(|_| after_install_or_update())
         .on_after_update_fast_callback(|_| after_install_or_update())
         .on_before_uninstall_fast_callback(|_| before_uninstall())
         .run();
 }
 
-/// Registrations that are on follow this install: the default file manager, DirectLook's start
-/// with Windows, and the Open/Save dialog DLL (a per-build copy).
+/// Registrations that are on follow this install: the default file manager and DirectLook's start
+/// with Windows.
 fn after_install_or_update() {
     let Ok(me) = std::env::current_exe() else { return };
     if rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES) {
@@ -50,15 +47,6 @@ fn after_install_or_update() {
     }
     if rf_win::dialogs::starts_with_windows_as("DirectLook") {
         let _ = rf_win::dialogs::set_start_with_windows_as("DirectLook", &me.with_file_name("directlook.exe"), &["--background"], true);
-    }
-    let _ = crate::dialog_registration(crate::DialogReg::Follow);
-}
-
-/// A fresh install turns on rustyfiles' Open/Save dialogs (per user, no admin rights; Settings →
-/// Advanced turns them off). Updates don't, so someone who turned them off keeps them off.
-fn dialogs_on_by_default() {
-    if !rf_win::dialog_reg::is_enabled(rf_win::dialog_reg::CLASSES) {
-        let _ = crate::dialog_registration(crate::DialogReg::Enable);
     }
 }
 
@@ -68,7 +56,6 @@ fn before_uninstall() {
     if rf_win::default_fm::is_enabled(classes) {
         let _ = rf_win::default_fm::disable(classes);
     }
-    let _ = rf_win::dialog_reg::disable(rf_win::dialog_reg::CLASSES);
     let none = Path::new("");
     let _ = rf_win::dialogs::set_start_with_windows_as("DirectLook", none, &[], false);
     let _ = rf_win::dialogs::set_start_with_windows(none, false);

@@ -56,27 +56,6 @@ fn busy_percent(from: Option<(u64, u64)>) -> String {
     }
 }
 
-/// How this process was started: its priority class and whether Windows throttles it (the dialog is a process
-/// started by another program, which may be running at a lower class, and a throttled one runs on slow cores).
-pub fn process_facts(what: &str) {
-    if !on() {
-        return;
-    }
-    use windows::Win32::System::Threading::{
-        GetCurrentProcess, GetPriorityClass, GetProcessInformation, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling,
-    };
-    unsafe {
-        let me = GetCurrentProcess();
-        let class = GetPriorityClass(me);
-        let mut st = PROCESS_POWER_THROTTLING_STATE { Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION, ControlMask: 0, StateMask: 0 };
-        let ok = GetProcessInformation(me, ProcessPowerThrottling, &mut st as *mut _ as *mut std::ffi::c_void, std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32).is_ok();
-        mark(&format!(
-            "{what}: process priority class 0x{class:x} (0x20 normal, 0x4000 below normal, 0x40 idle), power throttling control 0x{:x} state 0x{:x} (asked ok: {ok})",
-            st.ControlMask, st.StateMask
-        ));
-    }
-}
-
 /// What the pane has done for the current target.
 #[derive(Default)]
 pub struct PaneTrace {

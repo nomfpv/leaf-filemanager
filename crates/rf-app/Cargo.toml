@@ -16,8 +16,6 @@ path = "src/bin/directlook.rs"
 [dependencies]
 rf-core.workspace = true
 rf-win.workspace = true
-# the Open/Save dialog request types (the DLL itself is a separate build output)
-rf-dialog = { path = "../rf-dialog" }
 # installer and auto-update (GitHub Releases)
 velopack = "=1.2.161"
 rf-archive.workspace = true
