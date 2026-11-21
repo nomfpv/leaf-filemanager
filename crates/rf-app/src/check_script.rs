@@ -172,6 +172,12 @@ impl Workspace {
                 }
             }
             "usage" => self.navigate(rf_core::Location::DiskUsage(std::path::PathBuf::from(arg)), window, cx),
+            // the change feed page: `changes-pick <part of a path>` selects that row (its diff shows in the preview pane)
+            "changes-pick" => {
+                if let Some(cv) = self.active_tab().read(cx).changes_view() {
+                    cv.update(cx, |cv, cx| cv.pick(arg, cx));
+                }
+            }
             "changes" => self.navigate(rf_core::Location::Changes(std::path::PathBuf::from(arg)), window, cx),
             "junk" => self.navigate(rf_core::Location::BuildJunk(std::path::PathBuf::from(arg)), window, cx),
             // the Recycle Bin page: `bin restore` restores what is selected there (select with `run SelectAll`)

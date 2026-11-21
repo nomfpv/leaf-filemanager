@@ -3902,6 +3902,11 @@ impl FolderView {
         self.recycle.clone()
     }
 
+    /// The change feed page of this view while it shows one (the scripted test driver picks a row through it).
+    pub(crate) fn changes_view(&self) -> Option<Entity<crate::changes_view::ChangesView>> {
+        self.changes.clone()
+    }
+
     /// The duplicate finder page of this view while it shows one (the scripted test driver ticks and deletes through it).
     pub(crate) fn dups_view(&self) -> Option<Entity<crate::duplicates_view::DuplicatesView>> {
         self.dups.clone()

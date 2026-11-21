@@ -91,7 +91,7 @@ followed by `/alpha` (`"accent/0.3"`, `"#ffffff/0.1"`). Numbers are pixels unles
 | `compare_older` | Folder compare: the mark and tint of an item older than its twin in the other pane. |
 | `compare_different` | Folder compare: the mark and tint of an item that has the same time as its twin but another size. |
 | `secret_mark` | The small lock after the name of a file that looks like it holds a secret (.env, a private key, credentials). |
-| `diff_added` | Changes view of a file (preview pane, change feed): the tint of an added line. |
+| `diff_added` | Changes view of a file: the tint of an added line. |
 | `diff_removed` | Changes view of a file: the tint of a removed line. |
 | `diff_hunk` | Changes view of a file: the tint of a hunk header (the line saying where a change is). |
 | `kind_folder` | Folder icons. |

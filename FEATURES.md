@@ -145,6 +145,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Compare folders | Marks what differs between the two panes' folders: only here, newer, older, other size. |  |
 | Find duplicates | Looks for files with identical content in this folder or the selected folders. |  |
 | Find build junk | Looks in this folder for node_modules, target, .venv, caches and other folders a build makes again, with their size, and moves the ones you tick to the Recycle Bin. |  |
+| Show changes | Lists every changed, new, deleted and renamed file of the git repository this folder is in, grouped by folder, with the difference of each in the preview pane. It only reads: nothing in the repository is changed. |  |
 | Organize folder | Sorts the folder's files into folders by kind. |  |
 
 ## leaf itself

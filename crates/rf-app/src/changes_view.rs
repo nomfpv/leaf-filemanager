@@ -224,6 +224,13 @@ impl ChangesView {
         }
     }
 
+    /// Selects the first file whose path holds `part` (the scripted test driver).
+    pub fn pick(&mut self, part: &str, cx: &mut Context<Self>) {
+        if let Some(i) = self.items.iter().position(|i| i.change.path.contains(part)) {
+            self.select(i, cx);
+        }
+    }
+
     fn select(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(it) = self.items.get(i) else { return };
         self.selected = Some(it.path.clone());

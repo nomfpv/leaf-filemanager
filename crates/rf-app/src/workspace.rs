@@ -5266,7 +5266,11 @@ impl Render for Workspace {
                 .when(p.gap <= 0., |d| d.border_l_1().border_color(p.sheet_border))
                 .child(self.shelf.clone())
         });
-        let pane_shown = self.preview_open && self.compact.is_none() && room_for_preview && self.active_tab().read(cx).location().path().is_some();
+        let pane_shown = self.preview_open && self.compact.is_none() && room_for_preview && {
+            // (the change feed's page has its own list, and the diff of the chosen file shows in the pane)
+            let loc = self.active_tab().read(cx).location().clone();
+            loc.path().is_some() || matches!(loc, Location::Changes(_))
+        };
         // the hosted preview handler is a separate window: hide it whenever something of ours
         // could be under it (pane closed, a dialog or the Status Center open, palette, bulk rename)
         let overlay_open = crate::prompt::current(window, cx).is_some() || crate::conflict_dialog::current(window, cx).is_some() || self.ops.read(cx).open || self.palette.is_some() || self.bulk.is_some() || crate::organizer::is_open(window, cx) || crate::prop_chooser::is_open(window, cx);
