@@ -12,9 +12,9 @@ use leaf_sys::engine_guard::{EngineStalled, NoShellEngine, Op, PartlyDone};
 pub fn op_failure_text(err: &anyhow::Error) -> String {
     if let Some(n) = err.downcast_ref::<NoShellEngine>() {
         return match n.op {
-            Op::RecycleDelete => crate::t!("Moving to the Recycle Bin needs the Windows shell (Explorer), which is not running. Nothing was deleted; permanent delete is still available.").to_string(),
+            Op::RecycleDelete => crate::t!("Moving to the Trash needs the Windows shell (Explorer), which is not running. Nothing was deleted; permanent delete is still available.").to_string(),
             Op::Copy | Op::Move => crate::t!("This copy or move needs the Windows shell (Explorer), which is not running. Nothing was changed.").to_string(),
-            Op::RestoreFromBin | Op::DeleteFromBin => crate::t!("This Recycle Bin operation needs the Windows shell (Explorer), which is not running. Nothing was changed.").to_string(),
+            Op::RestoreFromBin | Op::DeleteFromBin => crate::t!("This Trash operation needs the Windows shell (Explorer), which is not running. Nothing was changed.").to_string(),
             Op::PermanentDelete | Op::Rename => crate::t!("Some items could not be deleted (locked, read-only or no permission), and the Windows shell (Explorer) that would show the details is not running.").to_string(),
         };
     }

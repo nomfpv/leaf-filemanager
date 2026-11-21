@@ -99,7 +99,7 @@ impl ActKind {
             ActKind::MoveTo => t!("Move to a folder"),
             ActKind::MoveToTemplate => t!("Move to a folder made from a template"),
             ActKind::Rename => t!("Rename with a template"),
-            ActKind::Recycle => t!("Send to the Recycle Bin"),
+            ActKind::Recycle => t!("Send to the Trash"),
         }
     }
 
@@ -407,7 +407,7 @@ impl EditorView {
             },
         };
         let text = if matches!(rule.action, Action::Recycle) {
-            format!("{} → {}", sample.name, t!("Recycle Bin"))
+            format!("{} → {}", sample.name, t!("Trash"))
         } else {
             let exists = |_: &std::path::Path| false;
             let mut ctx = rf_core::organize::PlanContext::new(now, super::classify, &exists, &self.protected);
@@ -415,7 +415,7 @@ impl EditorView {
             let home = super::home();
             match rf_core::organize::preview_dest(&rule, &sample, &ctx) {
                 Ok(Dest::Move(d)) => format!("{} → {}", sample.name, show_path(&d, home.as_deref())),
-                Ok(Dest::Recycle) => format!("{} → {}", sample.name, t!("Recycle Bin")),
+                Ok(Dest::Recycle) => format!("{} → {}", sample.name, t!("Trash")),
                 Err(why) => format!("{}: {}", sample.name, crate::i18n::td(why.text())),
             }
         };
@@ -871,7 +871,7 @@ impl Render for EditorView {
                 })))
                 .when(self.auto, |d| d.child(div().text_xs().text_color(p.text_secondary).pl(px(24.)).child(t!("Runs by itself show no preview; every run can be undone from its row in the Status Center."))))
                 .when(self.auto && matches!(self.action, ActKind::Recycle), |d| {
-                    d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("Careful: this rule will send matching files to the Recycle Bin without asking.")))
+                    d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("Careful: this rule will send matching files to the Trash without asking.")))
                 })
                 .when(self.auto && self.needs_manual_run(), |d| {
                     d.child(div().text_xs().text_color(p.danger).pl(px(24.)).child(t!("A rule with an \"older\" age condition does not run by itself (files just copied or extracted can carry old dates); it runs by hand only.")))

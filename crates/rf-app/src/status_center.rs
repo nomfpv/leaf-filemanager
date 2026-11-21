@@ -1325,7 +1325,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let title = if permanent {
         format!("{} {}", t!("Permanently deleting:"), crate::i18n::items(paths.len()))
     } else {
-        format!("{} {}", t!("Moving to Recycle Bin:"), crate::i18n::items(paths.len()))
+        format!("{} {}", t!("Moving to Trash:"), crate::i18n::items(paths.len()))
     };
     let fast = cx.global::<crate::settings::Settings>().fast_file_ops;
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));

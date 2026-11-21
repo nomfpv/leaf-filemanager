@@ -18,7 +18,7 @@ pub fn delete_message(facts: DeleteFacts, name: Option<&str>) -> String {
         Some(n) if facts.count == 1 => format!("\"{n}\""),
         _ => crate::i18n::items(facts.count),
     };
-    let mut s = format!("{subject} {}", t!("will be permanently deleted from the Recycle Bin."));
+    let mut s = format!("{subject} {}", t!("will be permanently deleted from the Trash."));
     let mut detail = Vec::new();
     if facts.count > 1 {
         detail.push(crate::i18n::items(facts.count));
@@ -41,7 +41,7 @@ pub fn delete_message(facts: DeleteFacts, name: Option<&str>) -> String {
 /// What the bin view's status line says after a deletion, and whether it is a problem (shown as one).
 pub fn delete_status(r: &DeleteReport) -> (String, bool) {
     if r.requested == 0 && r.error.is_none() {
-        return (t!("The items to delete were not found in the Recycle Bin").to_string(), true);
+        return (t!("The items to delete were not found in the Trash").to_string(), true);
     }
     let mut parts = Vec::new();
     if r.unknown {

@@ -125,7 +125,7 @@ impl Location {
     pub fn title(&self) -> String {
         match self {
             Location::Home => "Home".into(),
-            Location::RecycleBin => "Recycle Bin".into(),
+            Location::RecycleBin => "Trash".into(),
             Location::Settings => "Settings".into(),
             Location::Tag(_) => "Tag".into(),
             Location::Search { query, .. } => format!("Search: {query}"),

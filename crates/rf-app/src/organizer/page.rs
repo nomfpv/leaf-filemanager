@@ -146,7 +146,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Zap,
         t!("Organize files by themselves as they arrive"),
-        Some(t!("When on, the folders of rules set to run by themselves are watched; new files are moved, renamed or sent to the Recycle Bin 3 seconds after changes settle, without a preview. When off, nothing is watched and nothing runs.")),
+        Some(t!("When on, the folders of rules set to run by themselves are watched; new files are moved, renamed or sent to the Trash 3 seconds after changes settle, without a preview. When off, nothing is watched and nothing runs.")),
         switch("org-auto", p, auto_on, move |_, cx| super::update(cx, |f| f.auto_enabled = !auto_on)),
     ));
     out.push(section(p, t!("Rules")));

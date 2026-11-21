@@ -277,13 +277,13 @@ impl JunkView {
                 }
                 let bytes: u64 = msg_items.0.iter().map(|m| m.0).sum();
                 let size = if msg_items.0.iter().all(|m| m.1) { format::size(bytes) } else { format!("{}+", format::size(bytes)) };
-                let mut msg = format!("{} ({}) {}", crate::i18n::items(msg_items.1), size, t!("will be moved to the Recycle Bin."));
+                let mut msg = format!("{} ({}) {}", crate::i18n::items(msg_items.1), size, t!("will be moved to the Trash."));
                 if !bad.is_empty() {
                     msg.push_str("\n\n");
                     msg.push_str(&left_text(&bad));
                 }
                 crate::prompt::show(
-                    t!("Move to the Recycle Bin?"),
+                    t!("Move to the Trash?"),
                     Some(msg),
                     None,
                     vec![

@@ -561,7 +561,7 @@ impl FolderView {
         let (title, msg) = if permanent {
             (t!("Delete permanently?"), format!("{what} {}", t!("will be deleted and can't be recovered.")))
         } else {
-            (t!("Move to the Recycle Bin?"), format!("{what} {}", t!("will be moved to the Recycle Bin.")))
+            (t!("Move to the Trash?"), format!("{what} {}", t!("will be moved to the Trash.")))
         };
         crate::prompt::show(
             title,

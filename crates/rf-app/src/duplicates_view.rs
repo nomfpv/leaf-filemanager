@@ -277,14 +277,14 @@ impl DuplicatesView {
                     return;
                 }
                 let bytes: u64 = self.groups.iter().map(|g| g.size * g.files.iter().filter(|f| delete.contains(&f.path)).count() as u64).sum();
-                let mut msg = format!("{} ({}) {}", crate::i18n::items(delete.len()), format::size(bytes), t!("will be moved to the Recycle Bin."));
+                let mut msg = format!("{} ({}) {}", crate::i18n::items(delete.len()), format::size(bytes), t!("will be moved to the Trash."));
                 if !skipped.is_empty() {
                     msg.push_str("\n\n");
                     msg.push_str(&skipped_text(&skipped));
                 }
                 let me = cx.entity().downgrade();
                 crate::prompt::show(
-                    t!("Move to the Recycle Bin?"),
+                    t!("Move to the Trash?"),
                     Some(msg),
                     None,
                     vec![

@@ -174,7 +174,7 @@ impl Render for BinSettingsDialog {
         let mut body = v_flex().gap_3();
         if let (Some(now), Some(edit)) = (&self.now, &self.edit) {
             if now.volumes.is_empty() {
-                body = body.child(div().text_sm().text_color(p.text_secondary).child(t!("No drive with a Recycle Bin was found")));
+                body = body.child(div().text_sm().text_color(p.text_secondary).child(t!("No drive with a Trash was found")));
             }
             for (i, v) in now.volumes.iter().enumerate() {
                 let e = &edit.volumes[i];
@@ -230,7 +230,7 @@ impl Render for BinSettingsDialog {
                                 .text_sm()
                                 .cursor_pointer()
                                 .child(radio(&p, nuke))
-                                .child(div().flex_1().child(t!("Do not move files to the Recycle Bin; remove them immediately when deleted")))
+                                .child(div().flex_1().child(t!("Do not move files to the Trash; remove them immediately when deleted")))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(e) = this.edit.as_mut().and_then(|e| e.volumes.get_mut(i)) {
                                         e.remove_immediately = true;
@@ -326,7 +326,7 @@ impl Render for BinSettingsDialog {
                         v_flex()
                             .p_6()
                             .gap_3()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Recycle Bin settings")))
+                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Trash settings")))
                             .child(body)
                             .children(self.error.clone().filter(|_| self.edit.is_some()).map(|e| div().text_xs().text_color(p.danger).child(e))),
                     )

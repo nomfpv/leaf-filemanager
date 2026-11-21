@@ -201,11 +201,11 @@ impl RecycleView {
         {
             let me = cx.entity().downgrade();
             crate::prompt::show(
-                t!("Empty Recycle Bin"),
-                Some(t!("Every item in the Recycle Bin will be deleted for good. This cannot be undone.").to_string()),
+                t!("Empty Trash"),
+                Some(t!("Every item in the Trash will be deleted for good. This cannot be undone.").to_string()),
                 None,
                 vec![
-                    crate::prompt::Button::new(t!("Empty Recycle Bin"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                    crate::prompt::Button::new(t!("Empty Trash"), crate::prompt::Kind::Danger, move |_, _, cx| {
                         let _ = me.update(cx, |v, cx| v.run(cx, || leaf_sys::recycle::empty(false)));
                         Ok(())
                     }),
@@ -287,7 +287,7 @@ impl RecycleView {
             let BinDialogEvent::Closed(saved) = ev;
             this.settings = None;
             this.status = match saved {
-                Some(rf_core::recycle_bin::SaveOutcome::Saved { .. }) => Some((t!("Recycle Bin settings saved").to_string(), false)),
+                Some(rf_core::recycle_bin::SaveOutcome::Saved { .. }) => Some((t!("Trash settings saved").to_string(), false)),
                 Some(rf_core::recycle_bin::SaveOutcome::Unchanged) => Some((t!("No settings changed").to_string(), false)),
                 None => this.status.take(),
             };
@@ -479,7 +479,7 @@ impl Render for RecycleView {
                 v_flex()
                     .flex_1()
                     .min_w(px(140.))
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Recycle Bin")))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t!("Trash")))
                     .child(div().text_xs().text_color(p.text_secondary).child(if filtered {
                         format!("{} / {} · {}", self.order.len(), crate::i18n::items(self.items.len()), format::size(total))
                     } else {
@@ -510,7 +510,7 @@ impl Render for RecycleView {
                     .on_click(cx.listener(|this, _, window, cx| this.delete_selected(window, cx))),
             )
             .child(
-                button("rb-empty", L::Trash, t!("Empty Recycle Bin"), !self.items.is_empty() && !self.busy, compact, &p)
+                button("rb-empty", L::Trash, t!("Empty Trash"), !self.items.is_empty() && !self.busy, compact, &p)
                     .on_click(cx.listener(|this, _, window, cx| this.empty_bin(window, cx))),
             )
             .child(
@@ -526,7 +526,7 @@ impl Render for RecycleView {
                 .justify_center()
                 .gap_2()
                 .child(Icon::new(L::Trash).size(px(40.)).text_color(p.text_tertiary))
-                .child(div().text_color(p.text_secondary).child(t!("The Recycle Bin is empty")))
+                .child(div().text_color(p.text_secondary).child(t!("The Trash is empty")))
                 .into_any_element()
         } else if self.order.is_empty() {
             div().p_6().text_sm().text_color(p.text_secondary).child(t!("No matching items")).into_any_element()

@@ -291,7 +291,7 @@ impl Render for PreviewView {
                                         d.parent().map(|d| show_path(d, home.as_deref())).unwrap_or_default(),
                                         false,
                                     ),
-                                    Dest::Recycle => (t!("Recycle Bin").to_string(), String::new(), true),
+                                    Dest::Recycle => (t!("Trash").to_string(), String::new(), true),
                                 };
                                 // (the full destination is in the tooltip: a long name is cut at the end, and
                                 // the number a clash adds, " (2)", sits there)
