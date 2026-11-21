@@ -664,6 +664,8 @@ pub fn redo_run(rec: Record, cx: &mut App) {
     let again: Vec<(PathBuf, PathBuf)> = rec.moves.clone();
     let moved = Arc::new(Mutex::new(Vec::new()));
     let moved_out = moved.clone();
+    #[cfg(not(windows))]
+    let ask = crate::status_center::no_trash_asker(cx);
     crate::status_center::start_with(cx, t!("Redoing: file organizing").to_string(), move |tracker| {
         let r = leaf_sys::organize::redo_moves(&rec);
         *moved_out.lock().unwrap() = crate::tags::settled(again);
@@ -672,7 +674,11 @@ pub fn redo_run(rec: Record, cx: &mut App) {
         problems += rec.recycled.len() - present.len();
         if !present.is_empty() {
             // (`false`: to the Recycle Bin)
+            #[cfg(windows)]
             leaf_sys::fileops::delete_tracked(&present, false, tracker)?;
+            // (a drive without a trash: asked, as a delete does)
+            #[cfg(not(windows))]
+            crate::status_center::trash_asking(&present, tracker, &ask)?;
         }
         anyhow::ensure!(problems == 0, "{}", plural(problems, t!("1 file could not be moved"), t!("{n} files could not be moved")));
         Ok(true)

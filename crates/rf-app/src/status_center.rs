@@ -1283,6 +1283,35 @@ fn resolve_no_trash(
     }
 }
 
+/// The window side of the "this drive has no trash" question: call on the UI thread, hand the sender to a job.
+#[cfg(not(windows))]
+pub type NoTrashTx = mpsc::UnboundedSender<NoTrashAsk>;
+
+#[cfg(not(windows))]
+pub fn no_trash_asker(cx: &mut App) -> NoTrashTx {
+    let (qtx, mut qrx) = mpsc::unbounded::<NoTrashAsk>();
+    let origin = cx.active_window();
+    cx.spawn(async move |cx| {
+        while let Some((count, reply)) = qrx.next().await {
+            cx.update(|cx| ask_no_trash(count, reply, origin, cx));
+        }
+    })
+    .detach();
+    qtx
+}
+
+/// Moves `paths` to the trash inside a job; items on a drive without a trash are asked about, as a delete does.
+#[cfg(not(windows))]
+pub fn trash_asking(paths: &[std::path::PathBuf], t: Arc<Tracker>, ask: &NoTrashTx) -> anyhow::Result<bool> {
+    match fileops::delete_tracked(paths, false, t.clone()) {
+        Err(e) => match e.downcast::<leaf_sys::recycle::NoTrash>() {
+            Ok(no) => resolve_no_trash(no.paths, paths, &t, ask),
+            Err(e) => Err(e),
+        },
+        ok => ok,
+    }
+}
+
 pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, record: bool) {
     // a pinned folder that is deleted leaves the sidebar (its question was answered before this)
     for p in &paths {
@@ -1299,17 +1328,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let lock_paths = paths.clone();
     // a drive without a trash: the job asks here, on the UI side, and waits for the answer
     #[cfg(not(windows))]
-    let ask_tx = {
-        let (qtx, mut qrx) = mpsc::unbounded::<NoTrashAsk>();
-        let origin = cx.active_window();
-        cx.spawn(async move |cx| {
-            while let Some((count, reply)) = qrx.next().await {
-                cx.update(|cx| ask_no_trash(count, reply, origin, cx));
-            }
-        })
-        .detach();
-        qtx
-    };
+    let ask_tx = no_trash_asker(cx);
     let id = start_with_id(cx, title, move |t| {
         // permanent: our parallel delete (the shell takes what it can't); recycle bin: the shell
         let r = if permanent && fast {

@@ -1236,8 +1236,14 @@ impl FolderView {
         self.overlay_cancel.store(true, Ordering::Relaxed);
         self.overlay_cancel = Arc::new(AtomicBool::new(false));
         let dir = self.location().path().map(|p| p.to_path_buf()).filter(|d| {
-            let s = d.to_string_lossy();
-            let plain = (s.len() >= 2 && s.as_bytes()[1] == b':') || (s.starts_with(r"\\") && !s.starts_with(r"\\?\"));
+            #[cfg(windows)]
+            let plain = {
+                let s = d.to_string_lossy();
+                (s.len() >= 2 && s.as_bytes()[1] == b':') || (s.starts_with(r"\\") && !s.starts_with(r"\\?\"))
+            };
+            // (elsewhere every absolute path is a local folder; archives and remote places have their own locations)
+            #[cfg(not(windows))]
+            let plain = d.is_absolute();
             plain && !self.is_search() && !crate::nav_touch::may_hold_archive(d)
         });
         let Some(dir) = dir.filter(|_| cx.global::<crate::settings::Settings>().show_overlays) else {
