@@ -403,6 +403,12 @@ pub fn list() -> anyhow::Result<Vec<RecycleItem>> {
     Ok(all_trashes().iter().flat_map(list_one).collect())
 }
 
+/// `(item_count, total_bytes)` across every trash (folders count 0 bytes: no `directorysizes` cache is read).
+pub fn info() -> anyhow::Result<(u64, u64)> {
+    let items = list()?;
+    Ok((items.len() as u64, items.iter().map(|i| i.size).sum()))
+}
+
 /// Whether two keys (`parsing_path`) name the same trashed item: exactly equal here (Linux tells `a.txt` and `A.txt` apart).
 pub fn same_key(a: &str, b: &str) -> bool {
     a == b
