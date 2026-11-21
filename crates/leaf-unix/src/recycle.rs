@@ -155,6 +155,12 @@ fn trash_for(path: &Path) -> Option<Trash> {
     top_trash(&mount_top(parent)?, dev, true)
 }
 
+/// Whether the item at `path` has a trash on its own device that can take it (the one [`trash_tracked`] would use; it is made ready
+/// as that would). False for a mount point itself and for a device without a usable trash.
+pub(crate) fn can_trash(path: &Path) -> bool {
+    trash_for(path).is_some()
+}
+
 /// `t` when it is a trash that may be read, restored from and emptied: its folder, `files/` and `info/` are real folders (not links)
 /// on one device, the folder is ours, and for `$topdir/.Trash/$uid` the shared `.Trash` is a real sticky folder on that device (the
 /// rules of `top_trash`). A crafted stick whose `files` is a link to the home folder is refused here.

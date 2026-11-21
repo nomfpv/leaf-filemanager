@@ -14,7 +14,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use leaf_common::stub;
 use rf_core::organize::safety::{ProtectedPaths, is_inside, is_partial_download, norm};
 use rf_core::organize::{Dest, FileFact, FileKind, Step};
 use rf_core::{Entry, EntryKind, attrs};
@@ -145,23 +144,44 @@ pub trait Recycler {
     fn recycle(&self, paths: &[PathBuf]) -> anyhow::Result<Vec<(PathBuf, PathBuf)>>;
 }
 
-/// The system's bin: none here yet, so nothing can go there.
+/// The freedesktop trash ([`crate::recycle`]), with the progress of a Status Center job. Only ever the trash: a file whose device has
+/// no usable trash is skipped by the run (`NoRecycleBin`); a rule never deletes for good and never copies into the home trash.
 // TYPE-COPY(rf-win organize.rs:168)
 pub struct ShellRecycler {
     pub tracker: Arc<crate::fileops::Tracker>,
 }
 
 impl Recycler for ShellRecycler {
-    fn can_recycle(&self, _path: &Path) -> bool {
-        stub!("organize::ShellRecycler::can_recycle")
+    /// A trash on the file's own device (the home trash, or the device's `.Trash-$uid` / `.Trash/$uid`): the item is renamed into it,
+    /// never copied.
+    fn can_recycle(&self, path: &Path) -> bool {
+        crate::recycle::can_trash(path)
     }
 
+    /// The trash has no size limit or off switch here: whatever it can hold by a rename it takes.
     fn bin_takes(&self, _path: &Path) -> bool {
-        stub!("organize::ShellRecycler::bin_takes")
+        true
     }
 
-    fn recycle(&self, _paths: &[PathBuf]) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
-        leaf_common::stub_err!("organize::ShellRecycler::recycle")
+    /// Sends the files with [`crate::recycle::trash_tracked`]. When any of them turned out to have no trash after all, nothing was
+    /// moved and its [`crate::recycle::NoTrash`] answer is passed up as the error (the run lists every file as not sent). When some
+    /// went and others failed, the ones that went are answered (they are in the trash and belong in the undo record); the run lists
+    /// the rest as not sent.
+    fn recycle(&self, paths: &[PathBuf]) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
+        let before = self.tracker.results.lock().unwrap().len();
+        let r = crate::recycle::trash_tracked(paths, self.tracker.clone());
+        let sent = {
+            let results = self.tracker.results.lock().unwrap();
+            results[before.min(results.len())..].to_vec()
+        };
+        match r {
+            Err(e) if e.is::<crate::recycle::NoTrash>() => Err(e),
+            Err(e) => {
+                log::warn!("organizer: trash: {e:#}");
+                Ok(sent)
+            }
+            Ok(_) => Ok(sent),
+        }
     }
 }
 
@@ -858,5 +878,32 @@ mod tests {
         let r = redo_moves(&rep.record);
         assert_eq!((r.restored, r.failed.len()), (1, 1));
         assert_eq!((d.read("hedef/sub/a.txt"), d.read("hedef/sub/b.txt"), d.read("b.txt")), ("A".into(), "theirs".into(), "B".into()));
+    }
+
+    #[test]
+    fn recycle_round_trip_through_the_trash() {
+        // only ever a private trash: the run sets XDG_DATA_HOME to a fresh folder under TMPDIR; anything else and the test does nothing
+        let tmp = std::env::temp_dir();
+        let Some(data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.starts_with(&tmp) && tmp != Path::new("/tmp")) else {
+            eprintln!("skipped: XDG_DATA_HOME is not a private folder under a private TMPDIR");
+            return;
+        };
+        let d = Dir::new("bin");
+        let x = d.write("x.tmpx", "X");
+        let keep = d.write("keep.txt", "K");
+        let t = Arc::new(crate::fileops::Tracker::new(Box::new(|_, _, _| {}), Default::default()));
+        let bin = ShellRecycler { tracker: t };
+        assert!(bin.can_recycle(&x));
+        let rep = run(&[step(&d, &x, Dest::Recycle)], &RunOptions::manual(0), &bin, &|_, _, _| {}, &AtomicBool::new(false));
+        assert!(rep.failed.is_empty() && rep.skipped.is_empty(), "{rep:?}");
+        assert_eq!(rep.record.recycled, [(x.clone(), data.join("Trash/files/x.tmpx"))]);
+        assert!(!exists(&x) && exists(&keep));
+        // what the app's undo does: the record's trash path is a listed item, and it comes back to its old place
+        let key = rep.record.recycled[0].1.to_string_lossy().into_owned();
+        let items: Vec<_> = crate::recycle::list().unwrap().into_iter().filter(|i| i.parsing_path == key).collect();
+        assert_eq!(items.len(), 1);
+        crate::recycle::restore(&items).unwrap();
+        assert_eq!(d.read("x.tmpx"), "X");
+        assert!(crate::recycle::list().unwrap().iter().all(|i| i.parsing_path != key));
     }
 }
