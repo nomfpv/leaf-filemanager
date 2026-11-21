@@ -644,6 +644,8 @@ pub struct Settings {
     pub download_speed_limit: u32,
     /// Downloads that run at once; the others wait in line.
     pub download_parallel: u32,
+    /// Connections to one server over all downloads together (0 = no cap).
+    pub download_per_host: u32,
     /// Where `leaf download <address>` saves without a folder; empty: the Downloads folder.
     pub download_folder: String,
     /// Where a running operation's progress is shown (see [`TransferProgress`]).
@@ -878,6 +880,7 @@ impl Default for Settings {
             download_segments: 6,
             download_speed_limit: 0,
             download_parallel: 3,
+            download_per_host: 8,
             download_folder: String::new(),
             transfer_progress: TransferProgress::StatusBar,
             thumb_cache_mb: None,
@@ -1273,6 +1276,8 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     std::thread::spawn(move || s.save());
     // (Nearby follows its settings: started, stopped, started anew, or shown to others differently)
     crate::nearby::apply(cx);
+    // (a changed download limit applies to the downloads that are running)
+    crate::downloads::settings_changed(cx);
     cx.refresh_windows();
 }
 

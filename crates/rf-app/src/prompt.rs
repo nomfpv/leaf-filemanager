@@ -103,6 +103,11 @@ pub fn show_with(
     show_inner(title, message, input, false, choices, Vec::new(), buttons, window, cx)
 }
 
+/// A text box with check boxes under it.
+pub fn show_input_checks(title: impl Into<SharedString>, message: Option<String>, input: (String, String), checks: Vec<Check>, buttons: Vec<Button>, window: &mut Window, cx: &mut App) {
+    show_inner(title, message, Some(input), false, Vec::new(), checks, buttons, window, cx)
+}
+
 /// A plain notice with one button.
 pub fn notice(title: impl Into<SharedString>, message: String, window: &mut Window, cx: &mut App) {
     show(title, Some(message), None, vec![Button::new(crate::t!("OK"), Kind::Primary, |_, _, _| Ok(()))], window, cx)

@@ -3173,6 +3173,13 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         ),
         card(
             p,
+            L::Network,
+            t!("Connections to one server"),
+            Some(t!("Over all downloads together: several downloads from the same server share this many. Fewer are used when the server asks for it.")),
+            dropdown("download-per-host", p, s.download_per_host, [0u32, 2, 4, 6, 8, 12, 16, 24].into_iter().map(|n| (n, if n == 0 { t!("No limit").to_string() } else { n.to_string() })).collect(), |s, v| s.download_per_host = v),
+        ),
+        card(
+            p,
             L::Gauge,
             t!("Download speed limit"),
             Some(t!("For each download, over all its connections.")),
@@ -3206,6 +3213,16 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                     .detach();
                 }))
                 .into_any_element(),
+        ),
+        card(
+            p,
+            L::Clock,
+            t!("Download history"),
+            Some(format!("{} {}", crate::downloads::history_len(), t!("finished or failed downloads are remembered (the last 50)")).as_str()),
+            button("download-history-clear", p, t!("Clear"), |_, cx| {
+                crate::downloads::clear_history();
+                cx.refresh_windows();
+            }),
         ),
         card(
             p,

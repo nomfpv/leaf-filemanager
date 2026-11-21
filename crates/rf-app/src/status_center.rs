@@ -374,6 +374,8 @@ impl Ops {
 
     pub(crate) fn toggle_pause(&mut self, id: u64, cx: &mut Context<Self>) {
         self.pause_toggled(id);
+        // (a download that was paused comes back paused after a restart)
+        crate::downloads::persist_soon();
         cx.notify();
     }
 
@@ -776,6 +778,18 @@ pub fn set_result(cx: &mut App, id: u64, title: Option<String>, action: Option<R
                 op.title = t;
             }
             op.action = action;
+        }
+        cx.notify();
+    });
+}
+
+/// A button on the card while the operation runs ("Limit speed" on a download), see [`OpState::live`]; [`set_result`] replaces it at the end.
+pub fn set_live_action(cx: &mut App, id: u64, action: ResultAction) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    entity.update(cx, |ops, cx| {
+        if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
+            op.action = Some(action);
+            op.live = true;
         }
         cx.notify();
     });

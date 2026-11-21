@@ -706,7 +706,16 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(totals.unwrap_or_default()))
                 .child(div().flex_shrink_0().child(if v.paused { t!("Paused").to_string() } else { pace })),
         )
-        .child(h_flex().gap_2().items_end().child(div().flex_1().children(bars)).child(pause).child(cancel))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_end()
+                .child(div().flex_1().children(bars))
+                // a button the operation brought for while it runs (a download's "Limit speed")
+                .children(v.action.clone().map(|(label, run)| text_button(("card-live", id), p, label, false, move |_, cx| run(cx))))
+                .child(pause)
+                .child(cancel),
+        )
 }
 
 #[cfg(test)]
