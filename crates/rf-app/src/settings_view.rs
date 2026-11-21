@@ -647,7 +647,7 @@ fn quick_search_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement
     let shown: SharedString = if waiting { t!("Press keys…").into() } else { crate::keymap_editor::pretty(&s.quick_search_keys).into() };
     let keys_desc = match crate::quick_search::problem() {
         _ if !cfg!(windows) => t!("A shortcut from anywhere is not available on this system (Wayland has no global shortcuts)"),
-        Some(leaf_sys::hotkey::HotkeyError::Taken) if s.quick_search => t!("Another app uses this shortcut (ChatGPT, Gemini, PowerToys…): choose another one"),
+        Some(leaf_sys::hotkey::HotkeyError::Taken) if s.quick_search => t!("Another app uses this shortcut (a launcher, an assistant…): choose another one"),
         Some(leaf_sys::hotkey::HotkeyError::Invalid) if s.quick_search => t!("This shortcut can't be used: choose a key with Ctrl, Alt, Shift or Win"),
         _ => t!("Click and press the new keys to change it"),
     };
@@ -724,7 +724,7 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             p,
             L::CalendarClock,
             t!("Date format"),
-            Some(t!("Application: \"Today, 10:05\", \"Yesterday, 18:02\", older ones \"18 Nov 2026\"; System: always Windows' date and time format; Universal: 2026-11-05 13:45")),
+            Some(t!("Application: \"Today, 10:05\", \"Yesterday, 18:02\", older ones \"18 Nov 2026\"; System: always the system's date and time format; Universal: 2026-11-05 13:45")),
             dropdown(
                 "datefmt",
                 p,
@@ -809,7 +809,7 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::AppWindow,
         t!("Open folders from other programs in a new window"),
-        Some(t!("When Win+E, the desktop or another program opens a folder, it gets a new window instead of a new tab in the open window.")),
+        Some(t!("When the desktop or another program opens a folder, it gets a new window instead of a new tab in the open window.")),
         sw("launch-newwin", p, s.launch_in_new_window, |s, v| s.launch_in_new_window = v),
     ));
     v.push(card(
@@ -955,7 +955,7 @@ fn hidden_drives_card(p: &Palette, s: &Settings) -> AnyElement {
         p,
         L::HardDrive,
         t!("Hidden drives"),
-        Some(t!("A drive you hide is not shown in the sidebar, on the Home page or in the address bar's list of drives; you can still open it by typing its address. Drives that Explorer hides are hidden here too.")),
+        Some(t!("A drive you hide is not shown in the sidebar, on the Home page or in the address bar's list of drives; you can still open it by typing its address. Drives that the system hides are hidden here too.")),
         row.into_any_element(),
     )
 }
@@ -1113,7 +1113,7 @@ fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
                 }),
         );
     }
-    row = row.child(chip("accent-windows", t!("Windows' color"), windows, p).on_click(|_, _, cx| {
+    row = row.child(chip("accent-windows", t!("System color"), windows, p).on_click(|_, _, cx| {
         settings::update(cx, |s| {
             s.accent = "windows".into();
             s.accent_color.clear();
@@ -1142,7 +1142,7 @@ fn accent_card(p: &Palette, s: &Settings) -> AnyElement {
         p,
         L::Palette,
         t!("Accent color"),
-        Some(t!("The color of buttons, the selection and highlights: one of the theme's, Windows' own, or a color you write yourself.")),
+        Some(t!("The color of buttons, the selection and highlights: one of the theme's, the system's own, or a color you write yourself.")),
         row.into_any_element(),
     )
 }
@@ -1170,7 +1170,7 @@ fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
     let control = dropdown("backdrop", p, s.backdrop_in_use(), choices, |s, v| s.backdrop = v);
     let mut notes: Vec<String> = Vec::new();
     if !crate::settings::materials_available() && s.backdrop_in_use() != BackdropPref::Solid {
-        notes.push(t!("On this version of Windows the material is for the main window only; menus and pop-ups stay plain.").to_string());
+        notes.push(t!("On this system the material is for the main window only; menus and pop-ups stay plain.").to_string());
     }
     if s.backdrop_in_use() == BackdropPref::Glass || crate::glass::forced() {
         notes.push(t!("Bends and frosts what is behind the window like real glass. It watches the screen live and redraws on every change, so it uses more GPU and battery than Mica.").to_string());
@@ -1178,7 +1178,7 @@ fn backdrop_card(p: &Palette, s: &Settings) -> AnyElement {
         // permission) they are not, and the line would be untrue. Before the engine has chosen (no window has glass yet) the mode is
         // Off and the line is left out; the page is drawn again once the glass is on the window.
         if leaf_sys::glass::capture_mode() == leaf_sys::glass::CaptureMode::Affinity {
-            notes.push(t!("On this version of Windows, or while the screenshot border permission is off, leaf windows do not appear in screenshots, recordings or screen sharing.").to_string());
+            notes.push(t!("On this system, or while the screenshot border permission is off, leaf windows do not appear in screenshots, recordings or screen sharing.").to_string());
         }
         if let Some(why) = crate::glass::failure() {
             notes.push(t!("Glass could not start: {reason}. Mica is used instead.").replace("{reason}", &why));
@@ -1552,8 +1552,8 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         card(
             p,
             L::Shapes,
-            t!("Icons from Windows"),
-            Some(t!("Off: quiet line icons in the theme's colours. On: Windows' own file icons and the pictures of programs and shortcuts.")),
+            t!("Icons from the system"),
+            Some(t!("Off: quiet line icons in the theme's colours. On: the system's own file icons and the pictures of programs and shortcuts.")),
             sw("system-icons", p, s.system_icons, |s, v| s.system_icons = v),
         ),
         backdrop_card(p, s),
@@ -1582,7 +1582,7 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 p,
                 s.animations,
                 vec![
-                    (AnimPref::System, t!("Follow Windows").into()),
+                    (AnimPref::System, t!("Follow the system").into()),
                     (AnimPref::On, t!("On").into()),
                     (AnimPref::Off, t!("Off").into()),
                 ],
@@ -2056,7 +2056,7 @@ fn files(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::BadgeCheck,
         t!("Show other programs' icon overlays"),
-        Some(t!("The status marks programs such as Google Drive, OneDrive and TortoiseGit put in the corner of icons in Explorer.")),
+        Some(t!("The status marks programs such as Google Drive, OneDrive and TortoiseGit put in the corner of icons in the file list.")),
         sw("overlays", p, s.show_overlays, |s, v| s.show_overlays = v),
     ));
     v.push(card(p, L::SquareCheck, t!("Show checkboxes when selecting"), None, sw("checkboxes", p, s.show_checkboxes, |s, v| s.show_checkboxes = v)));
@@ -2175,7 +2175,7 @@ fn files(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     v.push(card(
         p,
         L::Search,
-        t!("Use the Windows Search index"),
+        t!("Use the system search index"),
         Some(t!("In indexed folders, file contents are searched too and filters like kind:picture or size:>10MB work")),
         sw("search-index", p, s.search_index, |s, v| s.search_index = v),
     ));
@@ -2696,7 +2696,7 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     )];
     // QuickLook instead (asked on Discord): shown with leaf-look off too, as that is how it is meant to be used
     let ql = s.space_quicklook;
-    v.push(card(
+    v.push(win_only(card(
         p,
         L::ScanEye,
         t!("Space opens QuickLook"),
@@ -2706,15 +2706,15 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             t!("QuickLook is not installed: get it from the Microsoft Store or GitHub (QL-Win/QuickLook).")
         }),
         switch("space-ql", p, ql, move |_, cx| settings::update(cx, |s| s.space_quicklook = !ql)),
-    ));
+    )));
     if !enabled {
         return v;
     }
     v.push(card(
         p,
         L::Monitor,
-        t!("Preview with Space in Explorer and on the desktop too"),
-        Some(t!("Preview keeps running in the background and opens when Windows starts (icon in the notification area), even while leaf is closed")),
+        t!("Preview with Space outside leaf too (other file managers, the desktop)"),
+        Some(t!("Preview keeps running in the background and opens when you sign in (icon in the system tray), even while leaf is closed")),
         switch("look-wide", p, l.look_system_wide, {
             let on = l.look_system_wide;
             move |_, cx| {
@@ -2766,11 +2766,11 @@ fn look(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         card(
             p,
             L::AppWindow,
-            t!("Preview icon in the notification area"),
+            t!("Preview icon in the system tray"),
             Some(t!("Not shown while leaf runs in the background: then leaf's icon is the only one")),
             lsw("look-tray", p, l.look_tray_icon, |s, v| s.look_tray_icon = v),
         ),
-        card(p, L::MousePointerClick, t!("Focus the window when it opens"), Some(t!("When off, the keyboard stays in Explorer: arrow keys move between files")), lsw("look-focus", p, l.look_focus_on_open, |s, v| s.look_focus_on_open = v)),
+        card(p, L::MousePointerClick, t!("Focus the window when it opens"), Some(t!("When off, the keyboard stays in the other program: arrow keys move between files")), lsw("look-focus", p, l.look_focus_on_open, |s, v| s.look_focus_on_open = v)),
         card(p, L::CircleX, t!("Close when another window is activated"), Some(t!("Pinned windows stay open")), lsw("look-lostfocus", p, l.look_close_on_lost_focus, |s, v| s.look_close_on_lost_focus = v)),
         card(p, L::Zap, t!("Transition animation"), None, lsw("look-transition", p, l.look_transition, |s, v| s.look_transition = v)),
         card(p, L::RefreshCw, t!("Reload button"), None, lsw("look-reload", p, l.look_show_reload, |s, v| s.look_show_reload = v)),
@@ -2895,6 +2895,12 @@ mod ext_tests {
     }
 }
 
+/// A card that only means something on Windows (start with Windows, WSL, the default file manager, QuickLook): elsewhere it is an empty
+/// strip that cancels the page's gap, so nothing shows and nothing is left over.
+fn win_only(card: AnyElement) -> AnyElement {
+    if cfg!(windows) { card } else { div().h_0().mt(px(-8.)).into_any_element() }
+}
+
 fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
     let start_on = leaf_sys::dialogs::starts_with_windows();
     let load = hybrid::load_snapshot();
@@ -2920,7 +2926,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::FileArchive,
             t!("Open archives with leaf"),
-            Some(t!("The default app for zip, 7z, rar and tar is chosen in Windows. Make leaf the default on the page that opens.")),
+            Some(t!("The default app for zip, 7z, rar and tar is chosen in the system settings. Make leaf the default on the page that opens.")),
             button("dfm-arch", p, t!("Default apps"), |_, _| {
                 let page = format!("ms-settings:defaultapps?registeredAppUser={}", leaf_sys::default_fm::APP_NAME);
                 if let Err(e) = leaf_sys::shell::open(std::path::Path::new(&page)) {
@@ -2935,14 +2941,17 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         link_row(p, "edit-file", L::FilePen, t!("Edit settings file"), Some(t!("settings.toml opens in a text editor")), |_, _| {
             if let Some(path) = settings::path() {
                 std::thread::spawn(move || {
+                    #[cfg(windows)]
                     let _ = std::process::Command::new("notepad.exe").arg(path).spawn();
+                    #[cfg(not(windows))]
+                    let _ = leaf_sys::shell::open(&path);
                 });
             }
         }),
-        card(
+        win_only(card(
             p,
             L::Power,
-            t!("Open leaf when Windows starts"),
+            t!("Open leaf when you sign in"),
             None,
             switch("start-win", p, start_on, move |window, _| {
                 if let Ok(exe) = std::env::current_exe() {
@@ -2952,12 +2961,12 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 }
                 window.refresh();
             }),
-        ),
+        )),
         card(
             p,
             L::PanelBottom,
             t!("Keep running in the background when the window is closed"),
-            Some(t!("An icon stays in the notification area; new windows open instantly")),
+            Some(t!("An icon stays in the system tray; new windows open instantly")),
             sw("background", p, s.run_in_background, |s, v| s.run_in_background = v),
         ),
         card(
@@ -2989,16 +2998,16 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::Zap,
             t!("Fast file operations"),
-            Some(t!("Copying, moving to another drive and permanent deletion use our own parallel engine. When off, Windows' engine does everything.")),
+            Some(t!("Copying, moving to another drive and permanent deletion use our own parallel engine. When off, the system's engine does everything.")),
             sw("fast-ops", p, s.fast_file_ops, |s, v| s.fast_file_ops = v),
         ),
-        card(
+        win_only(card(
             p,
             L::SquareTerminal,
             t!("Leave no download mark when copying into WSL"),
             Some(t!("In WSL, Windows writes a separate \"Zone.Identifier\" file beside a file downloaded from the internet. When on, copying deletes it.")),
             sw("wsl-zone", p, s.wsl_drop_zone, |s, v| s.wsl_drop_zone = v),
-        ),
+        )),
         card(
             p,
             L::ShieldCheck,
@@ -3053,7 +3062,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             .child(div().pl(px(56.)).pr_4().pb_3().text_xs().text_color(p.text_tertiary).child(live))
             .into_any_element(),
         section(p, t!("Experimental")),
-        card(
+        win_only(card(
             p,
             L::AppWindow,
             t!("Set as default file manager"),
@@ -3070,7 +3079,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 });
                 window.refresh();
             }),
-        ),
+        )),
     ];
     out.extend(archives);
     out.extend([

@@ -124,7 +124,7 @@ fn ask_program_path(ix: usize, window: &mut Window, cx: &mut App) {
 fn delete_dialog(ix: usize, window: &mut Window, cx: &mut App) {
     crate::prompt::show(
         t!("Delete this list?"),
-        Some(t!("Files of this type open with Windows' default program again.").to_string()),
+        Some(t!("Files of this type open with the system's default program again.").to_string()),
         None,
         vec![
             crate::prompt::Button::new(t!("Delete"), crate::prompt::Kind::Danger, move |_, _, cx| {
@@ -155,7 +155,7 @@ pub(crate) fn rule_line(r: &OpenRule) -> String {
     match (r.programs.first(), r.double_click) {
         (None, _) => t!("No program yet: add one.").to_string(),
         (Some(first), true) => format!("{}: {}", t!("Double click"), openrules::program_label(first)),
-        (Some(_), false) => t!("A double click opens with Windows' default; the programs are only under \"Open with\".").to_string(),
+        (Some(_), false) => t!("A double click opens with the system's default; the programs are only under \"Open with\".").to_string(),
     }
 }
 

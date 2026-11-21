@@ -791,7 +791,7 @@ pub(crate) fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         p,
         L::Send,
         t!("Use Nearby"),
-        Some(t!("leaf on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, Windows Firewall may ask you to let leaf use the network: allow it for private networks.")),
+        Some(t!("leaf on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, the firewall may ask you to let leaf use the network: allow it for private networks.")),
         switch("nearby-on", p, on, move |_, cx| settings::update(cx, |s| s.nearby_enabled = !on)),
     )];
     if !on {
