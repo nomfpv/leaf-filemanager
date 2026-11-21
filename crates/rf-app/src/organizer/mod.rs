@@ -22,7 +22,7 @@ use rf_core::organize::{FileFact, FileKind, Plan, PlanContext, ProtectedPaths, R
 use crate::t;
 
 mod auto;
-mod editor;
+pub(crate) mod editor;
 pub mod page;
 mod preview;
 

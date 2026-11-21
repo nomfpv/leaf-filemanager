@@ -25,7 +25,7 @@ const FIELD_COL: f32 = 170.0;
 const UNIT_COL: f32 = 96.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Field {
+pub(crate) enum Field {
     Name,
     Extension,
     Kind,
@@ -35,9 +35,9 @@ enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 6] = [Field::Name, Field::Extension, Field::Kind, Field::Size, Field::Modified, Field::Created];
+    pub(crate) const ALL: [Field; 6] = [Field::Name, Field::Extension, Field::Kind, Field::Size, Field::Modified, Field::Created];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Field::Name => t!("Name"),
             Field::Extension => t!("Extension"),
@@ -51,7 +51,7 @@ impl Field {
 
 /// The example a condition's value box shows while it is empty: what is typed there for this field. It follows the field when the
 /// field is changed (it did not: a size condition made from an extension one still said "jpg, png").
-fn value_hint(field: Field) -> &'static str {
+pub(crate) fn value_hint(field: Field) -> &'static str {
     match field {
         Field::Name => t!("Text to find"),
         Field::Extension => t!("jpg, png"),
@@ -61,7 +61,7 @@ fn value_hint(field: Field) -> &'static str {
     }
 }
 
-fn name_op_label(op: NameOp) -> &'static str {
+pub(crate) fn name_op_label(op: NameOp) -> &'static str {
     match op {
         NameOp::Contains => t!("contains"),
         NameOp::StartsWith => t!("starts with"),
@@ -70,7 +70,7 @@ fn name_op_label(op: NameOp) -> &'static str {
     }
 }
 
-fn cmp_label(field: Field, cmp: Cmp) -> &'static str {
+pub(crate) fn cmp_label(field: Field, cmp: Cmp) -> &'static str {
     match (field, cmp) {
         (Field::Size, Cmp::Greater) => t!("is larger than"),
         (Field::Size, Cmp::Less) => t!("is smaller than"),
@@ -79,7 +79,7 @@ fn cmp_label(field: Field, cmp: Cmp) -> &'static str {
     }
 }
 
-fn kind_label(k: FileKind) -> String {
+pub(crate) fn kind_label(k: FileKind) -> String {
     rf_core::organize::summary::kind_word(k, &super::tr)
 }
 
@@ -151,7 +151,7 @@ fn new_input(window: &mut Window, cx: &mut Context<EditorView>, placeholder: &st
     cx.new(|cx| InputState::new(window, cx).placeholder(ph).default_value(v))
 }
 
-fn parse_number(s: &str) -> Option<f64> {
+pub(crate) fn parse_number(s: &str) -> Option<f64> {
     let n: f64 = s.trim().replace(',', ".").parse().ok()?;
     (n.is_finite() && n >= 0.0).then_some(n)
 }
