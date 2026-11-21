@@ -47,6 +47,42 @@ pub fn pinned(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
     Some(grid.into_any_element())
 }
 
+/// Spinning or not, per drive root, asked once off the UI thread (`None` = not asked yet or the system does not say).
+static MEDIA: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Option<bool>>>> = std::sync::Mutex::new(None);
+
+fn media_of(root: &std::path::Path, local: bool, cx: &mut Context<FolderView>) -> Option<&'static str> {
+    if !local {
+        return None;
+    }
+    let known = {
+        let mut g = MEDIA.lock().ok()?;
+        let m = g.get_or_insert_with(Default::default);
+        match m.get(root) {
+            Some(r) => Some(*r),
+            None => {
+                m.insert(root.to_path_buf(), None);
+                None
+            }
+        }
+    };
+    match known {
+        Some(r) => r.map(|hdd| if hdd { "HDD" } else { "SSD" }),
+        None => {
+            let root = root.to_path_buf();
+            cx.spawn(async move |this, cx| {
+                let r2 = root.clone();
+                let r = cx.background_executor().spawn(async move { leaf_sys::drives::seek_penalty(&r2) }).await;
+                if let Ok(mut g) = MEDIA.lock() {
+                    g.get_or_insert_with(Default::default).insert(root, r);
+                }
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+            None
+        }
+    }
+}
+
 pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
     let drives = v.places.read(cx).drives.clone();
     let p = &w.p;
@@ -56,6 +92,8 @@ pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
         let usage_root = d.root.clone();
         let frac = d.used_fraction();
         let bar_color = if frac > 0.9 { p.danger } else { p.accent };
+        let local = matches!(d.kind, leaf_sys::DriveKind::Fixed | leaf_sys::DriveKind::Removable);
+        let kind_line = [Some(d.fs.clone()).filter(|f| !f.is_empty()), media_of(&d.root, local, cx).map(str::to_string)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         grid = grid.child(
             card(("drive", i).into(), p)
                 .child(
@@ -81,7 +119,8 @@ pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
                                     format!("{} {} / {}", format::size(d.free), t!("free"), format::size(d.total))
                                 } else {
                                     String::new()
-                                })),
+                                }))
+                                .when(!kind_line.is_empty(), |c| c.child(div().text_xs().text_color(p.text_tertiary).child(kind_line))),
                         )
                         // where the space goes, as its own tab (the card itself opens the drive)
                         .child(

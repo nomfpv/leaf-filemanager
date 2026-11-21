@@ -234,3 +234,20 @@ mod tests {
     }
 }
 
+
+/// Whether the disk under `path` is a spinning one (`Some(true)`), from the kernel's `queue/rotational` of the block device the
+/// mount comes from (a partition asks its whole disk); `None` for network and virtual mounts and when the device cannot be found.
+pub fn seek_penalty(path: &Path) -> Option<bool> {
+    let text = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let source = text
+        .lines()
+        .filter_map(parse_mount_line)
+        .filter(|(m, _, s)| s.starts_with("/dev/") && path.starts_with(m))
+        .max_by_key(|(m, _, _)| m.len())?
+        .2;
+    let dev = std::fs::canonicalize(&source).ok()?;
+    let sys = std::fs::canonicalize(Path::new("/sys/class/block").join(dev.file_name()?)).ok()?;
+    let read = |d: &Path| std::fs::read_to_string(d.join("queue/rotational")).ok().map(|t| t.trim() == "1");
+    read(&sys).or_else(|| read(sys.parent()?))
+}
