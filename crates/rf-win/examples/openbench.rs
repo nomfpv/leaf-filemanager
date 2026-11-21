@@ -17,6 +17,10 @@ fn main() {
                 kind: AppKind::Rustyfiles,
                 exe: PathBuf::from(exe),
                 env: vec![
+                    ("LEAF_MULTI_INSTANCE".into(), "1".into()),
+                    ("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
+                    ("LEAF_MUTE".into(), "1".into()),
+                    // baseline builds from before the rename (bench\bin) read the old names: the same isolation for them
                     ("RUSTYFILES_MULTI_INSTANCE".into(), "1".into()),
                     ("RUSTYFILES_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
                     ("RUSTYFILES_MUTE".into(), "1".into()),

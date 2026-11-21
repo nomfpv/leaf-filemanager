@@ -178,7 +178,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 
 /// Automated UI tests set this: a test must never make a sound.
 fn muted_for_tests() -> bool {
-    std::env::var_os("RUSTYFILES_MUTE").is_some()
+    std::env::var_os("LEAF_MUTE").is_some()
 }
 
 /// Whether `path` is audio / video our own player tries (Media Foundation decides in the end).

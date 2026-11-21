@@ -50,14 +50,14 @@ static HELD: Mutex<Option<(Option<String>, Option<rf_win::hotkey::HotkeyError>)>
 
 static NO_HOTKEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// This process registers the hotkey: the one rustyfiles (not DirectLook, not a test copy). `RUSTYFILES_QUICK_HOTKEY=1` lets a test
+/// This process registers the hotkey: the one rustyfiles (not DirectLook, not a test copy). `LEAF_QUICK_HOTKEY=1` lets a test
 /// copy hold it like the real one (a copy the user tries the next version with, while the installed app is not running); without it a
 /// test copy never takes the user's hotkey.
 fn hotkey_owner() -> bool {
-    let test_copy = std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some() || std::env::var_os("RUSTYFILES_INSTANCE").is_some();
+    let test_copy = std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || std::env::var_os("LEAF_INSTANCE").is_some();
     !crate::background::DIRECTLOOK_PROCESS.load(std::sync::atomic::Ordering::Relaxed)
         && !NO_HOTKEY.load(std::sync::atomic::Ordering::Relaxed)
-        && (!test_copy || std::env::var_os("RUSTYFILES_QUICK_HOTKEY").is_some())
+        && (!test_copy || std::env::var_os("LEAF_QUICK_HOTKEY").is_some())
 }
 
 /// Apps, files and pages being started on other threads: the app does not quit under them
@@ -960,7 +960,7 @@ pub fn toggle(cx: &mut App) {
         })
         .map(|d| d.id());
     // automated UI tests: shown without taking the foreground from the user
-    let test = std::env::var_os("RUSTYFILES_QUICK_SEARCH_NOACTIVATE").is_some();
+    let test = std::env::var_os("LEAF_QUICK_SEARCH_NOACTIVATE").is_some();
     // with HyperGlass as the app's backdrop the search is on the same glass (the user asked); else Windows' acrylic as before
     // (not on a Windows without materials: there only the main window takes HyperGlass, issue 78)
     let glassy = crate::settings::materials_available()

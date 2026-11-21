@@ -811,10 +811,10 @@ pub fn main_window_only(b: BackdropPref) -> bool {
 
 /// Whether Windows gives windows a material (Mica, Mica Alt, Acrylic): from Windows 11 22H2 on (`rf_win::osver`, issue 24). Where it
 /// does not, every window is the "Solid" look and every popup paints itself: see `theme::window_material` and `theme::popup_fill`.
-/// `RUSTYFILES_NO_BACKDROP=1` answers "no" on any Windows, to look at that state on a developer's PC. Read once.
+/// `LEAF_NO_BACKDROP=1` answers "no" on any Windows, to look at that state on a developer's PC. Read once.
 pub fn materials_available() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("RUSTYFILES_NO_BACKDROP").is_none() && rf_win::osver::system_backdrops())
+    *V.get_or_init(|| std::env::var_os("LEAF_NO_BACKDROP").is_none() && rf_win::osver::system_backdrops())
 }
 
 /// How strongly the app's own washes lie over the glass, 0..=100 (Settings > HyperGlass > Surface wash).
@@ -1014,8 +1014,8 @@ impl Settings {
             },
             Ordering::Relaxed,
         );
-        // An explicit RUSTYFILES_RENDERER env var wins (debugging).
-        if std::env::var_os("RUSTYFILES_RENDERER").is_none() {
+        // An explicit LEAF_RENDERER env var wins (debugging).
+        if std::env::var_os("LEAF_RENDERER").is_none() {
             gpui_windows::hybrid::set_mode(renderer_mode(self.renderer, crate::background::DOCK_PROCESS.load(Ordering::Relaxed)));
         }
     }
@@ -1182,9 +1182,9 @@ show_hidden = true").unwrap();
 }
 
 /// Where data that can be rebuilt lives (remembered folder sizes): `%LOCALAPPDATA%\rustyfiles`,
-/// or `RUSTYFILES_CONFIG_DIR` when set, so test copies keep their data apart.
+/// or `LEAF_CONFIG_DIR` when set, so test copies keep their data apart.
 pub fn local_data_dir() -> Option<std::path::PathBuf> {
-    if let Some(d) = std::env::var_os("RUSTYFILES_CONFIG_DIR").filter(|d| !d.is_empty()) {
+    if let Some(d) = std::env::var_os("LEAF_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(std::path::PathBuf::from(d));
     }
     // the portable copy keeps everything in its own folder (issue 71)
@@ -1194,9 +1194,9 @@ pub fn local_data_dir() -> Option<std::path::PathBuf> {
     dirs::data_local_dir().map(|d| d.join("rustyfiles"))
 }
 
-/// `%APPDATA%\rustyfiles`, or `RUSTYFILES_CONFIG_DIR` when set (portable use, tests).
+/// `%APPDATA%\rustyfiles`, or `LEAF_CONFIG_DIR` when set (portable use, tests).
 pub fn app_dir() -> Option<std::path::PathBuf> {
-    if let Some(d) = std::env::var_os("RUSTYFILES_CONFIG_DIR").filter(|d| !d.is_empty()) {
+    if let Some(d) = std::env::var_os("LEAF_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(std::path::PathBuf::from(d));
     }
     // the portable copy: its own `data` folder (`rf_win::portable`, issue 71)
@@ -1363,18 +1363,18 @@ fn sync_name_index(on: bool, excluded: &[String]) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(delay));
         // extra instances (tests, the speed test's) leave it to the main one
-        // (RUSTYFILES_INDEX=1 indexes there too, for testing)
-        let extra = (std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some() || std::env::var_os("RUSTYFILES_INSTANCE").is_some()) && std::env::var_os("RUSTYFILES_INDEX").is_none();
-        if STATE.load(Ordering::Relaxed) != 2 || std::env::var_os("RUSTYFILES_NO_INDEX").is_some() || extra {
+        // (LEAF_INDEX=1 indexes there too, for testing)
+        let extra = (std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || std::env::var_os("LEAF_INSTANCE").is_some()) && std::env::var_os("LEAF_INDEX").is_none();
+        if STATE.load(Ordering::Relaxed) != 2 || std::env::var_os("LEAF_NO_INDEX").is_some() || extra {
             return;
         }
         // a copy with its own settings folder (tests, portable) keeps its index there too
-        let dir = match std::env::var_os("RUSTYFILES_CONFIG_DIR").map(std::path::PathBuf::from).or_else(rf_win::portable::data_dir) {
+        let dir = match std::env::var_os("LEAF_CONFIG_DIR").map(std::path::PathBuf::from).or_else(rf_win::portable::data_dir) {
             Some(cfg) => cfg.join("index"),
             None => std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, std::path::PathBuf::from).join("rustyfiles").join("index"),
         };
-        // RUSTYFILES_INDEX_ROOTS="E:\;F:\" picks the roots (testing)
-        let roots = match std::env::var("RUSTYFILES_INDEX_ROOTS") {
+        // LEAF_INDEX_ROOTS="E:\;F:\" picks the roots (testing)
+        let roots = match std::env::var("LEAF_INDEX_ROOTS") {
             Ok(v) => v.split(';').filter(|s| !s.is_empty()).map(std::path::PathBuf::from).collect(),
             Err(_) => rf_win::indexer::local_roots(),
         };

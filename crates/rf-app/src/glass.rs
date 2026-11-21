@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 use gpui_kit::{Bounds, IntoElement, Pixels, Styled, Window, canvas, div, px};
 use rf_win::glass::LensSpec;
 
-/// `RUSTYFILES_GLASS=1`: every main window uses the Glass backdrop for this run, whatever the saved setting says (and nothing is saved).
+/// `LEAF_GLASS=1`: every main window uses the Glass backdrop for this run, whatever the saved setting says (and nothing is saved).
 /// Read once. "0" and an empty value mean off.
 pub fn forced() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("RUSTYFILES_GLASS").is_ok_and(|v| !v.is_empty() && v != "0"))
+    *ON.get_or_init(|| std::env::var("LEAF_GLASS").is_ok_and(|v| !v.is_empty() && v != "0"))
 }
 
 /// Why the engine gave up on a window, for the settings page. Only the latest failure is kept: a failed window is on Mica, the page

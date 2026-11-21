@@ -125,7 +125,7 @@ impl Global for Auto {}
 pub fn sync(cx: &mut App) {
     // helpers (dock, file dialogs) never watch; neither does a second copy running beside the real one
     // on the real rules (a test copy has a settings folder of its own: its rules are its own)
-    if crate::background::side_process() || (std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some() && std::env::var_os("RUSTYFILES_CONFIG_DIR").is_none()) {
+    if crate::background::side_process() || (std::env::var_os("LEAF_MULTI_INSTANCE").is_some() && std::env::var_os("LEAF_CONFIG_DIR").is_none()) {
         return;
     }
     let (wants, missing) = wanted_and_missing(&super::state(cx).file, &super::protected(), &|p| p.is_dir());

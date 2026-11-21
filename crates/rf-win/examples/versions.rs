@@ -20,10 +20,10 @@ fn main() {
         .map(|s| {
             let (label, exe) = s.split_once('=').expect("label=exe");
             let env = vec![
-                ("RUSTYFILES_MULTI_INSTANCE".into(), "1".into()),
-                ("RUSTYFILES_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
-                ("RUSTYFILES_MUTE".into(), "1".into()),
-                ("RUSTYFILES_NO_INDEX".into(), "1".into()),
+                ("LEAF_MULTI_INSTANCE".into(), "1".into()),
+                ("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
+                ("LEAF_MUTE".into(), "1".into()),
+                ("LEAF_NO_INDEX".into(), "1".into()),
             ];
             (label.to_string(), App { kind: AppKind::Rustyfiles, exe: PathBuf::from(exe), env })
         })

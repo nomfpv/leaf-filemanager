@@ -278,8 +278,8 @@ pub fn delete_by_keys(keys: &[String]) -> anyhow::Result<()> {
                 cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
                 // our own dialog has asked already: the shell is not to ask again (CMIC_MASK_FLAG_NO_UI is SEE_MASK_FLAG_NO_UI).
                 // How the bin's verb treats this flag is NOT known (skip its question, or refuse because it cannot ask): with
-                // RUSTYFILES_BIN_DELETE_SHELL_UI=1 the flag is left out, so that the first live run can try both without a rebuild.
-                fMask: if std::env::var_os("RUSTYFILES_BIN_DELETE_SHELL_UI").is_some_and(|v| v == "1") { 0 } else { SEE_MASK_FLAG_NO_UI },
+                // LEAF_BIN_DELETE_SHELL_UI=1 the flag is left out, so that the first live run can try both without a rebuild.
+                fMask: if std::env::var_os("LEAF_BIN_DELETE_SHELL_UI").is_some_and(|v| v == "1") { 0 } else { SEE_MASK_FLAG_NO_UI },
                 lpVerb: PCSTR(s!("delete").as_ptr()),
                 nShow: SW_SHOWNORMAL.0,
                 ..Default::default()

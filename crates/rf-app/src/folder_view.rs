@@ -5431,10 +5431,10 @@ impl Render for FolderView {
 #[allow(dead_code)]
 fn _assert_category_used(_: Category) {}
 
-/// `RUSTYFILES_TRACE_LIVE=1`: log listing and live-update timings (benchmarks).
+/// `LEAF_TRACE_LIVE=1`: log listing and live-update timings (benchmarks).
 fn trace_live() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("RUSTYFILES_TRACE_LIVE").is_some())
+    *ON.get_or_init(|| std::env::var_os("LEAF_TRACE_LIVE").is_some())
 }
 
 /// What the first click of a possible double click was made on: the listing it was made in (`FolderView::load_serial`) and the

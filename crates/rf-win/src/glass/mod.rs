@@ -54,7 +54,7 @@
 //! backdrop; the mean brightness of the part under the glass is worked out from the same bytes (`luma.rs`), kept per window and given
 //! to the app by [`backdrop_luma`] (the dock picks light or dark text with it). It costs no GPU time: no pass, no copy, no wait.
 //!
-//! `RUSTYFILES_GLASS_STATS=1` makes the engine log, every 5 s per window, how many frames it acquired, how many carried an image, how
+//! `LEAF_GLASS_STATS=1` makes the engine log, every 5 s per window, how many frames it acquired, how many carried an image, how
 //! many draws it presented and how many the loop guard skipped, and the average time of the prep and of the glass pass.
 
 // All the D3D / DXGI / DirectComposition calls are `unsafe`; a block around every single one inside the `unsafe fn`s adds noise, not safety.
@@ -317,7 +317,7 @@ pub(crate) enum Cmd {
 }
 
 impl Cmd {
-    /// A short name for the engine's per-cause turn counters (`RUSTYFILES_GLASS_STATS=1`).
+    /// A short name for the engine's per-cause turn counters (`LEAF_GLASS_STATS=1`).
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Cmd::Attach { .. } => "attach",

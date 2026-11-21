@@ -245,7 +245,7 @@ fn save_and_quit(cx: &mut App) {
 }
 
 /// The variable a restarted rustyfiles is started with: the process id of the one that is ending (see [`restart`]).
-const AFTER_EXIT_ENV: &str = "RUSTYFILES_AFTER_EXIT";
+const AFTER_EXIT_ENV: &str = "LEAF_AFTER_EXIT";
 
 /// Restarts rustyfiles: DirectLook is asked to stop, a new rustyfiles is started that waits for this one to end, and
 /// this one quits the usual way (settings and session written). The new one opens its last session and brings
@@ -312,11 +312,11 @@ fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<rf_win::
 }
 
 /// rustyfiles'ın girişi.
-/// Start-up timing (`RUSTYFILES_TRACE_START=1`, logged at info): milliseconds since the process
+/// Start-up timing (`LEAF_TRACE_START=1`, logged at info): milliseconds since the process
 /// was created, at the steps before the first window.
 pub(crate) fn start_mark(step: &str) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ON.get_or_init(|| std::env::var_os("RUSTYFILES_TRACE_START").is_some()) {
+    if *ON.get_or_init(|| std::env::var_os("LEAF_TRACE_START").is_some()) {
         eprintln!("start: {step} at {} ms", rf_win::process_age_ms());
     }
 }
@@ -456,7 +456,7 @@ pub fn main() {
         }
     }
     // Cache the registry state for the settings page (read once, off the hot path).
-    let registers = std::env::var_os("RUSTYFILES_CONFIG_DIR").is_none();
+    let registers = std::env::var_os("LEAF_CONFIG_DIR").is_none();
     std::thread::spawn(move || {
         // copies opened/copied out of archives days ago
         crate::archive_view::clean_temp();
@@ -496,7 +496,7 @@ pub fn main() {
     // folder opens at once; the file, if one comes, is selected in it.
     const SHELL_SELECT_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
     let shell_select = match &start {
-        Some(Location::Path(dir)) if select.is_none() && std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_none() && std::env::var_os("RUSTYFILES_INSTANCE").is_none() && rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES) => {
+        Some(Location::Path(dir)) if select.is_none() && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() && std::env::var_os("LEAF_INSTANCE").is_none() && rf_win::default_fm::is_enabled(rf_win::default_fm::CLASSES) => {
             let (tx, rx) = std::sync::mpsc::channel();
             let dir = dir.clone();
             std::thread::spawn(move || {
@@ -526,8 +526,8 @@ pub fn main() {
         }
         _ => String::new(),
     };
-    // RUSTYFILES_MULTI_INSTANCE=1 skips forwarding (automated tests run several copies).
-    let multi = std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some();
+    // LEAF_MULTI_INSTANCE=1 skips forwarding (automated tests run several copies).
+    let multi = std::env::var_os("LEAF_MULTI_INSTANCE").is_some();
     rf_win::handover::trace(&format!("main: launch, request of {} bytes, multi {multi}", message.len()));
     let _instance = if multi {
         None
@@ -633,7 +633,7 @@ pub fn main() {
             status_center::offer_resume(cx);
         }
         // DirectLook ayrı süreç: önceden başlatılır ki ilk Boşluk beklemesin (testlerde değil)
-        if cx.global::<settings::Settings>().directlook_enabled && std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_none() {
+        if cx.global::<settings::Settings>().directlook_enabled && std::env::var_os("LEAF_MULTI_INSTANCE").is_none() {
             look::ipc::send(look::ipc::Msg::Wake, true);
         }
         // "Safely remove" / eject: let go of a drive when Windows asks (see rf_win::removal)

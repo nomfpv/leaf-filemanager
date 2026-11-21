@@ -18,7 +18,7 @@ public static class U {
 [U]::SetProcessDPIAware() | Out-Null
 $script:RF = $null
 $script:RFExe = "$PSScriptRoot\..\target\debug\rustyfiles.exe"
-$env:RUSTYFILES_MULTI_INSTANCE = "1"   # tests must not forward into another running copy
+$env:LEAF_MULTI_INSTANCE = "1"   # tests must not forward into another running copy
 
 function Start-RF([string]$Path = "") {
   $sw = [Diagnostics.Stopwatch]::StartNew()

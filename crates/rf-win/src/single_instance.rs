@@ -47,7 +47,7 @@ fn names_in_session(app: &str, session: u32) -> (String, String) {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".into());
     // A separate settings folder (tests, portable copies) is a separate instance group:
     // its second launch must not land in the user's everyday window.
-    let suffix = match std::env::var_os("RUSTYFILES_CONFIG_DIR") {
+    let suffix = match std::env::var_os("LEAF_CONFIG_DIR") {
         Some(dir) => {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -82,11 +82,11 @@ pub fn acquire(message: &str) -> Role {
     acquire_app(&instance_name(), message)
 }
 
-/// "rustyfiles", or "rustyfiles-NAME" with `RUSTYFILES_INSTANCE=NAME`: a copy that is a single
+/// "rustyfiles", or "rustyfiles-NAME" with `LEAF_INSTANCE=NAME`: a copy that is a single
 /// instance of its own (the speed test's "already running" copy) and never forwards to, or
 /// receives from, the user's.
 pub fn instance_name() -> String {
-    match std::env::var("RUSTYFILES_INSTANCE") {
+    match std::env::var("LEAF_INSTANCE") {
         Ok(n) if !n.is_empty() => format!("rustyfiles-{n}"),
         _ => "rustyfiles".to_string(),
     }
@@ -159,7 +159,7 @@ fn send(pipe: &str, message: &str) -> bool {
 
 /// Serves the pipe on a background thread; each received line is passed to `on_message`.
 pub fn serve(on_message: impl Fn(String) + Send + Sync + 'static) {
-    // the pipe of the group the mutex was taken in (`acquire` uses `instance_name`): with RUSTYFILES_INSTANCE set, a copy used to
+    // the pipe of the group the mutex was taken in (`acquire` uses `instance_name`): with LEAF_INSTANCE set, a copy used to
     // take the mutex of its own group and serve the pipe of the user's everyday one
     serve_app(&instance_name(), on_message)
 }

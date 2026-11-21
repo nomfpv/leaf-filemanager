@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
     let log = std::env::temp_dir().join("rf-search-vs.log");
     let env = |c: &mut Command| {
         // an instance group of its own: never the user's running copy
-        c.env("RUSTYFILES_CONFIG_DIR", &cfg).env("RUSTYFILES_INSTANCE", "search-vs").env("RUSTYFILES_INDEX", "1").env("RUSTYFILES_INDEX_ROOTS", &root).env("RUSTYFILES_MUTE", "1").env("RUST_LOG", "info");
+        c.env("LEAF_CONFIG_DIR", &cfg).env("LEAF_INSTANCE", "search-vs").env("LEAF_INDEX", "1").env("LEAF_INDEX_ROOTS", &root).env("LEAF_MUTE", "1").env("RUST_LOG", "info");
     };
     let mut c = Command::new(&exe);
     c.arg(&root).stderr(std::fs::File::create(&log)?);

@@ -377,7 +377,7 @@ pub fn measure_launch(app: &App, arg: &std::ffi::OsStr, title: &str, quiet: Dura
             // (the test's own, with the test's settings)
             !before.contains(&w.hwnd)
                 && w.title.contains(&leaf)
-                && (app.kind != AppKind::Rustyfiles || !app.env.iter().any(|(k, _)| k == "RUSTYFILES_MULTI_INSTANCE") || w.pid == child_pid)
+                && (app.kind != AppKind::Rustyfiles || !app.env.iter().any(|(k, _)| k == "LEAF_MULTI_INSTANCE") || w.pid == child_pid)
         });
         if let Some(w) = found {
             break w;

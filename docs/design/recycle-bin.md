@@ -43,7 +43,7 @@ them: every one is a new menu entry, button or field, and nothing runs at start-
 unknown: how the bin's verb treats `SEE_MASK_FLAG_NO_UI`. Three outcomes are possible: it skips its own "are you sure" (what we
 want); it ignores the flag and asks (a second question, shown by the shell with no owner window, so it may sit behind the app);
 or it refuses because it may not ask (every deletion then ends as "N öğe silinemedi": a safe failure, but the feature does
-nothing). The environment variable `RUSTYFILES_BIN_DELETE_SHELL_UI=1` leaves the flag out, so the first live run can try both
+nothing). The environment variable `LEAF_BIN_DELETE_SHELL_UI=1` leaves the flag out, so the first live run can try both
 without a rebuild. Also unknown: whether a failure of one item (in use) makes the verb return an error or silently skip it (both are
 handled: the report counts what is left).
 

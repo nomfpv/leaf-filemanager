@@ -5,7 +5,7 @@
 //! (a real process: its mutex and pipe go when it ends) whose "UI thread" is modelled on the app's: a loop that acts on the
 //! requests that arrive and, on "the last window closed", goes through the quit the app goes through (settings save and name
 //! index stop block the UI thread, GPUI's quit is a task queued behind the tasks already queued, the process ends after that).
-//! The group is private (RUSTYFILES_INSTANCE and RUSTYFILES_CONFIG_DIR are set here), so nothing of the user's is touched.
+//! The group is private (LEAF_INSTANCE and LEAF_CONFIG_DIR are set here), so nothing of the user's is touched.
 //!
 //! N second launches are started at evenly spread moments around the event of the scenario. Each ends as one of
 //!   SHOWN    a window or tab with its folder is there and stays (acted on by a first instance that lives on, or shown by the
@@ -164,7 +164,7 @@ static TAKER_HANDLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn serve_as_taker(proto: Proto) {
     // once per group (a pipe thread of an earlier scenario goes on serving its own group's name; groups differ per scenario)
-    let group = std::env::var("RUSTYFILES_INSTANCE").unwrap_or_default();
+    let group = std::env::var("LEAF_INSTANCE").unwrap_or_default();
     {
         let mut served = SERVING.lock().unwrap();
         if served.contains(&group) {
@@ -206,7 +206,7 @@ fn run_scenario(exe: &Path, proto: Proto, name: &str, plan: Plan, n: usize, spre
         std::env::set_var("HANDOVER_PROBE_LOG", &log);
         // a group of its own for each scenario: nothing of an earlier scenario (a taker still serving its pipe) can answer in this one
         let base = std::env::var("HANDOVER_PROBE_GROUP").unwrap();
-        std::env::set_var("RUSTYFILES_INSTANCE", format!("{base}-{}", name.replace(|c: char| !c.is_ascii_alphanumeric(), "")));
+        std::env::set_var("LEAF_INSTANCE", format!("{base}-{}", name.replace(|c: char| !c.is_ascii_alphanumeric(), "")));
     }
     TAKER_HANDLED.lock().unwrap().clear();
     let mut cmd = std::process::Command::new(exe);
@@ -330,10 +330,10 @@ fn main() {
     unsafe {
         // (the first instance, a child, inherits its scenario's group from the parent)
         if args.first().map(String::as_str) != Some("first") {
-            std::env::set_var("RUSTYFILES_INSTANCE", format!("probe{}", std::process::id()));
+            std::env::set_var("LEAF_INSTANCE", format!("probe{}", std::process::id()));
         }
-        if std::env::var_os("RUSTYFILES_CONFIG_DIR").is_none() {
-            std::env::set_var("RUSTYFILES_CONFIG_DIR", std::env::temp_dir().join("rf-handover-probe-config"));
+        if std::env::var_os("LEAF_CONFIG_DIR").is_none() {
+            std::env::set_var("LEAF_CONFIG_DIR", std::env::temp_dir().join("rf-handover-probe-config"));
         }
     }
     if args.first().map(String::as_str) == Some("first") {
@@ -352,7 +352,7 @@ fn main() {
     let proto = if args.first().map(String::as_str) == Some("old") { Proto::Old } else { Proto::New };
     let n: usize = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(40);
     // the group is the same for the parent and the children it starts
-    unsafe { std::env::set_var("HANDOVER_PROBE_GROUP", std::env::var("RUSTYFILES_INSTANCE").unwrap()) };
+    unsafe { std::env::set_var("HANDOVER_PROBE_GROUP", std::env::var("LEAF_INSTANCE").unwrap()) };
     let exe = std::env::current_exe().unwrap();
     println!("protocol: {}, {n} second launches per scenario", if proto == Proto::Old { "old (0.6.5: write and leave)" } else { "new (acknowledged hand-over)" });
     let scenarios: Vec<(&str, Plan, (i64, i64))> = vec![

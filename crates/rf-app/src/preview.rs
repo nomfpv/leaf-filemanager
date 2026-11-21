@@ -64,7 +64,7 @@ pub struct Preview {
     /// The pane sits at the bottom of the window: the size of its box (width, height), set by the window every frame.
     /// None = at the right (the tall and narrow layout, which is all that was there before).
     wide: Option<(f32, f32)>,
-    /// Time marks (a test copy with RUSTYFILES_PREVIEW_TRACE only).
+    /// Time marks (a test copy with LEAF_PREVIEW_TRACE only).
     trace: crate::preview_trace::PaneTrace,
 }
 

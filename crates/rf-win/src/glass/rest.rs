@@ -33,7 +33,7 @@ pub(super) const HOLD: Duration = Duration::from_millis(400);
 /// like a command, `watch.rs` and `glass::pointer_over`; a frame ends the wait of a capture session at once). This was NOT shown to
 /// lower the wake-ups of the engine thread on the capture-session path (see `docs/design/dock.md`, "Glass that is not in front"); it
 /// is kept because it cannot make anything later than the events above, and the per-cause turn counters
-/// (`RUSTYFILES_GLASS_STATS=1`) are there to find what does wake the thread.
+/// (`LEAF_GLASS_STATS=1`) are there to find what does wake the thread.
 pub(super) const BEHIND_QUIET_WAIT_MS: u32 = 100;
 
 /// The quiet wait for a frame: `base` (what the engine waits when nothing is in front or not), or `BEHIND_QUIET_WAIT_MS` when this is
@@ -83,7 +83,7 @@ pub(super) fn care(f: &Facts) -> Care {
     if f.freeze && f.drawn { Care::Frozen } else { Care::Behind }
 }
 
-/// [`care`] when the rules are on; `Front` for every window when they are off (`RUSTYFILES_GLASS_BG_FPS=0`, see [`rules_on`]).
+/// [`care`] when the rules are on; `Front` for every window when they are off (`LEAF_GLASS_BG_FPS=0`, see [`rules_on`]).
 pub(super) fn care_under(rules: bool, f: &Facts) -> Care {
     if rules { care(f) } else { Care::Front }
 }
@@ -99,7 +99,7 @@ pub(super) fn facts_of(own_root: isize, fg_root: isize, under_pointer: isize, la
     (Facts { front, pointer, since: last.map(|t| now.saturating_duration_since(t)), freeze, drawn }, last)
 }
 
-/// Whether the rate rules are on: `RUSTYFILES_GLASS_BG_FPS=0` turns them off, every seen window is then in front (nothing is slowed or
+/// Whether the rate rules are on: `LEAF_GLASS_BG_FPS=0` turns them off, every seen window is then in front (nothing is slowed or
 /// frozen and the engine's quiet wait is the old one). What a window nobody sees gives back after `TRIM_AFTER`, the scan for glass of
 /// other processes and Desktop Duplication's reading of its dirty rectangles are not part of the rules and stay on.
 pub(super) fn rules_on() -> bool {
@@ -122,7 +122,7 @@ pub(super) fn pace<I: IntoIterator<Item = Care>>(cares: I) -> Pace {
 
 /// The shortest time between two frames for a pace, in 100 ns ticks: `normal` (what `wgc::interval_for` gives) for `Full`, and for
 /// `Slow` the longer of that and `1 / BEHIND_FPS` (never shorter than the normal rate: a display or a battery that already asks for
-/// less keeps it). `fps` overrides [`BEHIND_FPS`] (`RUSTYFILES_GLASS_BG_FPS`); `0` means no difference from `Full`.
+/// less keeps it). `fps` overrides [`BEHIND_FPS`] (`LEAF_GLASS_BG_FPS`); `0` means no difference from `Full`.
 pub(super) fn interval_ticks(normal: i64, pace: Pace, fps: f64) -> i64 {
     match pace {
         Pace::Full => normal,
@@ -131,11 +131,11 @@ pub(super) fn interval_ticks(normal: i64, pace: Pace, fps: f64) -> i64 {
     }
 }
 
-/// `RUSTYFILES_GLASS_BG_FPS` read once: a number of frames a second for windows that are seen but not in front (`0`: the rate rules
+/// `LEAF_GLASS_BG_FPS` read once: a number of frames a second for windows that are seen but not in front (`0`: the rate rules
 /// are off, see [`rules_on`]; for comparing on a live desktop without a new build).
 pub(super) fn behind_fps() -> f64 {
     static FPS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *FPS.get_or_init(|| std::env::var("RUSTYFILES_GLASS_BG_FPS").ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(BEHIND_FPS))
+    *FPS.get_or_init(|| std::env::var("LEAF_GLASS_BG_FPS").ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(BEHIND_FPS))
 }
 
 /// Whether a window that has a draw waiting may take its turn now. A window in front always may. A window that is seen but not in
@@ -261,7 +261,7 @@ mod tests {
         assert!(draw_due(Care::Behind, true, Some(gap), gap));
         // behind but only a lens or a shape moved (the backdrop is the one it has): never held back
         assert!(draw_due(Care::Behind, false, Some(ms(1)), gap));
-        // a window with a zero gap (no rule: RUSTYFILES_GLASS_BG_FPS=0) is never held back
+        // a window with a zero gap (no rule: LEAF_GLASS_BG_FPS=0) is never held back
         assert!(draw_due(Care::Behind, true, Some(Duration::ZERO), Duration::ZERO));
         // how long it waits
         assert_eq!(draw_wait(Care::Behind, true, Some(ms(10)), gap), Some(ms(40)));

@@ -398,7 +398,7 @@ impl Stats {
     }
 }
 
-/// Why the engine thread woke, counted per cause and logged with the other statistics (`RUSTYFILES_GLASS_STATS=1`). On the capture-session
+/// Why the engine thread woke, counted per cause and logged with the other statistics (`LEAF_GLASS_STATS=1`). On the capture-session
 /// path the thread was seen waking about 500 times a second on a desktop where nothing changed behind the glass, and the reason was not
 /// found by reading the code; these counters are there to find it on a live desktop instead of guessing.
 #[derive(Default)]
@@ -971,7 +971,7 @@ pub(super) fn run(rx: Receiver<Cmd>) {
         // window and monitor rectangles must come back in device pixels whatever the process was started as
         SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
-    let stats_on = std::env::var("RUSTYFILES_GLASS_STATS").is_ok_and(|v| v == "1");
+    let stats_on = std::env::var("LEAF_GLASS_STATS").is_ok_and(|v| v == "1");
     let mut e = Engine::new(rx);
     e.stats_on = stats_on;
     while e.step() {}
@@ -1786,7 +1786,7 @@ impl Engine {
         }
     }
 
-    /// Statistics every few seconds (RUSTYFILES_GLASS_STATS=1), and a look at the device.
+    /// Statistics every few seconds (LEAF_GLASS_STATS=1), and a look at the device.
     fn housekeeping(&mut self) {
         let now = Instant::now();
         self.trim_idle(now);

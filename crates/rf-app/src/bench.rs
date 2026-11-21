@@ -147,9 +147,9 @@ pub fn rustyfiles_app() -> App {
         kind: AppKind::Rustyfiles,
         exe,
         env: vec![
-            ("RUSTYFILES_MULTI_INSTANCE".into(), "1".into()),
-            ("RUSTYFILES_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
-            ("RUSTYFILES_MUTE".into(), "1".into()),
+            ("LEAF_MULTI_INSTANCE".into(), "1".into()),
+            ("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()),
+            ("LEAF_MUTE".into(), "1".into()),
         ],
     }
 }
@@ -650,7 +650,7 @@ directlook_enabled = false
         let warm = App {
             kind: AppKind::Rustyfiles,
             exe: fresh.exe.clone(),
-            env: vec![("RUSTYFILES_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()), ("RUSTYFILES_MUTE".into(), "1".into())],
+            env: vec![("LEAF_CONFIG_DIR".into(), cfg.to_string_lossy().into_owned()), ("LEAF_MUTE".into(), "1".into())],
         };
         let mut apps = vec![fresh, warm];
         apps.extend(rf_win::bench::detect().into_iter().filter(|a| matches!(a.kind, AppKind::Explorer | AppKind::Files)));

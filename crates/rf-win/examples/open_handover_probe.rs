@@ -11,8 +11,8 @@
 //! at start, so it is pointed at an empty one):
 //!
 //! ```text
-//! set RUSTYFILES_INSTANCE=probe-open
-//! set RUSTYFILES_CONFIG_DIR=<an empty temp folder>
+//! set LEAF_INSTANCE=probe-open
+//! set LEAF_CONFIG_DIR=<an empty temp folder>
 //! set TEMP=<another empty temp folder>
 //! cargo run --offline -p rf-win --example open_handover_probe -- <path of rustyfiles.exe> [runs]
 //! ```
@@ -35,8 +35,8 @@ fn main() {
         eprintln!("usage: open_handover_probe <rustyfiles.exe> [runs]");
         std::process::exit(2);
     };
-    if std::env::var_os("RUSTYFILES_INSTANCE").is_none() || std::env::var_os("RUSTYFILES_CONFIG_DIR").is_none() {
-        eprintln!("refusing to run: RUSTYFILES_INSTANCE and RUSTYFILES_CONFIG_DIR must be set, so that the user's own rustyfiles is never reached");
+    if std::env::var_os("LEAF_INSTANCE").is_none() || std::env::var_os("LEAF_CONFIG_DIR").is_none() {
+        eprintln!("refusing to run: LEAF_INSTANCE and LEAF_CONFIG_DIR must be set, so that the user's own rustyfiles is never reached");
         std::process::exit(2);
     }
     let runs: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);

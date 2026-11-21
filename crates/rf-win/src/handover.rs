@@ -30,7 +30,7 @@
 //! newer second launch knows it can get no answer and falls back to the old fire-and-forget write. A newer first instance takes
 //! the old fire-and-forget writes too (they just never see an answer).
 //!
-//! `RUSTYFILES_TRACE_HANDOVER=1` writes the steps with time marks to `rustyfiles-handover.log` in the temp folder (or to the
+//! `LEAF_TRACE_HANDOVER=1` writes the steps with time marks to `rustyfiles-handover.log` in the temp folder (or to the
 //! file the variable names); off, a step costs one atomic load.
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -295,15 +295,15 @@ pub static GATE: Gate = Gate::new();
 fn trace_sink() -> Option<&'static std::path::PathBuf> {
     static SINK: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
     SINK.get_or_init(|| {
-        let v = std::env::var_os("RUSTYFILES_TRACE_HANDOVER").filter(|v| !v.is_empty())?;
+        let v = std::env::var_os("LEAF_TRACE_HANDOVER").filter(|v| !v.is_empty())?;
         Some(if v == "1" { std::env::temp_dir().join("rustyfiles-handover.log") } else { v.into() })
     })
     .as_ref()
 }
 
 /// One step of the hand-over with its time (UTC time of day to the millisecond, so that the lines of the two processes sort, and
-/// the process's own age), when `RUSTYFILES_TRACE_HANDOVER` asks for it. The steps carry no paths.
-/// Whether `RUSTYFILES_TRACE_HANDOVER` is on (a costly step is traced only then).
+/// the process's own age), when `LEAF_TRACE_HANDOVER` asks for it. The steps carry no paths.
+/// Whether `LEAF_TRACE_HANDOVER` is on (a costly step is traced only then).
 pub fn tracing() -> bool {
     trace_sink().is_some()
 }

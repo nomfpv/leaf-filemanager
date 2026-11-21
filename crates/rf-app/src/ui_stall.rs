@@ -1,4 +1,4 @@
-//! `RUSTYFILES_TRACE_STALL=1` (or a number of milliseconds): logs every time the UI thread was blocked for longer than that
+//! `LEAF_TRACE_STALL=1` (or a number of milliseconds): logs every time the UI thread was blocked for longer than that
 //! (default 50 ms), with how long, and the longest block so far.
 //!
 //! How: a task on the UI thread asks the background timer for a wake-up in 10 ms. The wake-up can only run once the UI thread is
@@ -27,7 +27,7 @@ fn held(took: Duration) -> Duration {
 
 /// Starts the watch when the environment asks for it.
 pub fn start(cx: &mut App) {
-    let Some(text) = std::env::var_os("RUSTYFILES_TRACE_STALL") else { return };
+    let Some(text) = std::env::var_os("LEAF_TRACE_STALL") else { return };
     let limit = limit_from(&text.to_string_lossy());
     log::warn!("stall trace on: the UI thread held for more than {} ms is logged", limit.as_millis());
     cx.spawn(async move |cx| {

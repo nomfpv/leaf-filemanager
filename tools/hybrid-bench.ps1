@@ -26,8 +26,8 @@ Remove-Item $log, $raw -ErrorAction SilentlyContinue
 function Pct($sorted, [double]$p) { if ($sorted.Count -eq 0) { return $null }; $sorted[[int][Math]::Round(($sorted.Count - 1) * $p)] }
 
 function Start-App {
-  $env:RUSTYFILES_RENDERER = $Mode
-  $env:RUSTYFILES_FRAME_LOG = $raw
+  $env:LEAF_RENDERER = $Mode
+  $env:LEAF_FRAME_LOG = $raw
   $env:RUST_LOG = "info,gpui_windows=debug"
   $script:RF = Start-Process $script:RFExe -ArgumentList "`"$Path`"" -PassThru -RedirectStandardError $log
   $sw = [Diagnostics.Stopwatch]::StartNew()

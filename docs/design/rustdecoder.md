@@ -652,7 +652,7 @@ DirectLook route, gaps closed (2026-11-09, branch worktree-agent-a657e1e417248d4
   the `pasp` box renamed (VUI only), 12:11 from the table, MKV 4:3 and 9/8, WebM VP9, and the
   hidden window's letterbox rows (853x360 in 800x600: rows 131..469).
 - Viewer moves: no fix was needed. Checked on a DirectLook test instance
-  (`RUSTYFILES_RUSTDECODER=1`, muted, own config dir, a 640x360 `setsar=4/3` clip) driven only
+  (`LEAF_RUSTDECODER=1`, muted, own config dir, a 640x360 `setsar=4/3` clip) driven only
   with `SetWindowPos` / `PostMessage` on its own windows: three moves of the viewer left the popup
   at the same offset (8, 43) each time, a resize to 900x700 re-fitted it (883x373, the 853:360
   shape), and a posted `WM_LBUTTONDBLCLK` on the popup took the viewer to the full 2560x1440

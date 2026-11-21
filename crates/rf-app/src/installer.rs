@@ -109,7 +109,7 @@ pub fn busy() -> bool {
     matches!(state(), State::Checking | State::Downloading(..))
 }
 
-/// `RUSTYFILES_FAKE_UPDATE=1` (test copies): check, download 0→100 % and "ready" without a network,
+/// `LEAF_FAKE_UPDATE=1` (test copies): check, download 0→100 % and "ready" without a network,
 /// to see the About page's states.
 fn fake_check() {
     use std::thread::sleep;
@@ -119,8 +119,8 @@ fn fake_check() {
         set(State::Downloading("9.9.9".into(), pct));
         sleep(Duration::from_millis(120));
     }
-    // (`RUSTYFILES_FAKE_UPDATE=important`: the look of an important one)
-    if std::env::var("RUSTYFILES_FAKE_UPDATE").is_ok_and(|v| v.trim() == "important") {
+    // (`LEAF_FAKE_UPDATE=important`: the look of an important one)
+    if std::env::var("LEAF_FAKE_UPDATE").is_ok_and(|v| v.trim() == "important") {
         *IMPORTANT.lock().unwrap_or_else(|p| p.into_inner()) = Some("9.9.9".into());
     }
     set(State::Ready("9.9.9".into()));
@@ -128,9 +128,9 @@ fn fake_check() {
 
 /// "0.1.0 · b241ace · 08.11.2026 02:40": the version, the commit and when it was built.
 pub fn version_full() -> String {
-    let built = env!("RUSTYFILES_BUILT").parse::<i64>().ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0));
+    let built = env!("LEAF_BUILT").parse::<i64>().ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0));
     let when = built.map(|t| t.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M").to_string()).unwrap_or_default();
-    format!("{} · {} · {when}", version(), env!("RUSTYFILES_COMMIT"))
+    format!("{} · {} · {when}", version(), env!("LEAF_COMMIT"))
 }
 
 /// This build's version (the crate's).
@@ -138,9 +138,9 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Update checks are off in this fork: nothing is fetched (`RUSTYFILES_FAKE_UPDATE` still shows the About page's states).
+/// Update checks are off in this fork: nothing is fetched (`LEAF_FAKE_UPDATE` still shows the About page's states).
 pub fn check() {
-    if std::env::var_os("RUSTYFILES_FAKE_UPDATE").is_some() {
+    if std::env::var_os("LEAF_FAKE_UPDATE").is_some() {
         return fake_check();
     }
     set(State::NotInstalled);

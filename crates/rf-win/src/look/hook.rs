@@ -141,7 +141,7 @@ pub fn start(on_event: impl Fn(LookEvent) + Send + 'static) -> HookHandle {
     let hook = std::thread::Builder::new()
         .name("look-hook".into())
         .spawn(move || {
-            let trace = std::env::var_os("RUSTYFILES_LOOK_TRACE").is_some().then_some((0u64, Duration::ZERO));
+            let trace = std::env::var_os("LEAF_LOOK_TRACE").is_some().then_some((0u64, Duration::ZERO));
             STATE.with(|s| *s.borrow_mut() = Some(HookState { gate: KeyGate::new(), tx, trace }));
             let kb: Option<HHOOK> = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), None, 0) }.ok();
             let fg = unsafe {

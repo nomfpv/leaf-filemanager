@@ -473,7 +473,7 @@ pub(super) fn min_interval_ticks(hz: u32, power: Power) -> i64 {
     (period_ms.max(want_ms).max(4.0) * 10_000.0) as i64
 }
 
-/// The interval a session is given: the policy (`min_interval_ticks`), unless `RUSTYFILES_GLASS_MAX_FPS` says otherwise for this run
+/// The interval a session is given: the policy (`min_interval_ticks`), unless `LEAF_GLASS_MAX_FPS` says otherwise for this run
 /// (a number of frames a second; `0` is the old behaviour, one refresh period). It exists so that the cap can be compared with no cap
 /// on a live desktop without a new build.
 pub(super) fn interval_for(hz: u32, power: Power) -> i64 {
@@ -487,7 +487,7 @@ pub(super) fn interval_for_pace(hz: u32, power: Power, pace: Pace) -> i64 {
 
 fn interval_for_full(hz: u32, power: Power) -> i64 {
     static OVERRIDE: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    let fps = *OVERRIDE.get_or_init(|| std::env::var("RUSTYFILES_GLASS_MAX_FPS").ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0));
+    let fps = *OVERRIDE.get_or_init(|| std::env::var("LEAF_GLASS_MAX_FPS").ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0));
     match fps {
         Some(0.0) => refresh_period_ticks(hz),
         Some(f) => (refresh_period_ticks(hz) as f64).max(1e7 / f) as i64,

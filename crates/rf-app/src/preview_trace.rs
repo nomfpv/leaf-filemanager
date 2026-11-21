@@ -1,8 +1,8 @@
 //! Time marks for the preview pane's picture, from "the focused item changed" to "the picture is in hand",
-//! written only when the environment variable `RUSTYFILES_PREVIEW_TRACE` is set (a test copy; nothing is
+//! written only when the environment variable `LEAF_PREVIEW_TRACE` is set (a test copy; nothing is
 //! read, written or timed otherwise: `on()` is one cached bool).
 //!
-//! The lines go to `preview-trace.log` in `RUSTYFILES_CONFIG_DIR` (the temp folder when it is not set):
+//! The lines go to `preview-trace.log` in `LEAF_CONFIG_DIR` (the temp folder when it is not set):
 //!
 //! ```text
 //! +   1234.5 ms [thread] text
@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 fn state() -> &'static Option<(Instant, Mutex<std::fs::File>)> {
     static S: OnceLock<Option<(Instant, Mutex<std::fs::File>)>> = OnceLock::new();
     S.get_or_init(|| {
-        std::env::var_os("RUSTYFILES_PREVIEW_TRACE")?;
-        let dir = std::env::var_os("RUSTYFILES_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        std::env::var_os("LEAF_PREVIEW_TRACE")?;
+        let dir = std::env::var_os("LEAF_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
         let _ = std::fs::create_dir_all(&dir);
         let f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("preview-trace.log")).ok()?;
         Some((Instant::now(), Mutex::new(f)))

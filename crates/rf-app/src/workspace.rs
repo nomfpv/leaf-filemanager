@@ -281,7 +281,7 @@ pub(crate) fn save_closed_placement(id: WindowId, cx: &mut App) {
 /// pins or the language change; test runs (several instances) leave the user's list alone.
 fn update_jump_list(places: &crate::places::Places) {
     static LAST: std::sync::Mutex<Option<(Vec<(String, PathBuf)>, Vec<(String, PathBuf)>, [&'static str; 4])>> = std::sync::Mutex::new(None);
-    if !places.loaded || !places.extras_loaded || std::env::var_os("RUSTYFILES_MULTI_INSTANCE").is_some() || std::env::var_os("RUSTYFILES_INSTANCE").is_some() {
+    if !places.loaded || !places.extras_loaded || std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || std::env::var_os("LEAF_INSTANCE").is_some() {
         return;
     }
     // in the UI language, as the sidebar shows them (a default pin's title is its Turkish name)
@@ -4307,7 +4307,7 @@ impl Render for Workspace {
         let strip_due = surface == crate::transfer_view::Surface::Strip && crate::transfer_view::strip_due(&self.ops, cx);
         let show_statusbar = show_statusbar && (strip_due || !matches!(self.active_tab().read(cx).location(), Location::Home | Location::Settings));
         use crate::settings::BackdropPref;
-        // RUSTYFILES_GLASS=1 forces Glass for this run (nothing is saved); a window whose glass failed is on Mica until the setting changes
+        // LEAF_GLASS=1 forces Glass for this run (nothing is saved); a window whose glass failed is on Mica until the setting changes
         if self.backdrop_pref_seen != Some(backdrop) {
             if self.backdrop_pref_seen.is_some() {
                 // the user chose again: whatever was said about an earlier failure is old

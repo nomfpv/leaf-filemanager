@@ -1,4 +1,4 @@
-//! DirectLook's rustdecoder route (opt-in: `RUSTYFILES_RUSTDECODER=1`): MP4 / MOV files with H.264
+//! DirectLook's rustdecoder route (opt-in: `LEAF_RUSTDECODER=1`): MP4 / MOV files with H.264
 //! or HEVC play through `rustdecoder` (own container parser, GPU video decoder, WASAPI sound,
 //! flip-model swap chain) in a popup window owned by the viewer window and placed over the video
 //! area, the way the Media Foundation route does it. Whatever rustdecoder cannot open falls back
@@ -9,9 +9,9 @@ use std::path::Path;
 use rustdecoder::mp4::Codec;
 use rustdecoder::window::{Placement, VideoWindow, WindowOptions, WindowState};
 
-/// The route is on only when `RUSTYFILES_RUSTDECODER=1`.
+/// The route is on only when `LEAF_RUSTDECODER=1`.
 pub fn enabled() -> bool {
-    std::env::var("RUSTYFILES_RUSTDECODER").is_ok_and(|v| v == "1")
+    std::env::var("LEAF_RUSTDECODER").is_ok_and(|v| v == "1")
 }
 
 /// What the container says about a file rustdecoder might play.
@@ -67,7 +67,7 @@ impl RdVideo {
     /// thread. Fails when rustdecoder cannot play the file.
     pub fn open(path: &Path, owner: isize, rect: [i32; 4], s: &Settings) -> Result<RdVideo, String> {
         let place = Placement::Popup { owner, x: rect[0], y: rect[1], width: (rect[2] - rect[0]).max(1) as u32, height: (rect[3] - rect[1]).max(1) as u32 };
-        let muted = s.muted || std::env::var_os("RUSTYFILES_MUTE").is_some();
+        let muted = s.muted || std::env::var_os("LEAF_MUTE").is_some();
         let opts = WindowOptions { background: [0.0, 0.0, 0.0, 1.0], audio: true, muted, volume: s.volume, looping: s.looping, autoplay: true, visible: true, ring: 6 };
         let win = VideoWindow::open(path, place, opts).map_err(|e| e.to_string())?;
         Ok(RdVideo { win: Some(win) })
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn off_by_default() {
         // the variable is not set in the test environment unless somebody asked for it
-        if std::env::var_os("RUSTYFILES_RUSTDECODER").is_none() {
+        if std::env::var_os("LEAF_RUSTDECODER").is_none() {
             assert!(!enabled());
         }
     }

@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let log = std::env::temp_dir().join("rf-window-leak.log");
     let launch = |first: bool| -> anyhow::Result<std::process::Child> {
         let mut c = Command::new(&exe);
-        c.arg(&folder).env("RUSTYFILES_CONFIG_DIR", &cfg).env("RUSTYFILES_MUTE", "1");
+        c.arg(&folder).env("LEAF_CONFIG_DIR", &cfg).env("LEAF_MUTE", "1");
         if first {
             c.env("RUST_LOG", "info").stderr(std::fs::File::create(&log)?);
         }
