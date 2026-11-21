@@ -131,6 +131,24 @@ pub fn set_dark_mode(hwnd: isize, dark: bool) {
     }
 }
 
+/// Takes the window's system menu style away. A window that draws its own caption buttons (the title bar of the app) still has the
+/// system's close button in the top right corner of its frame, which the desktop draws over a see-through window as a small dim x above
+/// the app's own. Without `WS_SYSMENU` the system draws none; Alt+F4, the taskbar's close and the app's own buttons are unchanged.
+pub fn hide_system_caption(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, SWP_FRAMECHANGED, SWP_NOZORDER, SetWindowLongPtrW, WS_SYSMENU};
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let style = GetWindowLongPtrW(h, GWL_STYLE);
+        if style & WS_SYSMENU.0 as isize != 0 {
+            SetWindowLongPtrW(h, GWL_STYLE, style & !(WS_SYSMENU.0 as isize));
+            let _ = SetWindowPos(h, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+    }
+}
+
 /// Asks the system for small round corners (4 px at 100 %) on a window: what the Acrylic popups get from their material, for a popup
 /// whose background is the glass engine's instead. The glass takes its own corners from what the system reports, so this is also what
 /// the glass is cut to. Ignored before Windows 11.

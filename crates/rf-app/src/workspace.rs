@@ -888,6 +888,8 @@ impl Workspace {
             Self::release_preview_host(window);
             true
         });
+        // the system's own close button would show as a dim x above the title bar's over a see-through window
+        leaf_sys::window::hide_system_caption(crate::look::window::hwnd_of(window));
         let prefs = cx.global::<crate::settings::Settings>().clone();
         {
             let entry = (window.window_handle(), cx.entity().downgrade());

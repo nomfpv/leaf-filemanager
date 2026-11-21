@@ -55,6 +55,9 @@ pub fn set_app_id(_id: &str) {}
 /// Dark title bars and corner shapes are Windows' (DWM); the desktop draws the frame here.
 pub fn set_dark_mode(_hwnd: isize, _dark: bool) {}
 
+/// The desktop draws the frame here; nothing to take away.
+pub fn hide_system_caption(_hwnd: isize) {}
+
 pub fn set_small_corners(_hwnd: isize) {}
 
 pub fn set_round_corners(_hwnd: isize) {}
