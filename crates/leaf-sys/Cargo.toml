@@ -1,0 +1,16 @@
+[package]
+name = "leaf-sys"
+description = "leaf: the facade the app reaches the operating system through (rf-win on Windows, leaf-unix on Linux)"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+leaf-common.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+rf-win.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+leaf-unix.workspace = true

@@ -4265,6 +4265,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-sys"
+version = "0.9.4"
+dependencies = [
+ "leaf-common",
+ "leaf-unix",
+ "rf-win",
+]
+
+[[package]]
 name = "leaf-unix"
 version = "0.9.4"
 dependencies = [
