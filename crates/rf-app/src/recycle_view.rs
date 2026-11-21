@@ -18,6 +18,7 @@ use leaf_sys::recycle::RecycleItem;
 
 use crate::actions::{DeleteItems, DeletePermanently, InvertSelection, SelectAll};
 use crate::fluent_menu::{self, Item, Menu, MenuIcon};
+use crate::menu_model::{Entry, MenuContext, Slot, Target, plan};
 use crate::image_cache::ImageCache;
 use crate::recycle_settings_view::{BinDialogEvent, BinSettingsDialog, Store};
 use crate::recycle_text;
@@ -298,30 +299,31 @@ impl RecycleView {
         }
         let has_sel = !rf_core::recycle_bin::command_targets(&self.order, &self.selected).is_empty() && !self.busy;
         let me = cx.entity().downgrade();
-        let mut items = Vec::new();
-        {
-            let me = me.clone();
-            items.push(
-                Item::action(t!("Restore"), MenuIcon::Lucide(L::Undo2), move |_, cx| {
-                    let _ = me.update(cx, |v, cx| v.restore_selected(cx));
-                })
-                .enabled(has_sel),
-            );
-        }
-        {
-            let me = me.clone();
-            items.push(
-                Item::action(t!("Delete permanently"), MenuIcon::Lucide(L::TrashOff), move |window, cx| {
-                    let _ = me.update(cx, |v, cx| v.delete_selected(window, cx));
-                })
-                .hint("Shift+Del")
-                .enabled(has_sel),
-            );
-        }
-        items.push(Item::Separator);
-        items.push(Item::action(t!("Recycle Bin settings…"), MenuIcon::Lucide(L::Settings), move |window, cx| {
-            let _ = me.update(cx, |v, cx| v.open_settings(window, cx));
-        }));
+        // the rows come from `menu_model` (the same for a row and the background: Restore and Delete wait for a selection)
+        let ctx = MenuContext { target: Target::RecycleItem, ..Default::default() };
+        let items = plan(&ctx)
+            .into_iter()
+            .map(|e| match e {
+                Entry::Separator => Item::Separator,
+                Entry::Row(p) => {
+                    let (label, ic, me) = (p.label(&ctx), MenuIcon::Lucide(p.icon), me.clone());
+                    let item = match p.slot {
+                        Slot::BinRestore => Item::action(label, ic, move |_, cx| {
+                            let _ = me.update(cx, |v, cx| v.restore_selected(cx));
+                        })
+                        .enabled(has_sel),
+                        Slot::BinDelete => Item::action(label, ic, move |window, cx| {
+                            let _ = me.update(cx, |v, cx| v.delete_selected(window, cx));
+                        })
+                        .enabled(has_sel),
+                        _ => Item::action(label, ic, move |window, cx| {
+                            let _ = me.update(cx, |v, cx| v.open_settings(window, cx));
+                        }),
+                    };
+                    if p.hint.is_empty() { item } else { item.hint(p.hint) }
+                }
+            })
+            .collect();
         fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
     }
 }

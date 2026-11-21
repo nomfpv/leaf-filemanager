@@ -306,6 +306,10 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
         }
         Slot::YourActions => b.own.clone().expect("a row for the user's actions is shown only when there are some"),
         Slot::More => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "more", fallback: None }, click: None },
+        // the rows of the Recycle Bin page and of the sidebar are made where those menus are (`recycle_view.rs`, `workspace.rs`)
+        Slot::BinRestore | Slot::BinDelete | Slot::BinSettings | Slot::Unpin | Slot::Properties | Slot::HidePlace | Slot::HideDrive => {
+            unreachable!("no file list menu shows {:?}", p.slot)
+        }
     }
 }
 
@@ -488,6 +492,7 @@ impl FolderView {
             undo: None,
             redo: None,
             alias: if single_dir && crate::archive_view::split(&ctx_dir).is_none() { crate::aliases::name_of(&ctx_dir) } else { None },
+            ..Default::default()
         };
         let build = Build { me, v: self, cx, ctx: &ctx, dir: ctx_dir, items, own };
         let mut quick = self.quick_clipboard(me, true);

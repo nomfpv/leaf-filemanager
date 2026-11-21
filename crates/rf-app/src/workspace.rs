@@ -2697,6 +2697,7 @@ impl Workspace {
     /// The sidebar's folder menu at `at`; `classic`: Windows' own menu (extended verbs) instead of ours.
     fn sidebar_menu_at(&mut self, path: PathBuf, classic: bool, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         use crate::fluent_menu::{Item, Menu, MenuIcon, Sub};
+        use crate::menu_model::{Entry, MenuContext, Slot, Target, plan};
         if classic {
             // the classic Explorer menu, extended verbs included
             let p2 = path.clone();
@@ -2718,68 +2719,77 @@ impl Workspace {
                 let _ = me.update(cx, |ws, cx| f(ws, p, w, cx));
             }
         };
-        let mut items = vec![
-            Item::action(t!("Open"), MenuIcon::Lucide(L::SquareArrowOutUpRight), with(|ws, p, w, cx| ws.navigate(Location::Path(p), w, cx))),
-            Item::action(t!("Open in new tab"), MenuIcon::Lucide(L::SquarePlus), with(|ws, p, w, cx| {
-                let keep = ws.active;
-                ws.open_tab(Location::Path(p), w, cx);
-                if !cx.global::<crate::settings::Settings>().focus_new_tab {
-                    ws.activate(keep, w, cx);
-                }
-            })),
-            Item::action(t!("Open in new window"), MenuIcon::Lucide(L::AppWindow), with(|_, p, w, cx| {
-                let mut b = w.bounds();
-                b.origin.x += px(36.);
-                b.origin.y += px(36.);
-                cx.defer(move |cx| crate::open_main_window(Some(Location::Path(p)), None, Some(WindowBounds::Windowed(b)), cx));
-            })),
-            Item::Separator,
-            if is_pinned {
-                Item::action(t!("Unpin from sidebar"), MenuIcon::Lucide(L::PinOff), with(|ws, p, _, cx| ws.set_pinned(p, false, cx)))
-            } else {
-                Item::action(t!("Pin to sidebar"), MenuIcon::Lucide(L::Pin), with(|ws, p, _, cx| ws.set_pinned(p, true, cx)))
-            },
-        ];
-        if !root && cx.global::<crate::settings::Settings>().menu.tags && !cx.global::<crate::tags::Tags>().0.defs.is_empty() {
-            items.push(Item::sub(t!("Tags"), MenuIcon::Lucide(L::Tag), crate::tags::menu_items(std::slice::from_ref(&path), cx)));
-        }
-        items.extend([
-            Item::action(t!("Copy path"), MenuIcon::Lucide(L::ClipboardCopy), with(|_, p, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(p.display().to_string()))
-            })),
-            Item::action(t!("Open in terminal"), MenuIcon::Lucide(L::SquareTerminal), with(|_, p, _, cx| crate::terminal::open(p, cx))),
-            // our Properties window (a drive gets its own page there)
-            Item::action(t!("Properties"), MenuIcon::Lucide(L::Wrench), with(|ws, p, _, cx| {
-                crate::properties_view::open(vec![p], ws.images.clone(), cx);
-            }))
-            .hint("Alt+Enter"),
-            Item::Separator,
-            Item::Sub { label: t!("Show more options").into(), icon: MenuIcon::Lucide(L::Ellipsis), items: Sub::Pending { key: "more", fallback: None }, click: None },
-        ]);
-        // a cloud or WSL place can be taken off the sidebar on its own (it comes back from Settings > Files and folders)
-        if self.places.read(cx).cloud.iter().any(|c| c.path == path) {
-            let at = items.len() - 2;
-            let key = path.to_string_lossy().into_owned();
-            items.insert(
-                at,
-                Item::action(t!("Hide this place"), MenuIcon::Lucide(L::EyeOff), move |_, cx| {
-                    let key = key.clone();
-                    crate::settings::update(cx, move |s| {
-                        if !s.hidden_places.iter().any(|h| rf_core::pathkey::name_eq(h, &key)) {
-                            s.hidden_places.push(key);
+        // the rows come from `menu_model`; what each does is here
+        let ctx = {
+            let s = cx.global::<crate::settings::Settings>();
+            MenuContext {
+                target: Target::Sidebar,
+                pinned: is_pinned,
+                sidebar_root: root,
+                tags_defined: !cx.global::<crate::tags::Tags>().0.defs.is_empty(),
+                cloud_place: self.places.read(cx).cloud.iter().any(|c| c.path == path),
+                drive: crate::settings_view::drive_letter(&path).is_some(),
+                prefs: s.menu.clone(),
+                ..Default::default()
+            }
+        };
+        let items: Vec<Item> = plan(&ctx)
+            .into_iter()
+            .map(|e| match e {
+                Entry::Separator => Item::Separator,
+                Entry::Row(p) => {
+                    let (label, ic) = (p.label(&ctx), MenuIcon::Lucide(p.icon));
+                    let item = match p.slot {
+                        Slot::Open => Item::action(label, ic, with(|ws, p, w, cx| ws.navigate(Location::Path(p), w, cx))),
+                        Slot::OpenNewTab => Item::action(label, ic, with(|ws, p, w, cx| {
+                            let keep = ws.active;
+                            ws.open_tab(Location::Path(p), w, cx);
+                            if !cx.global::<crate::settings::Settings>().focus_new_tab {
+                                ws.activate(keep, w, cx);
+                            }
+                        })),
+                        Slot::OpenNewWindow => Item::action(label, ic, with(|_, p, w, cx| {
+                            let mut b = w.bounds();
+                            b.origin.x += px(36.);
+                            b.origin.y += px(36.);
+                            cx.defer(move |cx| crate::open_main_window(Some(Location::Path(p)), None, Some(WindowBounds::Windowed(b)), cx));
+                        })),
+                        Slot::Unpin => Item::action(label, ic, with(|ws, p, _, cx| ws.set_pinned(p, false, cx))),
+                        Slot::Pin => Item::action(label, ic, with(|ws, p, _, cx| ws.set_pinned(p, true, cx))),
+                        Slot::Tags => Item::sub(label, ic, crate::tags::menu_items(std::slice::from_ref(&path), cx)),
+                        Slot::CopyPath => Item::action(label, ic, with(|_, p, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(p.display().to_string())))),
+                        Slot::Terminal => Item::action(label, ic, with(|_, p, _, cx| crate::terminal::open(p, cx))),
+                        // our Properties window (a drive gets its own page there)
+                        Slot::Properties => Item::action(label, ic, with(|ws, p, _, cx| {
+                            crate::properties_view::open(vec![p], ws.images.clone(), cx);
+                        })),
+                        // a cloud or WSL place can be taken off the sidebar on its own (it comes back from Settings > Files and folders)
+                        Slot::HidePlace => {
+                            let key = path.to_string_lossy().into_owned();
+                            Item::action(label, ic, move |_, cx| {
+                                let key = key.clone();
+                                crate::settings::update(cx, move |s| {
+                                    if !s.hidden_places.iter().any(|h| rf_core::pathkey::name_eq(h, &key)) {
+                                        s.hidden_places.push(key);
+                                    }
+                                })
+                            })
                         }
-                    })
-                }),
-            );
-        }
-        // a drive can be taken off the lists of places (it comes back from Settings > Files and folders)
-        if let Some(letter) = crate::settings_view::drive_letter(&path) {
-            let at = items.len() - 2;
-            items.insert(
-                at,
-                Item::action(t!("Hide this drive"), MenuIcon::Lucide(L::EyeOff), move |_, cx| crate::settings::update(cx, move |s| crate::settings_view::set_drive_hidden(s, letter, true))),
-            );
-        }
+                        // a drive can be taken off the lists of places (it comes back from Settings > Files and folders)
+                        Slot::HideDrive => {
+                            let letter = crate::settings_view::drive_letter(&path);
+                            Item::action(label, ic, move |_, cx| {
+                                if let Some(letter) = letter {
+                                    crate::settings::update(cx, move |s| crate::settings_view::set_drive_hidden(s, letter, true))
+                                }
+                            })
+                        }
+                        _ => Item::Sub { label: label.into(), icon: ic, items: Sub::Pending { key: "more", fallback: None }, click: None },
+                    };
+                    if p.hint.is_empty() { item } else { item.hint(p.hint) }
+                }
+            })
+            .collect();
         // the row of quick buttons the file list's menu has (issue 53: "Can't do basic functions like copy, cut, delete, rename for
         // the folders at the left pane"). A drive's root can be pasted into, not cut, renamed or deleted.
         let quick = {

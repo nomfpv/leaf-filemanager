@@ -266,3 +266,48 @@ Tags > | Tag
 Add to shelf | Inbox | Ctrl+Shift+S
 -
 Show more options > | Ellipsis
+
+## bin
+Restore | Undo2
+Delete permanently | TrashOff | Shift+Del
+-
+Recycle Bin settings… | Settings
+
+## sidebar folder, pinned, tags defined
+Open | SquareArrowOutUpRight
+Open in new tab | SquarePlus
+Open in new window | AppWindow
+-
+Unpin from sidebar | PinOff
+Tags > | Tag
+Copy path | ClipboardCopy
+Open in terminal | SquareTerminal
+Properties | Wrench | Alt+Enter
+-
+Show more options > | Ellipsis
+
+## sidebar drive root
+Open | SquareArrowOutUpRight
+Open in new tab | SquarePlus
+Open in new window | AppWindow
+-
+Pin to sidebar | Pin
+Copy path | ClipboardCopy
+Open in terminal | SquareTerminal
+Properties | Wrench | Alt+Enter
+Hide this drive | EyeOff
+-
+Show more options > | Ellipsis
+
+## sidebar cloud place, tags switched off
+Open | SquareArrowOutUpRight
+Open in new tab | SquarePlus
+Open in new window | AppWindow
+-
+Pin to sidebar | Pin
+Copy path | ClipboardCopy
+Open in terminal | SquareTerminal
+Properties | Wrench | Alt+Enter
+Hide this place | EyeOff
+-
+Show more options > | Ellipsis

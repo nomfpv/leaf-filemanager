@@ -23,12 +23,12 @@ pub enum Target {
     Folder,
     /// Several items.
     Multi,
-    /// An item in an archive, the Recycle Bin, or the sidebar: still made by hand in `ctx_menu.rs`.
+    /// An item inside an archive has no menu of its own: it is a [`Target::File`] or [`Target::Folder`] with `in_archive` set.
     #[allow(dead_code)]
     ArchiveItem,
-    #[allow(dead_code)]
+    /// A row of the Recycle Bin page (or its background).
     RecycleItem,
-    #[allow(dead_code)]
+    /// A folder or drive of the sidebar.
     Sidebar,
 }
 
@@ -185,6 +185,15 @@ pub enum Slot {
     BulkRename,
     CopyToPane,
     MoveToPane,
+    // the Recycle Bin page's menu (made in `recycle_view.rs`)
+    BinRestore,
+    BinDelete,
+    BinSettings,
+    // the sidebar's menu (made in `workspace.rs`; it shares Open, OpenNewTab, OpenNewWindow, Pin, Tags, CopyPath, Terminal and More)
+    Unpin,
+    Properties,
+    HidePlace,
+    HideDrive,
 }
 
 /// Whether a row is in the menu, given the situation.
@@ -290,6 +299,16 @@ pub struct MenuContext {
     pub extractable: bool,
     /// Nearby sharing is on.
     pub nearby: bool,
+    /// The sidebar's folder is pinned.
+    pub pinned: bool,
+    /// The sidebar's folder is the root of a drive.
+    pub sidebar_root: bool,
+    /// Tags exist (the sidebar offers them only then).
+    pub tags_defined: bool,
+    /// The sidebar's place is a cloud or WSL place.
+    pub cloud_place: bool,
+    /// The sidebar's place is a drive.
+    pub drive: bool,
     /// The user has actions for this selection (`actions.toml`).
     pub own_actions: bool,
     /// What Ctrl+Z would undo, when there is something.
@@ -351,6 +370,23 @@ pub static MENU_ONLY: &[MenuPlace] = &[
     place(K::Git, "Git", L::GitBranch, T::BACKGROUND, S::Tools, 30).sub().when(|c| !c.in_search && !c.archive_path),
     place(K::YourActions, "Your actions", L::Zap, T::BACKGROUND.or(T::ITEMS), S::YourActions, 10).sub().when(|c| c.own_actions),
     place(K::More, "Show more options", L::Ellipsis, T::BACKGROUND.or(T::ITEMS), S::More, 10).sub(),
+    // ---- the Recycle Bin page (a row, or the page itself)
+    place(K::BinRestore, "Restore", L::Undo2, T::RECYCLE_ITEM, S::Open, 10),
+    place(K::BinDelete, "Delete permanently", L::TrashOff, T::RECYCLE_ITEM, S::Open, 20).hint("Shift+Del"),
+    place(K::BinSettings, "Recycle Bin settings…", L::Settings, T::RECYCLE_ITEM, S::Organize, 10),
+    // ---- a folder or drive of the sidebar (no switch of Settings reaches this menu except Tags)
+    place(K::Open, "Open", L::SquareArrowOutUpRight, T::SIDEBAR, S::Open, 10),
+    place(K::OpenNewTab, "Open in new tab", L::SquarePlus, T::SIDEBAR, S::Open, 20),
+    place(K::OpenNewWindow, "Open in new window", L::AppWindow, T::SIDEBAR, S::Open, 30),
+    place(K::Unpin, "Unpin from sidebar", L::PinOff, T::SIDEBAR, S::Organize, 10).when(|c| c.pinned),
+    place(K::Pin, "Pin to sidebar", L::Pin, T::SIDEBAR, S::Organize, 10).when(|c| !c.pinned),
+    place(K::Tags, "Tags", L::Tag, T::SIDEBAR, S::Organize, 20).sub().switch(SW_TAGS).when(|c| !c.sidebar_root && c.tags_defined),
+    place(K::CopyPath, "Copy path", L::ClipboardCopy, T::SIDEBAR, S::Organize, 30),
+    place(K::Terminal, "Open in terminal", L::SquareTerminal, T::SIDEBAR, S::Organize, 40),
+    place(K::Properties, "Properties", L::Wrench, T::SIDEBAR, S::Organize, 50).hint("Alt+Enter"),
+    place(K::HidePlace, "Hide this place", L::EyeOff, T::SIDEBAR, S::Organize, 60).when(|c| c.cloud_place),
+    place(K::HideDrive, "Hide this drive", L::EyeOff, T::SIDEBAR, S::Organize, 70).when(|c| c.drive),
+    place(K::More, "Show more options", L::Ellipsis, T::SIDEBAR, S::More, 10).sub(),
 ];
 
 /// Every row, the registry's commands' first.
@@ -371,10 +407,12 @@ pub fn plan(ctx: &MenuContext) -> Vec<Entry> {
     rows.sort_by_key(|p| (p.section.block(), p.order));
     let mut out = Vec::with_capacity(rows.len() + 6);
     let mut first = true;
+    // (the menus of the Recycle Bin and the sidebar have no empty block between their separators)
+    let lean = matches!(ctx.target, Target::RecycleItem | Target::Sidebar);
     for block in 0..=5u8 {
         let mine: Vec<&&'static MenuPlace> = rows.iter().filter(|p| p.section.block() == block).collect();
         match sep_before(block) {
-            Sep::Always if !first => out.push(Entry::Separator),
+            Sep::Always if !first && (!lean || !mine.is_empty()) => out.push(Entry::Separator),
             Sep::IfAny if !mine.is_empty() && !first => out.push(Entry::Separator),
             _ => {}
         }
@@ -518,6 +556,20 @@ mod tests {
             "two",
         );
         check("two fonts in search results", MenuContext { in_search: true, fonts: true, ..multi(2) }, "two");
+    }
+
+    #[test]
+    fn recycle_bin_and_sidebar_menus_are_as_recorded() {
+        assert_eq!(cases("bin").len() + cases("sidebar").len(), 4);
+        check("bin", MenuContext { target: Target::RecycleItem, ..Default::default() }, "bin");
+        let side = MenuContext { target: Target::Sidebar, ..Default::default() };
+        check("sidebar folder, pinned, tags defined", MenuContext { pinned: true, tags_defined: true, ..side.clone() }, "sidebar");
+        check("sidebar drive root", MenuContext { sidebar_root: true, drive: true, tags_defined: true, ..side.clone() }, "sidebar");
+        check(
+            "sidebar cloud place, tags switched off",
+            MenuContext { cloud_place: true, tags_defined: true, prefs: MenuPrefs { tags: false, ..Default::default() }, ..side },
+            "sidebar",
+        );
     }
 
     #[test]
