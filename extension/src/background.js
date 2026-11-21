@@ -16,6 +16,7 @@ const IS_FIREFOX = api.runtime.getURL("").startsWith("moz-extension:");
 const FRESH_MS = 10_000;
 // a finished request is kept this long so its download item can still find it
 const KEEP_MS = 20_000;
+// leaf-nmhost answers within 25 s, a start of leaf included (its DEADLINE), so leaf never takes a download the browser resumed
 const ANSWER_MS = 30_000;
 // the request headers leaf takes; everything else stays in the browser
 const HEADERS = ["cookie", "authorization", "referer", "user-agent", "accept-language"];

@@ -20,10 +20,10 @@ const PREFIX: &str = "\u{1}capture:";
 /// The browser allows 1 MB to the host and leaf cuts a request line at 64 KiB.
 const MAX_IN: usize = 1 << 20;
 const MAX_LINE: usize = 60 << 10;
-/// Taking over a download is quick (leaf only queues it).
-const WAIT: Duration = Duration::from_secs(20);
-/// How long a leaf that was just started is given to come up.
-const START_WAIT: Duration = Duration::from_secs(25);
+/// Everything this host does for one message, a start of leaf included, ends within this: the extension gives up after 30 s
+/// (`ANSWER_MS` in `extension/src/background.js`) and lets the browser go on with its copy, so a later "ok" would mean the file is
+/// fetched twice.
+const DEADLINE: Duration = Duration::from_secs(25);
 
 fn read_frame(input: &mut impl Read) -> Option<Vec<u8>> {
     let mut len = [0u8; 4];
@@ -91,23 +91,28 @@ fn start_leaf() -> bool {
     cmd.spawn().is_ok()
 }
 
-/// Hands `line` to leaf; starts leaf first when `start` and it is not running.
+const NOT_RUNNING: &str = "leaf is not running";
+
+
+/// Hands `line` to leaf; starts leaf first when `start` and it is not running. Ends within [`DEADLINE`].
 fn ask(line: &str, start: bool) -> Result<(), String> {
-    match leaf_sys::handover::ask(line, WAIT) {
-        Err(e) if e == "leaf is not running" && start => {
-            if !start_leaf() {
-                return Err(e);
-            }
-            let begun = Instant::now();
-            loop {
-                std::thread::sleep(Duration::from_millis(300));
-                match leaf_sys::handover::ask(line, WAIT) {
-                    Err(e) if e == "leaf is not running" && begun.elapsed() < START_WAIT => continue,
-                    r => return r.map(drop),
-                }
-            }
+    let until = Instant::now() + DEADLINE;
+    let left = || until.saturating_duration_since(Instant::now());
+    let try_once = || leaf_sys::handover::ask(line, left()).map(drop);
+    match try_once() {
+        Err(e) if e == NOT_RUNNING && start => {}
+        r => return r,
+    }
+    if !start_leaf() {
+        return Err(NOT_RUNNING.into());
+    }
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        match try_once() {
+            // (a second is kept for leaf's answer)
+            Err(e) if e == NOT_RUNNING && left() > Duration::from_secs(1) => continue,
+            r => return r,
         }
-        r => r.map(drop),
     }
 }
 
