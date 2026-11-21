@@ -116,6 +116,7 @@ pub mod args;
 pub mod fileattr;
 pub mod input;
 pub mod lock;
+pub mod locks;
 pub mod process;
 pub mod registry;
 

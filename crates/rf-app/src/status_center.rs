@@ -62,6 +62,8 @@ pub struct OpState {
     open_dest: Option<std::path::PathBuf>,
     /// What the undo stack's top must hold for this operation to be undone from its card: a path it made.
     undo_mark: Option<Arc<std::sync::Mutex<Option<std::path::PathBuf>>>>,
+    /// The files the operation works on: when it fails, they are asked who holds them open ("In use by: ...").
+    lock_paths: Vec<std::path::PathBuf>,
 }
 
 /// A question from the copy engine, kept here so every window's strip or card can ask it, not
@@ -104,6 +106,7 @@ impl OpState {
             question: None,
             open_dest: None,
             undo_mark: None,
+            lock_paths: Vec::new(),
         }
     }
 
@@ -611,6 +614,7 @@ pub fn start_with_id(
                 evs.push(e);
             }
             let mut finished = false;
+            let mut lookup: Vec<std::path::PathBuf> = Vec::new();
             let mut asks = Vec::new();
             let _ = entity.update(cx, |ops, cx| {
                 if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
@@ -644,6 +648,9 @@ pub fn start_with_id(
                                     Err(e) => OpPhase::Failed(e),
                                 };
                                 op.done = op.total;
+                                if matches!(op.phase, OpPhase::Failed(_)) {
+                                    lookup = std::mem::take(&mut op.lock_paths);
+                                }
                             }
                         }
                     }
@@ -681,6 +688,22 @@ pub fn start_with_id(
             }
             if finished {
                 ended = true;
+                // a failure on files may be a file in use: ask (off the UI thread) which program holds them and say so on a second line
+                if !lookup.is_empty() {
+                    let found = cx.background_spawn(async move { leaf_sys::locks::who_locks(&lookup) }).await;
+                    if !found.is_empty() {
+                        let line = in_use_line(&found);
+                        let _ = entity.update(cx, |ops, cx| {
+                            if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id)
+                                && let OpPhase::Failed(e) = &mut op.phase
+                            {
+                                e.push('\n');
+                                e.push_str(&line);
+                            }
+                            cx.notify();
+                        });
+                    }
+                }
                 // the result card goes away by itself, and the ring and the pulse after the last one: wake the windows up then
                 cx.update(|cx| {
                     notify_in(cx, &entity, xfer::CARD_CANCELLED_MS + 100);
@@ -843,6 +866,7 @@ fn transfer_inner(
     let open_dest = dest.clone();
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let marker = mark.clone();
+    let lock_paths = sources.clone();
     let id = start_with_id(cx, title, move |t| {
         t.set_verify(verify);
         t.limit.store(limit, Ordering::Relaxed);
@@ -875,6 +899,7 @@ fn transfer_inner(
         r
     }, on_done);
     set_extras(cx, id, Some(words), Some(open_dest), record.then_some(mark));
+    set_lock_paths(cx, id, lock_paths);
 }
 
 /// Words for the strip, a folder for the finished card to open, and the mark that tells the
@@ -1165,6 +1190,21 @@ pub fn compress_level(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std:
     });
 }
 
+/// The second line of a failure on files that are in use: "In use by: Name (PID 1234), ...".
+pub fn in_use_line(lockers: &[leaf_sys::locks::Locker]) -> String {
+    format!("{} {}", t!("In use by:"), lockers.iter().map(|l| format!("{} (PID {})", l.name, l.pid)).collect::<Vec<_>>().join(", "))
+}
+
+/// Tells operation `id` which files it works on, so a failure can name the program that holds one open.
+pub fn set_lock_paths(cx: &mut App, id: u64, paths: Vec<std::path::PathBuf>) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    entity.update(cx, |ops, _| {
+        if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
+            op.lock_paths = paths;
+        }
+    });
+}
+
 pub fn delete(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool) {
     delete_ex(cx, paths, permanent, true)
 }
@@ -1182,6 +1222,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let fast = cx.global::<crate::settings::Settings>().fast_file_ops;
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let marker = mark.clone();
+    let lock_paths = paths.clone();
     let id = start_with_id(cx, title, move |t| {
         // permanent: our parallel delete (the shell takes what it can't); recycle bin: the shell
         let r = if permanent && fast {
@@ -1196,6 +1237,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
         }
         r
     }, None);
+    set_lock_paths(cx, id, lock_paths);
     if record && !permanent {
         set_extras(cx, id, None, None, Some(mark));
     }

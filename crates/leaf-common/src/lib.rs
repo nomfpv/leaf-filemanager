@@ -12,6 +12,7 @@ pub mod engine_guard;
 pub mod fastcopy;
 pub mod fileops;
 pub mod listing;
+pub mod locks;
 pub mod propcols;
 pub mod recycle;
 pub mod thumbs;

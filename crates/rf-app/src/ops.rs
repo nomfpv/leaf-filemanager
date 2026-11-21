@@ -724,6 +724,7 @@ impl FolderView {
                         return;
                     }
                     let (tx, rx) = oneshot::channel::<anyhow::Result<bool>>();
+                    let n2_for_notice = n2.clone();
                     bg("rename", move || {
                         let _ = tx.send(fileops::rename(&f2, &n2));
                         Ok(true)
@@ -738,11 +739,22 @@ impl FolderView {
                             });
                         }
                         other => {
+                            let failed = matches!(other, Ok(Err(_)));
+                            let n2c = n2_for_notice;
                             if let Ok(Err(e)) = other {
                                 log::warn!("rename: {e:#}");
                             }
                             // nothing to wait for
                             let _ = this.update(cx, |v, cx| v.rename_failed(cx));
+                            // the system refused: if a program has the file open, say which (looked up here, off the UI thread)
+                            if failed {
+                                let held = from.clone();
+                                let found = cx.background_spawn(async move { leaf_sys::locks::who_locks(&[held]) }).await;
+                                if !found.is_empty() {
+                                    let msg = format!("{}\n\n{}", n2c, crate::status_center::in_use_line(&found));
+                                    let _ = handle.update(cx, |_, window, cx| crate::prompt::notice(crate::t!("Rename"), msg, window, cx));
+                                }
+                            }
                         }
                     }
                 })

@@ -50,6 +50,7 @@ pub mod listing;
 pub mod locale;
 pub mod localized;
 pub mod lock;
+pub mod locks;
 pub mod look;
 pub mod nameindex;
 pub mod network;

@@ -24,7 +24,7 @@ pub use os::{
 };
 
 // what rf-app did with Win32 itself until the Linux seam (A3)
-pub use os::{args, fileattr, input, lock, process, registry};
+pub use os::{args, fileattr, input, lock, locks, process, registry};
 
 // the crate-root items rf-win always had
 pub use os::{
