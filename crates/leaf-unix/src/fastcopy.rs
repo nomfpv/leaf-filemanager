@@ -649,7 +649,7 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
         }
         None => Decision::Restart,
     };
-    let start = match decision {
+    let mut start = match decision {
         Decision::Skip => {
             let _ = std::fs::remove_file(&part);
             if !verified(src, dst, sm.len(), verify)? {
@@ -672,8 +672,20 @@ fn copy_file_part(job: &mut Job, src: &Path, dst: &Path, verify: Verify, replace
             0
         }
     };
-    let to = if start > 0 {
-        let f = std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(&part)?;
+    // a part carried on must still be the plain file this job wrote: a regular file of ours with no other name (a hard link put there,
+    // in a folder others can write to, would have another file cut back and written into); else that file starts over
+    let carried = (start > 0)
+        .then(|| std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(&part).ok())
+        .flatten()
+        // SAFETY: geteuid has no preconditions.
+        .filter(|f| f.metadata().is_ok_and(|m| m.file_type().is_file() && m.nlink() == 1 && m.uid() == unsafe { libc::geteuid() }));
+    if start > 0 && carried.is_none() {
+        log::info!("copy: the part of {} is not the file written before, copying it again", dst.display());
+        // (only its name goes: a link's other file is left as it is)
+        let _ = std::fs::remove_file(&part);
+        start = 0;
+    }
+    let to = if let Some(f) = carried {
         f.set_len(start)?;
         f
     } else {
@@ -1739,6 +1751,23 @@ mod tests {
         assert!(!journal.exists(), "not kept");
         assert!(parts_in(&root.join("dest")).is_empty(), "its parts went with it");
         assert_eq!(std::fs::read(root.join("dest/a.bin")).unwrap(), pattern(2 << 20, 13), "what was finished stays");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn a_part_replaced_by_a_hard_link_is_never_cut_back() {
+        let (root, jobs) = fresh("hardlink");
+        let big = pattern(9 << 20, 15);
+        std::fs::write(root.join("src/big.bin"), &big).unwrap();
+        let journal = copy_and_die(&[root.join("src/big.bin")], &root.join("dest"), &jobs, "big.bin");
+        let part = parts_in(&root.join("dest")).remove(0);
+        // someone else's file put in the part's place, as a hard link
+        let other = pattern(12 << 20, 16);
+        std::fs::write(root.join("other.bin"), &other).unwrap();
+        std::fs::remove_file(&part).unwrap();
+        std::fs::hard_link(root.join("other.bin"), &part).unwrap();
+        assert!(resume(&journal, quiet()).unwrap());
+        assert_eq!(std::fs::read(root.join("other.bin")).unwrap(), other, "the linked file is left whole");
+        assert_eq!(std::fs::read(root.join("dest/big.bin")).unwrap(), big, "copied again from the start");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
