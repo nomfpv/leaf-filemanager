@@ -1025,16 +1025,31 @@ fn stat_on(l: &mut Lease, path: &str) -> Result<Option<Item>, Fail> {
     }
 }
 
-/// Like `stat_on`, but a link that MLST shows as its target is a link here (the parent's LIST says so).
+/// Like `stat_on`, but a link that MLST shows as its target is a link here (the parent's LIST says so), and a link whose
+/// target is gone (MLST: 550) is a link too, not "nothing there". Without MLST, `stat_on` read the LIST already.
 fn lstat_on(l: &mut Lease, path: &str) -> Result<Option<Item>, Fail> {
-    let Some(mut it) = stat_on(l, path)? else { return Ok(None) };
-    if it.kind != Kind::Link && path != "/" {
-        let (dir, name) = split(path);
-        if links_in(l, dir)?.contains(name) {
-            it.kind = Kind::Link;
-        }
+    if path == "/" || !l.mlsx() {
+        return stat_on(l, path);
     }
-    Ok(Some(it))
+    let it = stat_on(l, path)?;
+    if it.as_ref().is_some_and(|i| i.kind == Kind::Link) {
+        return Ok(it);
+    }
+    let (dir, name) = split(path);
+    let listed = match list_items(l, dir, true) {
+        Ok(items) => items.into_iter().find(|i| i.name == name),
+        // (a parent the user cannot list: what MLST said)
+        Err(Fail::Fs(FsError::NotFound | FsError::Denied)) => return Ok(it),
+        Err(e) => return Err(e),
+    };
+    Ok(match (it, listed) {
+        (Some(mut it), Some(li)) if li.kind == Kind::Link => {
+            it.kind = Kind::Link;
+            Some(it)
+        }
+        (None, Some(li)) if li.kind == Kind::Link => Some(li),
+        (it, _) => it,
+    })
 }
 
 /// `("/a/b", "c")` of `/a/b/c`; `("/", "c")` of `/c`.
@@ -1244,7 +1259,8 @@ impl Fs for FtpFs {
     fn stat(&self, p: &VPath) -> Result<Meta, FsError> {
         self.inner.op(p, &|| false, |l| {
             let sp = spath(l.home(), p);
-            stat_on(l, &sp)?.map(|i| i.meta()).ok_or(Fail::Fs(FsError::NotFound))
+            // (not following a link, as `Fs::stat` promises: MLST alone shows a link as what it points to)
+            lstat_on(l, &sp)?.map(|i| i.meta()).ok_or(Fail::Fs(FsError::NotFound))
         })
     }
 

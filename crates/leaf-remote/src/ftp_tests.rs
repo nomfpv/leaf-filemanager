@@ -488,8 +488,8 @@ fn ftp_recursive_remove_does_not_follow_a_link() {
         ("top-link", Node::Link("/keep".into())),
     ]));
     let fs = fs_for(Arc::new(Answers::default()));
-    // MLSD shows the link as a folder: the stat says so, and still nothing behind it is touched
-    assert!(fs.stat(&addr(&s, "/gone/to-keep")).unwrap().is_dir());
+    // MLSD/MLST show the link as a folder; the stat does not follow it, and nothing behind it is touched
+    assert_eq!(fs.stat(&addr(&s, "/gone/to-keep")).unwrap().kind, leaf_vfs::Kind::Link);
     fs.remove(&addr(&s, "/gone"), true).unwrap();
     // a link given itself is unlinked too
     fs.remove(&addr(&s, "/top-link"), true).unwrap();
@@ -565,4 +565,33 @@ fn ftp_replace_cut_after_moving_aside_keeps_both_and_names_them() {
     assert!(m.iter().any(|(k, n)| k.contains("leaf-old") && matches!(n, Node::File(b) if b == b"the original")), "{:?}", m.keys());
     assert!(m.iter().any(|(k, n)| k.contains("leaf-up") && matches!(n, Node::File(b) if b == b"the new version")), "{:?}", m.keys());
     assert_eq!(st.knobs.deles, 0);
+}
+
+#[test]
+fn ftp_leaf_trash_that_is_a_link_is_never_entered_or_emptied() {
+    use crate::trash::{self, TrashError};
+    let s = start(dir(vec![
+        ("www", dir(vec![("index.html", file("the site")), ("img", dir(vec![("a.png", file("png"))]))])),
+        (".leaf-trash", Node::Link("/www".into())),
+        ("old.txt", file("to delete")),
+    ]));
+    let fs = fs_for(Arc::new(Answers::default()));
+    let home = fs.home(&addr(&s, "/")).unwrap();
+    assert_eq!(fs.stat(&trash::root(&home)).unwrap().kind, leaf_vfs::Kind::Link);
+    // a delete does not go into the folder behind the link
+    let r = trash::move_to_trash(&fs, &home, &addr(&s, "/old.txt"), "2026-11-21_03-15-22.123");
+    assert!(matches!(r, Err(TrashError::CannotMove(_))), "{r:?}");
+    // "Empty server trash" and its size refuse it
+    assert!(trash::empty(&fs, &home, &|| false).is_err());
+    assert!(trash::usage(&fs, &home, &|| false).is_err());
+    let st = lock(&s.state);
+    assert!(matches!(st.get("/old.txt", false), Some(Node::File(b)) if b == b"to delete"));
+    assert!(matches!(st.get("/.leaf-trash", false), Some(Node::Link(_))));
+    let Some(Node::Dir(m)) = st.get("/www", true) else { panic!("/www is gone") };
+    assert_eq!(m.keys().collect::<Vec<_>>(), vec!["img", "index.html"]);
+    assert!(matches!(st.get("/www/img/a.png", false), Some(Node::File(_))));
+    // a link whose target is gone is still a link, not "nothing there"
+    drop(st);
+    lock(&s.state).root = dir(vec![("dangling", Node::Link("/nowhere".into()))]);
+    assert_eq!(fs.stat(&addr(&s, "/dangling")).unwrap().kind, leaf_vfs::Kind::Link);
 }
