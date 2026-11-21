@@ -334,18 +334,27 @@ mod tests {
         static GATE_A: Gate = Gate::new();
         let app = "leaf-ho-test";
         let Role::Primary(_guard) = acquire_in(app, "one", Duration::from_secs(5)) else { panic!("nobody runs") };
-        serve_with(app, &GATE_A, |m, ack| {
+        // Each acted-on request says so on this channel once its Ack is released (the gate counted it off). The second launch hears
+        // "ok"/"failed" a moment before that release, so the quit below waits for these and not for a sleep.
+        let (released_tx, released) = std::sync::mpsc::channel::<()>();
+        serve_with(app, &GATE_A, move |m, ack| {
+            let released_tx = released_tx.clone();
             std::thread::spawn(move || {
+                // (a first instance that takes a while to open the window: the second launch must wait for its word)
                 std::thread::sleep(Duration::from_millis(100));
                 if m == "refuse" {
                     ack.refuse();
                 } else {
                     ack.done();
                 }
+                let _ = released_tx.send(());
             });
         });
-        assert!(matches!(acquire_in(app, "/tmp/x", Duration::from_secs(5)), Role::Forwarded));
-        assert!(matches!(acquire_in(app, "refuse", Duration::from_secs(5)), Role::Primary(_)));
+        assert!(matches!(acquire_in(app, "/tmp/x", Duration::from_secs(30)), Role::Forwarded));
+        assert!(matches!(acquire_in(app, "refuse", Duration::from_secs(30)), Role::Primary(_)));
+        for _ in 0..2 {
+            released.recv_timeout(Duration::from_secs(30)).expect("both requests are released");
+        }
         assert!(GATE_A.try_leave());
         assert_eq!(request(app, "late", Duration::from_secs(5)), Sent::Leaving);
     }
