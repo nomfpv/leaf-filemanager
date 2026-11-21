@@ -2061,7 +2061,7 @@ fn layout(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         None,
         move || {
             type Set = fn(&mut Settings, bool);
-            let rows: [(&str, bool, Set); 11] = [
+            let rows: [(&str, bool, Set); 12] = [
                 (t!("Date modified"), c.modified, |s, v| s.columns.modified = v),
                 (t!("Date created"), c.created, |s, v| s.columns.created = v),
                 (t!("Type"), c.kind, |s, v| s.columns.kind = v),
@@ -2073,6 +2073,7 @@ fn layout(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 (t!("Commit author"), c.git_author, |s, v| s.columns.git_author = v),
                 (t!("Commit date"), c.git_date, |s, v| s.columns.git_date = v),
                 (t!("Commit hash"), c.git_hash, |s, v| s.columns.git_hash = v),
+                (t!("Permissions and owner (Linux, SFTP)"), c.permissions, |s, v| s.columns.permissions = v),
             ];
             rows.into_iter()
                 .enumerate()

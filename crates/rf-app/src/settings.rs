@@ -334,6 +334,8 @@ pub struct ColumnPrefs {
     pub git_date: bool,
     pub git_hash: bool,
     pub git_widths: [u16; 4],
+    /// Unix permissions and owner (`rwxr-xr-x  user`): local Linux paths and SFTP hosts; nothing on a Windows path.
+    pub permissions: bool,
     /// Columns for Windows properties the user added ("Diğer sütunlar…"): `System.Media.Duration:140`
     /// (canonical name, width), in the order they show after the fixed columns. Empty = none, and
     /// then nothing of the property columns runs and the file has no such key.
@@ -376,6 +378,7 @@ impl Default for ColumnPrefs {
             git_date: false,
             git_hash: false,
             git_widths: [240, 130, 140, 90],
+            permissions: false,
             properties: Vec::new(),
             name_width: 0,
         }

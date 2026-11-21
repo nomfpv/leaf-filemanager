@@ -126,6 +126,14 @@ pub fn mode_text(path: &Path) -> Option<String> {
     Some(out)
 }
 
+/// The name of the user with this id, or the number when none is known; looked up once per id.
+pub fn user_label(uid: u32) -> String {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, String>>> = OnceLock::new();
+    let mut c = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    c.entry(uid).or_insert_with(|| user_name(uid).unwrap_or_else(|| uid.to_string())).clone()
+}
+
 /// The name of the user that owns the item (the number when no such user is known).
 pub fn owner_name(path: &Path) -> Option<String> {
     let uid = std::fs::symlink_metadata(path).ok()?.uid();

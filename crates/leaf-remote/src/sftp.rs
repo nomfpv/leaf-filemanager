@@ -133,6 +133,13 @@ fn meta_of(a: &FileAttributes) -> Meta {
 }
 
 fn entry_of(name: &str, a: &FileAttributes) -> Entry {
+    let mut e = entry_of_plain(name, a);
+    e.mode = a.permissions.map_or(0, |p| (p & 0o7777) as u16);
+    e.uid = a.uid.unwrap_or(u32::MAX);
+    e
+}
+
+fn entry_of_plain(name: &str, a: &FileAttributes) -> Entry {
     let m = mtime_ms(a);
     // names starting with a dot are hidden on the server's side (the list's "dot files hidden" setting decides)
     match kind_of(a) {

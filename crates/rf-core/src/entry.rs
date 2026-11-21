@@ -43,6 +43,10 @@ pub struct Entry {
     pub link: bool,
     /// A `.ts`/`.mts`/`.cts` file that is TypeScript source, not a video (set by the folder view after the listing, see `tssource`).
     pub ts_source: bool,
+    /// The Unix permission bits (setuid, setgid, sticky and rwx for owner, group, others); 0 where the place has none (Windows paths).
+    pub mode: u16,
+    /// The owner's user id on a Unix-like place (`u32::MAX`: not known).
+    pub uid: u32,
 }
 
 impl Entry {
@@ -51,7 +55,7 @@ impl Entry {
             Some(i) if kind == EntryKind::File && i > 0 && i + 1 < name.len() => shared_ext(&name[i + 1..]),
             _ => shared_ext(""),
         };
-        Self { name: name.into(), ext, kind, size, modified_ms, created_ms, attrs, label: None, link: false, ts_source: false }
+        Self { name: name.into(), ext, kind, size, modified_ms, created_ms, attrs, label: None, link: false, ts_source: false, mode: 0, uid: u32::MAX }
     }
 
     /// The name to show (and sort and type-select by): the localized one when there is one.

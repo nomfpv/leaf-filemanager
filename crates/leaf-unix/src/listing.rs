@@ -122,6 +122,8 @@ fn to_entry(name: &str, path: &Path, m: &Metadata) -> Entry {
         .map_or(0, |d| d.as_millis() as i64);
     let mut e = Entry::new(name, kind, size, modified, created, a);
     e.link = link;
+    e.mode = (m.mode() & 0o7777) as u16;
+    e.uid = m.uid();
     e
 }
 

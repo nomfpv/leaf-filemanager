@@ -275,7 +275,12 @@ struct Cols {
     sync: bool,
     /// commit message, author, date, hash
     commit: [bool; 4],
+    /// Unix permissions and owner (a fixed width, `PERMS_COL_W`).
+    perms: bool,
 }
+
+/// The width of the permissions column.
+const PERMS_COL_W: f32 = 170.;
 
 /// The Name column's index for the column drag (the other columns are 0..11, see `col_widths`).
 const NAME_COL: usize = 11;
@@ -4404,7 +4409,9 @@ impl FolderView {
         let date = take(c.git_date && repo, w[9]);
         let author = take(c.git_author && repo, w[8]);
         let hash = take(c.git_hash && repo, w[10]);
-        Cols { modified, created, kind, size, tags, git, sync, commit: [message, author, date, hash] }
+        // (only where the entries carry Unix permissions: Linux paths and SFTP hosts)
+        let perms = take(c.permissions && self.entries.first().is_some_and(|e| e.mode != 0), PERMS_COL_W);
+        Cols { modified, created, kind, size, tags, git, sync, commit: [message, author, date, hash], perms }
     }
 
     /// Width the visible Details columns leave unused (what [`Self::visible_cols`] still had free).
@@ -4421,6 +4428,9 @@ impl FolderView {
             used += f32::from(self.type_col_w(cx));
         }
         used += self.props_used_width(cx);
+        if vis.perms {
+            used += PERMS_COL_W;
+        }
         for (i, on) in vis.commit.iter().enumerate() {
             if *on {
                 used += w[7 + i];
@@ -4564,6 +4574,7 @@ impl FolderView {
             .children(vis.commit[1].then(|| plain("h-gauth", t!("Commit author"), w[8]).child(handle(8, cx))))
             .children(vis.commit[2].then(|| plain("h-gdate", t!("Commit date"), w[9]).child(handle(9, cx))))
             .children(vis.commit[3].then(|| plain("h-ghash", t!("Commit hash"), w[10]).child(handle(10, cx))))
+            .children(vis.perms.then(|| plain("h-perms", t!("Permissions"), PERMS_COL_W)))
             .children(vis.size.then(|| col("h-size", t!("Size"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))))
             .children(vis.modified.then(|| {
                 col("h-mod", t!("Modified"), SortKey::Modified, Some(px(w[0])), false, cx).relative().child(handle(0, cx))
@@ -4839,6 +4850,15 @@ impl FolderView {
                         .into_any_element()
                 })
                 .collect();
+            let perms_cell = vis.perms.then(|| {
+                let text = if e.mode == 0 {
+                    String::new()
+                } else {
+                    let owner = if e.uid == u32::MAX { String::new() } else { format!("  {}", leaf_sys::fileinfo::user_label(e.uid)) };
+                    format!("{}{owner}", leaf_sys::perms::Mode::new(u32::from(e.mode)).symbolic())
+                };
+                div().w(px(PERMS_COL_W)).flex_shrink_0().px_2().text_color(p.text_secondary).whitespace_nowrap().overflow_hidden().text_ellipsis().child(text)
+            });
             let tag_cell = col_tags.then(|| {
                 let store = &cx.global::<crate::tags::Tags>().0;
                 let ids: Vec<u32> = self.path_of(ei).map(|path| store.tags_of(&path).to_vec()).unwrap_or_default();
@@ -5116,6 +5136,7 @@ impl FolderView {
                 .children(git_cell)
                 .children(sync_cell)
                 .children(commit_cells)
+                .children(perms_cell)
                 // (Size comes right after the name, then the dates and the type: the mockups' order)
                 .children(size_cell)
                 .children(show_date.then(|| {

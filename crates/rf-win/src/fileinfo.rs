@@ -68,6 +68,11 @@ pub fn link_count(path: &Path) -> Option<u32> {
     Some(info.nNumberOfLinks)
 }
 
+/// The name of the user with this id (Windows paths have no Unix owners: the number).
+pub fn user_label(uid: u32) -> String {
+    uid.to_string()
+}
+
 /// Bytes the file occupies: compressed size rounded up to whole clusters.
 pub fn size_on_disk(path: &Path) -> Option<u64> {
     let w = wide(path);
