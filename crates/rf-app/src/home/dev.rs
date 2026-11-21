@@ -123,6 +123,7 @@ pub struct Data {
     stats: Cell<Stats>,
     cal: Cell<Cal>,
     reclaim: Cell<Reclaim>,
+    rings: Cell<Rings>,
     reclaim_progress: Option<Arc<dupes::Progress>>,
 }
 
@@ -839,4 +840,126 @@ mod tests {
         assert_eq!((b[0], b[(today - start) as usize], b.iter().sum::<u32>()), (2, 1, 3));
         assert_eq!((level(0, 9), level(1, 9), level(9, 9), level(5, 9), level(3, 3)), (0, 1, 4, 2, 3));
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// S2 Age rings
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The ages the rings stand for, innermost first.
+const RING_LABELS: [&str; 5] = ["Today", "This week", "This month", "This year", "Older"];
+
+#[derive(Clone)]
+struct Rings {
+    /// Files by last change: today, within 7 days, within 30 days, within a year, older.
+    counts: [u64; 5],
+    partial: bool,
+}
+
+/// The ring a file of this age (seconds since its last change) belongs to.
+fn ring_of(age_secs: i64) -> usize {
+    match age_secs {
+        i64::MIN..=86_399 => 0,
+        86_400..=604_799 => 1,
+        604_800..=2_591_999 => 2,
+        2_592_000..=31_535_999 => 3,
+        _ => 4,
+    }
+}
+
+fn compute_rings(folder: &Path, stop: &AtomicBool) -> Rings {
+    let now = now_secs();
+    let mut counts = [0u64; 5];
+    let partial = walk(folder, stop, |_, m| {
+        let secs = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
+        counts[ring_of(now - secs)] += 1;
+        true
+    });
+    Rings { counts, partial }
+}
+
+pub fn age_rings_header(p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
+    refresh_btn("agerings-refresh", p, cx, |d| d.rings.clear())
+}
+
+pub fn age_rings(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
+    let p = &w.p;
+    let Some(folder) = folder_of(v, "agerings", cx) else { return Some(hint_no_folder(p)) };
+    let c = &mut v.home_data.rings;
+    c.sync(&folder);
+    c.poll();
+    if c.idle() {
+        let f = folder.clone();
+        c.begin(cx, move |stop| compute_rings(&f, stop));
+    }
+    let Some(got) = c.value.clone() else { return Some(note(p, "Reading modification times...")) };
+    let total: u64 = got.counts.iter().sum();
+    if total == 0 {
+        return Some(note(p, "No files here."));
+    }
+    // each ring is a track; the arc on it is that age's share of the files (a ring with files shows at least a sliver)
+    let size = 112.0f32;
+    let (hole, width, gap) = (14.0f32, 9.0f32, 2.5f32);
+    let fills: Vec<Hsla> = (0..5).map(|i| p.accent.opacity([1.0, 0.82, 0.64, 0.46, 0.3][i])).collect();
+    let arcs: Vec<(f32, f32, f32, Hsla)> = (0..5)
+        .map(|i| {
+            let r0 = hole + i as f32 * (width + gap);
+            let share = got.counts[i] as f32 / total as f32;
+            let sweep = if got.counts[i] == 0 { 0.0 } else { share.max(0.02) } * std::f32::consts::TAU;
+            (r0, r0 + width, sweep.min(std::f32::consts::TAU - 0.001), fills[i])
+        })
+        .collect();
+    let track = p.pressed;
+    let paint = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let c = size / 2.0;
+            let at = |r: f32, ang: f32| point(bounds.origin.x + px(c + r * ang.sin()), bounds.origin.y + px(c - r * ang.cos()));
+            let mut draw = |r0: f32, r1: f32, sweep: f32, color: Hsla| {
+                if sweep <= 0.0 {
+                    return;
+                }
+                let steps = ((sweep / 0.05).ceil() as usize).max(1);
+                let mut pts = Vec::with_capacity(2 * steps + 2);
+                for i in 0..=steps {
+                    pts.push(at(r1, sweep * i as f32 / steps as f32));
+                }
+                for i in (0..=steps).rev() {
+                    pts.push(at(r0, sweep * i as f32 / steps as f32));
+                }
+                let mut b = PathBuilder::fill();
+                b.add_polygon(&pts, true);
+                if let Ok(path) = b.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            for (r0, r1, sweep, color) in &arcs {
+                draw(*r0, *r1, std::f32::consts::TAU - 0.001, track);
+                draw(*r0, *r1, *sweep, *color);
+            }
+        },
+    )
+    .absolute()
+    .size_full();
+    let mut legend = v_flex().gap(px(3.)).justify_center();
+    for i in 0..5 {
+        let n = got.counts[i];
+        legend = legend.child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .text_xs()
+                .child(div().size(px(9.)).rounded_full().bg(fills[i]))
+                .child(div().w(px(76.)).text_color(p.text_secondary).child(RING_LABELS[i]))
+                .child(div().text_color(p.text).child(group(n))),
+        );
+    }
+    let extra = format!("{} files{}", group(total), if got.partial { ", partial: the walk was capped" } else { "" });
+    Some(
+        v_flex()
+            .gap_2()
+            .child(folder_line(p, &folder, &extra))
+            .child(h_flex().gap_4().items_center().child(div().relative().size(px(size)).flex_shrink_0().child(paint)).child(legend))
+            .into_any_element(),
+    )
 }

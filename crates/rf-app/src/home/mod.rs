@@ -208,6 +208,18 @@ pub static WIDGETS: &[Widget] = &[
         header: Some(dev::reclaim_header),
         since: "0.9.6",
     },
+    Widget {
+        id: "agerings",
+        title: "Age rings",
+        icon: L::Target,
+        sizes: ANY,
+        default_size: Size::Medium,
+        rows: 2,
+        folder: true,
+        render: dev::age_rings,
+        header: Some(dev::age_rings_header),
+        since: "0.9.6",
+    },
     Widget { id: "hosts", title: "Hosts", icon: L::Server, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: crate::hosts_ui::widget, header: None, since: "0.9.5" },
 ];
 
