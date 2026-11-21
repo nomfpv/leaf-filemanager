@@ -51,6 +51,50 @@ impl From<FsError> for SaveError {
     }
 }
 
+/// What to do with an editing copy that is there before a fetch (left from an earlier run of leaf).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Leftover {
+    /// No copy there: fetch.
+    None,
+    /// The copy has the server file's size and time: it IS the server's version, used as it is (no fetch).
+    Same,
+    /// The copy differs (an edit that was never sent): moved aside to this path in the same folder; then fetch.
+    SetAside(std::path::PathBuf),
+}
+
+/// Before an editing copy is fetched to `local`: a copy that is there already and differs from the server's file (`server`)
+/// is renamed to `name (unsent <time>).ext` beside it, so an edit not sent before leaf closed is never overwritten. Nothing
+/// is truncated or removed here.
+pub fn set_aside_unsent(local: &Path, server: &Meta) -> std::io::Result<Leftover> {
+    let m = match std::fs::symlink_metadata(local) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Leftover::None),
+        Err(e) => return Err(e),
+    };
+    let secs = |t: std::time::SystemTime| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let same = m.is_file() && m.len() == server.size && m.modified().is_ok_and(|t| secs(t) == server.modified_ms / 1000);
+    if same {
+        return Ok(Leftover::Same);
+    }
+    let dir = local.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
+    let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name.as_str(), ""),
+    };
+    let when = chrono::Local::now().format("%Y-%m-%d %H%M%S");
+    for n in 1..1000 {
+        let cand = if n == 1 { format!("{stem} (unsent {when}){ext}") } else { format!("{stem} (unsent {when} {n}){ext}") };
+        let to = dir.join(cand);
+        if std::fs::symlink_metadata(&to).is_ok() {
+            continue;
+        }
+        std::fs::rename(local, &to)?;
+        return Ok(Leftover::SetAside(to));
+    }
+    Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+}
+
 /// The name of the one backup kept beside an edited file.
 pub fn backup_name(name: &str) -> String {
     format!("{name}.leaf-bak")

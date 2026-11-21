@@ -1137,7 +1137,18 @@ pub fn edit_file(cx: &mut App, v: VPath, size: u64) {
         return;
     }
     let tx = edit_channel(cx);
-    crate::status_center::start(cx, format!("{} {name}", t!("Editing from the server:")), move |tr| {
+    let aside: Arc<Mutex<Option<PathBuf>>> = Arc::default();
+    let told = aside.clone();
+    let done: crate::status_center::OnDone = Box::new(move |_, cx| {
+        let Some(p) = told.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        if let Some(w) = crate::workspace::main_windows(cx).first().copied() {
+            let msg = format!("{}
+
+{}", t!("An editing copy from before was never sent to the server. It is kept here:"), p.display());
+            let _ = w.update(cx, |_, window, cx| crate::prompt::notice(t!("Unsent edit kept"), msg, window, cx));
+        }
+    });
+    crate::status_center::start_with(cx, format!("{} {name}", t!("Editing from the server:")), move |tr| {
         let cancel = tr.cancel.clone();
         let mut progress = |d: u64, total: u64| {
             tr.bytes.set(d, total);
@@ -1145,10 +1156,22 @@ pub fn edit_file(cx: &mut App, v: VPath, size: u64) {
         };
         let fs = leaf_vfs::fs_for(v.scheme()).map_err(anyhow_of)?;
         make_cache_dir(&local).map_err(anyhow_of)?;
-        let meta = match leaf_vfs::copy::fetch_file(&*fs, &v, &local, OPEN_MAX, None, &|| cancel.load(Ordering::Relaxed), &mut progress) {
-            Ok(m) => m,
-            Err(FsError::Cancelled) => return Ok(false),
-            Err(e) => return Err(anyhow_of(e)),
+        // a copy left from an earlier run: the server's version as it is, or an unsent edit that is moved aside first (never
+        // overwritten)
+        let server = fs.stat(&v).map_err(anyhow_of)?;
+        let leftover = leaf_remote::edit::set_aside_unsent(&local, &server)?;
+        let meta = if leftover == leaf_remote::edit::Leftover::Same {
+            server
+        } else {
+            if let leaf_remote::edit::Leftover::SetAside(p) = leftover {
+                log::info!("remote: an unsent editing copy was moved aside");
+                *aside.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
+            }
+            match leaf_vfs::copy::fetch_file(&*fs, &v, &local, OPEN_MAX, None, &|| cancel.load(Ordering::Relaxed), &mut progress) {
+                Ok(m) => m,
+                Err(FsError::Cancelled) => return Ok(false),
+                Err(e) => return Err(anyhow_of(e)),
+            }
         };
         let dir = local.parent().map(Path::to_path_buf).ok_or_else(|| anyhow::anyhow!("no folder"))?;
         let stamp = Arc::new(Mutex::new(local_stamp(&local)));
@@ -1176,7 +1199,7 @@ pub fn edit_file(cx: &mut App, v: VPath, size: u64) {
             log::warn!("edit {}: {e}", local.display());
         }
         Ok(true)
-    });
+    }, Some(done));
 }
 
 /// The editing copy `local` was saved: uploaded over the server's file (the old version kept as `name.leaf-bak`), or, when

@@ -912,3 +912,25 @@ fn edit_refuses_when_the_server_copy_changed() {
     assert_eq!(std::fs::read(served.0.join("notes.txt.leaf-bak")).unwrap(), b"my edit");
     assert_eq!(names_in(&served.0), ["notes (edited).txt", "notes.txt", "notes.txt.leaf-bak"]);
 }
+
+/// H10 after a restart: an editing copy that differs from the server's file is moved aside (never overwritten or cut); one
+/// that matches the server's size and time is used as it is.
+#[test]
+fn unsent_edit_copy_is_set_aside() {
+    use crate::edit::{Leftover, set_aside_unsent};
+    let tmp = Temp::new("unsent");
+    let local = tmp.0.join("notes.txt");
+    let server = leaf_vfs::Meta { kind: leaf_vfs::Kind::File, size: 3, modified_ms: 1_700_000_000_000, created_ms: 0, mode: None };
+    assert_eq!(set_aside_unsent(&local, &server).unwrap(), Leftover::None);
+    std::fs::write(&local, b"one").unwrap();
+    let f = std::fs::OpenOptions::new().write(true).open(&local).unwrap();
+    f.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)).unwrap();
+    drop(f);
+    assert_eq!(set_aside_unsent(&local, &server).unwrap(), Leftover::Same);
+    std::fs::write(&local, b"my unsent edit").unwrap();
+    let Leftover::SetAside(p) = set_aside_unsent(&local, &server).unwrap() else { panic!("not set aside") };
+    assert!(!local.exists());
+    assert_eq!(std::fs::read(&p).unwrap(), b"my unsent edit");
+    let n = p.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(n.starts_with("notes (unsent ") && n.ends_with(").txt"), "{n}");
+}
