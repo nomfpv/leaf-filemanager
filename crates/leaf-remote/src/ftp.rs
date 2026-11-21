@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 
 use leaf_vfs::{Caps, Entry, EntryKind, Fs, FsError, Kind, Meta, MetaChange, VPath, WriteMode, WriteOpts, WriteSink};
 use suppaftp::types::FileType as TransferType;
-use suppaftp::{FtpError, Mode, RustlsConnector, RustlsFtpStream, TlsStream, TransferStream};
+use suppaftp::{FtpError, Mode, RustlsConnector, RustlsFtpStream, Status, TlsStream, TransferStream};
 use zeroize::Zeroizing;
 
 use crate::conn::Config;
@@ -917,42 +917,93 @@ fn is_part_name(name: &str) -> bool {
     name.starts_with('.') && name.ends_with(".leaf-part")
 }
 
+/// How a move into place failed.
+enum PlaceFail {
+    /// Nothing changed: the name has its old file (or nothing), `from` is where it was.
+    Clean(Fail),
+    /// The old file may have been moved aside: the error names where both versions may be now. Nothing may be removed.
+    Left(FsError),
+}
+
+impl From<Fail> for PlaceFail {
+    fn from(f: Fail) -> PlaceFail {
+        PlaceFail::Clean(f)
+    }
+}
+
+fn fail_text(f: &Fail) -> String {
+    match f {
+        Fail::Lost(m) => m.clone(),
+        Fail::Fs(e) => e.to_string(),
+    }
+}
+
+/// RNFR then RNTO. The error says whether RNTO was sent: after that the server may have moved it even when the answer
+/// did not arrive.
+fn rnfr_rnto(l: &mut Lease, from: &str, to: &str) -> Result<(), (Fail, bool)> {
+    l.s().custom_command(format!("RNFR {from}"), &[Status::RequestFilePending]).map_err(|e| (fail_of(e), false))?;
+    l.s().custom_command(format!("RNTO {to}"), &[Status::RequestedFileActionOk]).map(|_| ()).map_err(|e| (fail_of(e), true))
+}
+
 /// Moves `from` to `to` (server paths) on this connection. Nothing at `to`: a plain rename. A file at `to`: `Exists` unless
 /// `replace`; then the old one is moved aside, the new one renamed in and the old one removed (moved back when the second
-/// step fails). A folder at `to` is never replaced.
-fn put_in_place(l: &mut Lease, from: &str, to: &str, replace: bool) -> Result<(), Fail> {
+/// step fails). A folder at `to` is never replaced. A failure once the old one may have left its name is `Left`, naming the
+/// aside name and `from`; a connection that broke is cut.
+fn put_in_place(l: &mut Lease, from: &str, to: &str, replace: bool) -> Result<(), PlaceFail> {
     let Some(old) = stat_on(l, to)? else {
-        return l.s().rename(from, to).ftp();
+        return rnfr_rnto(l, from, to).map_err(|(f, _)| PlaceFail::Clean(f));
     };
     if !replace || old.kind == Kind::Dir {
-        return Err(Fail::Fs(FsError::Exists));
+        return Err(PlaceFail::Clean(Fail::Fs(FsError::Exists)));
     }
     let (dir, name) = split(to);
     let aside = child(dir, &side_name(name, "leaf-old"));
-    l.s().rename(to, aside.as_str()).ftp()?;
-    match l.s().rename(from, to).ftp() {
+    let left = |why: String| {
+        log::warn!("ftp: a replace stopped half-way ({why}); the old version may be kept as an aside name");
+        PlaceFail::Left(FsError::Other(format!(
+            "The new version could not take the name {name} ({why}). The old version may now be kept on the server as {aside}, and the new one as {from}"
+        )))
+    };
+    // 1. the old one aside
+    match rnfr_rnto(l, to, &aside) {
+        Ok(()) => {}
+        Err((f, false)) => return Err(PlaceFail::Clean(f)),
+        Err((Fail::Fs(e), true)) => {
+            // refused: the old one is still under its name when the server says so
+            let still = matches!(stat_on(l, to), Ok(Some(_))) && matches!(stat_on(l, &aside), Ok(None));
+            if still {
+                return Err(PlaceFail::Clean(Fail::Fs(e)));
+            }
+            return Err(left(e.to_string()));
+        }
+        Err((lost, true)) => {
+            l.cut();
+            return Err(left(fail_text(&lost)));
+        }
+    }
+    // 2. the new one in
+    match rnfr_rnto(l, from, to) {
         Ok(()) => {
             if let Err(Fail::Fs(e)) = l.s().rm(aside.as_str()).ftp() {
                 log::warn!("ftp: the old version could not be removed after a replace ({e}); it stays beside the new one");
             }
             Ok(())
         }
-        Err(e) => {
-            if let Err(back) = l.s().rename(aside.as_str(), to).ftp() {
-                let back = match back {
-                    Fail::Lost(m) => m,
-                    Fail::Fs(e) => e.to_string(),
-                };
-                log::warn!("ftp: the old file could not be moved back after a failed replace ({back})");
-                let e = match e {
-                    Fail::Lost(m) => m,
-                    Fail::Fs(e) => e.to_string(),
-                };
-                return Err(Fail::Fs(FsError::Other(format!(
-                    "The new version could not take the name {name} ({e}), and the old version could not be put back ({back}). The old version is kept on the server as {aside}"
-                ))));
+        Err((f @ Fail::Fs(_), _)) => {
+            // the old one back under its name
+            match rnfr_rnto(l, &aside, to) {
+                Ok(()) => Err(PlaceFail::Clean(f)),
+                Err((back, _)) => {
+                    if let Fail::Lost(_) = back {
+                        l.cut();
+                    }
+                    Err(left(format!("{}; putting the old version back failed too: {}", fail_text(&f), fail_text(&back))))
+                }
             }
-            Err(e)
+        }
+        Err((lost, _)) => {
+            l.cut();
+            Err(left(fail_text(&lost)))
         }
     }
 }
@@ -1173,7 +1224,10 @@ impl Fs for FtpFs {
             if src.kind == Kind::Dir && stat_on(l, &b)?.is_some() {
                 return Err(Fail::Fs(FsError::Exists));
             }
-            put_in_place(l, &a, &b, replace)
+            put_in_place(l, &a, &b, replace).map_err(|e| match e {
+                PlaceFail::Clean(f) => f,
+                PlaceFail::Left(e) => Fail::Fs(e),
+            })
         })
     }
 
@@ -1301,26 +1355,36 @@ impl WriteSink for Writer {
     fn finish(mut self: Box<Self>) -> Result<(), FsError> {
         let stream = self.stream.take().ok_or_else(|| FsError::Other("the upload broke off".into()))?;
         let mut l = self.lease.take().expect("lease");
+        // whatever comes of it, nothing is left for Drop to do: what happens to the temporary file is decided here
+        let place = self.place.take();
+        self.done = true;
         let r = (|| {
             // the server confirms the whole file (226) before anything takes the real name
             stream.finish_box().ftp()?;
-            match &self.place {
+            match &place {
                 Some(p) => put_in_place(&mut l, &p.temp, &p.target, true),
                 None => Ok(()),
             }
         })();
         match r {
-            Ok(()) => {
-                self.done = true;
-                Ok(())
-            }
-            Err(Fail::Lost(why)) => {
+            Ok(()) => Ok(()),
+            // the old version may be aside and the new one under its temporary name: both stay, the error names them
+            Err(PlaceFail::Left(e)) => Err(e),
+            Err(PlaceFail::Clean(Fail::Lost(why))) => {
+                // (the real name was not touched) the temporary file goes over another connection, off this thread
                 l.cut();
+                drop(l);
+                if let Some(p) = place {
+                    let (inner, v) = (self.inner.clone(), self.v.clone());
+                    std::thread::spawn(move || {
+                        let _ = inner.once(&v, |l| l.s().rm(p.temp.as_str()).ftp());
+                    });
+                }
                 Err(FsError::Offline(why))
             }
-            Err(Fail::Fs(e)) => {
+            Err(PlaceFail::Clean(Fail::Fs(e))) => {
                 // the temporary file goes now, on this connection (the real name was not touched)
-                if let Some(p) = self.place.take() {
+                if let Some(p) = place {
                     let _ = l.s().rm(p.temp.as_str());
                 }
                 Err(e)

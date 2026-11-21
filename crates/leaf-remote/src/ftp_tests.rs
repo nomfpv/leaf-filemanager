@@ -30,6 +30,8 @@ struct Knobs {
     fail_stor: bool,
     /// DELE requests seen.
     deles: usize,
+    /// An RNTO whose target has this in it is done, then the connection is closed before the answer.
+    cut_after_rnto: Option<&'static str>,
 }
 
 struct State {
@@ -358,6 +360,10 @@ fn session(c: TcpStream, st: Shared) -> std::io::Result<()> {
                 let n = s.dir_mut(&fd).unwrap().remove(&fname).unwrap();
                 // (Unix rename: a file there is replaced)
                 put(&mut s, &path, n);
+                if s.knobs.cut_after_rnto.is_some_and(|k| path.contains(k)) {
+                    s.knobs.cut_after_rnto = None;
+                    return Ok(());
+                }
                 drop(s);
                 say(&mut out, "250 renamed")?;
             }
@@ -532,4 +538,25 @@ fn ftp_failed_upload_leaves_the_original() {
     drop(st);
     // a create-new over a name that is there is refused
     assert_eq!(fs.open_write(&target, WriteOpts::CREATE_NEW).err(), Some(FsError::Exists));
+}
+
+#[test]
+fn ftp_replace_cut_after_moving_aside_keeps_both_and_names_them() {
+    let s = start(dir(vec![("site", dir(vec![("index.html", file("the original"))]))]));
+    let fs = fs_for(Arc::new(Answers::default()));
+    let target = addr(&s, "/site/index.html");
+    // the old version is moved aside, then the line breaks before the answer
+    lock(&s.state).knobs.cut_after_rnto = Some("leaf-old");
+    let mut w = fs.open_write(&target, WriteOpts::REPLACE).unwrap();
+    w.write_all(b"the new version").unwrap();
+    let err = w.finish().unwrap_err().to_string();
+    assert!(err.contains(".index.html.leaf-old-") && err.contains(".index.html.leaf-up-"), "{err}");
+    // nothing is removed afterwards (not by finish, not off the thread)
+    std::thread::sleep(Duration::from_millis(400));
+    let st = lock(&s.state);
+    let Some(Node::Dir(m)) = st.get("/site", true) else { panic!() };
+    assert!(!m.contains_key("index.html"));
+    assert!(m.iter().any(|(k, n)| k.contains("leaf-old") && matches!(n, Node::File(b) if b == b"the original")), "{:?}", m.keys());
+    assert!(m.iter().any(|(k, n)| k.contains("leaf-up") && matches!(n, Node::File(b) if b == b"the new version")), "{:?}", m.keys());
+    assert_eq!(st.knobs.deles, 0);
 }
