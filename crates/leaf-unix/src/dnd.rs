@@ -1,4 +1,9 @@
-//! Linux backend of rf_win::dnd. Status: PARTIAL (the drop rules are real; dragging out is B1's)
+//! Linux backend of rf_win::dnd. Status: PARTIAL (the drop rules are real; the drag OUT is made by the file rows themselves)
+//!
+//! Dropping files in is the toolkit's: the window's drop targets take `ExternalPaths` (Wayland `text/uri-list`; GPUI's X11 backend
+//! offers none of the drag). Dragging out is not an imperative call here: GPUI starts the native drag when a drag that began on a
+//! row leaves the window (`folder_view::drag_out_row`: `on_drag` + `external_drag_payload`), so `drag_out` below stays an error
+//! nobody calls. Both are compiled and untried on a real desktop.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};

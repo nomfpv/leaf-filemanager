@@ -1049,6 +1049,7 @@ impl FolderView {
                         cx.listener(move |this, _: &MouseDownEvent, window, cx| this.on_row_right_down(vi, window, cx)),
                     )
                     .when_some(self.path_of(ei), |d, path| file_drop_target(d, path, is_dir, &p))
+                    .when_some(self.drag_out_value(ei), drag_out_row)
                     // Settings → "Select files and folders on hover"
                     .when(hover_select, |d| d.on_hover(cx.listener(move |this, on: &bool, _, cx| this.hover_row(vi, *on, cx))))
                     .into_any_element(),
@@ -3182,6 +3183,7 @@ impl FolderView {
                         cx.listener(move |this, _: &MouseDownEvent, window, cx| this.on_row_right_down(vi, window, cx)),
                     )
                     .when_some(self.path_of(ei), |d, path| file_drop_target(d, path, e.is_dir(), &p))
+                    .when_some(self.drag_out_value(ei), drag_out_row)
                     // Settings → "Select files and folders on hover"; in a sliced row also the tile's fill (`grid_hover`)
                     .when(hover_select || part.is_some(), |d| {
                         let sliced = part.is_some();
@@ -4777,6 +4779,7 @@ impl FolderView {
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| this.on_row_right_down(vi, window, cx)),
                 )
                 .when_some(self.path_of(ei), |d, path| file_drop_target(d, path, e.is_dir(), &p))
+                .when_some(self.drag_out_value(ei), drag_out_row)
                 .on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -6098,6 +6101,38 @@ impl FolderView {
         self.selected = next;
         cx.notify();
     }
+}
+
+/// What a drag started on row `ei` carries off Windows: the whole selection when the row is part of it (a large selection is not
+/// copied per row: that row drags alone), else the row itself. `None` on Windows, where the OLE drag (`ops::drag_paths_out`) does it.
+impl FolderView {
+    #[cfg(not(windows))]
+    fn drag_out_value(&self, ei: u32) -> Option<ExternalPaths> {
+        const MAX_PER_ROW: usize = 2000;
+        let paths = if self.selected.contains(&ei) && self.selected.len() <= MAX_PER_ROW { self.selection_paths() } else { vec![self.path_of(ei)?] };
+        Some(ExternalPaths(paths.into_iter().collect()))
+    }
+
+    #[cfg(windows)]
+    fn drag_out_value(&self, _ei: u32) -> Option<ExternalPaths> {
+        None
+    }
+}
+
+/// A row that can be dragged inside the window (drops accept `ExternalPaths`) and, when the drag leaves the window, becomes a native
+/// file drag of the same paths (GPUI's Linux backend does that on Wayland). Not tried on a real desktop yet.
+#[cfg(not(windows))]
+fn drag_out_row(row: Stateful<Div>, paths: ExternalPaths) -> Stateful<Div> {
+    let mut row = row.on_drag(paths, |d: &ExternalPaths, _, _, cx| cx.new(|_| d.clone()));
+    row = row.external_drag_payload::<ExternalPaths>(|d, _, _| {
+        Some(ExternalDragPayload::Files(FileDragPaths::new(d.paths().iter().map(|p| (p.clone(), p.is_dir())))))
+    });
+    row
+}
+
+#[cfg(windows)]
+fn drag_out_row(row: Stateful<Div>, _paths: ExternalPaths) -> Stateful<Div> {
+    row
 }
 
 /// Use the rendered path, so a refresh during a drag cannot retarget it by shifting row indices.

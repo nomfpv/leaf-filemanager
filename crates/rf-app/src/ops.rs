@@ -1044,6 +1044,12 @@ pub(crate) fn drag_archive_items_out(items: Vec<PathBuf>) {
 
 /// An OLE drag of `items` out of the window (the selection, or a recent item of the Home page).
 pub(crate) fn drag_paths_out(items: Vec<PathBuf>) {
+    // elsewhere the rows themselves start the native drag (`folder_view::drag_out_row`), the toolkit does the rest
+    #[cfg(not(windows))]
+    {
+        let _ = items;
+    }
+    #[cfg(windows)]
     {
         if items.is_empty() {
             return;

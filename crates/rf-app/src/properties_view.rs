@@ -217,6 +217,7 @@ pub struct PropsView {
     attrs: Attrs,
     /// The volume can compress / encrypt (Advanced attributes shows those only then).
     caps: (bool, bool),
+    #[cfg_attr(not(windows), allow(dead_code))]
     advanced_open: bool,
     /// A folder's attribute change goes down its whole tree too.
     recurse: bool,
