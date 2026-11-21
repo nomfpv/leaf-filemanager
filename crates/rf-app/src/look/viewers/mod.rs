@@ -11,8 +11,14 @@ pub mod image;
 pub mod info;
 pub mod markdown;
 pub mod pdf;
+#[cfg(windows)]
 pub mod rd_video;
 pub mod text;
+#[cfg(windows)]
+pub mod video;
+// (off Windows: video.rs needs the Windows-only presenter, audio sink and preview host)
+#[cfg(not(windows))]
+#[path = "video_unavailable.rs"]
 pub mod video;
 pub mod zoom;
 

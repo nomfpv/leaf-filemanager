@@ -407,10 +407,8 @@ impl LookWindow {
 
     fn drag_out(&self) {
         let items = vec![self.path.clone()];
-        let ui_thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
-        unsafe {
-            let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
-        }
+        let ui_thread = leaf_sys::input::current_thread_id();
+        leaf_sys::input::release_capture();
         leaf_sys::sta::run(move |owner| {
             if let Err(e) = leaf_sys::dnd::drag_out(owner, ui_thread, &items) {
                 log::warn!("look drag: {e:#}");

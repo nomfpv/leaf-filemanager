@@ -181,14 +181,7 @@ fn make_files(dir: &Path, n: usize, report: &dyn Fn(f32)) -> std::io::Result<()>
 /// The "done" marker, hidden so it doesn't show in the listings.
 fn hide(p: &Path) -> std::io::Result<()> {
     std::fs::write(p, b"")?;
-    use std::os::windows::ffi::OsStrExt;
-    let w: Vec<u16> = p.as_os_str().encode_wide().chain([0]).collect();
-    unsafe {
-        let _ = windows::Win32::Storage::FileSystem::SetFileAttributesW(
-            windows::core::PCWSTR(w.as_ptr()),
-            windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN,
-        );
-    }
+    leaf_sys::fileattr::set_hidden(p);
     Ok(())
 }
 
@@ -265,13 +258,7 @@ pub fn delete_test_files() -> std::io::Result<()> {
 }
 
 fn free_space(p: &Path) -> u64 {
-    use std::os::windows::ffi::OsStrExt;
-    let w: Vec<u16> = p.as_os_str().encode_wide().chain([0]).collect();
-    let mut free = 0u64;
-    unsafe {
-        let _ = windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(windows::core::PCWSTR(w.as_ptr()), Some(&mut free), None, None);
-    }
-    free
+    leaf_sys::fileattr::free_space(p)
 }
 
 // ------------------------------------------------------------------ running

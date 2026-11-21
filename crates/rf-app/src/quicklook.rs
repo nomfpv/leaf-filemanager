@@ -74,11 +74,7 @@ fn start() -> bool {
 fn store_installed() -> bool {
     let family = STORE_AUMID.split('!').next().unwrap_or_default();
     let (name, publisher) = family.split_once('_').unwrap_or((family, ""));
-    let Ok(packages) = windows_registry::CURRENT_USER.open(r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages")
-    else {
-        return false;
-    };
-    packages.keys().is_ok_and(|mut keys| keys.any(|k| k.starts_with(name) && k.ends_with(publisher)))
+    leaf_sys::registry::store_package_installed(name, publisher)
 }
 
 /// Space: QuickLook opens `path`, or closes the preview of it. Starts QuickLook when it is not running; false when it could not be

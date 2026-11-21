@@ -278,26 +278,13 @@ pub fn current(window: &Window, cx: &App) -> Option<Entity<MenuView>> {
 /// The screen rectangle of a window of ours (device px); `None` when it is gone.
 fn screen_rect(w: AnyWindowHandle, cx: &mut App) -> Option<leaf_sys::kit::Rect> {
     let hwnd = w.update(cx, |_, window, _| crate::look::window::hwnd_of(window)).ok()?;
-    let mut r = windows::Win32::Foundation::RECT::default();
-    // SAFETY: a plain read of a window's rectangle.
-    unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(windows::Win32::Foundation::HWND(hwnd as *mut _), &mut r).ok()? };
-    Some(leaf_sys::kit::Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom })
+    let (left, top, right, bottom) = leaf_sys::geom::window_rect(hwnd)?;
+    Some(leaf_sys::kit::Rect { left, top, right, bottom })
 }
 
 /// Whether the window in front belongs to this process.
 fn front_is_ours() -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
-    // SAFETY: plain reads.
-    unsafe {
-        let fg = GetForegroundWindow();
-        if fg.0.is_null() {
-            // (nothing is in front for the moment between two windows: not another program's)
-            return true;
-        }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, Some(&mut pid));
-        pid == windows::Win32::System::Threading::GetCurrentProcessId()
-    }
+    leaf_sys::process::front_is_ours()
 }
 
 /// Watches an open pop-up menu from outside and puts it away when the usual way cannot (`geo::menu_orphaned`: a menu whose window

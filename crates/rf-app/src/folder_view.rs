@@ -1476,7 +1476,7 @@ impl FolderView {
             let generation = self.generation;
             let (tx, mut rx) = mpsc::unbounded::<Msg>();
             std::thread::spawn(move || {
-                use std::os::windows::fs::MetadataExt;
+                use leaf_sys::fileattr::MetadataExt;
                 let mut es = Vec::new();
                 let mut ps: Vec<Arc<std::path::Path>> = Vec::new();
                 for p in paths {
@@ -1577,7 +1577,7 @@ impl FolderView {
                         let mut es = Vec::new();
                         let mut ps: Vec<Arc<std::path::Path>> = Vec::new();
                         for p in paths {
-                            use std::os::windows::fs::MetadataExt;
+                            use leaf_sys::fileattr::MetadataExt;
                             let Ok(m) = std::fs::metadata(&p) else { continue };
                             let ms = |t: std::io::Result<std::time::SystemTime>| {
                                 t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64)
@@ -2979,10 +2979,7 @@ impl FolderView {
                 }
                 // with Ctrl held the item joins the selection, with Shift the selection runs from the anchor to it, as in Explorer's
                 // "point to select" (issue 101: each hover replaced the selection)
-                let (ctrl, shift) = unsafe {
-                    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
-                    (GetKeyState(VK_CONTROL.0 as i32) < 0, GetKeyState(VK_SHIFT.0 as i32) < 0)
-                };
+                let (ctrl, shift) = (leaf_sys::input::ctrl_down(), leaf_sys::input::shift_down());
                 if shift {
                     let anchor = v.anchor.unwrap_or(now);
                     v.select_range(anchor, now);
@@ -3009,7 +3006,7 @@ impl FolderView {
     fn pick_in_column(&mut self, dir: PathBuf, name: String, cx: &mut Context<Self>) {
         self.static_pick += 1;
         let serial = self.static_pick;
-        let wait = std::time::Duration::from_millis(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() } as u64);
+        let wait = std::time::Duration::from_millis(leaf_sys::input::double_click_ms() as u64);
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             let _ = this.update(cx, |v, cx| {
@@ -3026,7 +3023,7 @@ impl FolderView {
         self.slow_click_serial += 1;
         let serial = self.slow_click_serial;
         self.slow_click = Some((ei, serial));
-        let wait = std::time::Duration::from_millis(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() } as u64);
+        let wait = std::time::Duration::from_millis(leaf_sys::input::double_click_ms() as u64);
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             let _ = this.update(cx, |v, cx| {
@@ -5537,10 +5534,7 @@ const SHARED_LAYOUT: &str = "<all folders>";
 /// How long the pointer rests on an item before "Select on hover" selects it: the system's hover time (Control Panel › Mouse;
 /// 400 ms out of the box), as Explorer's "point to select" waits.
 fn hover_time() -> std::time::Duration {
-    use windows::Win32::UI::WindowsAndMessaging::{SPI_GETMOUSEHOVERTIME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW};
-    let mut ms: u32 = 0;
-    let ok = unsafe { SystemParametersInfoW(SPI_GETMOUSEHOVERTIME, 0, Some(&mut ms as *mut u32 as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) }.is_ok();
-    std::time::Duration::from_millis(if ok && ms > 0 { ms.min(5000) as u64 } else { 400 })
+    leaf_sys::input::hover_time()
 }
 
 fn completes_double(first: Option<&FirstClick>, load: u64, name: Option<&str>) -> bool {
@@ -5595,7 +5589,7 @@ mod known_kind_tests {
 /// at a time, and sent in order; paths gone since they were indexed are left out. Returns how
 /// many were sent.
 fn send_index_hits(paths: &[PathBuf], tx: &mpsc::UnboundedSender<Msg>, cancel: &AtomicBool) -> usize {
-    use std::os::windows::fs::MetadataExt;
+    use leaf_sys::fileattr::MetadataExt;
     let ms = |t: std::io::Result<std::time::SystemTime>| t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64);
     let row = |p: &PathBuf| -> Option<(Entry, Arc<std::path::Path>)> {
         let m = std::fs::symlink_metadata(p).ok()?;

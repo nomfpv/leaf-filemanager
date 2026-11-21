@@ -802,7 +802,7 @@ impl PropsView {
         let owner = Self::hwnd(window);
         let (tx, rx) = futures::channel::oneshot::channel();
         leaf_sys::sta::run(move |_| {
-            let _ = leaf_sys::shell::open_with_dialog(windows::Win32::Foundation::HWND(owner as *mut _), &p);
+            let _ = leaf_sys::shell::open_with_dialog(leaf_sys::geom::owner_from_raw(owner), &p);
             let _ = tx.send(leaf_sys::fileinfo::opens_with(&p));
         });
         cx.spawn(async move |this, cx| {
@@ -823,7 +823,7 @@ impl PropsView {
         let owner = Self::hwnd(window);
         let (tx, rx) = futures::channel::oneshot::channel();
         leaf_sys::sta::run(move |_| {
-            let _ = tx.send(leaf_sys::folder_custom::pick_icon(windows::Win32::Foundation::HWND(owner as *mut _), &start.0, start.1));
+            let _ = tx.send(leaf_sys::folder_custom::pick_icon(leaf_sys::geom::owner_from_raw(owner), &start.0, start.1));
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Some((file, index))) = rx.await {
@@ -1745,7 +1745,7 @@ fn walk(dir: &Path, cancel: &AtomicBool) -> Vec<PathBuf> {
             let p = e.path();
             if ft.is_dir() {
                 // a junction is a directory with a reparse point
-                use std::os::windows::fs::MetadataExt;
+                use leaf_sys::fileattr::MetadataExt;
                 if e.metadata().is_ok_and(|m| m.file_attributes() & 0x400 != 0) {
                     continue;
                 }

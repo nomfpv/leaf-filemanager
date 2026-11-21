@@ -61,10 +61,7 @@ impl crate::folder_view::FolderView {
         let items: Vec<PathBuf> = if background { Vec::new() } else { sel.iter().filter_map(|&i| self.shell_items.get(i as usize)).map(|c| PathBuf::from(&c.parsing)).collect() };
         let (tx, rx) = futures::channel::oneshot::channel();
         leaf_sys::sta::run(move |owner| {
-            let mut pt = windows::Win32::Foundation::POINT::default();
-            unsafe {
-                let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
-            }
+            let pt = leaf_sys::input::cursor_pos();
             let r = match items.as_slice() {
                 [] => leaf_sys::ctxmenu::show_for_background(owner, std::path::Path::new(&parsing), (pt.x, pt.y), false, &[]),
                 [one] => leaf_sys::ctxmenu::show_for_one(owner, one, (pt.x, pt.y), false, &[]),

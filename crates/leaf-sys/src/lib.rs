@@ -23,9 +23,8 @@ pub use os::{
     sound, sta, syncroots, sysparams, taskbar_progress, thumbs, toast_post, tray, vfiles, volume, window, wsearch,
 };
 
-// (only until the settings lock moves into the backends: its one user, rf-app settings_merge.rs)
-#[cfg(windows)]
-pub use os::wide;
+// what rf-app did with Win32 itself until the Linux seam (A3)
+pub use os::{args, fileattr, input, lock, process, registry};
 
 // the crate-root items rf-win always had
 pub use os::{

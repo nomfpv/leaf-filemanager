@@ -1,6 +1,6 @@
 //! Shared Windows launch path for toolbar commands and file drops.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, Window};
@@ -8,26 +8,7 @@ use gpui_kit::{App, Window};
 use crate::i18n::tx;
 
 pub(crate) fn split_arguments(text: &str) -> anyhow::Result<Vec<OsString>> {
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
-    use windows::Win32::UI::Shell::CommandLineToArgvW;
-    use windows::core::PCWSTR;
-
-    // Windows parses argv[0] differently, so supply a dummy executable name.
-    anyhow::ensure!(!text.contains('\0'), "Invalid command arguments");
-    let line = format!("program {text}");
-    let wide: Vec<u16> = OsStr::new(&line).encode_wide().chain([0]).collect();
-    let mut count = 0;
-    unsafe {
-        let argv = CommandLineToArgvW(PCWSTR(wide.as_ptr()), &mut count);
-        if argv.is_null() {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        let args = std::slice::from_raw_parts(argv, count as usize).iter().skip(1)
-            .map(|p| OsString::from_wide(p.as_wide())).collect();
-        let _ = LocalFree(Some(HLOCAL(argv.cast())));
-        Ok(args)
-    }
+    leaf_sys::args::split(text)
 }
 
 pub(crate) fn accepts_program(path: &Path) -> bool {

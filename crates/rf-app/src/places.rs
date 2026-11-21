@@ -109,17 +109,9 @@ fn load_cloud_and_wsl() -> Vec<Pinned> {
         add(r.name, r.path, L::Cloud);
     }
     // WSL distributions registered for this user
-    if let Ok(lxss) = windows_registry::CURRENT_USER.open(r"Software\Microsoft\Windows\CurrentVersion\Lxss") {
-        if let Ok(keys) = lxss.keys() {
-            for k in keys {
-                if let Ok(d) = lxss.open(&k) {
-                    if let Ok(name) = d.get_string("DistributionName") {
-                        let path = PathBuf::from(format!(r"\\wsl.localhost\{name}"));
-                        out.push(Pinned { title: format!("WSL: {name}"), path, icon: L::SquareTerminal });
-                    }
-                }
-            }
-        }
+    for name in leaf_sys::registry::wsl_distributions() {
+        let path = PathBuf::from(format!(r"\\wsl.localhost\{name}"));
+        out.push(Pinned { title: format!("WSL: {name}"), path, icon: L::SquareTerminal });
     }
     out
 }

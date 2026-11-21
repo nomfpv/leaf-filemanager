@@ -1,4 +1,4 @@
-﻿//! File operations, clipboard, inline rename and the native context menu for a FolderView.
+//! File operations, clipboard, inline rename and the native context menu for a FolderView.
 //! Everything that can block runs on worker threads or the shell STA thread.
 
 use crate::t;
@@ -9,9 +9,6 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use leaf_sys::ctxmenu::MenuOutcome;
 use leaf_sys::fileops::{self, Transfer};
-use windows::Win32::Foundation::POINT;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
-use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::folder_view::FolderView;
 use leaf_sys::ctxmenu::ExtraItem;
@@ -813,12 +810,9 @@ impl FolderView {
         let paste_dir_ui = dir.clone();
         let (tx, rx) = oneshot::channel::<(MenuOutcome, Option<(Vec<PathBuf>, Transfer)>)>();
         // Read Shift here: the shell thread has its own input state.
-        let extended = unsafe { GetKeyState(VK_SHIFT.0 as i32) < 0 };
+        let extended = leaf_sys::input::shift_down();
         leaf_sys::sta::run(move |owner| {
-            let mut pt = POINT::default();
-            unsafe {
-                let _ = GetCursorPos(&mut pt);
-            }
+            let pt = leaf_sys::input::cursor_pos();
             let r = if background {
                 leaf_sys::ctxmenu::show_for_background(owner, &dir, (pt.x, pt.y), extended, &extra)
             } else {
@@ -978,10 +972,8 @@ fn paste_as_file(what: Pasted, dir: PathBuf, view: WeakEntity<FolderView>, cx: &
 }
 
 pub(crate) fn drag_archive_items_out(items: Vec<PathBuf>) {
-    let ui_thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
-    unsafe {
-        let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
-    }
+    let ui_thread = leaf_sys::input::current_thread_id();
+    leaf_sys::input::release_capture();
     std::thread::spawn(move || {
         let real = match crate::archive_view::extract_items(&items, &|| false, &mut |_| {}) {
             Ok(r) => r,
@@ -1004,10 +996,8 @@ pub(crate) fn drag_paths_out(items: Vec<PathBuf>) {
         if items.is_empty() {
             return;
         }
-        let ui_thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
-        unsafe {
-            let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
-        }
+        let ui_thread = leaf_sys::input::current_thread_id();
+        leaf_sys::input::release_capture();
         leaf_sys::sta::run(move |owner| {
             if let Err(e) = leaf_sys::dnd::drag_out(owner, ui_thread, &items) {
                 log::warn!("drag: {e:#}");
@@ -1030,10 +1020,7 @@ impl FolderView {
             .collect();
         let (tx, rx) = oneshot::channel::<Option<u32>>();
         leaf_sys::sta::run(move |owner| {
-            let mut pt = POINT::default();
-            unsafe {
-                let _ = GetCursorPos(&mut pt);
-            }
+            let pt = leaf_sys::input::cursor_pos();
             let _ = tx.send(leaf_sys::ctxmenu::show_simple(owner, (pt.x, pt.y), &items));
         });
         cx.spawn(async move |this, cx| {
@@ -1192,9 +1179,8 @@ pub(crate) fn drop_transfer(sources: &[std::path::PathBuf], dest: &std::path::Pa
 }
 
 pub(crate) fn drop_on_program(program: PathBuf, files: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
-    let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 } || crate::platform::gpui::dnd_hint::allowed() & crate::platform::gpui::dnd_hint::MOVE == 0;
-    let shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 };
+    let ctrl = leaf_sys::input::ctrl_down_now() || crate::platform::gpui::dnd_hint::allowed() & crate::platform::gpui::dnd_hint::MOVE == 0;
+    let shift = leaf_sys::input::shift_down_now();
     let window = window.window_handle();
     let (tx, rx) = futures::channel::oneshot::channel();
     // COM work must not queue behind the shell STA's own modal drag.

@@ -288,14 +288,7 @@ fn wait_for_the_old_one() {
     let Some(pid) = std::env::var(AFTER_EXIT_ENV).ok().and_then(|p| p.trim().parse::<u32>().ok()) else { return };
     // (not inherited by what this process starts)
     unsafe { std::env::remove_var(AFTER_EXIT_ENV) };
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
-    // SAFETY: a handle to wait on, closed right after
-    unsafe {
-        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
-            let _ = WaitForSingleObject(h, 10_000);
-            let _ = windows::Win32::Foundation::CloseHandle(h);
-        }
-    }
+    leaf_sys::process::wait_pid(pid, 10_000);
 }
 
 /// `Path::is_dir` with a time limit (it can block for the SMB timeout on an offline share).

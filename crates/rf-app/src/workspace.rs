@@ -2506,9 +2506,7 @@ impl Workspace {
     /// Right-click on a sidebar folder/drive: the Explorer menu (eject, properties, format…)
     /// plus open in new tab/window and pin/unpin.
     fn sidebar_menu(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let shift = unsafe {
-            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(windows::Win32::UI::Input::KeyboardAndMouse::VK_SHIFT.0 as i32) < 0
-        };
+        let shift = leaf_sys::input::shift_down();
         self.sidebar_menu_at(path, shift, window.mouse_position(), window, cx);
     }
 
@@ -2519,10 +2517,7 @@ impl Workspace {
             // the classic Explorer menu, extended verbs included
             let p2 = path.clone();
             leaf_sys::sta::run(move |owner| {
-                let mut pt = windows::Win32::Foundation::POINT::default();
-                unsafe {
-                    let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
-                }
+                let pt = leaf_sys::input::cursor_pos();
                 if let Err(e) = leaf_sys::ctxmenu::show_for_one(owner, &p2, (pt.x, pt.y), true, &[]) {
                     log::warn!("sidebar menu: {e:#}");
                 }
@@ -3944,7 +3939,7 @@ fn tooltip_text(id: &str) -> &'static str {
 /// Opens `dir` in the user's editor (`ide` path, else VS Code's `code` launcher).
 pub fn open_in_ide(dir: PathBuf, ide: String) {
     std::thread::spawn(move || {
-        use std::os::windows::process::CommandExt;
+        use leaf_sys::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let r = if ide.is_empty() {
             // "automatic": the first of the editors we know that is installed (`leaf_sys::editors`; looked for here, on this thread)
@@ -3967,10 +3962,7 @@ pub(crate) fn drop_files(paths: &ExternalPaths, dest: PathBuf, cx: &mut App) {
     if sources.is_empty() || leaf_sys::dnd::is_invalid_drop(&sources, &dest) {
         return;
     }
-    let (ctrl, shift) = unsafe {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
-        (GetAsyncKeyState(VK_CONTROL.0 as i32) < 0, GetAsyncKeyState(VK_SHIFT.0 as i32) < 0)
-    };
+    let (ctrl, shift) = (leaf_sys::input::ctrl_down_now(), leaf_sys::input::shift_down_now());
     let sources = hold_archiver_drop(sources, &std::env::temp_dir());
     let kind = crate::ops::drop_transfer(&sources, &dest, ctrl, shift);
     crate::status_center::transfer(cx, kind, sources, dest);

@@ -1046,7 +1046,7 @@ impl Render for MediaView {
                 let owner = crate::look::window::hwnd_of(window);
                 self.mf_owner = owner;
                 let path = self.path.clone();
-                let r = windows::Win32::Foundation::RECT { left: rect[0], top: rect[1], right: rect[2], bottom: rect[3] };
+                let r = leaf_sys::geom::RECT { left: rect[0], top: rect[1], right: rect[2], bottom: rect[3] };
                 leaf_sys::sta::run(move |_| {
                     if first {
                         leaf_sys::preview_host::media_play(owner, &path, Some(r));

@@ -11,8 +11,6 @@ use gpui_kit::*;
 use rf_core::{Location, SortDir, SortKey};
 use leaf_sys::ctxmenu::{MenuOutcome, ShellItem, ShellTarget};
 use leaf_sys::fileops::Transfer;
-use windows::Win32::Foundation::POINT;
-use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::fluent_menu::{self, Item, Menu, MenuIcon, Pending, Quick, Sub};
 use crate::folder_view::{FolderEvent, FolderView, GroupBy, ViewMode};
@@ -60,10 +58,7 @@ fn icon(l: L) -> MenuIcon {
 }
 
 fn cursor() -> (i32, i32) {
-    let mut pt = POINT::default();
-    unsafe {
-        let _ = GetCursorPos(&mut pt);
-    }
+    let pt = leaf_sys::input::cursor_pos();
     (pt.x, pt.y)
 }
 
@@ -78,10 +73,7 @@ impl FolderView {
             }
             return;
         }
-        let shift = unsafe {
-            use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
-            GetKeyState(VK_SHIFT.0 as i32) < 0
-        };
+        let shift = leaf_sys::input::shift_down();
         if shift {
             // power users: the full classic Explorer menu (extended verbs)
             self.show_native_menu(background, cx);
@@ -1246,8 +1238,7 @@ fn invoke_shell(me: &Me, session: u64, id: u32, cx: &mut App) {
 }
 
 fn shift_down() -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
-    unsafe { GetKeyState(VK_SHIFT.0 as i32) < 0 }
+    leaf_sys::input::shift_down()
 }
 
 impl FolderView {

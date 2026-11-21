@@ -371,7 +371,7 @@ impl Preview {
             pl.started = true;
             leaf_sys::sta::run(move |_| leaf_sys::preview_host::media_play(owner, &path, None));
         } else if pl.started {
-            let rect = pl.rect.map(|r| windows::Win32::Foundation::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] });
+            let rect = pl.rect.map(|r| leaf_sys::geom::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] });
             leaf_sys::sta::run(move |_| leaf_sys::preview_host::media_play(owner, &path, rect));
         } else {
             // the video box takes its place on the next frame and starts playback there
@@ -423,7 +423,7 @@ impl Preview {
         }
         let first = pl.rect.is_none();
         pl.rect = Some(r);
-        let rect = windows::Win32::Foundation::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
+        let rect = leaf_sys::geom::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
         leaf_sys::sta::run(move |_| {
             if first {
                 leaf_sys::preview_host::media_play(owner, &path, Some(rect));
@@ -586,7 +586,7 @@ impl Preview {
             }
         };
         let dark = Palette::for_window(window).dark;
-        let rect = windows::Win32::Foundation::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
+        let rect = leaf_sys::geom::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
         leaf_sys::sta::run(move |_| {
             if same_file {
                 leaf_sys::preview_host::reposition(rect);
