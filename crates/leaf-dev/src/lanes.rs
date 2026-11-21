@@ -379,6 +379,28 @@ fn delete_merged_branch(repo: &Path, branch: &str) -> bool {
     !branch.is_empty() && !branch.starts_with('-') && exec(repo, ["branch", "-d", branch]).is_ok_and(|o| o.ok)
 }
 
+/// The lane's own record in the repository, `<common>/worktrees/<id>`: the entry whose `gitdir` file names `<dir>/.git`. Only a
+/// folder directly in `<common>/worktrees` is ever given back.
+fn admin_of(repo: &Path, dir: &Path) -> Result<Option<PathBuf>, LaneError> {
+    let common = common_dir(repo).ok_or_else(|| LaneError::Git { what: "the repository's git folder could not be found".into(), detail: repo.display().to_string() })?;
+    let root = common.join("worktrees");
+    let Ok(entries) = std::fs::read_dir(&root) else { return Ok(None) };
+    let want = dir.join(".git");
+    for e in entries.flatten() {
+        let admin = e.path();
+        if !e.file_type().is_ok_and(|t| t.is_dir()) || admin.parent() != Some(root.as_path()) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(admin.join("gitdir")) else { continue };
+        let named = PathBuf::from(text.trim());
+        let named = if named.is_absolute() { named } else { admin.join(named) };
+        if same_path(&named, &want) {
+            return Ok(Some(admin));
+        }
+    }
+    Ok(None)
+}
+
 /// What a discard did besides putting the folder away.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Discarded {
@@ -417,10 +439,12 @@ fn keep_detached_head(dir: &Path, name: &str) -> Result<Option<String>, LaneErro
     if there.ok && there.stdout.trim() == sha { Ok(Some(branch)) } else { Err(failed("git did not make a branch to keep the lane's commits", &made)) }
 }
 
-/// Discards the lane, whatever is in it: its worktree folder goes to `put_away` (leaf: the Trash), then `git worktree prune`
-/// forgets it; the branch is kept unless it is merged. Only a linked worktree of `repo` is handed over: never a link (its target
-/// could be anything), never the main worktree or a folder that holds it. A folder already gone is just pruned. Commits only a
-/// detached HEAD holds get a branch first (`lane/<name>-kept-<hash>`).
+/// Discards the lane, whatever is in it: its worktree folder goes to `put_away` (leaf: the Trash), then its own record in the
+/// repository (`<common>/worktrees/<id>`, which holds its HEAD, its reflog and the repositories of its submodules) goes the same
+/// way, so git forgets it. No `git worktree prune`: that would forget every worktree whose folder is missing just now (an
+/// unplugged drive). The branch is kept unless it is merged. Only a linked worktree of `repo` is handed over: never a link (its
+/// target could be anything), never the main worktree or a folder that holds it. For a folder already gone only the record goes.
+/// Commits only a detached HEAD holds get a branch first (`lane/<name>-kept-<hash>`).
 pub fn discard(repo: &Path, dir: &Path, name: &str, branch: &str, put_away: &dyn Fn(&Path) -> Result<(), String>) -> Result<Discarded, LaneError> {
     let mut kept = None;
     let list = worktrees(repo)?;
@@ -440,16 +464,18 @@ pub fn discard(repo: &Path, dir: &Path, name: &str, branch: &str, put_away: &dyn
             return Err(LaneError::NotALane(format!("{} is not a folder", dir.display())));
         }
         kept = keep_detached_head(dir, name)?;
+    } else if !list.iter().skip(1).any(|w| key(&w.path) == key(dir)) {
+        return Err(LaneError::NotALane(dir.display().to_string()));
+    }
+    let admin = admin_of(repo, dir)?;
+    if meta.is_ok() {
         put_away(dir).map_err(|e| LaneError::Git { what: "the lane folder could not be moved to the Trash".into(), detail: e })?;
         if std::fs::symlink_metadata(dir).is_ok() {
             return Err(LaneError::Git { what: "the lane folder is still there".into(), detail: dir.display().to_string() });
         }
-    } else if !list.iter().skip(1).any(|w| key(&w.path) == key(dir)) {
-        return Err(LaneError::NotALane(dir.display().to_string()));
     }
-    let o = exec(repo, ["worktree", "prune"])?;
-    if !o.ok {
-        return Err(failed("git did not forget the worktree", &o));
+    if let Some(admin) = admin {
+        put_away(&admin).map_err(|e| LaneError::Git { what: "the lane folder is in the Trash, but git's record of it could not be moved there".into(), detail: e })?;
     }
     Ok(Discarded { branch_deleted: delete_merged_branch(repo, branch), kept })
 }
@@ -585,8 +611,12 @@ mod tests {
         let handed = std::cell::RefCell::new(Vec::<PathBuf>::new());
         let put_away = |p: &Path| -> Result<(), String> {
             handed.borrow_mut().push(p.to_path_buf());
-            std::fs::rename(p, trash.join("feat")).map_err(|e| e.to_string())
+            let n = handed.borrow().len();
+            std::fs::rename(p, trash.join(n.to_string())).map_err(|e| e.to_string())
         };
+        // another worktree whose folder is away just now (an unplugged drive): it stays registered
+        let away = r.lane("away");
+        std::fs::rename(&away, r.top.join("away-unplugged")).unwrap();
         // the link to the lane, the main worktree, a plain folder: refused, nothing handed over
         assert!(matches!(discard(&r.main, &alias, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
         assert!(matches!(discard(&r.main, &r.main, "feat", "feat", &put_away), Err(LaneError::NotALane(_))));
@@ -596,12 +626,18 @@ mod tests {
         // the lane itself: only its folder is handed over; what the link inside points to stays
         r.commit(&dir, "b.txt", "lane\n");
         assert_eq!(discard(&r.main, &dir, "feat", "feat", &put_away).map(|d| d.branch_deleted), Ok(false));
-        assert_eq!(*handed.borrow(), vec![dir.clone()]);
+        // the folder, then git's own record of it (in .git/worktrees)
+        let got = handed.borrow().clone();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0], dir);
+        assert!(same_path(got[1].parent().unwrap(), &r.main.join(".git").join("worktrees")), "{got:?}");
         assert!(!dir.exists());
         assert_eq!(std::fs::read_to_string(outside.join("keep.txt")).unwrap(), "keep\n");
         assert!(r.main.join("a.txt").is_file());
-        // pruned, the unmerged branch kept
-        assert!(!r.git(&r.main, &["worktree", "list"]).contains("feat"));
+        // forgotten, the unmerged branch kept, the other missing worktree still known
+        let listed = r.git(&r.main, &["worktree", "list"]);
+        assert!(!listed.contains("feat"), "{listed}");
+        assert!(listed.contains("away"), "{listed}");
         assert!(r.git(&r.main, &["branch", "--list", "feat"]).contains("feat"));
     }
 
@@ -613,8 +649,12 @@ mod tests {
         r.git(&dir, &["checkout", "-q", "--detach", &start]);
         r.commit(&dir, "lost.txt", "only here\n");
         let sha = r.git(&dir, &["rev-parse", "HEAD"]);
-        let trash = r.top.join("trash");
-        let put_away = |p: &Path| -> Result<(), String> { std::fs::rename(p, &trash).map_err(|e| e.to_string()) };
+        let n = std::cell::Cell::new(0);
+        std::fs::create_dir_all(r.top.join("trash")).unwrap();
+        let put_away = |p: &Path| -> Result<(), String> {
+            n.set(n.get() + 1);
+            std::fs::rename(p, r.top.join("trash").join(n.get().to_string())).map_err(|e| e.to_string())
+        };
         let done = discard(&r.main, &dir, "feat", "feat", &put_away).unwrap();
         let kept = format!("lane/feat-kept-{}", &sha[..7]);
         assert_eq!(done.kept.as_deref(), Some(kept.as_str()));
@@ -622,9 +662,7 @@ mod tests {
         // a lane on its branch needs none
         let other = r.lane("plain");
         r.commit(&other, "c.txt", "x\n");
-        let trash2 = r.top.join("trash2");
-        let put_away2 = |p: &Path| -> Result<(), String> { std::fs::rename(p, &trash2).map_err(|e| e.to_string()) };
-        assert_eq!(discard(&r.main, &other, "plain", "plain", &put_away2).unwrap().kept, None);
+        assert_eq!(discard(&r.main, &other, "plain", "plain", &put_away).unwrap().kept, None);
     }
 
     #[test]
