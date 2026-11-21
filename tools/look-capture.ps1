@@ -15,7 +15,11 @@ param(
     [int]$OnScreenMs = 1800,
     [string]$Script = "",
     [string]$Settings = "",
-    [int]$Border = 7
+    [int]$Border = 7,
+    # the window's own 1 px frame line left, right and below the client area: the window is made that much larger there and placed
+    # so that the captured W x H rectangle is the client area alone (0 = the old capture, frame lines included; the top line lies
+    # over the client area and stays)
+    [int]$Frame = 1
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -73,13 +77,13 @@ try {
     if ($hwnd -eq [IntPtr]::Zero) { throw "no leaf window" }
     # size it while still parked (the layout settles off-screen)
     # (Windows 11 keeps an invisible 7 px resize border left, right and below the visible frame: the frame itself is W x H)
-    [Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $W + 2 * $Border, $H + $Border, 0x0002 -bor 0x0004 -bor 0x0010) | Out-Null
+    [Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $W + 2 * $Border + 2 * $Frame, $H + $Border + $Frame, 0x0002 -bor 0x0004 -bor 0x0010) | Out-Null
     Start-Sleep -Milliseconds $SettleMs
     $img = [System.Drawing.Image]::FromFile((Resolve-Path $Wall).Path)
     $form = New-Object Backdrop($img, $X, $Y, $W, $H)
     $form.Show(); [System.Windows.Forms.Application]::DoEvents()
     # leaf over the backdrop, topmost for the capture, never activated
-    [Win]::SetWindowPos($hwnd, [IntPtr](-1), $X - $Border, $Y, $W + 2 * $Border, $H + $Border, 0x0010) | Out-Null
+    [Win]::SetWindowPos($hwnd, [IntPtr](-1), $X - $Border - $Frame, $Y, $W + 2 * $Border + 2 * $Frame, $H + $Border + $Frame, 0x0010) | Out-Null
     $t = [Diagnostics.Stopwatch]::StartNew()
     while ($t.ElapsedMilliseconds -lt $OnScreenMs) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 30 }
     $tries = 0
