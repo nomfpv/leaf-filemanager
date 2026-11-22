@@ -937,17 +937,28 @@ fn text_body(path: &Path, text: &SharedString, marks: &Option<(PathBuf, std::syn
     }
 }
 
+/// The first 512 bytes as hex rows (offset, bytes, ASCII), laid out by the Space viewer's hex view.
+fn hex_head(bytes: &[u8]) -> String {
+    let bytes = &bytes[..bytes.len().min(512)];
+    (0..bytes.len().div_ceil(16))
+        .map(|row| {
+            let (offset, hex, ascii) = crate::look::viewers::hex::row_text(bytes, row);
+            format!("{offset}  {hex:<49} {ascii}")
+        })
+        .collect::<Vec<_>>()
+        .join("
+")
+}
+
 fn read_text_head(path: &Path, sniff: bool) -> Option<String> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = vec![0u8; TEXT_LIMIT];
     let n = f.read(&mut buf).ok()?;
     buf.truncate(n);
-    if buf.iter().take(4096).filter(|&&b| b == 0).count() > 2 {
-        return None; // binary
-    }
-    if sniff && !crate::look::viewer::looks_like_text(&buf[..buf.len().min(4096)]) {
-        return None;
+    if buf.iter().take(4096).filter(|&&b| b == 0).count() > 2 || (sniff && !crate::look::viewer::looks_like_text(&buf[..buf.len().min(4096)])) {
+        // binary: an unknown kind of file shows its first bytes the way the Space viewer's hex view does, a known one shows nothing
+        return sniff.then(|| hex_head(&buf));
     }
     // UTF-16 LE BOM
     if buf.starts_with(&[0xFF, 0xFE]) {
