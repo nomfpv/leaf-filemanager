@@ -144,7 +144,9 @@ pub fn disconnect(v: &VPath, cx: &mut App) {
     let work = cx.background_executor().spawn(async move { leaf_sys::network::disconnect(&uri) });
     cx.spawn(async move |cx| {
         let Err(e) = work.await else { return };
-        let (title, text) = if e.kind() == std::io::ErrorKind::Unsupported {
+        let (title, text) = if e.kind() == std::io::ErrorKind::Unsupported && cfg!(windows) {
+            (t!("Not available"), e.to_string())
+        } else if e.kind() == std::io::ErrorKind::Unsupported {
             (t!("Not available"), t!("Network places need gio (gvfs), which is not installed on this system.").to_string())
         } else if e.kind() == std::io::ErrorKind::NotConnected {
             (

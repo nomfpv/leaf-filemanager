@@ -247,7 +247,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
                 }))
             })
             // an SMB host: ends the system's session with the server (Windows) or lets go of the mount (Linux), never forced
-            .when(h.scheme.eq_ignore_ascii_case("smb"), |d| {
+            .when(h.scheme.eq_ignore_ascii_case("smb") || h.scheme.eq_ignore_ascii_case("nfs"), |d| {
                 let address = h.address();
                 d.child(button(("host-disconnect", i), p, t!("Disconnect"), move |_, cx| {
                     if let Ok(v) = VPath::parse(&address) {

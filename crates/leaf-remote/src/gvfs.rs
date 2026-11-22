@@ -39,6 +39,7 @@ impl GvfsFs {
         let p = match leaf_sys::network::mount_path(&uri) {
             Ok(p) => p,
             // a share that wants a login: leaf's own dialog (or the saved password), answered on gio's input
+            #[cfg(unix)]
             Err(e) if v.scheme() == "smb" && e.kind() == std::io::ErrorKind::PermissionDenied => crate::smb::mount_with_login(v, &uri)?,
             Err(e) => return Err(mount_error(e)),
         };
@@ -55,6 +56,8 @@ impl GvfsFs {
 fn mount_error(e: std::io::Error) -> FsError {
     use std::io::ErrorKind as K;
     match e.kind() {
+        // (Windows: leaf's own sentence about the Client for NFS feature)
+        K::Unsupported if cfg!(windows) => FsError::Other(e.to_string()),
         K::Unsupported => FsError::Other("Network places need gio (gvfs), which is not installed on this system".into()),
         K::PermissionDenied => FsError::Auth(e.to_string()),
         _ => FsError::Offline(e.to_string()),

@@ -141,9 +141,116 @@ pub fn map_drive_dialog(owner: isize) {
     }
 }
 
-/// The folder of a `smb://` or `nfs://` place: only Linux (gvfs) mounts these; `Unsupported` here.
-pub fn mount_path(_uri: &str) -> std::io::Result<PathBuf> {
-    Err(std::io::ErrorKind::Unsupported.into())
+/// The folder of an `nfs://host/export/dir` place: the export is mounted to a free drive letter through the Windows NFS client
+/// (`mount.exe`, the "Client for NFS" feature, anonymous access) and the folder is on that drive. Without the client: `Unsupported`
+/// with leaf's wording naming the feature (nothing is installed, no setting is changed). `smb://` is a UNC path here: `Unsupported`.
+/// Blocks (seconds): worker threads only.
+pub fn mount_path(uri: &str) -> std::io::Result<PathBuf> {
+    let Some((host, segments)) = nfs_parts(uri) else { return Err(std::io::ErrorKind::Unsupported.into()) };
+    let Some(mount_exe) = nfs_tool("mount.exe") else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "NFS places need the Windows feature \"Client for NFS\" (Turn Windows features on or off, Services for NFS). It is not turned on on this PC, and leaf does not turn it on",
+        ));
+    };
+    // (the export is the longest start of the path the server accepts; the rest is a folder on the drive)
+    for n in (1..=segments.len()).rev() {
+        if let Some(root) = nfs_drive(&format!("{host}/{}", segments[..n].join("/"))) {
+            return Ok(segments[n..].iter().fold(root, |p, s| p.join(s)));
+        }
+    }
+    let mut last = String::new();
+    for n in (1..=segments.len()).rev() {
+        let export = segments[..n].join("\\");
+        let key = format!("{host}/{}", segments[..n].join("/"));
+        let remote = format!(r"\\{host}\{export}");
+        let out = run_limited(&mount_exe, &["-o", "anon", &remote, "*"], std::time::Duration::from_secs(25))?;
+        if let Some(letter) = drive_letter_in(&out.text) {
+            let root = PathBuf::from(format!(r"{letter}:\"));
+            NFS_DRIVES.lock().unwrap_or_else(|e| e.into_inner()).push((key, root.clone()));
+            return Ok(segments[n..].iter().fold(root, |p, s| p.join(s)));
+        }
+        last = out.text.trim().to_string();
+    }
+    Err(std::io::Error::other(last))
+}
+
+/// The NFS exports leaf mounted in this session: (`host/export`, drive root).
+static NFS_DRIVES: std::sync::Mutex<Vec<(String, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+
+/// The drive an export of this session is on, while it is still there.
+fn nfs_drive(key: &str) -> Option<PathBuf> {
+    let g = NFS_DRIVES.lock().unwrap_or_else(|e| e.into_inner());
+    g.iter().find(|(k, r)| k == key && r.exists()).map(|(_, r)| r.clone())
+}
+
+/// `nfs://host/export/dir` -> (`host`, [`export`, `dir`]); a host without a path, an option-like host, a `..` segment: `None`.
+fn nfs_parts(uri: &str) -> Option<(String, Vec<String>)> {
+    let rest = uri.strip_prefix("nfs://")?;
+    let (host, path) = rest.split_once('/')?;
+    let segments: Vec<String> = path.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let bad = |s: &str, space: bool| s == ".." || s == "." || s.contains(['\\', ':', '*', '?', '"', '<', '>', '|']) || (space && s.contains(' '));
+    (!host.is_empty() && !host.starts_with('-') && !bad(host, true) && !segments.is_empty() && !segments.iter().any(|s| bad(s, false))).then(|| (host.to_string(), segments))
+}
+
+/// A tool of the NFS client in the system folder (never searched on PATH), when the feature is turned on.
+fn nfs_tool(name: &str) -> Option<PathBuf> {
+    let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"))?;
+    let p = PathBuf::from(root).join("System32").join(name);
+    p.is_file().then_some(p)
+}
+
+/// The drive letter `mount.exe` names: `Z: is now successfully connected to \\host\export`.
+fn drive_letter_in(text: &str) -> Option<char> {
+    text.lines().find_map(|l| {
+        let l = l.trim();
+        let mut c = l.chars();
+        let (a, b) = (c.next()?, c.next()?);
+        (a.is_ascii_alphabetic() && b == ':' && l.contains("successfully")).then(|| a.to_ascii_uppercase())
+    })
+}
+
+struct Ran {
+    text: String,
+}
+
+/// Runs a system tool without a window, waits at most `limit` (then it is stopped), and returns what it printed.
+fn run_limited(exe: &Path, args: &[&str], limit: std::time::Duration) -> std::io::Result<Ran> {
+    use std::io::Read;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(exe)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x0800_0000)
+        .spawn()?;
+    let (mut out, mut err) = (child.stdout.take(), child.stderr.take());
+    let reader = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        if let Some(o) = out.as_mut() {
+            let _ = o.read_to_end(&mut s);
+        }
+        if let Some(e) = err.as_mut() {
+            let _ = e.read_to_end(&mut s);
+        }
+        s
+    });
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            break;
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let bytes = reader.join().unwrap_or_default();
+    Ok(Ran { text: String::from_utf8_lossy(&bytes).into_owned() })
 }
 
 /// `smb://` with a password: only Linux (`gio mount`); `Unsupported` here (Windows logs in with [`connect_share`]).
@@ -155,6 +262,9 @@ pub fn mount_path_login(_uri: &str, _user: &str, _domain: &str, _password: &str)
 /// shares): `WNetCancelConnection2W`, never forced (a file still open there keeps it). `NotConnected` when neither was. Other
 /// schemes (`nfs://`): `Unsupported`.
 pub fn disconnect(uri: &str) -> std::io::Result<()> {
+    if uri.starts_with("nfs://") {
+        return disconnect_nfs(uri);
+    }
     let Some(rest) = uri.strip_prefix("smb://") else { return Err(std::io::ErrorKind::Unsupported.into()) };
     let rest = rest.rsplit_once('@').map_or(rest, |(_, h)| h);
     let (host, share) = rest.split_once('/').unwrap_or((rest, ""));
@@ -179,6 +289,27 @@ pub fn disconnect(uri: &str) -> std::io::Result<()> {
         None if !any => Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "nothing of leaf's was connected to this server")),
         None => Ok(()),
     }
+}
+
+/// Lets go of the drive letter leaf's NFS mount of this export got (`umount.exe`, not forced). `NotConnected` when leaf mounted none.
+fn disconnect_nfs(uri: &str) -> std::io::Result<()> {
+    let Some((host, segments)) = nfs_parts(uri) else { return Err(std::io::ErrorKind::InvalidInput.into()) };
+    let full = format!("{host}/{}", segments.join("/"));
+    let found = {
+        let g = NFS_DRIVES.lock().unwrap_or_else(|e| e.into_inner());
+        g.iter().find(|(k, _)| full == *k || full.starts_with(&format!("{k}/"))).cloned()
+    };
+    let Some((key, root)) = found else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "nothing of leaf's was connected to this server"));
+    };
+    let Some(umount) = nfs_tool("umount.exe") else { return Err(std::io::ErrorKind::Unsupported.into()) };
+    let drive = root.to_string_lossy().trim_end_matches('\\').to_string();
+    let out = run_limited(&umount, &[&drive], std::time::Duration::from_secs(20))?;
+    if root.exists() {
+        return Err(std::io::Error::other(out.text.trim().to_string()));
+    }
+    NFS_DRIVES.lock().unwrap_or_else(|e| e.into_inner()).retain(|(k, _)| *k != key);
+    Ok(())
 }
 
 /// `WNetCancelConnection2W` on `\\host\share`, not forced. `Ok(false)`: it was not connected (2250).
