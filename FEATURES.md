@@ -150,6 +150,10 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Show project brain | Lists what an agent reads in this project: CLAUDE.md, AGENTS.md, the .claude folder (skills, settings, memory) and .mcp.json, with a search by name and the file shown in the preview pane. |  |
 | Rotate right | Turns the selected pictures a quarter to the right. |  |
 | Rotate left | Turns the selected pictures a quarter to the left. |  |
+| Convert to video file | Turns an unprotected Blu-ray (a disc, a BDMV folder, an .iso holding one), an AVCHD card or .m2ts files into one normal video file: the title, audio and subtitle tracks you choose, with chapters, without losing quality (MKV); with ffmpeg installed also a smaller re-encoded file. Copy-protected discs are not converted. |  |
+| Mount image | Mounts the selected disc image (.iso, .img) read-only and opens it; it shows under Drives until it is ejected. On Linux without root, through udisks (or gio, or fuseiso). |  |
+| Eject image | Unmounts the selected disc image that was mounted. |  |
+| Mount discs in drives | Mounts the discs in the optical drives that the desktop has not mounted, through udisks (or gio). (Linux only) |  |
 | Open in terminal | Opens a terminal in this folder; in a server (sftp://) folder it runs ssh into it. | `` Ctrl+Shift+` `` |
 | Open in Terminal as administrator | Opens an elevated terminal in this folder. (Windows only) |  |
 | Open in editor | Opens this folder in your code editor. |  |

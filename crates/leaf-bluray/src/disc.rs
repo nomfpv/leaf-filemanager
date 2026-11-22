@@ -65,6 +65,14 @@ pub fn find_bdmv(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// [`find_bdmv`] without listing any folder (the usual spellings only): cheap enough for a right-click menu.
+pub fn looks_like_disc(dir: &Path) -> bool {
+    let named_bdmv = dir.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("BDMV"));
+    let has = |p: &Path| p.join("PLAYLIST").is_dir() || p.join("playlist").is_dir();
+    (named_bdmv && has(dir))
+        || ["BDMV", "bdmv", "PRIVATE/AVCHD/BDMV", "private/avchd/bdmv", "AVCHD/BDMV"].iter().any(|s| has(&dir.join(s)))
+}
+
 pub fn is_stream_file(p: &Path) -> bool {
     p.extension().is_some_and(|e| {
         let e = e.to_string_lossy();

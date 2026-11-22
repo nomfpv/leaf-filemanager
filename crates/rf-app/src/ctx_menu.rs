@@ -189,6 +189,9 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
         // type-specific actions (Files: rotate, set as background, install font, run as administrator)
         Slot::RotateRight => Item::action(label, ic, act(me, |v, w, cx| v.rotate_selection(true, w, cx))),
         Slot::RotateLeft => Item::action(label, ic, act(me, |v, w, cx| v.rotate_selection(false, w, cx))),
+        Slot::ConvertVideo => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::ConvertToVideo), cx)),
+        Slot::MountImage => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::MountImage), cx)),
+        Slot::EjectImage => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::EjectImage), cx)),
         Slot::Wallpaper => {
             let p = b.items[0].clone();
             Item::action(label, ic, move |_, _| {
@@ -521,6 +524,9 @@ impl FolderView {
             runnable: items.len() == 1 && !image && leaf_sys::fileactions::is_runnable(&items[0]),
             fonts: !items.is_empty() && items.iter().all(|p| leaf_sys::fileactions::is_font(p)),
             extractable: !items.is_empty() && items.iter().all(|p| rf_archive::is_supported(p)),
+            bluray: !in_archive && crate::bluray_ui::offers(items),
+            disc_image: !in_archive && crate::bluray_ui::is_image(items),
+            image_mounted: !in_archive && crate::bluray_ui::is_image(items) && crate::bluray_ui::image_mounted(items),
             nearby: crate::nearby::running(cx),
             own_actions: own.is_some(),
             undo: None,

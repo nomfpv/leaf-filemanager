@@ -3000,6 +3000,7 @@ impl Workspace {
                 tags_defined: !cx.global::<crate::tags::Tags>().0.defs.is_empty(),
                 cloud_place: self.places.read(cx).cloud.iter().any(|c| c.path == path),
                 drive: crate::settings_view::drive_letter(&path).is_some(),
+                bluray: crate::bluray_ui::offers(std::slice::from_ref(&path)),
                 prefs: s.menu.clone(),
                 ..Default::default()
             }
@@ -3026,6 +3027,7 @@ impl Workspace {
                             cx.defer(move |cx| crate::open_main_window(Some(Location::Path(p)), None, Some(WindowBounds::Windowed(b)), cx));
                         })),
                         Slot::Unpin => Item::action(label, ic, with(|ws, p, _, cx| ws.set_pinned(p, false, cx))),
+                        Slot::ConvertVideo => Item::action(label, ic, with(|_, p, w, cx| crate::bluray_ui::convert(vec![p], w, cx))),
                         Slot::Pin => Item::action(label, ic, with(|ws, p, _, cx| ws.set_pinned(p, true, cx))),
                         Slot::Tags => Item::sub(label, ic, crate::tags::menu_items(std::slice::from_ref(&path), cx)),
                         Slot::CopyPath => Item::action(label, ic, with(|_, p, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(p.display().to_string())))),

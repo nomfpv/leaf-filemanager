@@ -177,6 +177,9 @@ pub enum Slot {
     Flatten,
     RotateRight,
     RotateLeft,
+    ConvertVideo,
+    MountImage,
+    EjectImage,
     Wallpaper,
     RunAdmin,
     InstallFont,
@@ -301,6 +304,12 @@ pub struct MenuContext {
     pub fonts: bool,
     /// Every selected item is an archive that can be extracted.
     pub extractable: bool,
+    /// The selection is an unprotected Blu-ray / AVCHD disc, folder, image or `.m2ts` files to convert.
+    pub bluray: bool,
+    /// One disc image (`.iso`, `.img`) is selected.
+    pub disc_image: bool,
+    /// That image is mounted.
+    pub image_mounted: bool,
     /// Nearby sharing is on.
     pub nearby: bool,
     /// The sidebar's folder is pinned.

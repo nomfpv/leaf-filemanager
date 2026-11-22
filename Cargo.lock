@@ -7749,6 +7749,7 @@ dependencies = [
  "gpui-pre-windows",
  "image",
  "leaf-agents",
+ "leaf-bluray",
  "leaf-decode",
  "leaf-dev",
  "leaf-download",

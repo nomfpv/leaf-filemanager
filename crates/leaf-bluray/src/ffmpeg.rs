@@ -50,7 +50,7 @@ fn os(v: &[&str]) -> Vec<OsString> {
 
 /// Re-encode Matroska read from standard input into `out`.
 pub fn encode_args(preset: Preset, out: &Path) -> Vec<OsString> {
-    let mut a = os(&["-hide_banner", "-loglevel", "error", "-f", "matroska", "-i", "pipe:0"]);
+    let mut a = os(&["-hide_banner", "-n", "-loglevel", "error", "-f", "matroska", "-i", "pipe:0"]);
     match preset {
         Preset::Hevc => a.extend(os(&["-map", "0", "-c:v", "libx265", "-crf", "22", "-preset", "medium", "-c:a", "copy", "-c:s", "copy", "-f", "matroska"])),
         Preset::H264 => a.extend(os(&["-map", "0", "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-c:a", "copy", "-c:s", "copy", "-f", "matroska"])),
@@ -66,7 +66,7 @@ pub fn encode_args(preset: Preset, out: &Path) -> Vec<OsString> {
 /// Copy the tracks `pids` of the clips (joined) into Matroska at `out`, without re-encoding: for the stream types leaf does not
 /// remux itself. Progress comes on standard output (`out_time_us=`).
 pub fn copy_args(clips: &[PathBuf], pids: &[u16], out: &Path) -> Vec<OsString> {
-    let mut a = os(&["-hide_banner", "-loglevel", "error", "-nostdin", "-progress", "pipe:1", "-fflags", "+genpts"]);
+    let mut a = os(&["-hide_banner", "-n", "-loglevel", "error", "-nostdin", "-progress", "pipe:1", "-fflags", "+genpts"]);
     let mut input = OsString::from("concat:");
     for (k, c) in clips.iter().enumerate() {
         if k > 0 {

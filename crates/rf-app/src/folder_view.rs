@@ -6419,6 +6419,29 @@ impl Render for FolderView {
             }))
             .on_action(cx.listener(|this, _: &RotateRight, window, cx| this.rotate_selection(true, window, cx)))
             .on_action(cx.listener(|this, _: &RotateLeft, window, cx| this.rotate_selection(false, window, cx)))
+            .on_action(cx.listener(|this, _: &ConvertToVideo, window, cx| {
+                let mut sel = this.selection_paths();
+                if sel.is_empty() {
+                    sel.extend(this.current_dir());
+                }
+                crate::bluray_ui::convert(sel, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MountImage, window, cx| {
+                if let [one] = this.selection_paths().as_slice()
+                    && crate::bluray_ui::is_image(std::slice::from_ref(one))
+                {
+                    let me = cx.entity().downgrade();
+                    crate::bluray_ui::mount(one.clone(), move |root, _, cx| {
+                        let _ = me.update(cx, |v, cx| v.navigate(Location::Path(root), cx));
+                    }, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &EjectImage, window, cx| {
+                if let [one] = this.selection_paths().as_slice() {
+                    crate::bluray_ui::eject(one.clone(), window, cx);
+                }
+            }))
+            .on_action(cx.listener(|_, _: &MountDiscs, window, cx| crate::bluray_ui::mount_discs(window, cx)))
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 if this.renaming.is_none() {
                     crate::undo::redo(cx);
