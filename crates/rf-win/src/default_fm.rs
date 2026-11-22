@@ -1,16 +1,27 @@
 //! "Set as default file manager" (Files' Advanced setting), per-user (HKCU only, no admin):
 //! folders and Win+E open in leaf. Same keys as Files' SetFilesAsDefault.reg. Archives
-//! are offered as an app registration (see `register_app`): the user picks leaf for them
+//! are offered as an app registration (see `app_writes`): the user picks leaf for them
 //! in Windows' Default apps.
 //!
 //! The app must hand non-folder arguments (e.g. `::{CLSID}` shell namespaces like Control Panel)
 //! back to explorer.exe — see `rf-app` main.
+//!
+//! What it takes over, and why each:
+//! - `Folder\shell\open` and `Folder\shell\explore`: every folder the shell opens. Also "Show in folder" in browsers, editors and
+//!   Task Manager (`SHOpenFolderAndSelectItems`: Windows opens the folder through this verb and names the file to a window it finds
+//!   in its window list, see `shell_window`), and `explorer.exe <folder>` started by another program (what leaf hands to Explorer
+//!   comes back through this verb, hence the loop guard below).
+//! - `CLSID\{52205fd8-…}\shell\opennewwindow`: Win+E. Empty `DelegateExecute` so the command wins over HKLM's handler.
+//!
+//! Everything it writes is recorded first (`default_fm_journal.rs`), so turning it off puts back exactly what was there.
 
-use windows_registry::{CURRENT_USER, Key};
+use windows_registry::CURRENT_USER;
+#[cfg(test)]
+use windows_registry::Key;
 
-/// Win+E and "Show in folder" from other programs, with a journal that turns it off exactly (Settings > Advanced).
-#[path = "explorer_hook.rs"]
-pub mod explorer_hook;
+#[path = "default_fm_journal.rs"]
+mod journal;
+use journal::Write;
 
 pub const CLASSES: &str = r"Software\Classes";
 const WIN_E_CLSID: &str = r"CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
@@ -19,6 +30,7 @@ const WIN_E_CLSID: &str = r"CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
 /// ("File Explorer") with ours into one entry with Explorer's name. Ours are removed.
 const ARCHIVE_VERBS: [&str; 2] = [r"CompressedFolder\shell\open", r"ArchiveFolder\shell\open"];
 
+#[cfg(test)]
 fn set_command(base: &Key, sub: &str, command: &str) -> anyhow::Result<()> {
     let k = base.create(sub)?;
     k.set_string("", command)?;
@@ -26,15 +38,33 @@ fn set_command(base: &Key, sub: &str, command: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Registers `exe` under `classes_root` (normally `CLASSES`; tests pass a scratch key).
+/// The verbs' `command` keys (under HKCU): whether they start leaf tells whether a journal is still ours.
+fn command_keys(classes_root: &str) -> Vec<String> {
+    [r"Folder\shell\open\command".to_string(), r"Folder\shell\explore\command".to_string(), format!(r"{WIN_E_CLSID}\shell\opennewwindow\command")]
+        .into_iter()
+        .map(|k| format!(r"{classes_root}\{k}"))
+        .collect()
+}
+
+/// Registers `exe` under `classes_root` (normally `CLASSES`; tests pass a scratch key). What was there before is recorded first
+/// (see `default_fm_journal.rs`); already on, the record from the first time stays. All or nothing.
 pub fn enable(exe: &str, classes_root: &str) -> anyhow::Result<()> {
-    let base = CURRENT_USER.create(classes_root)?;
     let cmd = format!("\"{exe}\" \"%1\"");
-    set_command(&base, r"Folder\shell\open\command", &cmd)?;
-    set_command(&base, r"Folder\shell\explore\command", &cmd)?;
-    set_command(&base, &format!(r"{WIN_E_CLSID}\shell\opennewwindow\command"), &format!("\"{exe}\""))?;
-    remove_archive_verbs(classes_root);
-    register_app(exe, classes_root)
+    let keys = command_keys(classes_root);
+    let mut writes = Vec::new();
+    for (key, cmd) in [(&keys[0], cmd.clone()), (&keys[1], cmd), (&keys[2], format!("\"{exe}\""))] {
+        writes.push(Write::sz(key.as_str(), "", cmd));
+        writes.push(Write::sz(key.as_str(), "DelegateExecute", ""));
+    }
+    writes.extend(app_writes(exe, classes_root));
+    journal::record_and_apply(exe, classes_root, &keys, &writes, || {
+        // leaf's own older keys (not recorded: they were never anyone else's)
+        remove_archive_verbs(classes_root);
+        // a plain command: `DelegateExecute` (needed above to beat HKLM's) would make Windows list this handler as File Explorer
+        if let Ok(base) = CURRENT_USER.open(classes_root) {
+            let _ = base.remove_tree(format!(r"{PROGID}\shell"));
+        }
+    })
 }
 
 /// Archive types leaf browses, offered in Windows' Default apps and "Open with". Which
@@ -51,35 +81,31 @@ fn software_root(classes_root: &str) -> &str {
 
 /// Registers leaf as an app that opens archives (Default Programs capabilities): it
 /// can then be picked in Settings → Default apps or "Open with → Always". Changes no default.
-pub fn register_app(exe: &str, classes_root: &str) -> anyhow::Result<()> {
-    let base = CURRENT_USER.create(classes_root)?;
-    let p = base.create(PROGID)?;
-    p.set_string("", "Compressed archive")?;
-    // the zip folder icon, not ours: archives must still look like archives
-    base.create(format!(r"{PROGID}\DefaultIcon"))?.set_expand_string("", r"%SystemRoot%\system32\zipfldr.dll")?;
-    // a plain command: `DelegateExecute` (needed above to beat HKLM's) would make Windows list
-    // this handler as File Explorer
-    let _ = base.remove_tree(format!(r"{PROGID}\shell"));
-    base.create(format!(r"{PROGID}\shell\open\command"))?.set_string("", format!("\"{exe}\" \"%1\""))?;
-    // the name and icon "Open with" / Default apps show for this handler
-    let app = base.create(format!(r"{PROGID}\Application"))?;
-    app.set_string("ApplicationName", APP_NAME)?;
-    app.set_string("ApplicationIcon", format!("\"{exe}\",0"))?;
-    app.set_string("ApplicationCompany", APP_NAME)?;
+/// The values, for `enable` to record and write.
+fn app_writes(exe: &str, classes_root: &str) -> Vec<Write> {
+    let c = classes_root;
+    let mut w = vec![
+        Write::sz(format!(r"{c}\{PROGID}"), "", "Compressed archive"),
+        // the zip folder icon, not ours: archives must still look like archives
+        Write::expand_sz(format!(r"{c}\{PROGID}\DefaultIcon"), "", r"%SystemRoot%\system32\zipfldr.dll"),
+        Write::sz(format!(r"{c}\{PROGID}\shell\open\command"), "", format!("\"{exe}\" \"%1\"")),
+        // the name and icon "Open with" / Default apps show for this handler
+        Write::sz(format!(r"{c}\{PROGID}\Application"), "ApplicationName", APP_NAME),
+        Write::sz(format!(r"{c}\{PROGID}\Application"), "ApplicationIcon", format!("\"{exe}\",0")),
+        Write::sz(format!(r"{c}\{PROGID}\Application"), "ApplicationCompany", APP_NAME),
+    ];
     for e in ARCHIVE_EXTS {
-        base.create(format!(r"{e}\OpenWithProgids"))?.set_string(PROGID, "")?;
+        w.push(Write::sz(format!(r"{c}\{e}\OpenWithProgids"), PROGID, ""));
     }
     let root = software_root(classes_root);
     let caps_path = format!(r"{root}\{APP_NAME}\Capabilities");
-    let caps = CURRENT_USER.create(&caps_path)?;
-    caps.set_string("ApplicationName", APP_NAME)?;
-    caps.set_string("ApplicationDescription", "Fast file manager")?;
-    let fa = caps.create("FileAssociations")?;
+    w.push(Write::sz(caps_path.as_str(), "ApplicationName", APP_NAME));
+    w.push(Write::sz(caps_path.as_str(), "ApplicationDescription", "Fast file manager"));
     for e in ARCHIVE_EXTS {
-        fa.set_string(e, PROGID)?;
+        w.push(Write::sz(format!(r"{caps_path}\FileAssociations"), e, PROGID));
     }
-    CURRENT_USER.create(format!(r"{root}\RegisteredApplications"))?.set_string(APP_NAME, &caps_path)?;
-    Ok(())
+    w.push(Write::sz(format!(r"{root}\RegisteredApplications"), APP_NAME, caps_path.as_str()));
+    w
 }
 
 fn unregister_app(classes_root: &str) {
@@ -155,13 +181,18 @@ pub fn add_archives(exe: &str, classes_root: &str) -> bool {
     if !is_enabled(classes_root) {
         return false;
     }
-    let removed = remove_archive_verbs(classes_root);
-    let added = !app_registered(exe, classes_root) && register_app(exe, classes_root).is_ok();
-    removed || added
+    // written again whole, through the journal (the state from the first time stays recorded)
+    let stale = ARCHIVE_VERBS.iter().any(|v| ours(classes_root, v)) || !app_registered(exe, classes_root);
+    stale && enable(exe, classes_root).is_ok()
 }
 
-/// Removes our overrides (the system defaults under HKLM take over again).
+/// Turns it off: what the journal recorded comes back exactly (a key another program took since stays that program's). A
+/// registration from before the journal: our overrides are removed (the system defaults under HKLM take over again).
 pub fn disable(classes_root: &str) -> anyhow::Result<()> {
+    if let Some(r) = journal::restore_recorded(classes_root) {
+        remove_archive_verbs(classes_root);
+        return r;
+    }
     let base = CURRENT_USER.create(classes_root)?;
     for sub in [r"Folder\shell\open", r"Folder\shell\explore", WIN_E_CLSID] {
         // missing keys are fine
@@ -193,7 +224,12 @@ pub fn registered_exe(classes_root: &str) -> Option<std::path::PathBuf> {
 /// Also a registration that lost its `open` verb while its `explore` verb is still ours (issue 97: on a reporter's PC `Folder\shell\open`
 /// was an empty key, so "Show in folder" from a browser went to Explorer, or to nothing, while every other folder opened here): it is
 /// written again whole.
+///
+/// First, a journal whose verbs are no longer ours (another program took them, the keys were removed) is dropped, keys untouched.
 pub fn heal(current: &str, classes_root: &str) -> bool {
+    if journal::drop_if_stale(classes_root, &command_keys(classes_root)) {
+        log::warn!("default file manager: its record was dropped, the keys are not ours any more");
+    }
     if !std::path::Path::new(current).exists() {
         return false;
     }
@@ -211,6 +247,88 @@ pub fn heal(current: &str, classes_root: &str) -> bool {
 pub fn should_forward_to_explorer(arg: &str) -> bool {
     let a = arg.trim().trim_matches('"');
     !a.is_empty() && (a.starts_with("::") || a.starts_with("shell:") || !std::path::Path::new(a).is_dir())
+}
+
+/// Opens `target` (a folder, a server root, a `::{CLSID}` or `shell:` namespace) in the real Explorer, through HKLM's `Folder`
+/// class (Explorer's own handler) and not the merged one, so our HKCU verb cannot send it back to leaf. False when the shell
+/// refused; the caller then starts explorer.exe.
+pub fn open_in_explorer(target: &str) -> bool {
+    use windows::Win32::System::Registry::HKEY;
+    use windows::Win32::UI::Shell::{SEE_MASK_CLASSKEY, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{PCWSTR, w};
+    let Ok(class) = windows_registry::LOCAL_MACHINE.open(r"Software\Classes\Folder") else { return false };
+    crate::shell::ensure_com();
+    let file = crate::wide::wide(std::ffi::OsStr::new(target));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_CLASSKEY | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+        lpVerb: w!("open"),
+        lpFile: PCWSTR(file.as_ptr()),
+        hkeyClass: HKEY(class.as_raw()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info) }.is_ok()
+}
+
+/// The real Explorer on `file`'s folder with `file` selected, in a way our verb cannot catch: not `SHOpenFolderAndSelectItems` or
+/// `explorer.exe /select` (both open the folder through the verb we take over), but [`open_in_explorer`] on the folder, then the
+/// new window's view (found in the shell's window list, as "Show in folder" finds a window) is asked to select the file. The
+/// selecting waits for the window on a thread of its own (5 s at most). False when the folder did not open.
+pub fn reveal_in_explorer(file: &std::path::Path) -> bool {
+    let Some(dir) = file.parent().map(std::path::Path::to_path_buf) else { return false };
+    if !open_in_explorer(&dir.to_string_lossy()) {
+        return false;
+    }
+    let file = file.to_path_buf();
+    std::thread::spawn(move || select_in_explorer(&dir, &file));
+    true
+}
+
+fn select_in_explorer(dir: &std::path::Path, file: &std::path::Path) {
+    use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IServiceProvider};
+    use windows::Win32::System::Variant::{InitVariantFromBuffer, VARIANT};
+    use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+    use windows::Win32::UI::Shell::{
+        ILFindLastID, ILFree, ILGetSize, IShellBrowser, IShellWindows, SHParseDisplayName, SID_STopLevelBrowser, SVSI_DESELECTOTHERS, SVSI_ENSUREVISIBLE,
+        SVSI_FOCUSED, SVSI_SELECT, SWC_BROWSER, SWFO_NEEDDISPATCH, ShellWindows,
+    };
+    use windows::core::{HSTRING, Interface};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let Ok(windows) = CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL) else { return };
+        let mut folder: *mut ITEMIDLIST = std::ptr::null_mut();
+        let mut item: *mut ITEMIDLIST = std::ptr::null_mut();
+        if SHParseDisplayName(&HSTRING::from(dir.as_os_str()), None, &mut folder, 0, None).is_err() {
+            return;
+        }
+        if SHParseDisplayName(&HSTRING::from(file.as_os_str()), None, &mut item, 0, None).is_err() {
+            ILFree(Some(folder));
+            return;
+        }
+        if let Ok(loc) = InitVariantFromBuffer(folder as *const _, ILGetSize(Some(folder))) {
+            let empty = VARIANT::default();
+            let flags = (SVSI_SELECT.0 | SVSI_DESELECTOTHERS.0 | SVSI_ENSUREVISIBLE.0 | SVSI_FOCUSED.0) as u32;
+            for _ in 0..100 {
+                let mut hwnd = 0i32;
+                let done = windows
+                    .FindWindowSW(&loc, &empty, SWC_BROWSER, &mut hwnd, SWFO_NEEDDISPATCH)
+                    .and_then(|disp| disp.cast::<IServiceProvider>())
+                    .and_then(|sp| sp.QueryService::<IShellBrowser>(&SID_STopLevelBrowser))
+                    .and_then(|b| b.QueryActiveShellView())
+                    // (a view that is still listing may refuse: asked again)
+                    .and_then(|view| view.SelectItem(ILFindLastID(item), flags))
+                    .is_ok();
+                if done {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        ILFree(Some(item));
+        ILFree(Some(folder));
+    }
 }
 
 /// Explorer opens folders through the same `Folder\shell\open` verb we take over, so an

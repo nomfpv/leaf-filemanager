@@ -198,8 +198,6 @@ pub(crate) fn install_panic_log() {
 
 /// Whether leaf is registered as the default file manager (HKCU).
 pub static DEFAULT_FM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Whether Win+E and "Show in folder" from other programs open leaf (`default_fm::explorer_hook`, HKCU, with its journal).
-pub static EXPLORER_HOOK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Opens a leaf window. `start = None` restores the session (first window) or opens Home.
 pub fn open_main_window(
     start: Option<Location>,
@@ -569,7 +567,7 @@ pub fn main() {
                     leaf_sys::handover::trace("main: handed to Explorer, this process ends");
                     // a namespace or a folder goes through Explorer's own handler (HKLM), which our HKCU verb cannot send back; a file
                     // to explorer.exe, which opens it with its program
-                    let own = !std::path::Path::new(&arg).is_file() && leaf_sys::default_fm::explorer_hook::open_in_explorer(&arg);
+                    let own = !std::path::Path::new(&arg).is_file() && leaf_sys::default_fm::open_in_explorer(&arg);
                     if !own {
                         let _ = std::process::Command::new("explorer.exe").arg(&arg).spawn();
                     }
@@ -600,19 +598,6 @@ pub fn main() {
         // default file manager whose registered exe vanished (moved / rebuilt elsewhere):
         // re-point it here, or Windows can't open any folder. Not from test instances.
         if registers {
-            if let Ok(me) = std::env::current_exe() {
-                // the Win+E / "Show in folder" hook first: a moved leaf is re-pointed, a journal whose keys are another program's now
-                // is dropped. While it is on, the default file manager's own repairs stay out: they would add the archive
-                // registration, which turning the hook off would not take back.
-                let journal = leaf_sys::default_fm::explorer_hook::journal_path();
-                if let Some(what) = leaf_sys::default_fm::explorer_hook::check(&me.display().to_string(), leaf_sys::default_fm::CLASSES, &journal) {
-                    log::warn!("explorer hook: {what}");
-                }
-            }
-        }
-        let hook_on = leaf_sys::default_fm::explorer_hook::is_enabled(leaf_sys::default_fm::CLASSES, &leaf_sys::default_fm::explorer_hook::journal_path());
-        EXPLORER_HOOK.store(hook_on, std::sync::atomic::Ordering::Relaxed);
-        if registers && !hook_on {
             if let Ok(me) = std::env::current_exe() {
                 if leaf_sys::default_fm::heal(&me.display().to_string(), leaf_sys::default_fm::CLASSES) {
                     log::warn!("default file manager re-registered to {}", me.display());

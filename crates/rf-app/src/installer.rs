@@ -46,11 +46,7 @@ pub fn startup() {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn after_install_or_update() {
     let Ok(me) = std::env::current_exe() else { return };
-    let journal = leaf_sys::default_fm::explorer_hook::journal_path();
-    // the Win+E hook re-points its own verbs only (the default file manager's enable would add the archive registration too)
-    if leaf_sys::default_fm::explorer_hook::is_enabled(leaf_sys::default_fm::CLASSES, &journal) {
-        let _ = leaf_sys::default_fm::explorer_hook::enable(&me.display().to_string(), leaf_sys::default_fm::CLASSES, &journal);
-    } else if leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES) {
+    if leaf_sys::default_fm::is_enabled(leaf_sys::default_fm::CLASSES) {
         let _ = leaf_sys::default_fm::enable(&me.display().to_string(), leaf_sys::default_fm::CLASSES);
     }
     if leaf_sys::dialogs::starts_with_windows_as("leaf-look") {
@@ -64,8 +60,6 @@ fn after_install_or_update() {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn before_uninstall() {
     let classes = leaf_sys::default_fm::CLASSES;
-    // the Win+E hook first: it puts back what was there before it (which may be the default file manager's keys, removed next)
-    let _ = leaf_sys::default_fm::explorer_hook::disable(classes, &leaf_sys::default_fm::explorer_hook::journal_path());
     if leaf_sys::default_fm::is_enabled(classes) {
         let _ = leaf_sys::default_fm::disable(classes);
     }

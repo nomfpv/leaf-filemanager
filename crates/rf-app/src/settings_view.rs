@@ -3081,6 +3081,9 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         t!("switches")
     );
     let dfm_on = crate::DEFAULT_FM.load(std::sync::atomic::Ordering::Relaxed);
+    // a copy run from a cargo build folder is not turned into the folder handler: each rebuild replaces the exe, a clean removes it,
+    // and Windows would be left with no program for folders until leaf starts again
+    let dfm_dev = !dfm_on && std::env::current_exe().is_ok_and(|e| is_build_folder_exe(&e)) && std::env::var_os("LEAF_DFM_ALLOW_BUILD").is_none();
     // while leaf is the default file manager: archives can be given to it too (only the
     // user can pick the default app, in Windows' own page)
     let archives = (dfm_on && cfg!(windows)).then(|| {
@@ -3094,30 +3097,6 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 if let Err(e) = leaf_sys::shell::open(std::path::Path::new(&page)) {
                     log::warn!("default apps page: {e:#}");
                 }
-            }),
-        )
-    });
-    // Win+E and "Show in folder" from other programs, with an exact way back (see default_fm::explorer_hook)
-    let hook_on = crate::EXPLORER_HOOK.load(std::sync::atomic::Ordering::Relaxed);
-    let explorer_hook = leaf_sys::default_fm::explorer_hook::supported().then(|| {
-        card(
-            p,
-            L::Keyboard,
-            t!("Open leaf for Win+E and for 'Show in folder' from other programs"),
-            Some(t!("Win+E, folders, and 'Show in folder' / 'Open file location' in browsers, editors and Task Manager open in leaf. Changes three entries for this user only (no admin). Turning it off puts back exactly what was there before. This PC, Control Panel and other places leaf does not show still open in Explorer.")),
-            switch("explorer-hook", p, hook_on, move |window, _| {
-                let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
-                std::thread::spawn(move || {
-                    let classes = leaf_sys::default_fm::CLASSES;
-                    let journal = leaf_sys::default_fm::explorer_hook::journal_path();
-                    let r = if hook_on { leaf_sys::default_fm::explorer_hook::disable(classes, &journal) } else { leaf_sys::default_fm::explorer_hook::enable(&exe, classes, &journal) };
-                    if let Err(e) = r {
-                        log::warn!("explorer hook: {e:#}");
-                    }
-                    crate::EXPLORER_HOOK.store(leaf_sys::default_fm::explorer_hook::is_enabled(classes, &journal), std::sync::atomic::Ordering::Relaxed);
-                    crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
-                });
-                window.refresh();
             }),
         )
     });
@@ -3356,12 +3335,18 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             p,
             L::AppWindow,
             t!("Set as default file manager"),
-            Some(if cfg!(windows) {
-                t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time.")
+            Some(if dfm_dev {
+                t!("This copy of leaf runs from a build folder (target). Every rebuild replaces it and a clean removes it, which would leave Windows with no program to open folders. Turn this on from an installed leaf.")
+            } else if cfg!(windows) {
+                t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time. It also covers Win+E and 'Show in folder' from other programs, and turning it off restores what was there before.")
             } else {
                 t!("Folders open with leaf (your mimeapps.list names it for inode/directory). Applies to this user only; turning it off gives folders back to the program that had them.")
             }),
             switch("dfm", p, dfm_on, move |window, _| {
+                if dfm_dev {
+                    log::warn!("default file manager: not turned on from a build folder");
+                    return;
+                }
                 let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
                 std::thread::spawn(move || {
                     let classes = leaf_sys::default_fm::CLASSES;
@@ -3375,7 +3360,6 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             }),
         ),
     ];
-    out.extend(explorer_hook);
     out.extend(archives);
     out.extend([
         card(
@@ -3527,7 +3511,10 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         link_row(p, "open-log", L::FolderOpen, t!("Open log and settings folder"), settings::app_dir().map(|d| d.display().to_string()).as_deref(), |_, _| {
             if let Some(d) = settings::app_dir() {
                 std::thread::spawn(move || {
-                    let _ = std::process::Command::new("explorer.exe").arg(d).spawn();
+                    // the real Explorer, past our own folder verb (which would open it here again)
+                    if !leaf_sys::default_fm::open_in_explorer(&d.to_string_lossy()) {
+                        let _ = std::process::Command::new("explorer.exe").arg(d).spawn();
+                    }
                 });
             }
         }),
@@ -4265,4 +4252,9 @@ fn proxy_id(cx: &App) -> Option<leaf_remote::SecretId> {
     let s = cx.global::<Settings>();
     let (user, host) = (s.download_proxy_user.trim(), s.download_proxy_host.trim());
     (!user.is_empty() && !host.is_empty()).then(|| crate::downloads::proxy_secret_id(user, host, s.download_proxy_port))
+}
+
+/// Whether `exe` lies in a cargo build folder: a `target` folder on its path, or one holding cargo's `CACHEDIR.TAG`.
+fn is_build_folder_exe(exe: &std::path::Path) -> bool {
+    exe.ancestors().skip(1).any(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("target")) || d.join("CACHEDIR.TAG").is_file())
 }

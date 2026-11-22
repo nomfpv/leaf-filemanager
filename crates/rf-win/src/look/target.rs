@@ -158,7 +158,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("a.txt");
         std::fs::write(&file, b"x").unwrap();
-        std::process::Command::new("explorer.exe").arg(format!("/select,{}", file.display())).spawn().unwrap();
+        // the real Explorer even while leaf is the default file manager (`/select` would come back through leaf's folder verb)
+        assert!(crate::default_fm::reveal_in_explorer(&file));
         let start = std::time::Instant::now();
         let mut got = None;
         while start.elapsed().as_secs() < 15 && got.is_none() {
