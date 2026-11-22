@@ -1381,6 +1381,103 @@ fn scrub_signed_docx_is_refused_unless_signatures_are_removed() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// The Office parts the first lanes did not cover: Word's extensible comment times, mail merge source and document ids, Excel's
+/// legacy note author runs, pivot cache refresh names, shared-workbook revisions and local link paths, PowerPoint change info,
+/// OpenDocument's stored versions. Every planted marker is gone from every entry; the visible text stays.
+#[test]
+fn scrub_office_history_parts_and_local_paths_leave_no_marker() {
+    let d = tmp_dir("office-more");
+    let ct = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>";
+    let rel = |id: &str, ty: &str, target: &str, ext: bool| {
+        format!("<Relationship Id=\"{id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}\" Target=\"{target}\"{}/>", if ext { " TargetMode=\"External\"" } else { "" })
+    };
+    let rels = |body: String| format!("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>");
+    // Word
+    let cex = "<w16cex:commentsExtensible xmlns:w16cex=\"http://schemas.microsoft.com/office/word/2018/wordml/cex\"><w16cex:commentExtensible w16cex:durableId=\"1\" w16cex:dateUtc=\"2026-11-22T14:22:33Z\"/></w16cex:commentsExtensible>";
+    let settings = format!("<w:settings {W} xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"><w:mailMerge><w:connectString w:val=\"Provider=x;Data Source=C:\\Users\\Planted Author\\list.xlsx\"/><w:dataSource r:id=\"m1\"/></w:mailMerge><w15:docId w15:val=\"{{LEAFTESTSERIAL123}}\"/></w:settings>");
+    let docx = d.join("a.docx");
+    make_zip_bytes(
+        &docx,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("word/document.xml", format!("<w:document {W}><w:body><w:p><w:r><w:t>visible</w:t></w:r></w:p></w:body></w:document>").as_bytes()),
+            ("word/commentsExtensible.xml", cex.as_bytes()),
+            ("word/settings.xml", settings.as_bytes()),
+            ("word/_rels/settings.xml.rels", rels(rel("m1", "mailMergeSource", "file:///C:/Users/Planted%20Author/list.xlsx", true)).as_bytes()),
+            ("word/_rels/document.xml.rels", rels(rel("h1", "hyperlink", "file:///C:/Users/LEAFTESTSERIAL123/notes.docx", true)).as_bytes()),
+        ],
+    );
+    let dst = clean_copy_name(&docx);
+    clean_to(&docx, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "docx more");
+    assert!(!zip_text(&dst, "word/commentsExtensible.xml").contains("2026"));
+    assert!(zip_text(&dst, "word/_rels/document.xml.rels").contains("Target=\"notes.docx\""));
+    assert!(zip_text(&dst, "word/document.xml").contains("visible"));
+    assert!(office::broken_references(&dst).unwrap().is_empty());
+    // Excel
+    let comments = "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors><author>Planted Author</author></authors><commentList><comment ref=\"A1\" authorId=\"0\"><text><r><rPr><b/></rPr><t>Planted Author:</t></r><r><t xml:space=\"preserve\">\nthe note</t></r></text></comment></commentList></comments>";
+    let pivot = "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" refreshedBy=\"Planted Author\" refreshedDate=\"46000.5\" createdVersion=\"6\"/>";
+    let xlsx = d.join("b.xlsx");
+    make_zip_bytes(
+        &xlsx,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("xl/workbook.xml", b"<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"),
+            ("xl/_rels/workbook.xml.rels", rels(rel("rv", "revisionHeaders", "revisions/revisionHeaders.xml", false)).as_bytes()),
+            ("xl/comments1.xml", comments.as_bytes()),
+            ("xl/pivotCache/pivotCacheDefinition1.xml", pivot.as_bytes()),
+            ("xl/revisions/revisionHeaders.xml", b"<headers><header userName=\"Planted Author\" guid=\"{LEAFTESTSERIAL123}\"/></headers>"),
+            ("xl/externalLinks/_rels/externalLink1.xml.rels", rels(rel("e1", "externalLinkPath", "file:///C:\\Users\\Planted Author\\other.xlsx", true)).as_bytes()),
+            ("xl/externalLinks/externalLink1.xml", b"<externalLink xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"),
+        ],
+    );
+    let before = inspect(&xlsx, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label == "Author name at the start of notes"), "{:?}", before.findings);
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Local file paths")));
+    let dst = clean_copy_name(&xlsx);
+    clean_to(&xlsx, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "xlsx more");
+    assert!(zip_text(&dst, "xl/comments1.xml").contains("the note"));
+    assert!(zip_text(&dst, "xl/externalLinks/_rels/externalLink1.xml.rels").contains("Target=\"other.xlsx\""));
+    assert!(office::broken_references(&dst).unwrap().is_empty(), "{:?}", office::broken_references(&dst));
+    // PowerPoint
+    let pptx = d.join("c.pptx");
+    make_zip_bytes(
+        &pptx,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("ppt/presentation.xml", b"<p:presentation xmlns:p=\"urn:p\"/>"),
+            ("ppt/changesInfos/changesInfo1.xml", b"<pc:chgInfo xmlns:pc=\"urn:pc\"><pc:chgData name=\"Planted Author\" userId=\"LEAFTESTSERIAL123\"/></pc:chgInfo>"),
+            ("ppt/revisionInfo.xml", b"<p1510:revInfo xmlns:p1510=\"urn:r\"><p1510:client id=\"{LEAFTESTSERIAL123}\"/></p1510:revInfo>"),
+        ],
+    );
+    let dst = clean_copy_name(&pptx);
+    clean_to(&pptx, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "pptx more");
+    // OpenDocument: stored versions are full earlier copies
+    let ns = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\"";
+    let manifest = "<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\"><manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/><manifest:file-entry manifest:full-path=\"Versions/Version1\" manifest:media-type=\"\"/><manifest:file-entry manifest:full-path=\"manifest.rdf\" manifest:media-type=\"application/rdf+xml\"/></manifest:manifest>";
+    let odt = d.join("d.odt");
+    make_zip_bytes(
+        &odt,
+        &[
+            ("mimetype", b"application/vnd.oasis.opendocument.text"),
+            ("content.xml", format!("<office:document-content {ns}><office:body><office:text/></office:body></office:document-content>").as_bytes()),
+            ("meta.xml", format!("<office:document-meta {ns}><office:meta/></office:document-meta>").as_bytes()),
+            ("META-INF/manifest.xml", manifest.as_bytes()),
+            ("VersionList.xml", b"<VL:version-list xmlns:VL=\"urn:v\"><VL:version-entry VL:creator=\"Planted Author\"/></VL:version-list>"),
+            ("Versions/Version1", b"an earlier copy by Planted Author LEAFTESTSERIAL123"),
+            ("manifest.rdf", b"<rdf:RDF xmlns:rdf=\"urn:rdf\">LEAFTESTSERIAL123</rdf:RDF>"),
+        ],
+    );
+    let dst = clean_copy_name(&odt);
+    clean_to(&odt, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "odt versions");
+    assert!(!zip_text(&dst, "META-INF/manifest.xml").contains("Versions/"));
+    assert!(office::broken_references(&dst).unwrap().is_empty());
+    let _ = fs::remove_dir_all(&d);
+}
+
 const CAT_AUTHOR_LABEL: &str = "Author names (comments, tracked changes)";
 
 #[test]

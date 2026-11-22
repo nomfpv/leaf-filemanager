@@ -181,6 +181,9 @@ const CAT_TEMPLATE: &str = "Attached template path";
 const CAT_PRINTER: &str = "Printer settings";
 const CAT_PATH: &str = "Folder path where the workbook was saved";
 const CAT_SHARING: &str = "Name of the user who reserved the workbook";
+const CAT_MAILMERGE: &str = "Mail merge data source (connection, file path)";
+const CAT_LOCAL_PATH: &str = "Local file paths of links (reduced to the file name)";
+const CAT_NOTE_NAME: &str = "Author name at the start of notes";
 const CAT_IDS: &str = "Save and co-authoring ids (revisionPtr, uid)";
 
 enum Act {
@@ -198,6 +201,8 @@ fn attr_rule(part: &str, local: &str, ns: Option<&str>, value: &str) -> Option<(
             "userId" => Some((Act::Set("Author"), CAT_AUTHOR)),
             "providerId" => Some((Act::Set("None"), CAT_AUTHOR)),
             "date" if main => Some((Act::Remove, CAT_DATE)),
+            // commentsExtensible.xml: the comment's time in UTC
+            "dateUtc" => Some((Act::Remove, CAT_DATE)),
             l if main && l.starts_with("rsid") => Some((Act::Remove, CAT_RSID)),
             _ => None,
         }
@@ -212,6 +217,12 @@ fn attr_rule(part: &str, local: &str, ns: Option<&str>, value: &str) -> Option<(
         match local {
             "userName" => Some((Act::Remove, CAT_SHARING)),
             "uid" if ns.is_some_and(|n| n.contains("spreadsheetml/2014/revision")) => Some((Act::Remove, CAT_IDS)),
+            _ => None,
+        }
+    } else if part.starts_with("xl/pivotCache/") {
+        match local {
+            "refreshedBy" => Some((Act::Set("Author"), CAT_AUTHOR)),
+            "refreshedDate" | "refreshedDateIso" => Some((Act::Remove, CAT_DATE)),
             _ => None,
         }
     } else if part.starts_with("xl/") && local == "uid" && ns.is_some_and(|n| n.contains("spreadsheetml/2014/revision")) {
@@ -269,6 +280,8 @@ fn elem_rule(part: &str, odf: bool, local: &str, parent: &str, config_name: Opti
     if part.starts_with("word/") && part.ends_with(".xml") {
         return match local {
             "rsids" | "rsidRoot" | "rsid" => Some((ElemAct::Remove, CAT_RSID)),
+            "docId" => Some((ElemAct::Remove, CAT_RSID)),
+            "mailMerge" => Some((ElemAct::Remove, CAT_MAILMERGE)),
             "docVars" => Some((ElemAct::Remove, CAT_VARS)),
             "attachedTemplate" => Some((ElemAct::Remove, CAT_TEMPLATE)),
             _ => None,
@@ -290,7 +303,7 @@ impl Counts {
     fn add(&mut self, cat: &'static str, value: &str) {
         let e = self.by.entry(cat).or_default();
         e.0 += 1;
-        if !value.is_empty() && e.1.len() < 4 && matches!(cat, CAT_AUTHOR | CAT_PATH | CAT_SHARING) {
+        if !value.is_empty() && e.1.len() < 4 && matches!(cat, CAT_AUTHOR | CAT_PATH | CAT_SHARING | CAT_LOCAL_PATH | CAT_NOTE_NAME) {
             e.1.insert(value.trim().to_string());
         }
     }
@@ -335,6 +348,20 @@ fn rewrite_part(part: &str, odf: bool, xml: &str, counts: &mut Counts) -> Result
     let doc = roxmltree::Document::parse_with_options(xml, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
         .map_err(|e| ScrubError::Malformed(format!("{part} is damaged: {e}")))?;
     let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    if !odf && part.starts_with("xl/comments") {
+        // a legacy note's text starts with a bold run "Name:" that Excel adds: it goes when the name is one of the authors
+        let authors: Vec<&str> = doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "author").filter_map(|n| n.text()).map(str::trim).filter(|a| !a.is_empty()).collect();
+        for t in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "text" && n.parent_element().is_some_and(|p| p.tag_name().name() == "comment")) {
+            if let Some(r) = t.children().find(|c| c.is_element()).filter(|r| r.tag_name().name() == "r") {
+                let txt: String = r.descendants().filter(|d| d.is_element() && d.tag_name().name() == "t").filter_map(|d| d.text()).collect();
+                let name = txt.trim().trim_end_matches(':').trim();
+                if !name.is_empty() && authors.contains(&name) {
+                    counts.add(CAT_NOTE_NAME, name);
+                    edits.push((r.range(), String::new()));
+                }
+            }
+        }
+    }
     for n in doc.descendants().filter(|n| n.is_element()) {
         let local = n.tag_name().name();
         if !odf && part == "xl/workbook.xml" {
@@ -462,7 +489,10 @@ fn read_through(e: &mut zip::read::ZipFile<'_, fs::File>) -> Result<()> {
 
 /// Relationship types whose relationship goes with the part it points at.
 fn is_rel_dropped(t: &str) -> bool {
-    t.ends_with("/thumbnail")
+    t.ends_with("/mailMergeSource")
+        || t.ends_with("/mailMergeHeaderSource")
+        || t.ends_with("/recipientData")
+        || t.ends_with("/thumbnail")
         || t.ends_with("/printerSettings")
         || t.ends_with("/attachedTemplate")
         || t.contains("/digital-signature/")
@@ -497,6 +527,23 @@ pub(crate) fn resolve(source: &str, target: &str) -> String {
         }
     }
     parts.join("/")
+}
+
+/// Parts that keep an editing history with names and dates: Excel shared-workbook revisions, PowerPoint change and revision info,
+/// OpenDocument's stored earlier versions (full copies of the document) and its RDF metadata.
+fn is_history_part(name: &str, odf: bool) -> bool {
+    if odf {
+        name == "VersionList.xml" || name.starts_with("Versions/") || name == "manifest.rdf"
+    } else {
+        name.starts_with("xl/revisions/") || name.starts_with("ppt/changesInfos/") || name == "ppt/revisionInfo.xml"
+    }
+}
+
+/// A link target that is a path on this computer or a share (`file:///C:/Users/...`, `C:\...`, `\\server\...`).
+fn local_path(t: &str) -> bool {
+    let l = t.to_ascii_lowercase();
+    let b = t.as_bytes();
+    l.starts_with("file:") || t.starts_with("\\\\") || (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
 }
 
 /// Signature parts of a document.
@@ -541,6 +588,26 @@ fn drop_rel_refs(part: &str, xml: &str, ids: &std::collections::BTreeSet<String>
                     }
                     edits.push((s..r.end, String::new()));
                 }
+            }
+        }
+    }
+    Ok(apply_edits(xml, edits))
+}
+
+/// External link targets that are local paths are reduced to the file name (a link to `C:\Users\name\x.xlsx` becomes `x.xlsx`).
+fn shorten_local_targets(xml: &str, counts: &mut Counts) -> Result<String> {
+    let doc = roxmltree::Document::parse(xml).map_err(|e| ScrubError::Malformed(format!("a relationship list is damaged: {e}")))?;
+    let mut edits = Vec::new();
+    for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Relationship") {
+        let external = n.attribute("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
+        if let (true, Some(a)) = (external, n.attributes().find(|a| a.name() == "Target")) {
+            if local_path(a.value()) {
+                let v = a.value();
+                let file = v.rsplit(['/', '\\']).next().unwrap_or("").to_string();
+                counts.add(CAT_LOCAL_PATH, v);
+                let r = a.range_value();
+                // the value as written in the XML (escaped): the file name has no characters that need escaping beyond &
+                edits.push((r, file.replace('&', "&amp;").replace('"', "&quot;")));
             }
         }
     }
@@ -680,7 +747,7 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
             if opts.remove_signatures {
                 dropped.insert(n.clone());
             }
-        } else if is_thumb || is_printer {
+        } else if is_thumb || is_printer || is_history_part(n, odf) {
             dropped.insert(n.clone());
         }
     }
@@ -829,6 +896,7 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
         } else if low.ends_with(".rels") {
             let ids = rels_source(&name).and_then(|s| drop_ids.get(&s)).cloned().unwrap_or_default();
             let changed = drop_elements(&xml, "Relationship", "Id", |v| ids.contains(v)).ok_or_else(|| ScrubError::Malformed(format!("{name} is damaged")))?;
+            let changed = shorten_local_targets(&changed, &mut counts)?;
             (changed != xml).then_some(changed)
         } else if !odf && name == "[Content_Types].xml" {
             let changed = drop_content_types(&xml, &dropped, &remaining)?;
