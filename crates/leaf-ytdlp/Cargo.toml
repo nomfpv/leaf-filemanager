@@ -1,0 +1,12 @@
+[package]
+name = "leaf-ytdlp"
+description = "leaf: videos and audio from web pages through the separate program yt-dlp (found on PATH, never shipped or installed by leaf)"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+# the file-name sanitiser
+leaf-download.workspace = true

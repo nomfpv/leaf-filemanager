@@ -53,6 +53,9 @@ struct Msg {
     size: Option<i64>,
     #[serde(default)]
     headers: std::collections::HashMap<String, String>,
+    /// "Download video with leaf": the browser whose sign-in yt-dlp may read itself (the extension's opt-in); leaf never gets cookies.
+    #[serde(default, rename = "cookiesFrom")]
+    cookies_from: Option<String>,
 }
 
 /// Why a capture is left to the browser (only for the log; the extension just hears "no").
@@ -126,6 +129,16 @@ pub fn handle(req: String, mut ack: leaf_sys::handover::Ack, cx: &mut App) {
     let (on, min_bytes) = (s.capture_browser, u64::from(s.capture_min_mb) << 20);
     let taken = match msg {
         Ok(m) if m.kind == "ping" || m.kind == "hello" => Ok(None),
+        // "Download video with leaf": a page address for yt-dlp (the media dialog's defaults; no cookies come along)
+        Ok(m) if m.kind == "video" => {
+            let url = m.url.trim().to_string();
+            if url.len() > MAX_URL || !dl::is_http_url(&url) || dl::has_password(&url) {
+                Err(Refused::NotHttp)
+            } else {
+                crate::videodl::from_browser(url, m.cookies_from, cx);
+                Ok(None)
+            }
+        }
         Ok(m) if m.kind == "download" => if on { check(m, min_bytes).map(Some) } else { Err(Refused::Off) },
         _ => Err(Refused::BadMessage),
     };

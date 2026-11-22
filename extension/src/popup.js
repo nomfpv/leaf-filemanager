@@ -65,3 +65,24 @@ document.getElementById("options").addEventListener("click", (e) => {
 });
 
 refresh("");
+
+// "Download video with leaf": this tab's address goes to leaf (yt-dlp does the rest). "Use this browser's sign-in" is off until ticked.
+const videoBtn = document.getElementById("video");
+const signIn = document.getElementById("signIn");
+const videoNote = document.getElementById("videoNote");
+api.storage.local.get({ videoSignIn: false }).then((c) => {
+  signIn.checked = !!c.videoSignIn;
+}, () => {});
+signIn.addEventListener("change", () => api.storage.local.set({ videoSignIn: signIn.checked }));
+videoBtn.addEventListener("click", async () => {
+  videoBtn.disabled = true;
+  let tab = null;
+  try {
+    [tab] = await api.tabs.query({ active: true, currentWindow: true });
+  } catch {
+    tab = null;
+  }
+  const r = tab?.url ? await api.runtime.sendMessage({ type: "video", url: tab.url }).catch(() => null) : null;
+  videoBtn.disabled = false;
+  videoNote.textContent = r?.ok ? "Sent to leaf. Its choices are waiting there." : "Not sent: leaf could not take this page (is leaf connected? Settings, Downloads, Connect browsers).";
+});

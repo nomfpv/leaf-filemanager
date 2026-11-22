@@ -5310,6 +5310,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-ytdlp"
+version = "0.9.4"
+dependencies = [
+ "leaf-download",
+ "serde_json",
+]
+
+[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7716,6 +7724,7 @@ dependencies = [
  "leaf-sys",
  "leaf-vfs",
  "leaf-vpn",
+ "leaf-ytdlp",
  "log",
  "mail-parser",
  "parking_lot",

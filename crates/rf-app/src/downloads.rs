@@ -102,7 +102,7 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
         };
         let after = view.update(cx, |v, cx| v.select_arrived(dir.clone(), cx)).ok();
         let through = offer_vpn.then(|| vpn_on.get());
-        start_with(cx, Request { sha256, verify: verify_on.get(), vpn: through, ..Request::new(url, dir.clone()) }, after);
+        crate::videodl::route(cx, Request { sha256, verify: verify_on.get(), vpn: through, ..Request::new(url, dir.clone()) }, after, false);
         Ok(())
     });
     let mut checks = vec![prompt::Check { label: t!("Verify with the checksum file next to it (address.sha256)").into(), note: "".into(), on: verify, enabled: true }];
@@ -181,7 +181,7 @@ fn confirm_many(view: WeakEntity<FolderView>, dir: PathBuf, urls: Vec<String>, s
     lines.insert(0, head);
     let add = Button::new(t!("Add to the queue"), Kind::Primary, move |_, _, cx| {
         for u in &urls {
-            start_with(cx, Request::new(u.clone(), dir.clone()), None);
+            crate::videodl::route(cx, Request::new(u.clone(), dir.clone()), None, true);
         }
         let _ = view.update(cx, |_, cx| cx.notify());
         Ok(())
@@ -213,7 +213,7 @@ pub fn start_cli(url: String, folder: Option<String>, cx: &mut App) {
             crate::workspace::select_in_open_folder(p, cx);
         }
     });
-    start_with(cx, Request { sort, ..Request::new(url, dest) }, Some(after));
+    crate::videodl::route(cx, Request { sort, ..Request::new(url, dest) }, Some(after), false);
 }
 
 /// The per-server caps of the settings, given to the engine.
@@ -411,7 +411,7 @@ pub fn restore(cx: &mut App) {
 
 /// Starts a download as a Status Center job. `after` gets the saved file (on the UI thread) when it is complete.
 pub fn start(cx: &mut App, url: String, dest: PathBuf, after: Option<Box<dyn FnOnce(Vec<PathBuf>, &mut App)>>) {
-    start_with(cx, Request::new(url, dest), after);
+    crate::videodl::route(cx, Request::new(url, dest), after, false);
 }
 
 pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<PathBuf>, &mut App)>>) {

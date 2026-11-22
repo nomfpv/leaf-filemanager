@@ -87,6 +87,7 @@ mod capture;
 mod space_check;
 mod download_schedule;
 mod downloads;
+mod videodl;
 mod vpn;
 mod vpn_page;
 mod transfer_view;

@@ -203,6 +203,22 @@ fn handle(frame: &[u8]) -> Value {
                 Err(e) => answer(false, why_of(&e)),
             }
         }
+        // "Download video with leaf": the page address (and, when the user opted in, the browser's name for yt-dlp's own cookie
+        // reading: never the cookies). leaf is started when it is not running; its media dialog or yt-dlp does the rest.
+        "video" => {
+            let url = msg.get("url").and_then(Value::as_str).unwrap_or("").trim().to_ascii_lowercase();
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return answer(false, "bad-message");
+            }
+            let line = format!("{PREFIX}{}", json!({ "v": 1, "type": "video", "url": msg["url"], "cookiesFrom": msg.get("cookiesFrom").cloned().unwrap_or(Value::Null) }));
+            if line.len() > MAX_LINE || line.contains(['\r', '\n']) {
+                return answer(false, "too-large");
+            }
+            match ask(&line, true) {
+                Ok(()) => answer(true, ""),
+                Err(e) => answer(false, why_of(&e)),
+            }
+        }
         _ => answer(false, "bad-message"),
     }
 }

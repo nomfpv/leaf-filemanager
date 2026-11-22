@@ -459,6 +459,43 @@ vpnConfig().then((cfg) => {
   checkVpn();
 });
 
+// "Download video with leaf" (leaf's own): the page address goes to leaf, which hands it to yt-dlp (YouTube, TikTok, Medal and
+// the other sites yt-dlp knows). No cookies are sent. With "Use this browser's sign-in" (off by default) only this browser's NAME
+// goes along, so yt-dlp reads the browser's cookies itself: leaf never sees or stores them.
+const VIDEO_WHY = {
+  "not-running": "leaf is not running.",
+  leaving: "leaf is closing.",
+  refused: "leaf did not take it.",
+  "bad-message": "That is not a web page address.",
+  "too-large": "The address is too long.",
+  "no-host": "The browser is not connected to leaf (leaf: Settings, Downloads, Connect browsers).",
+};
+
+async function sendVideo(url) {
+  if (!/^https?:\/\//i.test(url ?? "")) return { ok: false, why: "bad-message" };
+  const { videoSignIn } = await api.storage.local.get({ videoSignIn: false });
+  const r = await askLeaf({ v: 1, type: "video", url, cookiesFrom: videoSignIn ? browserName() : null });
+  const ok = !!r?.ok;
+  const why = ok ? "" : (r?.why ?? "no-host");
+  quietly(api.notifications?.create("leaf-video", { type: "basic", iconUrl: api.runtime.getURL("icons/leaf-128.png"), title: "leaf", message: ok ? "Sent to leaf." : `Not sent: ${VIDEO_WHY[why] ?? "leaf could not take it."}` }));
+  return { ok, why };
+}
+
+function makeVideoMenu() {
+  if (!api.contextMenus) return;
+  const make = () => api.contextMenus.create({ id: "leaf-video", title: "Download video with leaf", contexts: ["page", "link", "video"] });
+  try {
+    Promise.resolve(api.contextMenus.removeAll()).then(make, () => {});
+  } catch {
+    // no menu: the popup still has the button
+  }
+}
+makeVideoMenu();
+api.contextMenus?.onClicked.addListener((info) => {
+  if (info.menuItemId !== "leaf-video") return;
+  sendVideo(info.linkUrl || info.pageUrl);
+});
+
 // the options page asks whether leaf can be reached; the popup turns Browse through Mullvad on and off
 api.runtime.onMessage.addListener((msg, _sender, reply) => {
   const answer = (p) => {
@@ -468,6 +505,8 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
   switch (msg?.type) {
     case "ping":
       return answer(askLeaf({ v: 1, type: "ping" }).then((r) => r ?? { v: 1, ok: false, why: "no-host" }));
+    case "video":
+      return answer(sendVideo(msg.url));
     case "mullvad-on":
       return answer(mullvadOn());
     case "mullvad-off":

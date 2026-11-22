@@ -768,6 +768,10 @@ pub struct Settings {
     pub download_schedule_days: u8,
     /// What leaf does when the queue is done.
     pub download_when_done: WhenDone,
+    /// Where the `yt-dlp` program is (videos from websites); empty: found on the PATH.
+    pub ytdlp_path: String,
+    /// The quality a video starts with in the media dialog: 0 = best, else the highest height in pixels (1080, 720).
+    pub ytdlp_quality: u32,
     /// leaf's VPN (Settings > VPN): only leaf's own connections, never the PC's. The account number and this PC's key are in the
     /// system keyring only, never here; this only says that there is one (so the keyring is not opened at start without need).
     pub vpn_signed_in: bool,
@@ -1056,6 +1060,8 @@ impl Default for Settings {
             download_schedule_stop: 6 * 60,
             download_schedule_days: 0x7f,
             download_when_done: WhenDone::Nothing,
+            ytdlp_path: String::new(),
+            ytdlp_quality: 0,
             download_categories: DownloadCategory::defaults(),
             vpn_signed_in: false,
             vpn_country: String::new(),

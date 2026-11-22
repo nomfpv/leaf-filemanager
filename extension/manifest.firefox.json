@@ -3,11 +3,11 @@
   "name": "leaf browser capture",
   "short_name": "leaf",
   "description": "Hands the downloads you start in the browser to the leaf file manager on this computer, and can browse through leaf's Mullvad VPN.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "icons": { "16": "icons/leaf-16.png", "32": "icons/leaf-32.png", "48": "icons/leaf-48.png", "128": "icons/leaf-128.png" },
   "background": { "scripts": ["background.js"] },
   "browser_action": { "default_popup": "popup.html", "default_title": "leaf", "default_icon": { "16": "icons/leaf-16.png", "32": "icons/leaf-32.png" } },
   "options_ui": { "page": "options.html", "open_in_tab": true },
-  "permissions": ["downloads", "nativeMessaging", "storage", "webRequest", "proxy", "privacy", "alarms", "notifications", "http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
+  "permissions": ["downloads", "contextMenus", "nativeMessaging", "storage", "webRequest", "proxy", "privacy", "alarms", "notifications", "http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
   "browser_specific_settings": { "gecko": { "id": "browser-capture@leaf-filemanager", "strict_min_version": "115.0" } }
 }
