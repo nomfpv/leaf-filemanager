@@ -3270,6 +3270,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         download_proxy_card(p, s),
         download_schedule_card(p, s),
         crate::videodl::settings_card(p, s),
+        crate::usenet::servers_card(p, s),
         card(
             p,
             L::Globe,

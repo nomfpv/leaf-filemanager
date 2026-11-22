@@ -5127,6 +5127,18 @@ pub(crate) fn drop_files(paths: &ExternalPaths, dest: PathBuf, cx: &mut App) {
     }
     let (ctrl, shift) = (leaf_sys::input::ctrl_down_now(), leaf_sys::input::shift_down_now());
     let sources = hold_archiver_drop(sources, &std::env::temp_dir());
+    // NZB files only: asked whether to download what they list (Usenet) or to copy them
+    if sources.iter().all(|p| crate::usenet::is_nzb(p))
+        && let Some(w) = cx.active_window()
+    {
+        let (nzbs, to) = (sources.clone(), dest.clone());
+        let copy: Box<dyn FnOnce(&mut App)> = Box::new(move |cx| {
+            let kind = crate::ops::drop_transfer(&sources, &dest, ctrl, shift);
+            crate::status_center::transfer(cx, kind, sources, dest);
+        });
+        let _ = w.update(cx, move |_, window, cx| crate::usenet::ask_dropped(nzbs, to, copy, window, cx));
+        return;
+    }
     let kind = crate::ops::drop_transfer(&sources, &dest, ctrl, shift);
     crate::status_center::transfer(cx, kind, sources, dest);
 }
@@ -6169,6 +6181,14 @@ impl Render for Workspace {
                     Some(dir) => crate::downloads::ask(v.downgrade(), dir, window, cx),
                     None => crate::prompt::notice(t!("Download here"), t!("This works in a folder on this PC. Open the folder the file should go to first.").to_string(), window, cx),
                 }
+            }))
+            .on_action(cx.listener(|this, _: &DownloadNzb, window, cx| {
+                let paths = this.active_tab().read(cx).selection_paths();
+                crate::usenet::download_selected(paths, window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &UsenetPauseAll, _, cx| {
+                crate::usenet::pause_all(!leaf_nzb::queue::all_paused());
+                cx.refresh_windows();
             }))
             .on_action(cx.listener(|this, _: &DownloadMany, window, cx| {
                 // the folder shown, when it is a folder on this PC

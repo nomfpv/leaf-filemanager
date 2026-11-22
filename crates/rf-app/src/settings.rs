@@ -785,6 +785,16 @@ pub struct Settings {
     pub vpn_kill_switch: bool,
     /// Downloads go through the VPN (each download can still say otherwise).
     pub vpn_downloads: bool,
+    /// Usenet servers for NZB downloads; their passwords are in the system keyring only.
+    pub usenet_servers: Vec<crate::usenet::UsenetServer>,
+    /// Usenet only while the VPN is on: every NNTP connection goes through leaf's VPN, or waits.
+    pub usenet_vpn_only: bool,
+    /// A folder whose NZB files are taken over (empty: off).
+    pub usenet_watch_folder: String,
+    /// Where Usenet jobs are put together (empty: "incomplete" in the download folder).
+    pub usenet_incomplete_folder: String,
+    pub usenet_unpack: bool,
+    pub usenet_cleanup: bool,
     /// Mullvad's DNS blocking lists.
     pub vpn_block_ads: bool,
     pub vpn_block_trackers: bool,
@@ -1070,6 +1080,12 @@ impl Default for Settings {
             vpn_connect_on_start: false,
             vpn_kill_switch: true,
             vpn_downloads: false,
+            usenet_servers: Vec::new(),
+            usenet_vpn_only: true,
+            usenet_watch_folder: String::new(),
+            usenet_incomplete_folder: String::new(),
+            usenet_unpack: true,
+            usenet_cleanup: true,
             vpn_block_ads: false,
             vpn_block_trackers: false,
             vpn_block_malware: false,
@@ -1498,6 +1514,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     crate::agents::apply(cx);
     // (a changed download limit applies to the downloads that are running)
     crate::downloads::settings_changed(cx);
+    crate::usenet::settings_changed(cx);
     cx.refresh_windows();
 }
 

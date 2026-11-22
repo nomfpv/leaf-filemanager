@@ -88,6 +88,7 @@ mod space_check;
 mod download_schedule;
 mod downloads;
 mod videodl;
+mod usenet;
 mod vpn;
 mod vpn_page;
 mod transfer_view;
@@ -798,6 +799,7 @@ pub fn main() {
             downloads::restore(cx);
             download_schedule::start(cx);
             downloads::init_ui(cx);
+            usenet::init(cx);
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);
         }

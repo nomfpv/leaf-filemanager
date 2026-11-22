@@ -25,10 +25,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Cli {
     let rest: Vec<String> = it.collect();
     if let [verb, url, more @ ..] = rest.as_slice()
         && verb.eq_ignore_ascii_case("download")
-        && leaf_download::is_http_url(url.trim())
+        && (leaf_download::is_http_url(url.trim()) || url.trim().to_ascii_lowercase().ends_with(".nzb"))
     {
+        // (an NZB file: its absolute path stands in for the address)
+        let url = if leaf_download::is_http_url(url.trim()) { url.trim().to_string() } else { absolute(url) };
         let folder = more.iter().find(|a| !a.starts_with('-')).map(|a| absolute(a));
-        return Cli { args: out, new_tab: false, download: Some((url.trim().to_string(), folder)) };
+        return Cli { args: out, new_tab: false, download: Some((url, folder)) };
     }
     let it = rest.into_iter();
     let mut new_tab = false;

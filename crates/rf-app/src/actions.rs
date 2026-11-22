@@ -137,6 +137,8 @@ gpui_kit::actions!(
         BookmarkRemoteFolder,
         DownloadHere,
         DownloadMany,
+        DownloadNzb,
+        UsenetPauseAll,
         SendToDevice,
         AddToBasket,
         RemoveFromBasket,

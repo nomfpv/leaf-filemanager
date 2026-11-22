@@ -28,6 +28,8 @@ leaf-vfs.workspace = true
 leaf-remote.workspace = true
 leaf-download.workspace = true
 leaf-ytdlp.workspace = true
+# Usenet (NZB) downloads: NNTP, yEnc, par2, unpack (usenet.rs is its face)
+leaf-nzb.workspace = true
 # leaf's VPN (leaf's own connections only; the tunnel runs on leaf-remote's runtime)
 leaf-vpn.workspace = true
 # the VPN's sign-in text is wiped when dropped

@@ -4484,6 +4484,8 @@ impl FolderView {
             } else {
                 self.navigate(Location::Path(path), cx);
             }
+        } else if crate::usenet::is_nzb(&path) {
+            crate::usenet::open_nzb(path, cx);
         } else if is_lnk(&path) {
             self.open_shortcut(path, cx);
         } else {

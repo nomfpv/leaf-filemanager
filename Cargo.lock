@@ -7744,6 +7744,7 @@ dependencies = [
  "leaf-decode",
  "leaf-dev",
  "leaf-download",
+ "leaf-nzb",
  "leaf-open",
  "leaf-remote",
  "leaf-share",

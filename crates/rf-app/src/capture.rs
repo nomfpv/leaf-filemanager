@@ -171,6 +171,10 @@ fn start(c: Capture, cx: &mut App) {
     let after: Box<dyn FnOnce(Vec<std::path::PathBuf>, &mut App)> = Box::new(|arrived, cx| {
         if let Some(p) = arrived.first() {
             crate::workspace::select_in_open_folder(p, cx);
+            // an NZB link the browser handed over: what it lists is downloaded from Usenet
+            if crate::usenet::is_nzb(p) {
+                crate::usenet::open_nzb(p.clone(), cx);
+            }
         }
     });
     crate::downloads::start_with(cx, req, Some(after));

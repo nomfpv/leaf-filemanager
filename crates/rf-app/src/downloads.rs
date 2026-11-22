@@ -203,6 +203,12 @@ pub fn from_message(rest: &str, cx: &mut App) -> bool {
 
 pub fn start_cli(url: String, folder: Option<String>, cx: &mut App) {
     let sort = folder.is_none();
+    // `leaf download x.nzb [folder]`: a Usenet job
+    if crate::usenet::is_nzb(Path::new(&url)) {
+        let dest = folder.map(PathBuf::from).unwrap_or_else(|| default_folder(cx.global::<Settings>()));
+        crate::usenet::start(PathBuf::from(url), dest, sort, cx);
+        return;
+    }
     let dest = folder.map(PathBuf::from).unwrap_or_else(|| default_folder(cx.global::<Settings>()));
     if let Err(e) = std::fs::create_dir_all(&dest) {
         log::warn!("download: the folder {} could not be made: {e}", dest.display());

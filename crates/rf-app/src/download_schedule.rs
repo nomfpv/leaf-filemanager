@@ -72,11 +72,12 @@ fn tick(cx: &mut App) {
         if *last != Some(open) {
             *last = Some(open);
             crate::downloads::schedule_gate(open);
+            crate::usenet::schedule_gate(open);
         }
     }
     // (empty: it is "done" when something was started and one of them finished; otherwise the mark is dropped, so a download
     // cancelled later is never taken for the end of a queue)
-    if crate::downloads::live_count() == 0 {
+    if crate::downloads::live_count() + crate::usenet::live_count() == 0 {
         let started = HAD_WORK.swap(false, Ordering::Relaxed);
         if FINISHED_ONE.swap(false, Ordering::Relaxed) && started {
             done(when, cx);
