@@ -5296,6 +5296,7 @@ name = "leaf-scrub"
 version = "0.9.4"
 dependencies = [
  "crc32fast",
+ "flate2",
  "image",
  "kamadak-exif",
  "libc",

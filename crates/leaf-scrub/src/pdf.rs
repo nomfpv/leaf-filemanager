@@ -45,6 +45,7 @@ fn load(path: &Path) -> Result<(Document, Vec<u8>)> {
     if !tail.windows(5).any(|w| w == b"%%EOF") {
         return Err(ScrubError::Malformed("the PDF has no end marker, it is cut off".into()));
     }
+    guard(&raw)?;
     let doc = Document::load_mem(&raw).map_err(|e| ScrubError::Malformed(format!("the PDF could not be read: {e}")))?;
     if doc.trailer.has(b"Encrypt") || doc.is_encrypted() {
         return Err(ScrubError::Unsupported("the PDF is encrypted".into()));
@@ -53,6 +54,98 @@ fn load(path: &Path) -> Result<(Document, Vec<u8>)> {
         return Err(ScrubError::Malformed("the PDF has no pages".into()));
     }
     Ok((doc, raw))
+}
+
+/// The most a compressed object stream may unpack to, and how deep dictionaries and arrays may nest: a PDF built to exhaust
+/// memory or the stack is refused before the reader sees it.
+const MAX_UNPACKED: u64 = 256 << 20;
+const MAX_DEPTH: usize = 100;
+
+/// Checks what the PDF reader would otherwise do without a limit: unpack the object streams and cross-reference streams it reads
+/// whole, and follow nesting.
+fn guard(raw: &[u8]) -> Result<()> {
+    use std::io::Read;
+    // nesting of << >> and [ ] outside strings, comments and stream data
+    let (mut depth, mut i) = (0usize, 0usize);
+    while i < raw.len() {
+        match raw[i] {
+            b'(' => {
+                let mut level = 1;
+                i += 1;
+                while i < raw.len() && level > 0 {
+                    match raw[i] {
+                        b'\\' => i += 1,
+                        b'(' => level += 1,
+                        b')' => level -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            b'%' => {
+                while i < raw.len() && raw[i] != b'\n' && raw[i] != b'\r' {
+                    i += 1;
+                }
+            }
+            b'<' if raw.get(i + 1) == Some(&b'<') => {
+                depth += 1;
+                i += 1;
+            }
+            b'>' if raw.get(i + 1) == Some(&b'>') => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b's' if raw[i..].starts_with(b"stream") && matches!(raw.get(i + 6), Some(b'\r' | b'\n')) => {
+                let start = i + 6;
+                match find(&raw[start..], b"endstream") {
+                    Some(k) => {
+                        let data = &raw[start..start + k];
+                        // the dictionary before it: an object stream or cross-reference stream is unpacked by the reader itself
+                        let dict_from = raw[..i].windows(3).rposition(|w| w == b"obj").unwrap_or(0);
+                        let dict = &raw[dict_from..i];
+                        if (find(dict, b"/ObjStm").is_some() || find(dict, b"/XRef").is_some()) && find(dict, b"/FlateDecode").is_some() {
+                            let body = data.strip_prefix(b"\r\n").or_else(|| data.strip_prefix(b"\n")).unwrap_or(data);
+                            let mut z = flate2::read::ZlibDecoder::new(body).take(MAX_UNPACKED + 1);
+                            let n = std::io::copy(&mut z, &mut std::io::sink()).unwrap_or(0);
+                            if n > MAX_UNPACKED || (n > 1 << 20 && n / (body.len() as u64).max(1) > 1000) {
+                                return Err(ScrubError::Unsupported("the PDF has a compressed part that unpacks to far more than its size, leaf does not unpack it".into()));
+                            }
+                        }
+                        i = start + k + 9;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            _ => {}
+        }
+        if depth > MAX_DEPTH {
+            return Err(ScrubError::Unsupported("the PDF nests its objects deeper than leaf reads".into()));
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// The raw (still compressed) bytes of every content stream of every page: the rewrite must give the same back. Nothing is
+/// unpacked for this.
+fn page_streams(doc: &Document) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for id in doc.get_pages().values() {
+        for c in doc.get_page_contents(*id) {
+            if let Ok(Object::Stream(s)) = doc.get_object(c) {
+                out.push(s.content.clone());
+            }
+        }
+    }
+    out
 }
 
 fn text(o: &Object, doc: &Document) -> String {
@@ -325,7 +418,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     }
     let pages_before = doc.get_pages().len();
     // what every page draws, as it is now: the rewrite must give the same back
-    let drawn: Vec<Vec<u8>> = doc.get_pages().values().map(|id| doc.get_page_content(*id)).collect();
+    let drawn = page_streams(&doc);
     if let Some(Object::Reference(id)) = doc.trailer.get(b"Info").ok().cloned() {
         doc.delete_object(id);
     }
@@ -369,7 +462,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     if again.get_pages().len() != pages_before {
         return Err(ScrubError::Verify("the rewritten PDF has a different number of pages".into()));
     }
-    let drawn_again: Vec<Vec<u8>> = again.get_pages().values().map(|id| again.get_page_content(*id)).collect();
+    let drawn_again = page_streams(&again);
     if drawn != drawn_again {
         return Err(ScrubError::Verify("the rewritten PDF draws its pages differently".into()));
     }

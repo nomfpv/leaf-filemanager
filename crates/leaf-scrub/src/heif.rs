@@ -112,6 +112,7 @@ impl Item {
 }
 
 fn parse_iinf(d: &[u8], b: B) -> Result<Vec<Item>> {
+    let d = &d[..b.end];
     let mut p = b.body();
     let ver = *d.get(p).ok_or_else(|| ScrubError::Malformed("iinf is cut off".into()))?;
     p += 4;
@@ -164,6 +165,8 @@ struct Extent {
 
 /// The data ranges of every item, resolved to file positions (`idat` data is addressed inside the idat box).
 fn parse_iloc(d: &[u8], b: B, idat: Option<B>) -> Result<Vec<Extent>> {
+    // every read stays inside the box, and every count read from it is checked against the bytes it would need
+    let d = &d[..b.end];
     let mut p = b.body();
     let ver = *d.get(p).ok_or_else(|| ScrubError::Malformed("iloc is cut off".into()))?;
     if ver > 2 {
@@ -173,6 +176,13 @@ fn parse_iloc(d: &[u8], b: B, idat: Option<B>) -> Result<Vec<Extent>> {
     let sizes = be16(d, p)?;
     p += 2;
     let (offset_size, length_size, base_size, index_size) = ((sizes >> 12) & 15, (sizes >> 8) & 15, (sizes >> 4) & 15, if ver > 0 { sizes & 15 } else { 0 });
+    if [offset_size, length_size, base_size, index_size].iter().any(|n| !matches!(n, 0 | 4 | 8)) {
+        return bad("the item location table has a field width that is not allowed");
+    }
+    let per_extent = index_size + offset_size + length_size;
+    if per_extent == 0 {
+        return bad("the item location table has extents of zero width");
+    }
     let count = if ver < 2 {
         let c = be16(d, p)?;
         p += 2;
@@ -182,6 +192,10 @@ fn parse_iloc(d: &[u8], b: B, idat: Option<B>) -> Result<Vec<Extent>> {
         p += 4;
         c
     };
+    let per_item = if ver < 2 { 2 } else { 4 } + if ver > 0 { 2 } else { 0 } + 2 + base_size + 2;
+    if count.checked_mul(per_item).is_none_or(|n| n > d.len() - p) {
+        return bad("the item location table lists more items than it holds");
+    }
     let mut out = Vec::new();
     for _ in 0..count {
         let id = if ver < 2 {
@@ -204,6 +218,9 @@ fn parse_iloc(d: &[u8], b: B, idat: Option<B>) -> Result<Vec<Extent>> {
         p += base_size;
         let ext_count = be16(d, p)?;
         p += 2;
+        if ext_count.checked_mul(per_extent).is_none_or(|n| n > d.len().saturating_sub(p)) {
+            return bad("an item lists more extents than the table holds");
+        }
         for _ in 0..ext_count {
             if ver > 0 && index_size > 0 {
                 p += index_size;

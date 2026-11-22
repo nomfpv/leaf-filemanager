@@ -181,6 +181,9 @@ fn clean(xml: &str, opts: &Options) -> Result<(String, Vec<Finding>, Vec<String>
 }
 
 pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
+    if fs::metadata(path)?.len() > 256 << 20 {
+        return Err(ScrubError::Unsupported("the SVG is bigger than 256 MB".into()));
+    }
     let xml = load(&fs::read(path)?)?;
     let f = scan(&xml, opts)?;
     let mut findings = f.findings;

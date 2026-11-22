@@ -636,6 +636,37 @@ fn scrub_heic_and_avif_leave_no_marker_anywhere_and_keep_picture_and_rotation() 
     }
 }
 
+/// Files built to exhaust memory are refused quickly: a HEIC item table with zero-width fields or more items than it holds, a PDF
+/// nested thousands deep, an Office part that unpacks to a thousand times its size.
+#[test]
+fn scrub_crafted_files_that_would_exhaust_memory_are_refused() {
+    let d = tmp_dir("bombs");
+    let heic = d.join("a.heic");
+    make_heic(&heic, b"heic");
+    let good = fs::read(&heic).unwrap();
+    let at = good.windows(4).position(|w| w == b"iloc").unwrap() + 8; // after the box type and version / flags
+    for (name, patch) in [("zero widths", vec![0u8, 0u8]), ("too many items", vec![0x44, 0x00, 0xFF, 0xFF])] {
+        let mut b = good.clone();
+        b[at..at + patch.len()].copy_from_slice(&patch);
+        fs::write(&heic, &b).unwrap();
+        assert!(matches!(inspect(&heic, &opts()), Err(ScrubError::Malformed(_))), "{name}");
+    }
+    let pdf = d.join("deep.pdf");
+    let deep = format!("%PDF-1.4\n1 0 obj\n<< /Pages 2 0 R /A {}{} >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", "[".repeat(5000), "]".repeat(5000));
+    fs::write(&pdf, deep).unwrap();
+    assert!(matches!(inspect(&pdf, &opts()), Err(ScrubError::Unsupported(_))));
+    let docx = d.join("bomb.docx");
+    let zeros = vec![b' '; 8 << 20];
+    let mut z = zip::ZipWriter::new(fs::File::create(&docx).unwrap());
+    for (n, c) in [("[Content_Types].xml", &b"<Types/>"[..]), ("word/document.xml", &zeros[..])] {
+        z.start_file(n, zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(c).unwrap();
+    }
+    z.finish().unwrap();
+    assert!(matches!(inspect(&docx, &opts()), Err(ScrubError::Unsupported(_))));
+    let _ = fs::remove_dir_all(&d);
+}
+
 #[test]
 fn scrub_heic_refuses_when_metadata_shares_bytes_with_the_picture() {
     let d = tmp_dir("heif-shared");

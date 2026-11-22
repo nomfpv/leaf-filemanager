@@ -17,6 +17,8 @@ lofty = "0.25"
 zip.workspace = true
 roxmltree = "0.20"
 crc32fast.workspace = true
+# capped unpacking of PDF object streams before the PDF reader sees them (already in the tree through zip and lopdf)
+flate2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # FindFirstStreamW / DeleteFileW: alternate data streams
