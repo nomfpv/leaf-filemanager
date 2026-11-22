@@ -23,7 +23,8 @@ pub enum Launch {
 /// Whether `s` names a shell namespace rather than a file system path.
 pub fn is_namespace(s: &str) -> bool {
     let l = s.trim().to_ascii_lowercase();
-    l.starts_with("::") || l.starts_with("shell:") || l.contains("::{")
+    // (a `search-ms:` link and a Settings page are no paths either: leaf reads the first itself, Explorer gets the rest)
+    l.starts_with("::") || l.starts_with("shell:") || l.contains("::{") || l.starts_with("search-ms:") || l.starts_with("ms-settings:")
 }
 
 /// True when the command line starts with one of Explorer's switches (so it is read with [`parse`], not as a list of folders).
@@ -188,6 +189,21 @@ mod tests {
             ("/e,::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", ns("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}")),
             ("/root,::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", ns("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}")),
             (r"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{21EC2020-3AEA-1069-A2DD-08002B30309D}", ns(r"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{21EC2020-3AEA-1069-A2DD-08002B30309D}")),
+            // Network, the Recycle Bin, Libraries, This PC, a phone, a search link, a Settings page: namespaces (what leaf lists opens
+            // in leaf, the rest goes to Explorer: decided by the caller)
+            ("shell:NetworkPlacesFolder", ns("shell:NetworkPlacesFolder")),
+            ("/e,shell:NetworkPlacesFolder", ns("shell:NetworkPlacesFolder")),
+            ("/root,shell:RecycleBinFolder", ns("shell:RecycleBinFolder")),
+            ("::{031E4825-7B94-4DC3-B131-E946B44C8DD5}", ns("::{031E4825-7B94-4DC3-B131-E946B44C8DD5}")),
+            ("/n,/e,shell:MyComputerFolder", ns("shell:MyComputerFolder")),
+            ("shell:ControlPanelFolder", ns("shell:ControlPanelFolder")),
+            (
+                r"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\?\usb#vid_18d1&pid_4ee1#3a1#{6ac27878-a6fa-4155-ba85-f98f491d4f33}",
+                ns(r"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\?\usb#vid_18d1&pid_4ee1#3a1#{6ac27878-a6fa-4155-ba85-f98f491d4f33}"),
+            ),
+            (r"/e,search-ms:query=report&crumb=location:C%3A%5CUsers%5Cuser", ns(r"search-ms:query=report&crumb=location:C%3A%5CUsers%5Cuser")),
+            ("ms-settings:display", ns("ms-settings:display")),
+            ("/select,search-ms:query=x", Launch::FallThrough),
             // what leaf does not read
             ("/idlist,:123:456", Launch::FallThrough),
             ("/factory,{75dff2b7-6936-4c06-a8bb-676a7b00b24b}", Launch::FallThrough),
