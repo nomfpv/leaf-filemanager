@@ -719,6 +719,7 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
     let mut counts = Counts::default();
     let (mut thumbs, mut printers, mut customs, mut unreadable, mut macros, mut embedded) = (0, 0, 0, 0, false, false);
     let mut pics: Vec<Finding> = Vec::new();
+    let mut not_cleaned: Vec<String> = Vec::new();
     // 1. the names, and the parts that go whole
     let mut names: Vec<String> = Vec::with_capacity(z.len());
     let mut total = 0u64;
@@ -823,29 +824,41 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
             p.fates.push(Fate::Keep);
             continue;
         }
-        if is_media {
+        if is_media || name.contains("/embeddings/") {
             let data = read_bytes(&mut e)?;
-            let fam = if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                Some(Family::Jpeg)
+            let short = name.rsplit('/').next().unwrap_or(&name).to_string();
+            let heif = data.len() > 12 && &data[4..8] == b"ftyp" && [&b"heic"[..], b"heix", b"mif1", b"avif", b"msf1"].contains(&&data[8..12]);
+            let cleaned: Option<Result<(Vec<u8>, Vec<Finding>)>> = if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                Some(crate::image::process(&data, Family::Jpeg, opts))
             } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-                Some(Family::Png)
+                Some(crate::image::process(&data, Family::Png, opts))
             } else if data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
-                Some(Family::Webp)
+                Some(crate::image::process(&data, Family::Webp, opts))
+            } else if data.starts_with(b"GIF8") {
+                Some(crate::gif::clean_bytes(&data, opts))
+            } else if data.starts_with(b"II*\0") || data.starts_with(b"MM\0*") {
+                Some(crate::tiff::clean_bytes(&data, opts))
+            } else if heif {
+                Some(crate::heif::clean_bytes(&data, opts))
             } else {
                 None
             };
             let mut fate = Fate::Keep;
-            if let Some(fam) = fam {
-                match crate::image::process(&data, fam, opts) {
-                    Ok((out, found)) => {
-                        let what: Vec<String> = found.iter().filter(|f| f.remove).take(3).map(|f| f.label.clone()).collect();
-                        if !what.is_empty() && out != data {
-                            pics.push(Finding::new(format!("Picture metadata ({})", name.rsplit('/').next().unwrap_or(&name)), what.join(", "), true));
-                            fate = Fate::Replace(out);
-                        }
+            match cleaned {
+                Some(Ok((out, found))) => {
+                    let what: Vec<String> = found.iter().filter(|f| f.remove).take(3).map(|f| f.label.clone()).collect();
+                    if !what.is_empty() && out != data {
+                        pics.push(Finding::new(format!("Picture metadata ({short})"), what.join(", "), true));
+                        fate = Fate::Replace(out);
                     }
-                    Err(_) => unreadable += 1,
                 }
+                Some(Err(_)) => {
+                    unreadable += 1;
+                    not_cleaned.push(short);
+                }
+                // vector pictures (EMF, WMF), HD Photo (WDP), video, sound, embedded documents and OLE objects: named, not cleaned
+                None if !data.is_empty() && !name.ends_with(".xml") => not_cleaned.push(short),
+                None => {}
             }
             p.fates.push(fate);
             continue;
@@ -935,7 +948,12 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
     if p.signed && opts.remove_signatures {
         p.notes.push("The digital signatures are removed completely (signer, time, certificate): the cleaned document is no longer signed.".into());
     }
-    if unreadable > 0 {
+    if !not_cleaned.is_empty() {
+        let n = not_cleaned.len();
+        let shown: Vec<&str> = not_cleaned.iter().take(8).map(String::as_str).collect();
+        let more = if n > 8 { format!(" and {} more", n - 8) } else { String::new() };
+        p.notes.push(format!("Still inside, not cleaned: {} embedded file(s) leaf has no remover for or could not read ({}{more}); they keep their own metadata.", n, shown.join(", ")));
+    } else if unreadable > 0 {
         p.notes.push(format!("Still inside: {unreadable} embedded picture(s) leaf could not read, their own metadata stays."));
     }
     if macros {

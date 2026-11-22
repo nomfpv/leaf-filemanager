@@ -381,6 +381,20 @@ fn free_box(b: B, patches: &mut Vec<Patch>, d: &[u8]) {
     patches.push((b.off + 4, b"free".to_vec()));
 }
 
+/// A HEIC / AVIF held in memory, cleaned the same way as a file (for pictures inside Office files).
+pub(crate) fn clean_bytes(src: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
+    let (patches, found, _) = plan(src, opts)?;
+    let mut d = src.to_vec();
+    for (off, bytes) in &patches {
+        d[*off..*off + bytes.len()].copy_from_slice(bytes);
+    }
+    let (left, again, _) = plan(&d, opts)?;
+    if left.iter().any(|(_, b)| b.iter().any(|c| *c != 0)) || !again.is_empty() {
+        return Err(ScrubError::Verify("metadata items are still in the picture".into()));
+    }
+    Ok((d, found))
+}
+
 pub(crate) fn inspect(path: &Path, name: &'static str, opts: &Options) -> Result<Inspection> {
     let d = crate::image::read_all(path)?;
     let (_, findings, notes) = plan(&d, opts)?;

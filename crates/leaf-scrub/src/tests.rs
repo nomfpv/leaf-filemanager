@@ -1478,6 +1478,34 @@ fn scrub_office_history_parts_and_local_paths_leave_no_marker() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// Pictures inside an Office file other than JPEG / PNG / WebP (here a GIF with a comment) are cleaned too; what leaf has no
+/// remover for (an EMF vector picture) is named as still inside, never passed silently.
+#[test]
+fn scrub_docx_gif_inside_cleaned_and_emf_named() {
+    let d = tmp_dir("office-media");
+    let frame = [&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0][..], &[2], &sub(&[0x4C, 0x01])].concat();
+    let comment = [&[0x21, 0xFE][..], &sub(b"made by Planted Author")].concat();
+    let gif = gif_blocks(&[b"GIF89a", &[1, 0, 1, 0, 0x80, 0, 0], &[0, 0, 0, 255, 255, 255], &comment, &frame, &[0x3B]]);
+    let ct = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>";
+    let src = d.join("a.docx");
+    make_zip_bytes(
+        &src,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("word/document.xml", format!("<w:document {W}><w:body/></w:document>").as_bytes()),
+            ("word/media/image1.gif", &gif),
+            ("word/media/image2.emf", b"\x01\0\0\0 vector picture"),
+        ],
+    );
+    let i = inspect(&src, &opts()).unwrap();
+    assert!(i.findings.iter().any(|f| f.label == "Picture metadata (image1.gif)"), "{:?}", i.findings);
+    assert!(i.notes.iter().any(|n| n.contains("image2.emf")), "{:?}", i.notes);
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "docx gif");
+    let _ = fs::remove_dir_all(&d);
+}
+
 const CAT_AUTHOR_LABEL: &str = "Author names (comments, tracked changes)";
 
 #[test]

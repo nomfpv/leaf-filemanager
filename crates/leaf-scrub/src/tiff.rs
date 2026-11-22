@@ -267,6 +267,20 @@ fn is_some_icc(e: &[Entry]) -> bool {
     e.iter().any(|e| e.tag == 34675)
 }
 
+/// A TIFF held in memory, cleaned the same way as a file (for pictures inside Office files).
+pub(crate) fn clean_bytes(src: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
+    let first = plan(src, opts)?;
+    let mut d = src.to_vec();
+    for (off, bytes) in &first.patches {
+        d[*off..*off + bytes.len()].copy_from_slice(bytes);
+    }
+    let after = plan(&d, opts)?;
+    if after.findings.iter().any(|f| f.remove) || !after.patches.is_empty() || first.strips.iter().any(|(a, b)| d[*a..*b] != src[*a..*b]) {
+        return Err(ScrubError::Verify("tags are still in the TIFF".into()));
+    }
+    Ok((d, first.findings))
+}
+
 pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
     let d = crate::image::read_all(path)?;
     let p = plan(&d, opts)?;

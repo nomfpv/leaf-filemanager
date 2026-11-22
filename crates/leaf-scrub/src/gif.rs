@@ -115,6 +115,12 @@ fn process(d: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>, Vec<Strin
     Ok((out, found, notes))
 }
 
+/// A GIF held in memory, cleaned (for pictures inside Office files).
+pub(crate) fn clean_bytes(d: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
+    let (out, found, _) = process(d, opts)?;
+    Ok((out, found))
+}
+
 pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
     let d = crate::image::read_all(path)?;
     let (_, findings, mut notes) = process(&d, opts)?;
