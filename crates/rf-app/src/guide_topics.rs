@@ -916,19 +916,21 @@ pub static TOPICS: &[Topic] = &[
     t(
         "downloadmgr",
         G_DOWNLOADS,
-        "Pause, limit or retry a download",
-        &["download manager", "pause", "resume", "speed limit", "queue", "retry", "bandwidth"],
+        "Manage downloads",
+        &["download manager", "downloads page", "download list", "pause", "resume", "speed limit", "queue", "retry", "bandwidth", "cancel", "remove", "priority", "nzb", "paste", "drop"],
         &[
-            "Click the Status Center button in the title bar. Every download is a row.",
-            "Pause or cancel it there. On a running download, \"Limit speed\" asks for a number of MB per second (0: no limit), and applies it at once.",
-            "A failed download keeps what it got. Press Retry to carry on from there.",
-            "For all downloads, open Settings > Advanced > Downloads: \"Downloads at once\", \"Download speed limit\" and \"Connections per download\".",
+            "Open the Downloads page: choose \"Download list\" in the sidebar, or press Ctrl+Shift+P and choose \"Download list\", or click the title of a download in the Status Center. One list holds every download: web, video, Usenet and from the browser, the running ones on top, then the waiting, then the finished.",
+            "To add one: press Add (or Add several) in the toolbar, or paste a link or an NZB file with Ctrl+V, or drop one on the page. It goes into the download folder.",
+            "Click a row (Ctrl and Shift add more) and use the buttons above the list or the right-click menu: Pause or Resume, Cancel, Retry (a failed or cancelled one carries on from the part it got), Open, Show in folder and Copy the address.",
+            "On a Usenet job, Move up, Move down and High or Low priority change its place in the Usenet queue. Web downloads go in the order they were added.",
+            "\"Pause all\" and \"Resume all\" hold or release every download; the button with a speed sets the limit of each download (the same as Settings > Advanced > Downloads).",
+            "\"Remove from the list\" (or Delete) takes only the entry off. \"Remove and delete the file\" also moves the finished file to the Trash. \"Clear finished\" takes off all the finished ones.",
         ],
-        &["The finished and failed ones are remembered in \"Download history\" on that page (the last 50)."],
-        Go::Page(Page::Advanced),
+        &["The Status Center keeps its cards as they are; the page lists the same downloads and, after a restart, the last finished and failed ones (the history of transfers)."],
+        Go::Cmd("ShowDownloadList"),
     )
     .needs(Module::Downloads)
-    .label("Open Settings > Advanced"),
+    .label("Open the Downloads page"),
     t(
         "browserext",
         G_DOWNLOADS,
