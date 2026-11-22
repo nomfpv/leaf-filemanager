@@ -5109,7 +5109,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "log",
- "md-5",
+ "md-5 0.10.6",
  "notify",
  "rayon",
  "rf-core",
@@ -5155,7 +5155,7 @@ name = "leaf-download"
 version = "0.9.4"
 dependencies = [
  "log",
- "md-5",
+ "md-5 0.10.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5178,6 +5178,23 @@ dependencies = [
  "leaf-sys",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "leaf-nzb"
+version = "0.9.4"
+dependencies = [
+ "crc32fast",
+ "log",
+ "md-5 0.10.6",
+ "rf-archive",
+ "roxmltree 0.20.0",
+ "rust-par2",
+ "rustls",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "zip 9.3.0",
 ]
 
 [[package]]
@@ -5632,6 +5649,16 @@ checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
  "digest 0.10.7",
+]
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -6504,7 +6531,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hkdf 0.12.4",
  "hmac 0.12.1",
- "md-5",
+ "md-5 0.10.6",
  "num",
  "num-bigint-dig",
  "pbkdf2 0.12.2",
@@ -7850,7 +7877,7 @@ dependencies = [
  "leaf-copy",
  "leaf-decode",
  "log",
- "md-5",
+ "md-5 0.10.6",
  "notify",
  "parking_lot",
  "png 0.18.1",
@@ -8147,6 +8174,19 @@ dependencies = [
  "siphasher",
  "toml 0.8.23",
  "triomphe",
+]
+
+[[package]]
+name = "rust-par2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22bdbdb4983f325e641f57a8a0131551a483225c79c2d15070c55e7c5a49923f"
+dependencies = [
+ "crc32fast",
+ "md-5 0.11.0",
+ "rayon",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

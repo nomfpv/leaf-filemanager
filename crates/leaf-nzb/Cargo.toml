@@ -1,0 +1,26 @@
+[package]
+name = "leaf-nzb"
+description = "leaf: Usenet (NZB) downloads: NZB parsing, pipelined NNTP over leaf's dial seam, yEnc, positional assembly, par2 repair, unpack"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crc32fast.workspace = true
+# the NZB file is XML; roxmltree 0.20 is already in the tree (leaf-common, rf-win)
+roxmltree = "0.20"
+# NNTPS: rustls with ring and the system's certificates, as leaf-remote and leaf-vpn have them (no second TLS stack)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rustls-platform-verifier = "0.7"
+# PAR2 verify and Reed-Solomon repair (MIT OR Apache-2.0, pure Rust)
+rust-par2 = "0.2"
+# leaf's archive engine for the unpack step (RAR incl. volumes and passwords, 7z, zip); it never writes outside the folder
+rf-archive.workspace = true
+
+[dev-dependencies]
+md-5.workspace = true
+zip.workspace = true

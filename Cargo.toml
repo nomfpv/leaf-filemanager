@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-nmhost", "crates/leaf-download", "crates/leaf-sync", "crates/leaf-copy", "crates/leaf-agents", "crates/leaf-vpn", "crates/leaf-share", "crates/leaf-open", "crates/leaf-ytdlp"]
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-nmhost", "crates/leaf-download", "crates/leaf-sync", "crates/leaf-copy", "crates/leaf-agents", "crates/leaf-vpn", "crates/leaf-share", "crates/leaf-open", "crates/leaf-ytdlp", "crates/leaf-nzb"]
 exclude = ["vendor/velopack"]
 
 [workspace.package]
@@ -29,6 +29,7 @@ leaf-vpn = { path = "crates/leaf-vpn" }
 leaf-share = { path = "crates/leaf-share" }
 leaf-open = { path = "crates/leaf-open" }
 leaf-ytdlp = { path = "crates/leaf-ytdlp" }
+leaf-nzb = { path = "crates/leaf-nzb" }
 rf-player = { path = "crates/rf-player" }
 rf-nearby = { path = "crates/rf-nearby" }
 rustdecoder = { path = "crates/rustdecoder" }
