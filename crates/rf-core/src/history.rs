@@ -35,6 +35,8 @@ pub enum Location {
     Agents,
     /// A folder that is not a local one, listed through the virtual filesystem (`leaf-vfs`): `sftp://`, `mem://`...
     Remote(crate::vpath::VPath),
+    /// A full page of an extension (`rf_app::ext`): the extension's id, the page's id and the title its tab shows.
+    Ext { ext: String, page: String, title: String },
 }
 
 impl Location {
@@ -127,7 +129,7 @@ impl Location {
             Location::Changes(p) => Some(Location::Path(p.clone())),
             Location::Brain(p) => Some(Location::Path(p.clone())),
             Location::Duplicates(v) => Some(v.first().map_or(Location::Home, |p| Location::Path(p.clone()))),
-            Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads | Location::SyncJobs | Location::Agents => {
+            Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Downloads | Location::SyncJobs | Location::Agents | Location::Ext { .. } => {
                 Some(Location::Home)
             }
             Location::Shell { parsing, .. } => Some(shell_parent(parsing)),
@@ -154,6 +156,7 @@ impl Location {
             Location::Downloads => "Downloads".into(),
             Location::SyncJobs => "Sync jobs".into(),
             Location::Agents => "Agents".into(),
+            Location::Ext { title, .. } => title.clone(),
             Location::Remote(v) if v.is_root() && v.authority().is_empty() => v.scheme().to_string(),
             Location::Remote(v) if v.is_root() => v.authority().to_string(),
             Location::Remote(v) => v.name().to_string(),

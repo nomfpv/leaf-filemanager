@@ -51,6 +51,8 @@ pub enum Page {
     ThisPc,
     /// The first-run setup (`setup.rs`): no entry in the list of pages, it fills the whole Settings pane.
     Setup,
+    /// A section an extension registered (`ext::Registrar::settings_section`); which one is `Ui::ext_ix`.
+    Ext,
 }
 
 const PAGES: [(Page, L, &str); 23] = [
@@ -106,6 +108,8 @@ struct Ui {
     /// How wide the Settings pane was at its last paint, logical px (0: not painted yet). The list of pages is drawn as a strip of
     /// icons when the pane is narrow ([`nav_is_strip`]).
     pane_w: f32,
+    /// The extension whose section the page `Page::Ext` shows.
+    ext_ix: usize,
 }
 impl Global for Ui {}
 
@@ -123,7 +127,7 @@ pub(crate) fn nav_is_strip(pane_w: f32) -> bool {
 
 fn ui(cx: &mut App) -> &mut Ui {
     if !cx.has_global::<Ui>() {
-        cx.set_global(Ui { page: Page::General, open: HashSet::new(), search: None, hg_focus: Vec::new(), pane_w: 0.0 });
+        cx.set_global(Ui { page: Page::General, open: HashSet::new(), search: None, hg_focus: Vec::new(), pane_w: 0.0, ext_ix: 0 });
     }
     cx.global_mut::<Ui>()
 }
@@ -255,6 +259,10 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Features => crate::features_page::page(p, cx),
         Page::Guide => crate::guide_page::page(p, cx),
         Page::Setup => Vec::new(),
+        Page::Ext => {
+            let ix = ui(cx).ext_ix;
+            crate::ext::settings_body(ix, cx)
+        }
         Page::WhatsNew => crate::whats_new_page::page(p, cx),
         Page::About => about(p, cx),
         Page::ThisPc => crate::this_pc::page(p, cx),
@@ -511,6 +519,7 @@ fn link_row(p: &Palette, id: &'static str, icon: L, title: &str, desc: Option<&s
 pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, scroll: &ScrollHandle) -> AnyElement {
     use gpui_kit::component::input::{Input, InputState};
     let page = ui(cx).page;
+    let ext_ui_ix = ui(cx).ext_ix;
     PAGE_SCROLL.with(|h| *h.borrow_mut() = Some(scroll.clone()));
     let s = cx.global::<Settings>().clone();
     // the first-run setup fills the pane: no list of pages, no search
@@ -592,6 +601,36 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
                 }),
         );
     }
+    // the sections extensions registered, after leaf's own pages
+    for (k, (ext_ix, label, icon)) in crate::ext::settings_entries().into_iter().enumerate() {
+        let on = page == Page::Ext && ext_ui_ix == ext_ix;
+        let tip: SharedString = label.clone().into();
+        nav = nav.child(
+            h_flex()
+                .id(("set-nav-ext", k))
+                .h(px(36.))
+                .when(!strip, |d| d.px_3())
+                .when(strip, |d| d.justify_center().tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)))
+                .gap_3()
+                .items_center()
+                .relative()
+                .rounded(theme::RADIUS_SM)
+                .text_sm()
+                .when(on, |d| d.bg(p.selection).child(theme::selection_pill(p)))
+                .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+                .child(Icon::new(icon).size(px(16.)).text_color(if on { p.accent } else { p.text_secondary }))
+                .when(!strip, |d| d.child(label.clone()))
+                .on_click({
+                    let search = search.clone();
+                    move |_, window, cx| {
+                        open_page(Page::Ext, cx);
+                        ui(cx).ext_ix = ext_ix;
+                        search.update(cx, |s, cx| s.set_value("", window, cx));
+                        window.refresh();
+                    }
+                }),
+        );
+    }
     // (Nearby's page on screen shows this PC to everyone while it is: `nearby::page_seen`)
     if query.is_empty() && page == Page::Nearby {
         crate::nearby::page_seen(window.window_handle(), cx);
@@ -600,7 +639,11 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
         crate::whats_new_page::seen(&s, cx);
     }
     let (title, body): (String, Vec<AnyElement>) = if query.is_empty() {
-        (PAGES.iter().find(|x| x.0 == page).map(|x| page_title(x.0, crate::i18n::t(x.2))).unwrap_or_default(), build_page(page, p, &s, cx))
+        let title = match page {
+            Page::Ext => crate::ext::settings_entries().into_iter().find(|e| e.0 == ext_ui_ix).map(|e| e.1).unwrap_or_default(),
+            _ => PAGES.iter().find(|x| x.0 == page).map(|x| page_title(x.0, crate::i18n::t(x.2))).unwrap_or_default(),
+        };
+        (title, build_page(page, p, &s, cx))
     } else {
         let found = matching(collect(p, &s, cx), &query);
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -1994,7 +2037,7 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         },
         cx,
     ));
-    let home_on: Vec<&'static str> = crate::home::layout(s).iter().map(|&(i, _)| crate::home::WIDGETS[i].id).collect();
+    let home_on: Vec<&'static str> = crate::home::layout(s).iter().map(|&(i, _)| crate::home::widget(i).id).collect();
     v.push(expander(
         "home-sections",
         p,
@@ -2003,8 +2046,8 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         Some(t!("Sizes and order: Customize on the Home page")),
         None,
         move || {
-            let mut rows: Vec<AnyElement> = crate::home::WIDGETS
-                .iter()
+            let mut rows: Vec<AnyElement> = (0..crate::home::count())
+                .map(crate::home::widget)
                 .map(|w| {
                     let (id, on) = (w.id, home_on.contains(&w.id));
                     sub(&pp, crate::i18n::t(w.title), None, switch(SharedString::from(format!("hm-{id}")), &pp, on, move |_, cx| settings::update(cx, |s| crate::home::set_shown(s, id, !on))))

@@ -193,6 +193,10 @@ pub enum MenuTarget {
     Folders,
     /// The menu of the empty space of a folder.
     Background,
+    /// The menu of a sidebar row of a folder (`selection` holds its path).
+    SidebarRow,
+    /// The menu of a tab (`dir` holds the tab's folder when it shows one).
+    Tab,
 }
 
 /// What a command or menu entry is run on: the folder shown and the selected items of the active tab.
@@ -342,11 +346,49 @@ pub struct RowInfo {
     pub selected: bool,
 }
 
-/// A pane docked at the right side of the workspace, like the preview pane.
+/// A pane docked at the right side of the workspace, like the preview pane, or (`left`) a block of `width` x height under the
+/// sidebar's own groups.
 pub struct SidePane {
     pub title: String,
+    /// The width of a right pane; the height of a left one.
     pub width: f32,
+    pub left: bool,
     pub render: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+}
+
+/// The size a Home widget is drawn in (the user picks it in Customize mode).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidgetSize {
+    Small,
+    Medium,
+    Wide,
+    Large,
+}
+
+type WidgetBody = Rc<dyn Fn(&mut App, WidgetSize, f32) -> Option<AnyElement>>;
+
+struct HomeWidgetReg {
+    id: String,
+    title: String,
+    icon: IconName,
+    sizes: Vec<WidgetSize>,
+    rows: u16,
+    body: WidgetBody,
+}
+
+/// A full page with its own tab title and icon (like Settings or Storage usage).
+struct PageReg {
+    id: String,
+    title: String,
+    icon: IconName,
+    render: Layer,
+}
+
+/// A section with its own entry in the list of Settings.
+struct SettingsReg {
+    title: String,
+    icon: IconName,
+    body: Rc<dyn Fn(&mut App) -> Vec<AnyElement>>,
 }
 
 /// The colours of the app's theme, read only.
@@ -408,7 +450,10 @@ pub struct Registrar {
     status: Vec<(Side, Rc<dyn Fn(&mut App) -> Option<AnyElement>>)>,
     title: Vec<(f32, Rc<dyn Fn(&mut App) -> Option<AnyElement>>)>,
     groups: Vec<(String, Rc<dyn Fn(&mut App) -> Vec<SidebarRow>>)>,
-    pane: Option<SidePane>,
+    panes: Vec<SidePane>,
+    pages: Vec<PageReg>,
+    widgets: Vec<HomeWidgetReg>,
+    settings: Option<SettingsReg>,
     commands: Vec<Command>,
     menus: Vec<(MenuTarget, Command)>,
     name_hook: Option<Rc<dyn Fn(&Path) -> Option<String>>>,
@@ -464,9 +509,38 @@ impl Registrar {
     pub fn sidebar_group(&mut self, title: &str, rows: impl Fn(&mut App) -> Vec<SidebarRow> + 'static) {
         self.groups.push((title.to_string(), Rc::new(rows)));
     }
-    /// A pane docked at the right of the workspace. It is shown after the command "Show/hide <title>" (added for it) is run.
+    /// A pane docked at the right of the workspace. It is shown after the command "Show or hide <title>" (added for it) is run. An
+    /// extension may register several; they can be open together.
     pub fn side_pane(&mut self, title: &str, width: f32, render: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
-        self.pane = Some(SidePane { title: title.to_string(), width: width.clamp(160., 640.), render: Rc::new(render) });
+        self.panes.push(SidePane { title: title.to_string(), width: width.clamp(160., 640.), left: false, render: Rc::new(render) });
+    }
+    /// A pane docked at the left: a block of `height` (60 to 600 pixels) under the sidebar's own groups, as wide as the sidebar (not
+    /// shown while the sidebar is a narrow rail). Toggled by "Show or hide <title>" like the right panes.
+    pub fn side_pane_left(&mut self, title: &str, height: f32, render: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
+        self.panes.push(SidePane { title: title.to_string(), width: height.clamp(60., 600.), left: true, render: Rc::new(render) });
+    }
+    /// A full page with its own tab title and icon, opened by a command ("Open <title>" in the command search) or by
+    /// [`open_page`]. `id` is unique inside the extension. The page fills the content area; leaf's own dialogs and menus come above it.
+    pub fn page(&mut self, id: &str, title: &str, icon: IconName, render: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
+        self.pages.push(PageReg { id: id.to_string(), title: title.to_string(), icon, render: Rc::new(render) });
+    }
+    /// A widget of the Home page, in the same table as leaf's own: it can be hidden, shown, moved and resized in Customize mode
+    /// (and has a switch in Settings > Files and folders > Home page widgets). `body` gets the size and the usable width and may
+    /// return `None` to show nothing for now. Off by default: the user adds it.
+    pub fn home_widget(
+        &mut self,
+        id: &str,
+        title: &str,
+        icon: IconName,
+        sizes: &[WidgetSize],
+        rows: u16,
+        body: impl Fn(&mut App, WidgetSize, f32) -> Option<AnyElement> + 'static,
+    ) {
+        self.widgets.push(HomeWidgetReg { id: id.to_string(), title: title.to_string(), icon, sizes: sizes.to_vec(), rows: rows.clamp(1, 6), body: Rc::new(body) });
+    }
+    /// A section with its own entry in the list of Settings (not only a part of About).
+    pub fn settings_section(&mut self, title: &str, icon: IconName, body: impl Fn(&mut App) -> Vec<AnyElement> + 'static) {
+        self.settings = Some(SettingsReg { title: title.to_string(), icon, body: Rc::new(body) });
     }
     /// A command in the command search, with its optional key.
     pub fn command(&mut self, c: Command) {
@@ -519,7 +593,8 @@ struct Entry {
 
 struct Registry {
     list: Vec<Entry>,
-    pane_open: Cell<Option<usize>>,
+    /// The docked panes that are open: (extension, pane).
+    panes_open: RefCell<Vec<(usize, usize)>>,
     scene: RefCell<Option<Scene>>,
     scene_gen: Cell<u64>,
     frames: RefCell<Vec<String>>,
@@ -568,6 +643,41 @@ fn guard<R>(who: &str, f: impl FnOnce() -> R) -> Option<R> {
 }
 
 impl Registry {
+    fn new(list: Vec<Entry>) -> Self {
+        Self { list, panes_open: RefCell::new(Vec::new()), scene: RefCell::new(None), scene_gen: Cell::new(0), frames: RefCell::new(Vec::new()) }
+    }
+    /// The Home widget table rows of all extensions (ids are `ext:<extension>/<widget>`; the strings live as long as the program).
+    fn home_widgets(&self) -> Vec<crate::home::Widget> {
+        let mut out = Vec::new();
+        for e in &self.list {
+            for w in &e.r.widgets {
+                let sizes: Vec<crate::home::Size> = w
+                    .sizes
+                    .iter()
+                    .map(|z| match z {
+                        WidgetSize::Small => crate::home::Size::Small,
+                        WidgetSize::Medium => crate::home::Size::Medium,
+                        WidgetSize::Wide => crate::home::Size::Wide,
+                        WidgetSize::Large => crate::home::Size::Large,
+                    })
+                    .collect();
+                let sizes: &'static [crate::home::Size] = Box::leak(if sizes.is_empty() { vec![crate::home::Size::Medium] } else { sizes }.into_boxed_slice());
+                out.push(crate::home::Widget {
+                    id: Box::leak(format!("ext:{}/{}", e.id, w.id).into_boxed_str()),
+                    title: Box::leak(w.title.clone().into_boxed_str()),
+                    icon: w.icon,
+                    sizes,
+                    default_size: sizes[0],
+                    rows: w.rows,
+                    folder: false,
+                    render: crate::home::ext_widget,
+                    header: None,
+                    since: "",
+                });
+            }
+        }
+        out
+    }
     fn on(&self) -> impl Iterator<Item = (usize, &Entry)> {
         self.list.iter().enumerate().filter(|(_, e)| !e.off.get())
     }
@@ -584,8 +694,9 @@ pub(crate) fn install(ext: Extensions, cx: &mut App) {
     if ext.list.is_empty() {
         return;
     }
-    let reg = Rc::new(Registry { list: ext.list, pane_open: Cell::new(None), scene: RefCell::new(None), scene_gen: Cell::new(0), frames: RefCell::new(Vec::new()) });
+    let reg = Rc::new(Registry::new(ext.list));
     reg.refresh_flags();
+    crate::home::add_ext_widgets(reg.home_widgets());
     REG.with(|r| *r.borrow_mut() = Some(reg.clone()));
     ACTIVE.store(true, Ordering::Relaxed);
     bind_keys(&reg, cx);
@@ -1259,23 +1370,41 @@ pub(crate) fn sidebar_groups(p: &crate::theme::Palette, rail: bool, cx: &mut App
     out
 }
 
-/// The docked panes that are open (at most one per extension).
+/// The right panes that are open, in the order they were opened.
 pub(crate) fn side_panes(p: &crate::theme::Palette, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
     let Some(reg) = registry() else { return Vec::new() };
-    let Some(open) = reg.pane_open.get() else { return Vec::new() };
-    let Some(e) = reg.list.get(open).filter(|e| !e.off.get()) else { return Vec::new() };
-    let Some(pane) = &e.r.pane else { return Vec::new() };
-    let Some(el) = guard(&e.id, || (pane.render)(window, cx)) else { return Vec::new() };
-    vec![
-        crate::theme::sheet(p, p.content_bg)
-            .w(px(pane.width))
-            .flex_shrink_0()
-            .h_full()
-            .overflow_hidden()
-            .when(p.gap <= 0., |d| d.border_l_1().border_color(p.sheet_border))
-            .child(el)
-            .into_any_element(),
-    ]
+    let open = reg.panes_open.borrow().clone();
+    let mut out = Vec::new();
+    for (ei, pi) in open {
+        let Some(e) = reg.list.get(ei).filter(|e| !e.off.get()) else { continue };
+        let Some(pane) = e.r.panes.get(pi).filter(|p| !p.left) else { continue };
+        let Some(el) = guard(&e.id, || (pane.render)(window, cx)) else { continue };
+        out.push(
+            crate::theme::sheet(p, p.content_bg)
+                .w(px(pane.width))
+                .flex_shrink_0()
+                .h_full()
+                .overflow_hidden()
+                .when(p.gap <= 0., |d| d.border_l_1().border_color(p.sheet_border))
+                .child(el)
+                .into_any_element(),
+        );
+    }
+    out
+}
+
+/// The left panes that are open: blocks under the sidebar's groups.
+pub(crate) fn left_panes(p: &crate::theme::Palette, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
+    let Some(reg) = registry() else { return Vec::new() };
+    let open = reg.panes_open.borrow().clone();
+    let mut out = Vec::new();
+    for (ei, pi) in open {
+        let Some(e) = reg.list.get(ei).filter(|e| !e.off.get()) else { continue };
+        let Some(pane) = e.r.panes.get(pi).filter(|p| p.left) else { continue };
+        let Some(el) = guard(&e.id, || (pane.render)(window, cx)) else { continue };
+        out.push(div().flex_shrink_0().w_full().h(px(pane.width)).mt_2().overflow_hidden().border_t_1().border_color(p.divider).child(el).into_any_element());
+    }
+    out
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- scene
@@ -1373,29 +1502,100 @@ pub(crate) fn palette_commands() -> Vec<(String, String, IconName, String)> {
         for c in &e.r.commands {
             out.push((full_id(&e.id, &c.id), c.title.clone(), c.icon, c.keys.clone().unwrap_or_default()));
         }
-        if let Some(p) = &e.r.pane {
-            out.push((full_id(&e.id, "pane"), format!("{} {}", crate::t!("Show or hide"), p.title), IconName::PanelRight, String::new()));
+        for (i, p) in e.r.panes.iter().enumerate() {
+            out.push((full_id(&e.id, &format!("pane:{i}")), format!("{} {}", crate::t!("Show or hide"), p.title), if p.left { IconName::PanelLeft } else { IconName::PanelRight }, String::new()));
+        }
+        for pg in &e.r.pages {
+            out.push((full_id(&e.id, &format!("page:{}", pg.id)), format!("{} {}", crate::t!("Open"), pg.title), pg.icon, String::new()));
         }
     }
     out
 }
 
-pub(crate) fn run_command(id: &str, ctx: &CmdCtx, cx: &mut App) {
-    let Some(reg) = registry() else { return };
+/// Runs a command by its full id. A page command answers with the place to open (the caller opens it in a tab).
+pub(crate) fn run_command(id: &str, ctx: &CmdCtx, cx: &mut App) -> Option<rf_core::Location> {
+    let reg = registry()?;
     for (ix, e) in reg.on() {
         let Some(rest) = id.strip_prefix(e.id.as_str()).and_then(|r| r.strip_prefix('/')) else { continue };
-        if rest == "pane" && e.r.pane.is_some() {
-            reg.pane_open.set(if reg.pane_open.get() == Some(ix) { None } else { Some(ix) });
+        if let Some(pi) = rest.strip_prefix("pane:").and_then(|n| n.parse::<usize>().ok())
+            && pi < e.r.panes.len()
+        {
+            let mut open = reg.panes_open.borrow_mut();
+            match open.iter().position(|&x| x == (ix, pi)) {
+                Some(at) => {
+                    open.remove(at);
+                }
+                None => open.push((ix, pi)),
+            }
+            drop(open);
             cx.refresh_windows();
-            return;
+            return None;
+        }
+        if let Some(pg) = rest.strip_prefix("page:").and_then(|n| e.r.pages.iter().find(|p| p.id == n)) {
+            return Some(rf_core::Location::Ext { ext: e.id.clone(), page: pg.id.clone(), title: pg.title.clone() });
         }
         if let Some(c) = e.r.commands.iter().find(|c| c.id == rest) {
             let run = c.run.clone();
             guard(&e.id, || run(ctx, cx));
             cx.refresh_windows();
         }
-        return;
+        return None;
     }
+    None
+}
+
+/// Opens page `page` of extension `ext_id` in a tab of the active window (the page registered with [`Registrar::page`]).
+pub fn open_page(ext_id: &str, page: &str, cx: &mut App) {
+    let Some(win) = cx.active_window() else { return };
+    let action = RunExtCommand { id: full_id(&sanitize(ext_id), &format!("page:{page}")) };
+    let _ = win.update(cx, |_, window, cx| window.dispatch_action(Box::new(action), cx));
+}
+
+/// The body of an extension's page, for the view that shows the place `Location::Ext`.
+pub(crate) fn page_element(ext: &str, page: &str, window: &mut Window, cx: &mut App) -> AnyElement {
+    let missing = || div().p_6().text_sm().text_color(theme().text_secondary).child(crate::t!("This page is not available (its extension is off).")).into_any_element();
+    let Some(reg) = registry() else { return missing() };
+    let Some(e) = reg.on().map(|(_, e)| e).find(|e| e.id == ext) else { return missing() };
+    let Some(pg) = e.r.pages.iter().find(|p| p.id == page) else { return missing() };
+    let render = pg.render.clone();
+    guard(&e.id, || render(window, cx)).unwrap_or_else(missing)
+}
+
+/// The icon of an extension page's tab.
+pub(crate) fn page_icon(ext: &str, page: &str) -> IconName {
+    registry().and_then(|r| r.list.iter().find(|e| e.id == ext).and_then(|e| e.r.pages.iter().find(|p| p.id == page).map(|p| p.icon))).unwrap_or(IconName::Puzzle)
+}
+
+/// A Home widget's body: its id is `ext:<extension>/<widget>`.
+pub(crate) fn home_widget_body(id: &str, size: crate::home::Size, width: f32, cx: &mut App) -> Option<AnyElement> {
+    let reg = registry()?;
+    let rest = id.strip_prefix("ext:")?;
+    let (eid, wid) = rest.split_once('/')?;
+    let e = reg.on().map(|(_, e)| e).find(|e| e.id == eid)?;
+    let w = e.r.widgets.iter().find(|w| w.id == wid)?;
+    let size = match size {
+        crate::home::Size::Small => WidgetSize::Small,
+        crate::home::Size::Medium => WidgetSize::Medium,
+        crate::home::Size::Wide => WidgetSize::Wide,
+        crate::home::Size::Large => WidgetSize::Large,
+    };
+    let body = w.body.clone();
+    guard(&e.id, || body(cx, size, width)).flatten()
+}
+
+/// The extensions' settings sections: `(extension index, title, icon)` for the list of Settings (switched-off ones left out).
+pub(crate) fn settings_entries() -> Vec<(usize, String, IconName)> {
+    let Some(reg) = registry() else { return Vec::new() };
+    reg.on().filter_map(|(ix, e)| e.r.settings.as_ref().map(|s| (ix, s.title.clone(), s.icon))).collect()
+}
+
+/// The cards of settings section `ix`.
+pub(crate) fn settings_body(ix: usize, cx: &mut App) -> Vec<AnyElement> {
+    let Some(reg) = registry() else { return Vec::new() };
+    let Some(e) = reg.list.get(ix).filter(|e| !e.off.get()) else { return Vec::new() };
+    let Some(s) = &e.r.settings else { return Vec::new() };
+    let body = s.body.clone();
+    guard(&e.id, || body(cx)).unwrap_or_default()
 }
 
 /// Adds the extension entries to a right-click menu about to be shown.
@@ -1578,8 +1778,8 @@ pub(crate) fn about_rows(p: &crate::theme::Palette, cx: &mut App) -> Vec<AnyElem
                 e.off.set(!e.off.get());
             }
             r2.refresh_flags();
-            if r2.pane_open.get() == Some(ix) && r2.list[ix].off.get() {
-                r2.pane_open.set(None);
+            if r2.list[ix].off.get() {
+                r2.panes_open.borrow_mut().retain(|(e, _)| *e != ix);
             }
             cx.refresh_windows();
         });
@@ -1690,7 +1890,7 @@ mod tests {
     fn display_name_hook_changes_only_what_is_shown() {
         let mut ext = Extensions::new();
         ext = ext.add("t", "T", |e| e.display_name(|p| p.file_name().map(|n| format!("shown {}", n.to_string_lossy()))));
-        let reg = Rc::new(Registry { list: ext.list, pane_open: Cell::new(None), scene: RefCell::new(None), scene_gen: Cell::new(0), frames: RefCell::new(Vec::new()) });
+        let reg = Rc::new(Registry::new(ext.list));
         reg.refresh_flags();
         REG.with(|r| *r.borrow_mut() = Some(reg.clone()));
         ACTIVE.store(true, Ordering::Relaxed);

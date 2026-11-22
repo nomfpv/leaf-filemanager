@@ -946,6 +946,7 @@ impl FolderView {
             Location::Downloads => L::ArrowDownToLine,
             Location::SyncJobs => L::FolderSync,
             Location::Agents => L::Brain,
+            Location::Ext { ext, page, .. } => crate::ext::page_icon(ext, page),
             Location::Remote(_) => L::Server,
             Location::Path(p) if leaf_sys::network::server_root(p).is_some() => L::Server,
             // the archive itself or a folder inside it (name check only: no disk access here, not even for a `.001` name)
@@ -6505,6 +6506,7 @@ impl Render for FolderView {
                 };
                 div().size_full().child(sv).into_any_element()
             }
+            Location::Ext { ext, page, .. } => div().size_full().overflow_hidden().child(crate::ext::page_element(ext, page, window, cx)).into_any_element(),
             Location::RecycleBin => {
                 let rv = match &self.recycle {
                     Some(rv) => rv.clone(),

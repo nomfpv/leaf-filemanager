@@ -1689,7 +1689,12 @@ impl Workspace {
             items.push(Item::sub(t!("Open session"), MenuIcon::Lucide(L::FolderOpen), open));
             items.push(Item::sub(t!("Delete session"), MenuIcon::Lucide(L::Trash), remove));
         }
-        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+        let mut menu = Menu { quick: Vec::new(), items };
+        if crate::ext::active() {
+            let dir = self.tabs.get(ix).and_then(|t| t.view().read(cx).location().path().map(Path::to_path_buf));
+            crate::ext::extend_menu(&mut menu, crate::ext::MenuTarget::Tab, &crate::ext::CmdCtx { dir, selection: Vec::new() });
+        }
+        crate::fluent_menu::show(menu, window.mouse_position(), window, cx);
     }
 
     /// Breadcrumb chevron: pick a subfolder of `dir` (or a drive when `dir` is None).
@@ -3130,7 +3135,12 @@ impl Workspace {
                 ),
             ]
         };
-        let menu = crate::fluent_menu::show(Menu { quick, items }, at, window, cx);
+        let mut menu_data = Menu { quick, items };
+        if crate::ext::active() {
+            let ctx = crate::ext::CmdCtx { dir: path.parent().map(Path::to_path_buf), selection: vec![path.clone()] };
+            crate::ext::extend_menu(&mut menu_data, crate::ext::MenuTarget::SidebarRow, &ctx);
+        }
+        let menu = crate::fluent_menu::show(menu_data, at, window, cx);
         let view = self.active_tab().downgrade();
         crate::ctx_menu::load_shell_more(menu.downgrade(), leaf_sys::ctxmenu::ShellTarget::One(path), view, cx);
     }
@@ -4423,7 +4433,7 @@ impl Workspace {
             })
     }
 
-    fn render_sidebar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_sidebar(&mut self, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let cur = self.active_tab().read(cx).location().clone();
         let places = self.places.read(cx);
         let pinned = places.pinned.clone();
@@ -4764,6 +4774,12 @@ impl Workspace {
         }
         for group in crate::ext::sidebar_groups(p, rail, cx) {
             col = col.child(group);
+        }
+        // panes an extension docks at the left, under the groups (not in the narrow rail)
+        if !rail {
+            for pane in crate::ext::left_panes(p, window, cx) {
+                col = col.child(pane);
+            }
         }
         let settings = self.sidebar_item(
             "sb-settings".into(),
@@ -5959,7 +5975,7 @@ impl Render for Workspace {
         self.sidebar_lens = glass_on && !self.sidebar_rail;
         self.sidebar_lens_claimed.set(false);
         self.ensure_side_tree(window, cx);
-        let sidebar = show_sidebar.then(|| self.render_sidebar(&p, cx));
+        let sidebar = show_sidebar.then(|| self.render_sidebar(&p, window, cx));
         self.sidebar_lens = false;
         let plan = crate::glass::lens_plan(
             glass_on,
@@ -6007,7 +6023,7 @@ impl Render for Workspace {
         let peek = (peek_wanted || self.rail_peek_closing).then(|| {
             self.sidebar_rail = false;
             self.set_tree_peek(true);
-            let full = self.render_sidebar(&p, cx);
+            let full = self.render_sidebar(&p, window, cx);
             self.set_tree_peek(false);
             self.sidebar_rail = true;
             let (full_w, opening, serial) = (self.sidebar_w, peek_wanted, self.rail_peek_serial);
@@ -6630,10 +6646,12 @@ impl Render for Workspace {
                     cx.stop_propagation();
                 }
             }))
-            .on_action(cx.listener(|this, a: &crate::ext::RunExtCommand, _, cx| {
+            .on_action(cx.listener(|this, a: &crate::ext::RunExtCommand, window, cx| {
                 let v = this.active_tab().read(cx);
                 let ctx = crate::ext::CmdCtx { dir: v.current_dir(), selection: v.selection_paths() };
-                crate::ext::run_command(&a.id, &ctx, cx);
+                if let Some(loc) = crate::ext::run_command(&a.id, &ctx, cx) {
+                    this.open_tab(loc, window, cx);
+                }
             }))
             .children(backdrop_layers)
             .children(ext_under)

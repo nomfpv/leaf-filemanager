@@ -111,6 +111,8 @@ pub struct WidgetCx {
     pub size: Size,
     /// The width inside the widget's padding.
     pub width: f32,
+    /// The widget's id (for the one render function an extension's widgets share).
+    pub id: &'static str,
 }
 
 /// Draws a widget's body; `None`: nothing to show right now (no devices plugged in): the widget is left out of the page outside
@@ -257,15 +259,42 @@ pub const DEFAULT: &[&str] = &["pinned", "drives", "devices", "network", "hosts"
 /// The keys of the old hide list (`Settings::home_hidden`) and the widgets they were.
 const OLD_KEYS: &[(&str, &str)] = &[("quick", "pinned"), ("drives", "drives"), ("devices", "devices"), ("network", "network"), ("tags", "tags"), ("recent", "recent")];
 
-/// A widget of the layout: its row in [`WIDGETS`] and its size.
+/// The widgets an extension registered, after the table's own (set once at start).
+static EXT_WIDGETS: std::sync::OnceLock<Vec<Widget>> = std::sync::OnceLock::new();
+
+/// The one render function the extensions' widgets share: it finds the widget by its id.
+pub(crate) fn ext_widget(_v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
+    crate::ext::home_widget_body(w.id, w.size, w.width, cx)
+}
+
+/// Adds the extensions' widgets (called once by `ext::install`).
+pub(crate) fn add_ext_widgets(list: Vec<Widget>) {
+    let _ = EXT_WIDGETS.set(list);
+}
+
+fn ext_widgets() -> &'static [Widget] {
+    EXT_WIDGETS.get().map_or(&[], |v| v.as_slice())
+}
+
+/// How many widgets there are: the table's and the extensions'.
+pub fn count() -> usize {
+    WIDGETS.len() + ext_widgets().len()
+}
+
+/// Widget number `i` (a row of [`WIDGETS`], then the extensions').
+pub fn widget(i: usize) -> &'static Widget {
+    WIDGETS.get(i).unwrap_or_else(|| &ext_widgets()[i - WIDGETS.len()])
+}
+
+/// A widget of the layout: its index (see [`widget`]) and its size.
 pub type Placed = (usize, Size);
 
 fn index(id: &str) -> Option<usize> {
-    WIDGETS.iter().position(|w| w.id == id)
+    (0..count()).find(|&i| widget(i).id == id)
 }
 
 pub fn default_layout() -> Vec<Placed> {
-    DEFAULT.iter().filter_map(|id| index(id)).map(|i| (i, WIDGETS[i].default_size)).collect()
+    DEFAULT.iter().filter_map(|id| index(id)).map(|i| (i, widget(i).default_size)).collect()
 }
 
 /// The layout the settings hold, made sense of: unknown widgets and repeats are skipped, a size the widget cannot take becomes its
@@ -279,7 +308,7 @@ pub fn resolve(saved: Option<&[Slot]>) -> Vec<Placed> {
         if out.iter().any(|(j, _)| *j == i) {
             continue;
         }
-        let w = &WIDGETS[i];
+        let w = widget(i);
         let size = Size::parse(slot.size.trim()).filter(|z| w.sizes.contains(z)).unwrap_or(w.default_size);
         out.push((i, size));
     }
@@ -290,13 +319,13 @@ pub fn resolve(saved: Option<&[Slot]>) -> Vec<Placed> {
 }
 
 fn to_slots(layout: &[Placed]) -> Vec<Slot> {
-    layout.iter().map(|&(i, z)| Slot { id: WIDGETS[i].id.to_string(), size: z.key().to_string(), folder: String::new() }).collect()
+    layout.iter().map(|&(i, z)| Slot { id: widget(i).id.to_string(), size: z.key().to_string(), folder: String::new() }).collect()
 }
 
 /// The layout the old hide list described: the default set without the hidden sections.
 pub fn from_hidden(hidden: &[String]) -> Vec<Slot> {
     let gone = |id: &str| OLD_KEYS.iter().any(|(old, new)| *new == id && hidden.iter().any(|h| h == old));
-    to_slots(&default_layout().into_iter().filter(|&(i, _)| !gone(WIDGETS[i].id)).collect::<Vec<_>>())
+    to_slots(&default_layout().into_iter().filter(|&(i, _)| !gone(widget(i).id)).collect::<Vec<_>>())
 }
 
 /// Moves the old hide list into the layout, once (called by `Settings::migrate`).
@@ -353,7 +382,7 @@ pub fn set_shown(s: &mut Settings, id: &str, on: bool) {
     edit(s, |l| {
         l.retain(|(j, _)| *j != i);
         if on {
-            l.push((i, WIDGETS[i].default_size));
+            l.push((i, widget(i).default_size));
         }
     });
 }
@@ -425,7 +454,7 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
     let mut grid = div().grid().grid_cols(cols).gap(px(gap)).w_full().when(ruled, |d| d.border_t_1().border_l_1().border_color(p.border));
     let mut shown = 0;
     for (pos, &(i, size)) in placed.iter().enumerate() {
-        let w = &WIDGETS[i];
+        let w = widget(i);
         // (a widget of a module that is off is not drawn and computes nothing; its place in the layout is kept)
         if crate::modules::of_widget(w.id).is_some_and(|m| !crate::modules::enabled(cx, m)) {
             continue;
@@ -435,7 +464,7 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
         let rows = size.rows(w.rows);
         // (tile widgets grow to hold every tile: a row of drives or tags is never cut off by the fixed row unit)
         let card_h = (f32::from(rows) * p.home_row + f32::from(rows - 1) * gap).max(tiles_height(w.id, width, v, cx));
-        let body = (w.render)(v, &WidgetCx { p, size, width }, cx);
+        let body = (w.render)(v, &WidgetCx { p, size, width, id: w.id }, cx);
         if body.is_none() && !editing {
             continue;
         }
@@ -482,8 +511,8 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
             }),
         ));
 
-    let missing: Vec<usize> = (0..WIDGETS.len())
-        .filter(|i| !placed.iter().any(|(j, _)| j == i) && crate::modules::of_widget(WIDGETS[*i].id).is_none_or(|m| crate::modules::enabled(cx, m)))
+    let missing: Vec<usize> = (0..count())
+        .filter(|i| !placed.iter().any(|(j, _)| j == i) && crate::modules::of_widget(widget(*i).id).is_none_or(|m| crate::modules::enabled(cx, m)))
         .collect();
     let adder = editing.then(|| {
         let mut row = h_flex().flex_wrap().gap_2().items_center().child(div().text_sm().text_color(p.text_secondary).child(t!("Add a widget:")));
@@ -491,11 +520,11 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
             row = row.child(div().text_sm().text_color(p.text_tertiary).child(t!("every widget is on the page")));
         }
         for i in missing {
-            let id = WIDGETS[i].id;
+            let id = widget(i).id;
             row = row.child(home_button(
                 SharedString::from(format!("home-add-{id}")),
                 L::Plus,
-                crate::i18n::t(WIDGETS[i].title),
+                crate::i18n::t(widget(i).title),
                 &p,
                 cx.listener(move |_, _, _, cx| crate::settings::update(cx, |s| set_shown(s, id, true))),
             ));
@@ -546,7 +575,7 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
 
 /// Size, move and remove, in a widget's heading in Customize mode.
 fn edit_controls(pos: usize, len: usize, i: usize, size: Size, p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
-    let w = &WIDGETS[i];
+    let w = widget(i);
     let mut row = h_flex().gap_1().items_center();
     if w.sizes.len() > 1 {
         for &z in w.sizes {
@@ -640,7 +669,7 @@ fn edit_controls(pos: usize, len: usize, i: usize, size: Size, p: &Palette, cx: 
         .on_key_down(keys)
         .child(icon_btn("earlier", L::ArrowLeft, "Move earlier", pos > 0).when(pos > 0, |d| d.on_click(cx.listener(shift(-1)))))
         .child(icon_btn("later", L::ArrowRight, "Move later", pos + 1 < len).when(pos + 1 < len, |d| d.on_click(cx.listener(shift(1)))))
-        .child(icon_btn("remove", L::X, "Remove from Home", true).on_click(cx.listener(move |_, _, _, cx| crate::settings::update(cx, |s| set_shown(s, WIDGETS[i].id, false)))))
+        .child(icon_btn("remove", L::X, "Remove from Home", true).on_click(cx.listener(move |_, _, _, cx| crate::settings::update(cx, |s| set_shown(s, widget(i).id, false)))))
         .into_any_element()
 }
 
@@ -678,10 +707,10 @@ fn home_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{Placed, Settings, Size, WIDGETS, default_layout, edit, layout, move_by, reset, set_shown};
+    use super::{Placed, Settings, Size, default_layout, widget, edit, layout, move_by, reset, set_shown};
 
     fn ids(l: &[Placed]) -> Vec<(&'static str, &'static str)> {
-        l.iter().map(|&(i, z)| (WIDGETS[i].id, z.key())).collect()
+        l.iter().map(|&(i, z)| (widget(i).id, z.key())).collect()
     }
 
     #[test]
@@ -701,7 +730,7 @@ mod tests {
         // a layout saved and read again is the same layout
         let mut s = Settings::parse_migrated("").unwrap();
         edit(&mut s, |l| {
-            l.retain(|(i, _)| WIDGETS[*i].id != "network");
+            l.retain(|(i, _)| widget(*i).id != "network");
             let second = l[1].0;
             move_by(l, second, -1);
             l[0].1 = Size::Medium;
