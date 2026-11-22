@@ -30,6 +30,7 @@ mod agents;
 mod agents_view;
 mod session_view;
 mod lanes;
+mod agent_rules;
 mod brain_view;
 mod mockup_demo;
 mod context_copy;

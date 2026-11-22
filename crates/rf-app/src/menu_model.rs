@@ -148,6 +148,8 @@ pub enum Slot {
     Pin,
     CopyPath,
     CopyAsContext,
+    ProtectFromAgents,
+    AllowAgentsHere,
     DiskUsage,
     FindDuplicates,
     FindBuildJunk,

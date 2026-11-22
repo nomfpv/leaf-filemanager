@@ -111,6 +111,8 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
         Slot::PasteShortcut => Item::action(label, ic, act(me, |v, w, cx| v.paste_shortcuts(w, cx))).enabled(leaf_sys::clipboard::has_files()),
         Slot::Pin => Item::action(label, ic, act(me, move |v, _, cx| v.pin(d.clone(), cx))),
         Slot::CopyPath => Item::action(label, ic, act(me, |v, _, cx| v.copy_path(cx))),
+        Slot::ProtectFromAgents => Item::action(label, ic, act(me, |v, w, cx| crate::agent_rules::change(v.selection_paths(), false, w, cx))),
+        Slot::AllowAgentsHere => Item::action(label, ic, act(me, |v, w, cx| crate::agent_rules::change(v.selection_paths(), true, w, cx))),
         Slot::CopyAsContext => Item::action(label, ic, act(me, |v, w, cx| v.copy_as_context(w, cx))),
         Slot::DiskUsage => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInNewTab(Location::DiskUsage(d.clone()))))),
         Slot::FindDuplicates => Item::action(label, ic, act(me, move |_, _, cx| cx.emit(FolderEvent::OpenInNewTab(Location::Duplicates(vec![d.clone()]))))),

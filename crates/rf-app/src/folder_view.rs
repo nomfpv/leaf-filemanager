@@ -6414,6 +6414,13 @@ impl Render for FolderView {
             .on_action(cx.listener(|this, _: &NewTextFile, _, cx| this.create_new(false, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
             .on_action(cx.listener(|this, _: &CopyAsContext, window, cx| this.copy_as_context(window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::ProtectFromAgents, window, cx| crate::agent_rules::change(this.selection_paths(), false, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::AllowAgentsHere, window, cx| crate::agent_rules::change(this.selection_paths(), true, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::ShowAgentRules, window, cx| {
+                if let Some(d) = this.selection_paths().into_iter().next().or_else(|| this.current_dir()) {
+                    crate::agent_rules::show_rules(d, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &crate::actions::SendToDevice, _, cx| crate::nearby::send_selection(this.selection_paths(), cx)))
             .on_action(cx.listener(|this, _: &crate::actions::AddToBasket, _, _| crate::basket::add(&this.selection_paths())))
             .on_action(cx.listener(|this, _: &crate::actions::RemoveFromBasket, _, _| crate::basket::remove(&this.selection_paths())))

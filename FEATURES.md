@@ -87,6 +87,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Rename | Renames the selected item. | `F2` |
 | Duplicate | Makes a copy of the selected items next to them. | `Ctrl+Alt+D` |
 | Undo | Takes back the last copy, move, rename or delete. | `Ctrl+Z` |
+| Protect from agents | Adds rules to Claude Code's settings so it may not read or change the selected items. Shows the lines and the file first, writes .claude/settings.local.json unless you choose the shared file. |  |
+| Allow agents here | Adds rules to Claude Code's settings so it may read and change the selected items without asking. Shows the lines and the file first, writes .claude/settings.local.json unless you choose the shared file. |  |
 | Open with | Opens the selected file in a program you choose. |  |
 | Properties | Shows the details of the selected items. | `Alt+Enter` |
 | Context menu | Opens the right-click menu for the selected items. | `Shift+F10`, `Menu` |
@@ -182,6 +184,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | New lane | Starts a lane for one piece of work in the git repository this folder is in: a new worktree beside the repository on a new branch from the current head (or a base you choose), opened in a new tab, with a coding agent started in a terminal there if you pick one. Needs the agent layer on (Settings). |  |
 | End lane | Ends the lane this folder is in, after showing its commits and uncommitted files: review its changes, merge it into its base branch (only when both folders are clean and nothing conflicts), remove its worktree (refused while it has work that is not merged), or discard it to the Trash. |  |
 | Organize folder | Sorts the folder's files into folders by kind. |  |
+| Agent rules | Lists the permission rules Claude Code reads for this project (allow, ask, deny; user, project and local file) and removes the ones you tick. |  |
 
 ## The viewer (Space)
 

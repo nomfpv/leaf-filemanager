@@ -343,7 +343,7 @@ pub fn of_command(id: &str) -> Option<Module> {
         "VpnConnect" | "VpnDisconnect" => Module::Vpn,
         "ShowChanges" | "Checkpoint" | "ShowCheckpoints" | "ShowWorktrees" | "NewWorktree" | "FindBuildJunk" | "CopyAsContext" | "CopyBasketAsContext"
         | "CopyBasketAsMentions" | "ShowProjectBrain" | "OpenDocker" | "ToggleHideIgnored" => Module::Dev,
-        "ReviewChanges" | "ShowAgents" | "NewLane" | "EndLane" => Module::Agents,
+        "ReviewChanges" | "ShowAgents" | "NewLane" | "EndLane" | "ShowAgentRules" | "ProtectFromAgents" | "AllowAgentsHere" => Module::Agents,
         "ConvertToVideo" | "MountImage" | "EjectImage" | "MountDiscs" => Module::Media,
         _ => return None,
     })
@@ -356,6 +356,7 @@ pub fn of_slot(slot: Slot) -> Option<Module> {
         Slot::ShareFolder | Slot::Nearby => Module::Shares,
         Slot::DiskUsage => Module::DiskUsage,
         Slot::CopyAsContext | Slot::FindBuildJunk | Slot::Checkpoint | Slot::Git | Slot::HideIgnored => Module::Dev,
+        Slot::ProtectFromAgents | Slot::AllowAgentsHere => Module::Agents,
         Slot::ConvertVideo | Slot::MountImage | Slot::EjectImage => Module::Media,
         _ => return None,
     })
