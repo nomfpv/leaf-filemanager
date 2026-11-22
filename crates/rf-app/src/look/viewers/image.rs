@@ -3,6 +3,7 @@
 //! düzey göstergesi, saydamlıkta damalı zemin, animasyon, EXIF katmanı, kopyala, PNG kaydet,
 //! renkleri ters çevir, koyu/açık zemin.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use leaf_sys::thumbs::Bgra;
 
 use super::zoom;
 use crate::look::viewer::{MoreItem, Prepared, Probe, ThemeChoice, Viewer};
+use gpui_kit::Modifiers;
 use crate::look::config::LookSettings;
 use crate::settings::LookImageTheme;
 use crate::t;
@@ -29,9 +31,20 @@ pub const EXTENSIONS: &[&str] = &[
 /// Tam görüntünün en uzun kenarı (GPU doku sınırının altında).
 const MAX_SIDE: u32 = 8192;
 
+/// The slideshow goes on across files: each step makes leaf show the next file (a new view), which picks the slideshow up if
+/// the step it asked for came in time.
+static RESUME_UNTIL: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+const SLIDE_EVERY: Duration = Duration::from_secs(4);
+/// How long after a step the next file may take to arrive before the slideshow gives up.
+const SLIDE_WAIT: Duration = Duration::from_secs(3);
+
 #[derive(Default)]
 pub struct ImageViewer {
     view: Option<Entity<ImageView>>,
+    /// The slideshow needs leaf's list to step through (it is not offered when look was opened from Explorer).
+    can_step: bool,
+    /// Whether the slideshow runs: the "More" menu reads it (it gets no `App`).
+    sliding: Rc<Cell<bool>>,
 }
 
 impl Viewer for ImageViewer {
@@ -49,7 +62,10 @@ impl Viewer for ImageViewer {
         let name = super::file_name(&f.path);
         let dims = leaf_sys::look::decode::dimensions(&f.path);
         let path = f.path.clone();
-        self.view = Some(cx.new(|cx| ImageView::new(path, dims, cx)));
+        self.can_step = crate::look::system::opened_from_app(cx);
+        self.sliding = Rc::new(Cell::new(false));
+        let (can_step, sliding) = (self.can_step, self.sliding.clone());
+        self.view = Some(cx.new(|cx| ImageView::new(path, dims, can_step, sliding, cx)));
         let (w, h) = dims.map_or((800.0, 600.0), |(w, h)| (w as f32, h as f32));
         let title = match dims {
             // (a design file's picture is its preview, not the design's size)
@@ -75,7 +91,9 @@ impl Viewer for ImageViewer {
             let v = v.clone();
             MoreItem { label: label.into(), action: Rc::new(move |window: &mut Window, cx: &mut App| v.update(cx, |iv, cx| f(iv, window, cx))) }
         };
-        vec![
+        let mut items = vec![
+            item(t!("Rotate right (R)"), |v, _, cx| v.rotate(true, cx)),
+            item(t!("Rotate left (Shift+R)"), |v, _, cx| v.rotate(false, cx)),
             item(t!("Copy to clipboard"), |v, _, cx| v.copy(cx)),
             item(t!("Save as PNG…"), |v, _, cx| v.save_png(cx)),
             item(t!("Invert colors"), |v, _, cx| v.toggle_invert(cx)),
@@ -92,7 +110,28 @@ impl Viewer for ImageViewer {
                 });
                 cx.notify();
             }),
-        ]
+        ];
+        if self.can_step {
+            let label = if self.sliding.get() { t!("Stop slideshow (S)") } else { t!("Slideshow (S)") };
+            items.insert(2, item(label, |v, _, cx| v.toggle_slideshow(cx)));
+        }
+        items
+    }
+    fn on_key(&mut self, key: &str, mods: &Modifiers, _window: &mut Window, cx: &mut App) -> bool {
+        let Some(view) = self.view.clone() else { return false };
+        if mods.control || mods.alt || mods.platform {
+            return false;
+        }
+        match key {
+            "r" => view.update(cx, |v, cx| v.rotate(!mods.shift, cx)),
+            "s" if !mods.shift && self.can_step => view.update(cx, |v, cx| v.toggle_slideshow(cx)),
+            // any other key ends the slideshow (an arrow then also steps, as it does outside one)
+            _ => {
+                view.update(cx, |v, cx| v.stop_slideshow(cx));
+                return false;
+            }
+        }
+        true
     }
     fn cleanup(&mut self) {
         self.view = None;
@@ -124,6 +163,17 @@ pub struct ImageView {
     label_until: Option<Instant>,
     inverted: bool,
     show_exif: bool,
+    /// Quarter turns clockwise the view should show, and how many the pixels in `frames` / `thumb` have (they are turned off
+    /// the UI thread; `inverted_frames` is the same for the colour inversion).
+    turns: u8,
+    frames_turns: u8,
+    thumb_turns: u8,
+    inverted_frames: bool,
+    working: bool,
+    slideshow: bool,
+    can_step: bool,
+    sliding: Rc<Cell<bool>>,
+    _show: Option<Task<()>>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -158,6 +208,29 @@ fn ready(d: leaf_sys::look::decode::Decoded) -> Ready {
     let delays = d.frames.iter().map(|(_, ms)| *ms).collect();
     let frames = d.frames.into_iter().filter_map(|(b, _)| render_image_owned(b)).collect();
     Ready { width: d.width, height: d.height, exif: d.exif, has_alpha, delays, frames }
+}
+
+/// The picture turned by `turns` quarter turns clockwise.
+fn turned(b: Bgra, turns: u8) -> Bgra {
+    let (w, h) = (b.width as usize, b.height as usize);
+    let turns = turns % 4;
+    if turns == 0 || w == 0 || h == 0 {
+        return b;
+    }
+    let (nw, nh) = if turns == 2 { (w, h) } else { (h, w) };
+    let mut data = vec![0u8; b.data.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = match turns {
+                1 => (h - 1 - y, x),
+                2 => (w - 1 - x, h - 1 - y),
+                _ => (y, w - 1 - x),
+            };
+            let (src, dst) = ((y * w + x) * 4, (dy * nw + dx) * 4);
+            data[dst..dst + 4].copy_from_slice(&b.data[src..src + 4]);
+        }
+    }
+    Bgra { width: nw as u32, height: nh as u32, data }
 }
 
 fn inverted(b: &Bgra) -> Bgra {
@@ -195,7 +268,7 @@ fn checker(dark: bool) -> Arc<RenderImage> {
 }
 
 impl ImageView {
-    fn new(path: PathBuf, dims: Option<(u32, u32)>, cx: &mut Context<Self>) -> Self {
+    fn new(path: PathBuf, dims: Option<(u32, u32)>, can_step: bool, sliding: Rc<Cell<bool>>, cx: &mut Context<Self>) -> Self {
         let mut v = Self {
             path: path.clone(),
             dims: dims.map(|(w, h)| (w as f32, h as f32)),
@@ -212,8 +285,22 @@ impl ImageView {
             label_until: None,
             inverted: false,
             show_exif: false,
+            turns: 0,
+            frames_turns: 0,
+            thumb_turns: 0,
+            inverted_frames: false,
+            working: false,
+            slideshow: false,
+            can_step,
+            sliding,
+            _show: None,
             _tasks: Vec::new(),
         };
+        // the slideshow's step brought us here: it goes on
+        let resume = RESUME_UNTIL.lock().ok().and_then(|mut r| r.take()).is_some_and(|t| Instant::now() < t);
+        if resume && can_step {
+            v.start_slideshow(cx);
+        }
         // pencere kapanınca ya da başka dosyaya geçilince GPU dokuları bırakılır
         cx.on_release(|v: &mut Self, cx| {
             for img in v.frames.drain(..).chain(v.thumb.take()) {
@@ -253,11 +340,10 @@ impl ImageView {
                 for img in std::mem::replace(&mut self.frames, d.frames) {
                     cx.drop_image(img, None);
                 }
-                // (inverted before it arrived: turn it now)
-                if self.inverted {
-                    self.inverted = false;
-                    self.toggle_invert(cx);
-                }
+                // (inverted or turned before it arrived: done now)
+                self.frames_turns = 0;
+                self.inverted_frames = false;
+                self.pump(cx);
                 if let Some(t) = self.thumb.take() {
                     cx.drop_image(t, None);
                 }
@@ -303,25 +389,111 @@ impl ImageView {
     fn toggle_invert(&mut self, cx: &mut Context<Self>) {
         self.inverted = !self.inverted;
         cx.notify();
-        if self.frames.is_empty() {
-            return; // turned when the image arrives
+        self.pump(cx);
+    }
+
+    /// R / Shift+R: the view turns a quarter (the file is not changed).
+    fn rotate(&mut self, clockwise: bool, cx: &mut Context<Self>) {
+        self.turns = (self.turns + if clockwise { 1 } else { 3 }) % 4;
+        self.zoom = None;
+        self.offset = (0.0, 0.0);
+        // (the small shell picture is turned at once)
+        if self.thumb_turns != self.turns {
+            if let Some(t) = self.thumb.take() {
+                if let Some(b) = pixels_of(&t) {
+                    self.thumb = render_image_owned(turned(b, (self.turns + 4 - self.thumb_turns) % 4));
+                }
+                cx.drop_image(t, None);
+            }
+            self.thumb_turns = self.turns;
         }
-        // the frames turned on a helper thread (inverting twice gives the original back)
+        cx.notify();
+        self.pump(cx);
+    }
+
+    /// The pixels in `frames` are brought to the turn and the colours the view asks for, on a helper thread; one job at a time
+    /// (when the view asked for more meanwhile, the next job follows).
+    fn pump(&mut self, cx: &mut Context<Self>) {
+        if self.working || self.frames.is_empty() {
+            return;
+        }
+        let quarter = (self.turns + 4 - self.frames_turns) % 4;
+        let flip = self.inverted != self.inverted_frames;
+        if quarter == 0 && !flip {
+            return;
+        }
+        self.working = true;
         let frames = self.frames.clone();
-        let want = self.inverted;
-        let work = cx.background_spawn(async move { frames.iter().filter_map(|f| pixels_of(f)).filter_map(|b| render_image_owned(inverted(&b))).collect::<Vec<_>>() });
+        let (turns, inv) = (self.turns, self.inverted);
+        let work = cx.background_spawn(async move {
+            frames
+                .iter()
+                .filter_map(|f| pixels_of(f))
+                .filter_map(|b| render_image_owned(turned(if flip { inverted(&b) } else { b }, quarter)))
+                .collect::<Vec<_>>()
+        });
         self._tasks.push(cx.spawn(async move |this, cx| {
-            let turned = work.await;
+            let done = work.await;
             let _ = this.update(cx, |v, cx| {
-                if v.inverted != want {
-                    return; // toggled again meanwhile: that one wins
+                v.working = false;
+                if !done.is_empty() {
+                    for img in std::mem::replace(&mut v.frames, done) {
+                        cx.drop_image(img, None);
+                    }
                 }
-                for img in std::mem::replace(&mut v.frames, turned) {
-                    cx.drop_image(img, None);
-                }
+                v.frames_turns = turns;
+                v.inverted_frames = inv;
                 cx.notify();
+                v.pump(cx);
             });
         }));
+    }
+
+    fn toggle_slideshow(&mut self, cx: &mut Context<Self>) {
+        if self.slideshow {
+            self.stop_slideshow(cx);
+        } else if self.can_step {
+            self.start_slideshow(cx);
+        }
+    }
+
+    fn start_slideshow(&mut self, cx: &mut Context<Self>) {
+        self.slideshow = true;
+        self.sliding.set(true);
+        self._show = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(SLIDE_EVERY).await;
+                if !this.update(cx, |v, _| v.slideshow).unwrap_or(false) {
+                    break;
+                }
+                // leaf shows the next file in its list (a new view that carries the slideshow on); nothing came: it ends here
+                let sent = cx
+                    .background_spawn(async { leaf_sys::single_instance::send_to(&leaf_sys::single_instance::instance_name(), &crate::look::ipc::ToApp::Step(true).encode()) })
+                    .await;
+                if sent {
+                    if let Ok(mut r) = RESUME_UNTIL.lock() {
+                        *r = Some(Instant::now() + SLIDE_WAIT);
+                    }
+                    cx.background_executor().timer(SLIDE_WAIT).await;
+                }
+                let _ = this.update(cx, |v, cx| v.stop_slideshow(cx));
+                break;
+            }
+        }));
+        cx.notify();
+    }
+
+    fn stop_slideshow(&mut self, cx: &mut Context<Self>) {
+        if !self.slideshow {
+            return;
+        }
+        self.slideshow = false;
+        self.sliding.set(false);
+        self._show = None;
+        if let Ok(mut r) = RESUME_UNTIL.lock() {
+            *r = None;
+        }
+        cx.notify();
     }
 
     fn png_bytes(&self) -> Option<Vec<u8>> {
@@ -372,7 +544,12 @@ impl ImageView {
 
     /// Şu anki ölçek, sığdırma ölçeği ve gösterilen boyut.
     fn layout(&self, area: (f32, f32)) -> Option<(f32, f32, (f32, f32))> {
-        let dims = self.dims?;
+        let mut dims = self.dims?;
+        // (the size of the pixels on the screen: a picture still being turned keeps its old shape)
+        let shown_turns = if self.frames.is_empty() { self.thumb_turns } else { self.frames_turns };
+        if shown_turns % 2 == 1 {
+            dims = (dims.1, dims.0);
+        }
         let fit = zoom::fit_zoom(dims, area);
         let z = self.zoom.unwrap_or(fit);
         Some((z, fit, (dims.0 * z, dims.1 * z)))
@@ -423,6 +600,7 @@ impl Render for ImageView {
                 cx.notify();
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(|v, ev: &MouseDownEvent, _, cx| {
+                v.stop_slideshow(cx);
                 if ev.click_count == 2 {
                     v.zoom = None;
                     v.show_label(cx);

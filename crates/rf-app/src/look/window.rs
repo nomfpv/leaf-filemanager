@@ -703,8 +703,8 @@ impl Render for LookWindow {
                         v.open_file();
                         window.remove_window();
                     }),
-                    // E: the text viewer's editor
-                    "e" => {
+                    // E: the text viewer's editor; R and S: the picture viewer's turn and slideshow
+                    "e" | "r" | "s" => {
                         if v.viewer.on_key(k, m, window, cx) {
                             cx.notify();
                         }

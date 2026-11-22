@@ -191,6 +191,11 @@ pub fn app_source(cx: &mut App) {
     cx.default_global::<LookSystem>().source = None;
 }
 
+/// Whether the preview was opened from leaf (not from an Explorer selection): only then has it leaf's list to step through.
+pub(crate) fn opened_from_app(cx: &mut App) -> bool {
+    cx.default_global::<LookSystem>().source.is_none()
+}
+
 /// Önizleme açıkken Explorer'daki seçim 300 ms'de bir okunur (fareyle seçim değişikliği için).
 fn watch_selection(cx: &mut App) {
     if std::mem::replace(&mut cx.default_global::<LookSystem>().watching, true) {
