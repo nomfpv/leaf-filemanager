@@ -74,7 +74,23 @@ pub fn location(h: &Host) -> Option<Location> {
 /// A bookmark of the host as a place.
 pub fn bookmark_location(h: &Host, path: &str) -> Option<Location> {
     let v = VPath::parse(&h.address()).ok()?;
-    Some(Location::Remote(v.with_path(path)))
+    // (an SMB host's bookmark on Windows is a folder of the share, `\\host\share\dir`)
+    Some(crate::remote::place_of(v.with_path(path)))
+}
+
+/// "Bookmark this folder" in a folder of a Windows share (`\\host\share\dir`): the bookmark of its saved `smb://` host. `None`: no
+/// saved host is this server (or the path is no share folder).
+pub fn toggle_unc_bookmark(p: &std::path::Path, cx: &mut App) -> Option<bool> {
+    let rest = p.to_str()?.strip_prefix(r"\\")?;
+    let (host, share_path) = rest.split_once('\\')?;
+    if host.is_empty() || host.starts_with(['?', '.']) || share_path.trim_matches('\\').is_empty() {
+        return None;
+    }
+    let path = format!("/{}", share_path.trim_matches('\\').replace('\\', "/"));
+    all(cx);
+    let mut done = None;
+    change(cx, |hs| done = hs.toggle_smb_bookmark(host, &path));
+    done
 }
 
 /// "Bookmark this folder": adds the remote folder to its saved host, or removes the bookmark. Returns what was done (`None`: no

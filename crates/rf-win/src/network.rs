@@ -326,15 +326,18 @@ pub fn cancel_share(remote: &str) -> std::io::Result<bool> {
 }
 
 /// Logs in to `\\host\share` (`remote`) as `user` (`name`, `DOMAIN\name` or `name@domain`; empty: this PC's user) with `password`:
-/// `WNetAddConnection2W` without a drive letter, `CONNECT_TEMPORARY` unless `remember`. The password's copy made here is wiped
+/// `WNetAddConnection2W` without a drive letter, `CONNECT_TEMPORARY` (the session only; `remember` is leaf's own keyring, not Windows'). The password's copy made here is wiped
 /// before returning. A refused login reads as [`is_login_refused`].
 pub fn connect_share(remote: &str, user: &str, password: &str, remember: bool) -> std::io::Result<()> {
-    use windows::Win32::NetworkManagement::WNet::{CONNECT_TEMPORARY, NET_CONNECT_FLAGS, NETRESOURCEW, RESOURCETYPE_DISK, WNetAddConnection2W};
+    use windows::Win32::NetworkManagement::WNet::{CONNECT_TEMPORARY, NETRESOURCEW, RESOURCETYPE_DISK, WNetAddConnection2W};
     let mut name = wide(remote);
     let user_w = wide(user);
     let mut pw: Vec<u16> = password.encode_utf16().chain(std::iter::once(0)).collect();
     let res = NETRESOURCEW { dwType: RESOURCETYPE_DISK, lpRemoteName: windows::core::PWSTR(name.as_mut_ptr()), ..Default::default() };
-    let flags = if remember { NET_CONNECT_FLAGS(0) } else { CONNECT_TEMPORARY };
+    // (always for this session: never CONNECT_UPDATE_PROFILE, and CONNECT_TEMPORARY so Windows does not restore it at sign-in. `remember`
+    // only says that leaf keeps the password in its own keyring, which is not Windows' business)
+    let _ = remember;
+    let flags = CONNECT_TEMPORARY;
     let user_p = if user.is_empty() { PCWSTR::null() } else { PCWSTR(user_w.as_ptr()) };
     // SAFETY: every pointer is to a NUL-terminated buffer that lives for the call
     let rc = unsafe { WNetAddConnection2W(&res, PCWSTR(pw.as_ptr()), user_p, flags) };

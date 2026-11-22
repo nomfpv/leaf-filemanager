@@ -6224,10 +6224,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &BookmarkRemoteFolder, window, cx| {
                 // the folder shown, when it is on a saved host
                 let loc = this.active_tab().read(cx).location().clone();
-                let Location::Remote(v) = loc else {
-                    return crate::prompt::notice(t!("Bookmark this folder"), t!("This works in a folder on a saved host (Settings > Hosts).").to_string(), window, cx);
+                let done = match &loc {
+                    Location::Remote(v) => crate::hosts_ui::toggle_bookmark(v, cx),
+                    // (Windows: a folder of a saved `smb://` host is a UNC path)
+                    Location::Path(p) if cfg!(windows) && leaf_remote::smb::unc_share(p).is_some() => crate::hosts_ui::toggle_unc_bookmark(p, cx),
+                    _ => return crate::prompt::notice(t!("Bookmark this folder"), t!("This works in a folder on a saved host (Settings > Hosts).").to_string(), window, cx),
                 };
-                if crate::hosts_ui::toggle_bookmark(&v, cx).is_none() {
+                if done.is_none() {
                     crate::prompt::notice(t!("Bookmark this folder"), t!("This server is not in the saved hosts. Add it under Settings > Hosts first.").to_string(), window, cx);
                 }
             }))

@@ -343,6 +343,19 @@ impl Hosts {
         }
     }
 
+    /// [`toggle_bookmark`](Self::toggle_bookmark) for a folder of a Windows share (`\\host\share\dir`, here `path` = `/share/dir`): the saved `smb`
+    /// host of that server, whatever user name its address names (a UNC path has none).
+    pub fn toggle_smb_bookmark(&mut self, host: &str, path: &str) -> Option<bool> {
+        let h = self.hosts.iter_mut().find(|h| h.scheme.eq_ignore_ascii_case("smb") && h.host.eq_ignore_ascii_case(host))?;
+        if let Some(i) = h.bookmarks.iter().position(|b| b == path) {
+            h.bookmarks.remove(i);
+            Some(false)
+        } else {
+            h.bookmarks.push(path.to_string());
+            Some(true)
+        }
+    }
+
     /// Adds the imported hosts whose name is not in the list yet; returns how many were added.
     pub fn merge(&mut self, imported: Vec<Host>) -> usize {
         let mut n = 0;

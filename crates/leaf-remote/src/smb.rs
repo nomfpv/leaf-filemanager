@@ -181,6 +181,10 @@ pub fn unc_of(text: &str) -> Option<std::path::PathBuf> {
     if !t.get(..6).is_some_and(|s| s.eq_ignore_ascii_case("smb://")) {
         return None;
     }
+    // (a password written into the address is never taken along: such an address is refused where it is typed, see remote::refused_address)
+    if t[6..].split('/').next().and_then(|a| a.rsplit_once('@')).is_some_and(|(info, _)| info.contains(':')) {
+        return None;
+    }
     let v = crate::VPath::parse(t).ok()?;
     if v.host().is_empty() {
         return None;
@@ -269,6 +273,16 @@ mod tests {
     use super::*;
     use crate::secrets::MemoryStore;
     use std::sync::Mutex;
+
+    #[test]
+    fn smb_address_maps_to_the_unc_path_and_never_takes_a_password() {
+        let unc = |t: &str| unc_of(t).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(unc("smb://nas.example.com/photos/2024"), Some(r"\\nas.example.com\photos\2024".into()));
+        assert_eq!(unc("smb://user@nas.example.com/photos"), Some(r"\\nas.example.com\photos".into()));
+        assert_eq!(unc("smb://nas.example.com"), Some(r"\\nas.example.com".into()));
+        assert_eq!(unc("sftp://nas.example.com/photos"), None);
+        assert_eq!(unc("smb://user:secret@nas.example.com/photos"), None);
+    }
 
     /// The user at the dialog: answers in turn (user, password, Remember), and notes what was asked.
     #[derive(Default)]
