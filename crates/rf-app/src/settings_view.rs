@@ -3557,6 +3557,22 @@ fn open_url(url: &'static str) {
     });
 }
 
+/// Which kind of install this is and whether "Retry as administrator" is available, with the reason when it is not (Settings → About).
+fn install_card(p: &Palette) -> AnyElement {
+    use crate::installer::InstallKind;
+    let kind = match crate::installer::install_kind() {
+        InstallKind::AllUsers => t!("Installed for all users"),
+        InstallKind::PerUser => t!("Installed for this user only"),
+        InstallKind::Other => t!("Not installed (a build or a copied folder)"),
+    };
+    let admin = match crate::admin::blocked() {
+        None if crate::admin::available() => t!("Retry as administrator is available.").to_string(),
+        None => t!("Retry as administrator is only offered in leaf itself.").to_string(),
+        Some(why) => format!("{} {why}", t!("Retry as administrator is not available:")),
+    };
+    card(p, L::ShieldCheck, kind, Some(admin.as_str()), div().into_any_element())
+}
+
 /// Update status and the button that fits it (Settings → About).
 fn update_card(p: &Palette, s: &Settings) -> AnyElement {
     use crate::installer::State;
@@ -3565,6 +3581,7 @@ fn update_card(p: &Palette, s: &Settings) -> AnyElement {
     let err = crate::installer::last_error();
     let text = match &state {
         State::NotInstalled => t!("This copy wasn't installed with the setup, so it can't update itself.").to_string(),
+        State::AllUsers => t!("Installed for all users: update by running the installer again.").to_string(),
         State::Idle if !err.is_empty() => format!("{} {err}", t!("The check failed:")),
         State::Idle if !s.update_check => t!("Update checks are off: leaf contacts no server.").to_string(),
         State::Idle if !usable => t!("Write the address of the release feed to check for updates.").to_string(),
@@ -3574,7 +3591,7 @@ fn update_card(p: &Palette, s: &Settings) -> AnyElement {
         State::Ready(v) => format!("{} {v}. {}", t!("Downloaded:"), t!("It is applied when you restart.")),
     };
     let control = match state {
-        State::NotInstalled => div().into_any_element(),
+        State::NotInstalled | State::AllUsers => div().into_any_element(),
         State::Ready(_) => button("upd-restart", p, t!("Restart and update"), |_, _| {
             std::thread::spawn(crate::installer::restart_to_update);
         }),
@@ -3723,6 +3740,7 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             Some(t!("System, memory, graphics, drives and leaf's own numbers, to copy as text or as a picture")),
             button("about-pc", p, t!("Open"), |_, cx| open_page(Page::ThisPc, cx)),
         ),
+        install_card(p),
         update_card(p, &s),
         update_options_card(p, &s),
         section(p, t!("Project")),
