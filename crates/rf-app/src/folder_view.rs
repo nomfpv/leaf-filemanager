@@ -1650,6 +1650,13 @@ impl FolderView {
             self.anchor = None;
             self.error = None;
             self.load_ms = None;
+            // The list is drawn with no rows for the first frames of a listing, and a list with no rows throws a pending "scroll to the
+            // top" away without applying it (gpui takes it before it looks at the row count): the old page's offset then stayed and
+            // clamped into the new rows, opening the folder scrolled. The offset itself is set to the top here, as well.
+            {
+                let state = self.scroll.0.borrow_mut();
+                state.base_handle.set_offset(point(px(0.), px(0.)));
+            }
             self.scroll.scroll_to_item(0, ScrollStrategy::Top);
             // slow sources (offline share, FTP, big network folder): show a placeholder after a
             // moment instead of a blank pane; fast folders never see it
