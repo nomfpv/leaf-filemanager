@@ -33,6 +33,9 @@ pub enum UndoOp {
     /// `path` (`None`: nothing, the file was only removed). Undo puts the previous version back only while the file is still
     /// that, moving it to the Trash first. Not redone (revert again instead).
     Reverted { path: PathBuf, bin: PathBuf, wrote: Option<leaf_dev::review::Stamp> },
+    /// An operation an agent asked for through leaf-mcp (plan F9): undoable like any other, named with the agent in the undo
+    /// list, and Ctrl+Z asks before undoing it.
+    ByAgent { agent: String, op: Box<UndoOp> },
 }
 
 static STACK: Mutex<Vec<UndoOp>> = Mutex::new(Vec::new());
@@ -47,6 +50,11 @@ pub fn push(op: UndoOp) {
     if s.len() > MAX {
         s.remove(0);
     }
+}
+
+/// Records an operation an agent asked for (see [`UndoOp::ByAgent`]).
+pub fn push_by_agent(agent: &str, op: UndoOp) {
+    push(UndoOp::ByAgent { agent: agent.to_string(), op: Box::new(op) });
 }
 
 /// A short name for what an operation did, for a menu entry that says what it would undo ("Geri al: Silme").
@@ -64,18 +72,50 @@ fn label(op: &UndoOp) -> &'static str {
         UndoOp::Organized { .. } => t!("Organize"),
         UndoOp::RemoteTrashed { .. } => t!("Delete"),
         UndoOp::Reverted { .. } => t!("Revert"),
+        UndoOp::ByAgent { op, .. } => label(op),
+    }
+}
+
+/// [`label`], with the agent's name for an agent's operation.
+fn named(op: &UndoOp) -> String {
+    match op {
+        UndoOp::ByAgent { agent, op } => format!("{} ({})", label(op), t!("by {agent}").replace("{agent}", agent)),
+        other => label(other).to_string(),
     }
 }
 
 /// What Ctrl+Z would undo now and what Ctrl+Y would redo (`None`: nothing).
-pub fn next_labels() -> (Option<&'static str>, Option<&'static str>) {
-    (STACK.lock().last().map(label), REDO.lock().last().map(label))
+pub fn next_labels() -> (Option<String>, Option<String>) {
+    (STACK.lock().last().map(named), REDO.lock().last().map(named))
 }
 
 /// Reverses the most recent operation (in the background, through the Status Center).
 pub fn undo(cx: &mut App) {
     let Some(op) = STACK.lock().pop() else { return };
-    undo_op(op, cx);
+    match op {
+        // an agent's operation is never undone without a word: asked once, and put back on the stack when the answer is no
+        UndoOp::ByAgent { agent, op } => {
+            let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
+                STACK.lock().push(UndoOp::ByAgent { agent, op });
+                return;
+            };
+            let question = t!("Undo what {agent} did: {what}?").replace("{agent}", &agent).replace("{what}", label(&op));
+            let asked = window.update(cx, |_, window, cx| crate::prompt::ask(t!("Undo an agent's change"), question, window, cx));
+            let Ok(rx) = asked else {
+                STACK.lock().push(UndoOp::ByAgent { agent, op });
+                return;
+            };
+            cx.spawn(async move |cx| {
+                if rx.await.unwrap_or(false) {
+                    cx.update(|cx| undo_op(*op, cx));
+                } else {
+                    STACK.lock().push(UndoOp::ByAgent { agent, op });
+                }
+            })
+            .detach();
+        }
+        op => undo_op(op, cx),
+    }
 }
 
 /// Whether the most recent operation is a copy, move or recycle that made `path` (a copy or
@@ -86,7 +126,11 @@ pub fn last_made(path: &std::path::Path) -> bool {
 }
 
 fn top_made(stack: &[UndoOp], path: &std::path::Path) -> bool {
-    match stack.last() {
+    let top = match stack.last() {
+        Some(UndoOp::ByAgent { op, .. }) => Some(&**op),
+        other => other,
+    };
+    match top {
         Some(UndoOp::Transferred { pairs, .. } | UndoOp::Recycled { pairs }) => pairs.iter().any(|(_, made)| made == path),
         _ => false,
     }
@@ -164,11 +208,17 @@ pub fn update_organized(token: u64, change: impl FnOnce(&mut crate::organizer::R
 }
 
 fn undo_op(op: UndoOp, cx: &mut App) {
+    let op = match op {
+        UndoOp::ByAgent { op, .. } => *op,
+        op => op,
+    };
     // creating an item can't be replayed (its contents may have changed), everything else can
     if !matches!(op, UndoOp::Created { .. } | UndoOp::Reverted { .. }) {
         REDO.lock().push(op.clone());
     }
     match op {
+        // (unwrapped before: an agent's record holds the operation itself; the redo stack gets the bare operation)
+        UndoOp::ByAgent { .. } => {}
         UndoOp::Renamed { from, to } => {
             let name = from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             crate::status_center::start_with(cx, format!("{} {name}", t!("Undoing rename →")), {
@@ -287,6 +337,8 @@ pub fn redo(cx: &mut App) {
     // it becomes undoable again
     STACK.lock().push(op.clone());
     match op {
+        // (unwrapped before: an agent's record holds the operation itself; the redo stack gets the bare operation)
+        UndoOp::ByAgent { .. } => {}
         UndoOp::Renamed { from, to } => {
             let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             crate::status_center::start_with(cx, format!("{} {name}", t!("Redoing: rename →")), {

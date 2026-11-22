@@ -607,8 +607,8 @@ impl FolderView {
             ftp: crate::remote::is_address_path(dir),
             organizer: !in_search && crate::organizer::has_rules_for(dir, cx),
             own_actions: own.is_some(),
-            undo: undo.map(str::to_string),
-            redo: redo.map(str::to_string),
+            undo,
+            redo,
             ..Default::default()
         };
         let build = Build { me, v: self, cx, ctx: &ctx, dir: dir.to_path_buf(), items: &[], own };
@@ -792,8 +792,8 @@ impl FolderView {
                     Item::action(t!("Cut"), icon(L::Scissors), act(&me, |v, w, cx| v.copy_to_clipboard(leaf_sys::fileops::Transfer::Move, w, cx))).hint("Ctrl+X").enabled(!none),
                     Item::action(t!("Share"), icon(L::Share2), act(&me, |v, w, cx| v.share(w, cx))).enabled(!none),
                     Item::Separator,
-                    Item::action(undo_text(undo), icon(L::Undo2), move |_, cx| crate::undo::undo(cx)).hint("Ctrl+Z").enabled(undo.is_some()),
-                    Item::action(redo_text(redo), icon(L::Redo2), move |_, cx| crate::undo::redo(cx)).hint("Ctrl+Y").enabled(redo.is_some()),
+                    Item::action(undo_text(undo.as_deref()), icon(L::Undo2), move |_, cx| crate::undo::undo(cx)).hint("Ctrl+Z").enabled(undo.is_some()),
+                    Item::action(redo_text(redo.as_deref()), icon(L::Redo2), move |_, cx| crate::undo::redo(cx)).hint("Ctrl+Y").enabled(redo.is_some()),
                     Item::Separator,
                     Item::action(t!("Select all"), icon(L::SquareCheck), act(&me, |v, _, cx| v.select_all_items(cx))).hint("Ctrl+A"),
                     Item::action(t!("Select none"), icon(L::Square), act(&me, |v, _, cx| v.select_no_items(cx))).enabled(!none),
