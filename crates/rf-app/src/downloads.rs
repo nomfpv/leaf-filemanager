@@ -491,6 +491,16 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     LIVE.lock().unwrap_or_else(|e| e.into_inner()).push(live);
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_req, key, settings, through_vpn, (&limit, &got), &fail_flag), Some(on_done));
     id_cell.set(id);
+    crate::status_center::set_transfer(
+        cx,
+        id,
+        crate::xfer_history::Note {
+            kind: crate::xfer_history::Kind::Download,
+            what: dl::file_name(None, &req.url),
+            from: crate::xfer_history::plain_url(&req.url),
+            to: req.dest.to_string_lossy().into_owned(),
+        },
+    );
     if id != 0 {
         let limit_now = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|l| l.key == key).map(|l| (l.limit.clone(), own_limit));
         if let Some((limit, own)) = limit_now {

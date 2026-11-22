@@ -118,5 +118,6 @@ pub fn page(p: &Palette, s: &Settings, _cx: &mut App) -> Vec<AnyElement> {
             }))
             .into_any_element(),
     );
+    v.extend(crate::home::transfers_page_section(p, s));
     v
 }

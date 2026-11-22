@@ -112,6 +112,7 @@ gpui_kit::actions!(
         ShowFeatures,
         CustomizeHome,
         ResetHome,
+        ShowTransferHistory,
         CopyAsContext,
         ToggleHideIgnored,
         FindBuildJunk,

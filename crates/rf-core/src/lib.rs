@@ -35,6 +35,7 @@ pub mod textedit;
 pub mod transfer;
 pub mod treemap;
 pub mod usage;
+pub mod xfer_log;
 pub mod tssource;
 pub mod vpath;
 pub mod hosts;

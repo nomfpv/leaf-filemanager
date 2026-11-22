@@ -9,9 +9,11 @@
 //! when the page is drawn. A widget that is not in the layout is never called.
 
 mod dev;
+mod transfers;
 mod widgets;
 
 pub use dev::Data;
+pub(crate) use transfers::page_section as transfers_page_section;
 
 use gpui_kit::assets::IconName as L;
 use gpui_kit::component::{Icon, h_flex, v_flex};
@@ -244,6 +246,7 @@ pub static WIDGETS: &[Widget] = &[
         header: Some(dev::photos_header),
         since: "0.9.6",
     },
+    Widget { id: "transfers", title: "Transfers", icon: L::Activity, sizes: &[Size::Medium, Size::Wide, Size::Large], default_size: Size::Medium, rows: 2, folder: false, render: transfers::widget, header: Some(transfers::header), since: "0.9.6" },
     Widget { id: "hosts", title: "Hosts", icon: L::Server, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: crate::hosts_ui::widget, header: None, since: "0.9.5" },
 ];
 
@@ -364,6 +367,10 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &crate::actions::ResetHome, cx| {
         crate::settings::update(cx, reset);
         cx.refresh_windows();
+    });
+    cx.on_action(|_: &crate::actions::ShowTransferHistory, cx| {
+        crate::settings_view::open_page(crate::settings_view::Page::Numbers, cx);
+        crate::workspace::show_settings(cx);
     });
 }
 

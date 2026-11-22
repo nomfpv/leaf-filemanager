@@ -64,6 +64,8 @@ pub struct OpState {
     undo_mark: Option<Arc<std::sync::Mutex<Option<std::path::PathBuf>>>>,
     /// The files the operation works on: when it fails, they are asked who holds them open ("In use by: ...").
     lock_paths: Vec<std::path::PathBuf>,
+    /// Says what a transfer is, so that its end goes into the history of transfers (`xfer_history`).
+    note: Option<crate::xfer_history::Note>,
 }
 
 /// A question from the copy engine, kept here so every window's strip or card can ask it, not
@@ -107,6 +109,7 @@ impl OpState {
             open_dest: None,
             undo_mark: None,
             lock_paths: Vec::new(),
+            note: None,
         }
     }
 
@@ -686,6 +689,14 @@ pub fn start_with_id(
                                     Err(e) => OpPhase::Failed(e),
                                 };
                                 op.done = op.total;
+                                if let Some(n) = op.note.take() {
+                                    let result = match op.phase {
+                                        OpPhase::Done => crate::xfer_history::Outcome::Done,
+                                        OpPhase::Cancelled => crate::xfer_history::Outcome::Cancelled,
+                                        _ => crate::xfer_history::Outcome::Failed,
+                                    };
+                                    crate::xfer_history::record(n, op.bytes.get().0, op.started.elapsed().as_millis() as u64, result);
+                                }
                                 if matches!(op.phase, OpPhase::Failed(_)) {
                                     lookup = std::mem::take(&mut op.lock_paths);
                                 }
@@ -948,6 +959,12 @@ fn transfer_run(
     let mark = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let marker = mark.clone();
     let lock_paths = sources.clone();
+    let note_what = match sources.as_slice() {
+        [one] => one.file_name().map_or_else(|| one.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned()),
+        many => crate::i18n::items(many.len()),
+    };
+    let note_from = sources.first().and_then(|p| p.parent()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let note_to = dest.to_string_lossy().into_owned();
     let id = start_with_id(cx, title, move |t| {
         t.set_verify(verify);
         t.limit.store(limit, Ordering::Relaxed);
@@ -988,6 +1005,25 @@ fn transfer_run(
     }, on_done);
     set_extras(cx, id, Some(words), Some(open_dest), record.then_some(mark));
     set_lock_paths(cx, id, lock_paths);
+    set_transfer(cx, id, crate::xfer_history::Note { kind: if kind == Transfer::Copy { crate::xfer_history::Kind::Copy } else { crate::xfer_history::Kind::Move }, what: note_what, from: note_from, to: note_to });
+}
+
+/// Marks a running job as a transfer: when it ends, it is written to the history of transfers.
+pub fn set_transfer(cx: &mut App, id: u64, note: crate::xfer_history::Note) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    entity.update(cx, |ops, _| {
+        if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
+            op.note = Some(note);
+        }
+    });
+}
+
+/// The running jobs' pace for Home's transfers widget: (title, speed bars of the last minute, bytes a second).
+pub fn live_paces(ops: &Ops) -> Vec<(String, Vec<f32>, Option<f64>)> {
+    ops.ops.iter().filter(|o| o.phase == OpPhase::Running).map(|o| {
+        let v = o.view();
+        (v.title, v.bars, v.pace.speed)
+    }).collect()
 }
 
 /// Words for the strip, a folder for the finished card to open, and the mark that tells the

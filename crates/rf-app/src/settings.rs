@@ -869,6 +869,8 @@ pub struct Settings {
     pub selection_details: bool,
     /// Counts what is done with Leaf (files copied, folders opened, ...) for the "Your numbers" page; the numbers stay in the config folder.
     pub count_usage: bool,
+    /// Keeps a history of finished transfers (copy, move, download, upload) for Home and "Your numbers"; paths and numbers, on this PC only.
+    pub record_transfers: bool,
     /// Rows of files changed in the last ten minutes get a faint tint that fades.
     pub fresh_tint: bool,
     /// The master switch of the agent layer (Settings > Developer): the Agents page, the dot on folders and tabs with a running agent session and
@@ -1123,6 +1125,7 @@ impl Default for Settings {
             show_token_estimate: false,
             selection_details: false,
             count_usage: true,
+            record_transfers: true,
             fresh_tint: false,
             ai_layer: true,
             lane_folder: "<repo>-wt/<name>".into(),
@@ -1403,6 +1406,7 @@ impl Settings {
     pub(crate) fn apply_side_effects(&self) {
         sync_name_index(self.name_index, &self.index_excluded);
         crate::usage::set_enabled(self.count_usage);
+        crate::xfer_history::set_enabled(self.record_transfers);
         crate::aliases::set(self.folder_aliases.clone());
         leaf_sys::openrules::set(self.open_rules.clone());
         leaf_sys::drives::set_hidden(leaf_sys::drives::mask_of_letters(&self.hidden_drives));

@@ -34,6 +34,7 @@ mod disk_usage;
 mod selection_stats;
 mod numbers_page;
 mod usage;
+mod xfer_history;
 mod diff_view;
 mod duplicates_view;
 mod changes_view;
