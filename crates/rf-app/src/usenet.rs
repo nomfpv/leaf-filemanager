@@ -174,8 +174,35 @@ impl leaf_nzb::dial::Net for VpnNet {
     }
 }
 
-fn dialer(s: &Settings) -> leaf_nzb::dial::RouteDialer<VpnNet> {
-    leaf_nzb::dial::RouteDialer { net: VpnNet, route: leaf_nzb::dial::Route { vpn_only: s.usenet_vpn_only, through_vpn: s.vpn_downloads } }
+/// The route settings of now, for every dial of every job (a change applies to the next connection; [`set_route`] also
+/// closes the open ones).
+static VPN_ONLY: AtomicBool = AtomicBool::new(true);
+static THROUGH_VPN: AtomicBool = AtomicBool::new(false);
+static ROUTE_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Takes the settings' route; when it changed, the running jobs' connections are closed and dialled again under it.
+fn set_route(s: &Settings) {
+    let a = VPN_ONLY.swap(s.usenet_vpn_only, Ordering::AcqRel);
+    let b = THROUGH_VPN.swap(s.vpn_downloads, Ordering::AcqRel);
+    if a != s.usenet_vpn_only || b != s.vpn_downloads {
+        ROUTE_GEN.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+pub struct LiveRoute;
+
+impl leaf_nzb::dial::RouteSource for LiveRoute {
+    fn route(&self) -> leaf_nzb::dial::Route {
+        leaf_nzb::dial::Route { vpn_only: VPN_ONLY.load(Ordering::Acquire), through_vpn: THROUGH_VPN.load(Ordering::Acquire) }
+    }
+    fn generation(&self) -> u64 {
+        ROUTE_GEN.load(Ordering::Acquire)
+    }
+}
+
+fn dialer(s: &Settings) -> leaf_nzb::dial::RouteDialer<VpnNet, LiveRoute> {
+    set_route(s);
+    leaf_nzb::dial::RouteDialer { net: VpnNet, route: LiveRoute }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -185,8 +212,13 @@ fn dialer(s: &Settings) -> leaf_nzb::dial::RouteDialer<VpnNet> {
 #[serde(default)]
 struct SavedJob {
     key: u64,
-    /// leaf's own copy of the NZB (its file name kept: it may carry `{{password}}`).
+    /// leaf's own copy of the NZB (named without the `{{password}}` its name may carry: that one is in the keyring).
     nzb: PathBuf,
+    /// The job's own folder in the incomplete folder, once it has one (two jobs with one title never share it).
+    folder: Option<PathBuf>,
+    /// Not written to `usenet.json` (leaf could not make its own copy of an NZB whose name holds a password).
+    #[serde(skip)]
+    transient: bool,
     title: String,
     /// The folder the result goes into.
     dest: PathBuf,
@@ -239,7 +271,9 @@ fn persist() {
                 s.priority = l.priority;
             }
         }
-        st.clone()
+        let mut snapshot = st.clone();
+        snapshot.active.retain(|a| !a.transient);
+        snapshot
     };
     if let Some(path) = store_path() {
         std::thread::spawn(move || {
@@ -314,8 +348,9 @@ pub fn pause_all(on: bool) {
     gate(!on && leaf_download::queue::is_open());
 }
 
-/// The speed limit changed in the settings: running jobs take it at once.
+/// The speed limit or the route changed in the settings: running jobs take it at once.
 pub fn settings_changed(cx: &App) {
+    set_route(cx.global::<Settings>());
     let limit = u64::from(cx.global::<Settings>().download_speed_limit) << 20;
     for l in LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter() {
         l.limit.store(limit, Ordering::Relaxed);
@@ -330,20 +365,56 @@ pub fn open_nzb(path: PathBuf, cx: &mut App) {
 
 /// Opens an NZB as a Usenet job whose result goes into `dest`.
 pub fn start(path: PathBuf, dest: PathBuf, sort: bool, cx: &mut App) {
-    let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
-    // (leaf keeps its own copy: the job survives a restart even when the NZB was a temporary download)
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "job.nzb".into());
-    let copy = nzb_dir().map(|d| d.join(key.to_string()).join(&name));
-    let nzb = match &copy {
-        Some(c) => {
-            let _ = std::fs::create_dir_all(c.parent().unwrap_or(c));
-            if std::fs::copy(&path, c).is_ok() { c.clone() } else { path.clone() }
-        }
-        None => path.clone(),
-    };
-    let title = leaf_nzb::nzb::split_password(&name).0;
-    let title = title.strip_suffix(".nzb").or_else(|| title.strip_suffix(".NZB")).unwrap_or(&title).trim().to_string();
-    let job = SavedJob { key, nzb, title, dest, sort, priority: JobPriority::Normal, paused: false };
+    start_named(path, name, dest, sort, cx);
+}
+
+/// Where the archive password from an NZB's file name waits for its job (a restart included).
+fn job_secret(key: u64) -> leaf_remote::SecretId {
+    leaf_remote::SecretId::password("nzb", "archive", &format!("job-{key}"), 0)
+}
+
+/// The archive passwords of the jobs of this run (the keyring keeps them across a restart).
+static PASSWORDS: LazyLock<Mutex<std::collections::HashMap<u64, String>>> = LazyLock::new(Default::default);
+
+fn job_password(key: u64) -> Option<String> {
+    if let Some(p) = PASSWORDS.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Some(p.clone());
+    }
+    leaf_remote::vault().get(&job_secret(key)).map(|p| p.as_str().to_string())
+}
+
+fn forget_job_password(key: u64) {
+    if PASSWORDS.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).is_some() {
+        std::thread::spawn(move || {
+            let _ = leaf_remote::vault().forget(&job_secret(key));
+        });
+    }
+}
+
+/// [`start`] for an NZB whose file name is `name` (the watch folder renames what it takes).
+fn start_named(path: PathBuf, name: String, dest: PathBuf, sort: bool, cx: &mut App) {
+    let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
+    // (leaf keeps its own copy: the job survives a restart even when the NZB was a temporary download. The copy's name
+    // has no `{{password}}`: that goes to the keyring, never into usenet.json)
+    let (clean, password) = leaf_nzb::nzb::split_password(&name);
+    let clean = if clean.is_empty() { "job.nzb".to_string() } else { clean };
+    let copy = nzb_dir().map(|d| d.join(key.to_string()).join(&clean));
+    let copied = copy.as_ref().filter(|c| {
+        let _ = std::fs::create_dir_all(c.parent().unwrap_or(c));
+        std::fs::copy(&path, c).is_ok()
+    });
+    let nzb = copied.cloned().unwrap_or_else(|| path.clone());
+    let transient = copied.is_none() && password.is_some();
+    if let Some(pw) = password {
+        PASSWORDS.lock().unwrap_or_else(|e| e.into_inner()).insert(key, pw.clone());
+        // (on its own thread: a keyring can wait for the user)
+        std::thread::spawn(move || {
+            let _ = leaf_remote::vault().keep(&job_secret(key), &leaf_remote::Secret::new(pw));
+        });
+    }
+    let title = clean.strip_suffix(".nzb").or_else(|| clean.strip_suffix(".NZB")).unwrap_or(&clean).trim().to_string();
+    let job = SavedJob { key, nzb, folder: None, transient, title, dest, sort, priority: JobPriority::Normal, paused: false };
     store().active.push(job.clone());
     persist();
     run_job(job, cx);
@@ -393,6 +464,7 @@ fn run_job(job: SavedJob, cx: &mut App) {
             }
             persist();
             if ok {
+                forget_job_password(key);
                 // (leaf's copy of the NZB is not needed any more)
                 if job.nzb.starts_with(nzb_dir().unwrap_or_default()) {
                     let _ = std::fs::remove_file(&job.nzb);
@@ -617,10 +689,13 @@ fn work(tr: &Tracker, job: &SavedJob, s: &Settings, limit: &Arc<AtomicU64>, fold
         failed.store(true, Ordering::Relaxed);
         Err(anyhow::anyhow!(msg))
     };
-    let nzb = match leaf_nzb::read(&job.nzb) {
+    let mut nzb = match leaf_nzb::read(&job.nzb) {
         Ok(n) => n,
         Err(e) => return fail(format!("{}\n{e}", t!("This is not an NZB file leaf can read"))),
     };
+    if nzb.password.is_none() {
+        nzb.password = job_password(job.key);
+    }
     let servers: Vec<leaf_nzb::Server> = s.usenet_servers.iter().filter(|v| v.enabled && !v.host.trim().is_empty()).map(engine_server).collect();
     if servers.is_empty() {
         return fail(t!("No Usenet server is set up. Add one in Settings > Downloads > Usenet servers.").to_string());
@@ -632,7 +707,14 @@ fn work(tr: &Tracker, job: &SavedJob, s: &Settings, limit: &Arc<AtomicU64>, fold
         Some(c) => job.dest.join(c),
         None => job.dest.clone(),
     };
-    let job_dir = incomplete_dir(s).join(&name);
+    // (its own folder: another NZB with the same title never shares it; kept for the job so a restart finds it)
+    let job_dir = job.folder.clone().unwrap_or_else(|| leaf_nzb::job::job_dir(&incomplete_dir(s), &name, &nzb));
+    if job.folder.is_none() {
+        if let Some(a) = store().active.iter_mut().find(|a| a.key == job.key) {
+            a.folder = Some(job_dir.clone());
+        }
+        persist();
+    }
     let spec = leaf_nzb::Spec { nzb, job_dir: job_dir.clone(), dest_dir, name, unpack: s.usenet_unpack, cleanup: s.usenet_cleanup };
     let ctl = leaf_nzb::engine::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: limit.clone() };
     let link = Link { tr, step: Mutex::new(Step::Download), label: Mutex::new(String::new()), total: AtomicU64::new(spec.nzb.bytes()) };
@@ -660,9 +742,10 @@ fn fail_text(e: &leaf_nzb::Error, kept: &Path) -> String {
     let kept_line = format!("{} {}", t!("What was downloaded is kept in"), kept.display());
     let (what, detail) = match e {
         leaf_nzb::Error::Download(D::NoServers) => (t!("No Usenet server is set up. Add one in Settings > Downloads > Usenet servers.").to_string(), None),
+        leaf_nzb::Error::Download(D::Crashed) => (t!("The download stopped because of an error in leaf").to_string(), None),
         leaf_nzb::Error::Download(D::NoRoom(_)) => (t!("There is not enough free space on this PC for this download").to_string(), None),
         leaf_nzb::Error::Download(D::Unreachable(d)) => (t!("No Usenet server could be used: the sign-in was refused or the server did not answer").to_string(), Some(d.clone())),
-        leaf_nzb::Error::Download(D::Io(d)) => (t!("The files could not be written in the incomplete folder").to_string(), Some(d.to_string())),
+        leaf_nzb::Error::Download(D::Io(d)) => (t!("The files could not be written in the incomplete folder (is the disk full?)").to_string(), Some(d.to_string())),
         leaf_nzb::Error::Download(D::Cancelled) | leaf_nzb::Error::Cancelled => (t!("Cancelled").to_string(), None),
         leaf_nzb::Error::Damaged { failed, detail } => (t!("{n} articles are on no server and the par2 files could not repair what they miss.").replace("{n}", &failed.to_string()), Some(detail.clone())),
         leaf_nzb::Error::Password { wrong: true } => (t!("The archive's password is wrong").to_string(), None),
@@ -773,8 +856,9 @@ pub fn init(cx: &mut App) {
             let found = cx.background_spawn(async move { take_from_watch_folder(Path::new(&folder)) }).await;
             if !found.is_empty() {
                 let _ = cx.update(|cx| {
-                    for p in found {
-                        open_nzb(p, cx);
+                    for (p, name) in found {
+                        let dest = crate::downloads::default_folder(cx.global::<Settings>());
+                        start_named(p, name, dest, true, cx);
                     }
                 });
             }
@@ -784,8 +868,8 @@ pub fn init(cx: &mut App) {
 }
 
 /// The NZB files in the watch folder, each renamed so it is not taken again (`name.nzb` → `name.nzb.taken`); the renamed
-/// paths.
-fn take_from_watch_folder(dir: &Path) -> Vec<PathBuf> {
+/// paths with the names they had (a `{{password}}` in it is read from there; no copy is left anywhere else).
+fn take_from_watch_folder(dir: &Path) -> Vec<(PathBuf, String)> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out = Vec::new();
     for e in rd.flatten() {
@@ -799,12 +883,7 @@ fn take_from_watch_folder(dir: &Path) -> Vec<PathBuf> {
         }
         let taken = PathBuf::from(format!("{}.taken", p.display()));
         if !taken.exists() && std::fs::rename(&p, &taken).is_ok() {
-            // (the job reads leaf's copy, named as the original was: its `{{password}}` stays)
-            let named = std::env::temp_dir().join(format!("leaf-nzb-{}", std::process::id())).join(p.file_name().unwrap_or_default());
-            let _ = std::fs::create_dir_all(named.parent().unwrap_or(&named));
-            if std::fs::copy(&taken, &named).is_ok() {
-                out.push(named);
-            }
+            out.push((taken, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
         }
     }
     out
