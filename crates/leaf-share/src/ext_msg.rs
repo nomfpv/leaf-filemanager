@@ -113,4 +113,18 @@ mod tests {
         let got: anyhow::Result<Notice> = rt.block_on(crate::wire::read_frame_max(&mut r, MAX_NOTICE_FRAME));
         assert!(got.is_err());
     }
+
+    /// A notice of a kind this leaf does not know is skipped and the next one is still read; the connection is not dropped.
+    #[test]
+    fn unknown_notice_is_skipped() {
+        let mut bytes = Vec::new();
+        for body in [r#"{"t":"from-the-future","x":1}"#, r#"{"t":"ext","kind":3}"#, r#"{"t":"changed"}"#] {
+            bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(body.as_bytes());
+        }
+        let mut r: &[u8] = &bytes;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let got: Vec<Notice> = (0..3).map(|_| rt.block_on(crate::wire::read_notice(&mut r, MAX_NOTICE_FRAME)).unwrap()).collect();
+        assert_eq!(got, vec![Notice::Unknown, Notice::Unknown, Notice::Changed]);
+    }
 }

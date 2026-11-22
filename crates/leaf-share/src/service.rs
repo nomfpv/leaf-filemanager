@@ -79,8 +79,10 @@ pub trait ShareListener: Send + Sync {
     fn joined(&self, share: &str, result: Result<(), String>);
     /// A share stopped by itself (a refusal of the sync, the friend left): for a notice.
     fn paused(&self, share: &str, name: &str, reason: &str);
-    /// A message for the app's extensions from the friend of `share`, already checked (allowed, small, not too often).
-    fn ext_message(&self, _share: &str, _friend_name: &str, _kind: u16, _payload: Vec<u8>) {}
+    /// A message for the app's extensions from the friend with device id `friend_id`, already checked (allowed, small, not too often).
+    fn ext_message(&self, _friend_id: &str, _friend_name: &str, _kind: u16, _payload: Vec<u8>) {}
+    /// The link to a friend came up (`up`) or went down; `friend_id` is the friend's device id.
+    fn friend_link(&self, _friend_id: &str, _friend_name: &str, _up: bool) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +104,12 @@ pub struct ShareInfo {
     pub folder: PathBuf,
     pub role: Role,
     pub peer_name: String,
+    /// The friend's device id (the same for every folder shared with that friend).
+    pub peer_id: String,
+    /// The link to the friend is up now.
+    pub connected: bool,
+    /// The friend's leaf said it understands extension messages (known while the link is up).
+    pub peer_ext: bool,
     pub address: String,
     pub friend_can_write: bool,
     pub state: State,
@@ -117,6 +125,8 @@ pub(crate) struct Session {
     /// The rate of extension messages in each direction on this link.
     ext_rx: Mutex<ext_msg::Limiter>,
     ext_tx: Mutex<ext_msg::Limiter>,
+    /// The other leaf said in its hello that it understands extension messages.
+    peer_ext: AtomicBool,
 }
 
 impl Session {
@@ -540,6 +550,9 @@ impl Inner {
             folder: s.folder.clone(),
             role: s.role,
             peer_name: s.peer.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+            peer_id: s.peer.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
+            connected,
+            peer_ext: connected && self.session(&s.id).is_some_and(|x| x.peer_ext.load(Ordering::Relaxed)),
             address,
             friend_can_write: s.friend_can_write,
             state,
@@ -551,10 +564,10 @@ impl Inner {
 
     /// An extension message arrived on `share`'s link: passed on only when both switches allow it, it is small and not too frequent.
     fn ext_in(&self, share: &str, sess: &Session, kind: u16, hex: &str) {
-        let friend = {
+        let (friend, friend_id) = {
             let store = lock(&self.store);
             match store.get(share) {
-                Some(s) if s.allow_ext => s.peer.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+                Some(s) if s.allow_ext => s.peer.as_ref().map(|p| (p.name.clone(), p.id.clone())).unwrap_or_default(),
                 _ => return,
             }
         };
@@ -562,7 +575,7 @@ impl Inner {
             return;
         }
         if let Some(payload) = ext_msg::decode(hex) {
-            self.listener.ext_message(share, &friend, kind, payload);
+            self.listener.ext_message(&friend_id, &friend, kind, payload);
         }
     }
 
@@ -800,13 +813,23 @@ impl Inner {
             s.remove(id);
         }
         drop(s);
+        self.link_event(id, false);
         self.listener.changed();
+    }
+
+    /// Tells the listener a friend's link went up or down.
+    fn link_event(&self, share: &str, up: bool) {
+        let peer = lock(&self.store).get(share).and_then(|s| s.peer.clone());
+        if let Some(p) = peer {
+            self.listener.friend_link(&p.id, &p.name, up);
+        }
     }
 
     fn put_session(&self, id: &str, sess: Arc<Session>) {
         if let Some(old) = lock(&self.sessions).insert(id.to_string(), sess) {
             old.link.close();
         }
+        self.link_event(id, true);
         self.listener.changed();
     }
 
@@ -819,7 +842,7 @@ impl Inner {
             anyhow::bail!("another device answered at {}", peer.address);
         }
         let (mut s, mut r) = link.open().await?;
-        wire::write_frame(&mut s, &Open::Resume { proto: PROTO, share: rec.id.clone(), name: self.cfg.name.clone() }).await?;
+        wire::write_frame(&mut s, &Open::Resume { proto: PROTO, share: rec.id.clone(), name: self.cfg.name.clone(), ext: true }).await?;
         let reply: OpenReply = match tokio::time::timeout(HELLO_TIME, wire::read_frame(&mut r)).await {
             Ok(Ok(r)) => r,
             _ => {
@@ -827,7 +850,7 @@ impl Inner {
                 anyhow::bail!("the other PC did not take the connection (it may have paused or stopped sharing the folder)");
             }
         };
-        let OpenReply::Welcome { name, can_write, .. } = reply else {
+        let OpenReply::Welcome { name, can_write, ext: host_ext, .. } = reply else {
             link.close();
             anyhow::bail!("an unexpected answer");
         };
@@ -841,17 +864,17 @@ impl Inner {
                 store.save();
             }
         }
-        self.start_guest_session(&rec.id, rec.folder.clone(), link, s, r);
+        self.start_guest_session(&rec.id, rec.folder.clone(), link, s, r, host_ext);
         Ok(())
     }
 
     /// The friend's side of a connection: answers the sharing PC's file requests and hears its notices.
-    fn start_guest_session(self: &Arc<Self>, id: &str, folder: PathBuf, link: Arc<dyn Link>, ctl: SendHalf, mut ctl_recv: RecvHalf) {
-        let sess = Arc::new(Session { link: link.clone(), ctl: tokio::sync::Mutex::new(ctl), ext_rx: Mutex::default(), ext_tx: Mutex::default() });
+    fn start_guest_session(self: &Arc<Self>, id: &str, folder: PathBuf, link: Arc<dyn Link>, ctl: SendHalf, mut ctl_recv: RecvHalf, peer_ext: bool) {
+        let sess = Arc::new(Session { link: link.clone(), ctl: tokio::sync::Mutex::new(ctl), ext_rx: Mutex::default(), ext_tx: Mutex::default(), peer_ext: AtomicBool::new(peer_ext) });
         self.put_session(id, sess.clone());
         let (inner, share) = (self.clone(), id.to_string());
         self.rt.spawn(async move {
-            while let Ok(n) = wire::read_frame_max::<_, Notice>(&mut ctl_recv, ext_msg::MAX_NOTICE_FRAME).await {
+            while let Ok(n) = wire::read_notice(&mut ctl_recv, ext_msg::MAX_NOTICE_FRAME).await {
                 match n {
                     Notice::Left => {
                         let who = lock(&inner.store).get(&share).and_then(|s| s.peer.as_ref().map(|p| p.name.clone())).unwrap_or_default();
@@ -868,7 +891,7 @@ impl Inner {
                         drop(store);
                         inner.listener.changed();
                     }
-                    Notice::Changed => {}
+                    Notice::Changed | Notice::Unknown => {}
                     Notice::Ext { kind, hex } => inner.ext_in(&share, &sess, kind, &hex),
                 }
             }
@@ -905,7 +928,7 @@ impl Inner {
         let refused = || "The other PC did not take the invite: it may have run out or been used already. Ask your friend for a new one".to_string();
         let broken = |e: anyhow::Error| format!("The connection broke off ({e:#})");
         let (mut s, mut r) = link.open().await.map_err(broken)?;
-        wire::write_frame(&mut s, &Open::Join { proto: PROTO, share: inv.share.clone(), secret: inv.secret.clone(), name: self.cfg.name.clone() }).await.map_err(broken)?;
+        wire::write_frame(&mut s, &Open::Join { proto: PROTO, share: inv.share.clone(), secret: inv.secret.clone(), name: self.cfg.name.clone(), ext: true }).await.map_err(broken)?;
         let mut reply: OpenReply = match tokio::time::timeout(HELLO_TIME, wire::read_frame(&mut r)).await {
             Ok(Ok(x)) => x,
             _ => {
@@ -926,7 +949,7 @@ impl Inner {
                 }
             };
         }
-        let OpenReply::Welcome { name, folder: shared_name, can_write } = reply else {
+        let OpenReply::Welcome { name, folder: shared_name, can_write, ext: host_ext } = reply else {
             link.close();
             return Err(refused());
         };
@@ -950,7 +973,7 @@ impl Inner {
         }
         lock(&self.live).remove(&inv.share);
         self.activate(&inv.share);
-        self.start_guest_session(&inv.share, folder, link, s, r);
+        self.start_guest_session(&inv.share, folder, link, s, r, host_ext);
         Ok(())
     }
 
@@ -991,7 +1014,7 @@ impl Inner {
             return;
         };
         match open {
-            Open::Resume { proto, share, name } if proto == PROTO => {
+            Open::Resume { proto, share, name, ext: guest_ext } if proto == PROTO => {
                 let ok = {
                     let mut store = lock(&self.store);
                     match store.get_mut(&share) {
@@ -1000,7 +1023,7 @@ impl Inner {
                                 p.address = link.remote_address();
                                 p.name = name;
                             }
-                            let w = OpenReply::Welcome { name: self.cfg.name.clone(), folder: rec.name.clone(), can_write: rec.friend_can_write };
+                            let w = OpenReply::Welcome { name: self.cfg.name.clone(), folder: rec.name.clone(), can_write: rec.friend_can_write, ext: true };
                             store.save();
                             Some(w)
                         }
@@ -1016,9 +1039,9 @@ impl Inner {
                     link.close();
                     return;
                 }
-                self.start_host_session(&share, link, s, r);
+                self.start_host_session(&share, link, s, r, guest_ext);
             }
-            Open::Join { proto, share, secret, name } if proto == PROTO => {
+            Open::Join { proto, share, secret, name, ext: guest_ext } if proto == PROTO => {
                 let good = {
                     let mut store = lock(&self.store);
                     let hash = sha256_hex(&secret);
@@ -1055,7 +1078,7 @@ impl Inner {
                         return;
                     };
                     rec.peer = Some(PeerRec { id: kit::id_of(&fp), fingerprint: fp.clone(), name, address: link.remote_address() });
-                    let w = OpenReply::Welcome { name: self.cfg.name.clone(), folder: rec.name.clone(), can_write: rec.friend_can_write };
+                    let w = OpenReply::Welcome { name: self.cfg.name.clone(), folder: rec.name.clone(), can_write: rec.friend_can_write, ext: true };
                     store.save();
                     w
                 };
@@ -1063,20 +1086,20 @@ impl Inner {
                     link.close();
                     return;
                 }
-                self.start_host_session(&share, link, s, r);
+                self.start_host_session(&share, link, s, r, guest_ext);
             }
             _ => link.close(),
         }
     }
 
     /// The sharing PC's side of a connection: hears the friend's notices; syncs on connect.
-    fn start_host_session(self: &Arc<Self>, id: &str, link: Arc<dyn Link>, ctl: SendHalf, mut ctl_recv: RecvHalf) {
-        let sess = Arc::new(Session { link, ctl: tokio::sync::Mutex::new(ctl), ext_rx: Mutex::default(), ext_tx: Mutex::default() });
+    fn start_host_session(self: &Arc<Self>, id: &str, link: Arc<dyn Link>, ctl: SendHalf, mut ctl_recv: RecvHalf, peer_ext: bool) {
+        let sess = Arc::new(Session { link, ctl: tokio::sync::Mutex::new(ctl), ext_rx: Mutex::default(), ext_tx: Mutex::default(), peer_ext: AtomicBool::new(peer_ext) });
         self.put_session(id, sess.clone());
         self.wake(id);
         let (inner, share) = (self.clone(), id.to_string());
         self.rt.spawn(async move {
-            while let Ok(n) = wire::read_frame_max::<_, Notice>(&mut ctl_recv, ext_msg::MAX_NOTICE_FRAME).await {
+            while let Ok(n) = wire::read_notice(&mut ctl_recv, ext_msg::MAX_NOTICE_FRAME).await {
                 match n {
                     Notice::Changed => inner.wake(&share),
                     Notice::Left => {
@@ -1085,7 +1108,7 @@ impl Inner {
                         sess.link.close();
                         break;
                     }
-                    Notice::CanWrite { .. } => {}
+                    Notice::CanWrite { .. } | Notice::Unknown => {}
                     Notice::Ext { kind, hex } => inner.ext_in(&share, &sess, kind, &hex),
                 }
             }

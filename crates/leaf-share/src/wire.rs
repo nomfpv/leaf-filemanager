@@ -20,9 +20,9 @@ const MAX_FRAME: usize = 64 << 20;
 #[serde(tag = "t", rename_all = "kebab-case")]
 pub enum Open {
     /// The first connection: the invite's secret.
-    Join { proto: u32, share: String, secret: String, name: String },
-    /// Every later one.
-    Resume { proto: u32, share: String, name: String },
+    Join { proto: u32, share: String, secret: String, name: String, #[serde(default)] ext: bool },
+    /// Every later one. `ext`: this leaf understands the extension notice (`ext_msg`); an older leaf does not send the field.
+    Resume { proto: u32, share: String, name: String, #[serde(default)] ext: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub enum OpenReply {
     /// The devices are not paired yet: both show the code.
     Pair,
     /// `folder`: the shared folder's name on the sharing PC. `can_write`: the friend's changes come back.
-    Welcome { name: String, folder: String, can_write: bool },
+    Welcome { name: String, folder: String, can_write: bool, #[serde(default)] ext: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +50,9 @@ pub enum Notice {
     CanWrite { can_write: bool },
     /// A message for the app's extensions (`ext_msg`): the payload as lower-case hex. Dropped unless the receiver allowed it.
     Ext { kind: u16, hex: String },
+    /// A notice of a kind this leaf does not know (a newer leaf's): skipped. Made by [`read_notice`], never sent.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,11 +131,22 @@ pub async fn read_frame<R: AsyncRead + Unpin + ?Sized, T: DeserializeOwned>(r: &
 
 /// [`read_frame`] with a smaller limit, checked before the buffer is allocated (the control stream: notices are small).
 pub async fn read_frame_max<R: AsyncRead + Unpin + ?Sized, T: DeserializeOwned>(r: &mut R, max: usize) -> anyhow::Result<T> {
+    Ok(serde_json::from_slice(&read_raw(r, max).await?)?)
+}
+
+async fn read_raw<R: AsyncRead + Unpin + ?Sized>(r: &mut R, max: usize) -> anyhow::Result<Vec<u8>> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len).await?;
     let len = u32::from_be_bytes(len) as usize;
     anyhow::ensure!(len <= max, "a frame of {len} bytes is too large");
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf).await?;
-    Ok(serde_json::from_slice(&buf)?)
+    Ok(buf)
+}
+
+/// Reads one control-stream notice. A notice this leaf does not understand (an unknown kind, or fields it does not know) is
+/// [`Notice::Unknown`] and the connection goes on; only a frame that is too large, or a broken stream, is an error.
+pub async fn read_notice<R: AsyncRead + Unpin + ?Sized>(r: &mut R, max: usize) -> anyhow::Result<Notice> {
+    let raw = read_raw(r, max).await?;
+    Ok(serde_json::from_slice(&raw).unwrap_or(Notice::Unknown))
 }

@@ -215,15 +215,15 @@ fn a_peer_not_stored_for_the_share_gets_nothing() {
     let port = p.host.port();
     // a device that never joined
     let stranger = p.root.join("stranger");
-    assert_eq!(raw_open(&stranger, port, Open::Resume { proto: PROTO, share: p.id.clone(), name: "x".into() }), None);
+    assert_eq!(raw_open(&stranger, port, Open::Resume { proto: PROTO, share: p.id.clone(), name: "x".into(), ext: false }), None);
     // the friend itself, for a share it is not stored for
     let other = p.root.join("other");
     std::fs::create_dir_all(&other).unwrap();
     let other_id = p.host.create(&other).unwrap();
     let friend = p.root.join("g").join("id");
-    assert_eq!(raw_open(&friend, port, Open::Resume { proto: PROTO, share: other_id, name: "x".into() }), None);
+    assert_eq!(raw_open(&friend, port, Open::Resume { proto: PROTO, share: other_id, name: "x".into(), ext: false }), None);
     // while the friend, for its share, is answered
-    assert!(matches!(raw_open(&friend, port, Open::Resume { proto: PROTO, share: p.id.clone(), name: "x".into() }), Some(OpenReply::Welcome { .. })));
+    assert!(matches!(raw_open(&friend, port, Open::Resume { proto: PROTO, share: p.id.clone(), name: "x".into(), ext: false }), Some(OpenReply::Welcome { .. })));
 }
 
 #[test]
@@ -233,15 +233,15 @@ fn an_expired_or_reused_invite_is_refused() {
     let stranger = p.root.join("stranger");
     // used once already (by the friend)
     let used = Invite::parse(&p.invite).unwrap();
-    assert_eq!(raw_open(&stranger, port, Open::Join { proto: PROTO, share: used.share, secret: used.secret, name: "x".into() }), None);
+    assert_eq!(raw_open(&stranger, port, Open::Join { proto: PROTO, share: used.share, secret: used.secret, name: "x".into(), ext: false }), None);
     // ran out
     let other = p.root.join("other");
     std::fs::create_dir_all(&other).unwrap();
     let other_id = p.host.create(&other).unwrap();
     let old = Invite::parse(&p.host.invite_until(&other_id, "127.0.0.1", crate::now_ms() - 1000).unwrap()).unwrap();
     assert!(p.guest.join(&old.to_text(), &p.root.join("j2")).is_err(), "the joining side refuses it too");
-    assert_eq!(raw_open(&stranger, port, Open::Join { proto: PROTO, share: old.share.clone(), secret: old.secret.clone(), name: "x".into() }), None);
+    assert_eq!(raw_open(&stranger, port, Open::Join { proto: PROTO, share: old.share.clone(), secret: old.secret.clone(), name: "x".into(), ext: false }), None);
     // a good one for the same share is answered (the code is asked: the stranger never met this PC)
     let good = Invite::parse(&p.host.invite(&other_id, "127.0.0.1").unwrap()).unwrap();
-    assert_eq!(raw_open(&stranger, port, Open::Join { proto: PROTO, share: good.share, secret: good.secret, name: "x".into() }), Some(OpenReply::Pair));
+    assert_eq!(raw_open(&stranger, port, Open::Join { proto: PROTO, share: good.share, secret: good.secret, name: "x".into(), ext: false }), Some(OpenReply::Pair));
 }

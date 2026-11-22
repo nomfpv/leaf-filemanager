@@ -25,7 +25,8 @@ enum Ev {
     Code { share: String, peer: String, code: String },
     Joined { result: Result<(), String> },
     Paused { name: String, reason: String },
-    Ext { share: String, name: String, kind: u16, payload: Vec<u8> },
+    Ext { friend: String, name: String, kind: u16, payload: Vec<u8> },
+    Link { friend: String, name: String, up: bool },
 }
 
 struct Listener(mpsc::UnboundedSender<Ev>);
@@ -43,8 +44,11 @@ impl ShareListener for Listener {
     fn paused(&self, _share: &str, name: &str, reason: &str) {
         let _ = self.0.unbounded_send(Ev::Paused { name: name.into(), reason: reason.into() });
     }
-    fn ext_message(&self, share: &str, friend_name: &str, kind: u16, payload: Vec<u8>) {
-        let _ = self.0.unbounded_send(Ev::Ext { share: share.into(), name: friend_name.into(), kind, payload });
+    fn ext_message(&self, friend_id: &str, friend_name: &str, kind: u16, payload: Vec<u8>) {
+        let _ = self.0.unbounded_send(Ev::Ext { friend: friend_id.into(), name: friend_name.into(), kind, payload });
+    }
+    fn friend_link(&self, friend_id: &str, friend_name: &str, up: bool) {
+        let _ = self.0.unbounded_send(Ev::Link { friend: friend_id.into(), name: friend_name.into(), up });
     }
 }
 
@@ -224,7 +228,8 @@ fn on_event(ev: Ev, cx: &mut App) {
                 Err(e) => crate::prompt::notice(t!("The shared folder could not be joined"), e, window, cx),
             });
         }
-        Ev::Ext { share, name, kind, payload } => crate::ext::emit(cx, || crate::ext::Event::PeerMessage { friend: share, friend_name: name, kind, payload }),
+        Ev::Ext { friend, name, kind, payload } => crate::ext::emit(cx, || crate::ext::Event::PeerMessage { friend, friend_name: name, kind, payload }),
+        Ev::Link { friend, name, up } => crate::ext::emit(cx, || crate::ext::Event::FriendLink { friend, friend_name: name, online: up }),
         Ev::Paused { name, reason } => {
             refresh(cx);
             crate::status_center::start_with_id(cx, format!("{} {name}", t!("Shared folder paused:")), move |_| Err(anyhow::anyhow!(reason)), None);
@@ -569,11 +574,30 @@ pub(crate) fn settings_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<Any
 
 // ------------------------------------------------------------------------------------------------------------------ extension messages
 
-/// The friends of the shared folders, `(share id, name)` (the id names the friend for [`send_ext`]).
-pub fn connected_friends(cx: &App) -> Vec<(String, String)> {
-    cx.try_global::<ShareUi>().map(|u| u.shares.iter().filter(|s| !s.peer_name.is_empty()).map(|s| (s.id.clone(), s.peer_name.clone())).collect()).unwrap_or_default()
+/// The friends of the shared folders, one per friend however many folders are shared with them: `(device id, name, link is up,
+/// their leaf takes extension messages)`.
+pub fn connected_friends(cx: &App) -> Vec<(String, String, bool, bool)> {
+    let mut out: Vec<(String, String, bool, bool)> = Vec::new();
+    for s in cx.try_global::<ShareUi>().map(|u| u.shares.as_slice()).unwrap_or_default() {
+        if s.peer_id.is_empty() {
+            continue;
+        }
+        match out.iter_mut().find(|f| f.0 == s.peer_id) {
+            Some(f) => {
+                f.2 |= s.connected;
+                f.3 |= s.peer_ext;
+            }
+            None => out.push((s.peer_id.clone(), s.peer_name.clone(), s.connected, s.peer_ext)),
+        }
+    }
+    out
 }
 
-pub fn send_ext(cx: &App, share: &str, kind: u16, payload: &[u8]) -> Result<(), String> {
-    service(cx).ok_or_else(|| "Shared folders are not running".to_string())?.send_ext(share, kind, payload)
+/// Sends to the friend with device id `friend` over a folder whose link is up and whose leaf takes extension messages.
+pub fn send_ext(cx: &App, friend: &str, kind: u16, payload: &[u8]) -> Result<(), String> {
+    let share = cx
+        .try_global::<ShareUi>()
+        .and_then(|u| u.shares.iter().find(|s| s.peer_id == friend && s.connected && s.peer_ext).map(|s| s.id.clone()))
+        .ok_or_else(|| "The friend is not connected, or their leaf does not take extension messages".to_string())?;
+    service(cx).ok_or_else(|| "Shared folders are not running".to_string())?.send_ext(&share, kind, payload)
 }

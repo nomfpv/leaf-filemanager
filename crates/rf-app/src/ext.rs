@@ -171,6 +171,8 @@ pub enum Event {
     WindowMinimized { minimized: bool },
     /// A frame is being drawn while an extension asked for frames (see [`animate`] and [`want_frames`]); `dt_ms` since the last one.
     Frame { dt_ms: u32 },
+    /// The link to a friend's leaf came up (`online`) or went down. `friend` is the friend's stable id (see [`peer::friends`]).
+    FriendLink { friend: String, friend_name: String, online: bool },
     /// A message from a friend's leaf on a shared folder's link (see `ext::peer`). Delivered only when both switches allow it.
     PeerMessage { friend: String, friend_name: String, kind: u16, payload: Vec<u8> },
 }
@@ -1950,13 +1952,32 @@ mod tests {
 pub mod peer {
     pub use leaf_share::ext_msg::{BURST, MAX_PAYLOAD, PER_SEC};
 
-    /// The friends that can be sent to right now: `(friend id, name)`. The id is the one in [`super::Event::PeerMessage`].
-    pub fn friends(cx: &gpui_kit::App) -> Vec<(String, String)> {
-        crate::share_ui::connected_friends(cx)
+    /// One friend a folder is shared with.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Friend {
+        /// The friend's device id: stable across restarts and the same for every folder shared with them. It is the id of
+        /// [`super::Event::PeerMessage`], [`super::Event::FriendLink`] and [`send`].
+        pub id: String,
+        /// The name the friend gave their PC.
+        pub name: String,
+        /// The link to them is up now.
+        pub online: bool,
+        /// Their leaf said in its hello that it understands extension messages (an older leaf does not; known while online).
+        pub can_receive: bool,
     }
 
-    /// Sends one message to a friend (see the limits above). Fails, without queueing, when the friend is not connected, the payload is
-    /// too long or messages go out too often.
+    /// The friends folders are shared with (one entry each, whether or not they are online).
+    pub fn friends(cx: &gpui_kit::App) -> Vec<Friend> {
+        crate::share_ui::connected_friends(cx).into_iter().map(|(id, name, online, can_receive)| Friend { id, name, online, can_receive }).collect()
+    }
+
+    /// Whether the link to the friend with this id is up.
+    pub fn online(cx: &gpui_kit::App, friend: &str) -> bool {
+        crate::share_ui::connected_friends(cx).iter().any(|f| f.0 == friend && f.2)
+    }
+
+    /// Sends one message to a friend (see the limits above). Fails, without queueing, when the friend is not connected, their leaf does
+    /// not take extension messages, the payload is too long or messages go out too often.
     pub fn send(cx: &gpui_kit::App, friend: &str, kind: u16, payload: &[u8]) -> Result<(), String> {
         crate::share_ui::send_ext(cx, friend, kind, payload)
     }
