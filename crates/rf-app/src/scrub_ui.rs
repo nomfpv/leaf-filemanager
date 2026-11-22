@@ -18,7 +18,7 @@ use crate::theme::{self, Palette};
 /// Kinds of file the right-click menu offers the command for (the command itself takes any file and says what it cannot do).
 const KINDS: &[&str] = &[
     "jpg", "jpeg", "png", "webp", "tif", "tiff", "heic", "heif", "avif", "gif", "pdf", "docx", "xlsx", "pptx", "docm", "xlsm", "pptm", "odt", "ods", "odp",
-    "mp3", "flac", "ogg", "oga", "opus", "wav", "m4a", "mp4", "m4v", "mov", "mkv", "avi",
+    "mp3", "flac", "ogg", "oga", "opus", "wav", "m4a", "mp4", "m4v", "mov", "mkv", "avi", "webm", "svg", "bmp", "ico", "dng", "cr2", "cr3", "nef", "arw",
 ];
 
 /// The selection holds a file this command is for (cheap: for the right-click menu).
@@ -55,6 +55,31 @@ struct FileResult {
     error: Option<(String, String)>,
     /// "Show metadata": nothing was changed.
     dry: bool,
+    /// The file name itself looks like it carries a date or a device name (the content cleaning cannot change it).
+    name_note: Option<String>,
+}
+
+/// The sheet's note about a file NAME, unless the neutral-name option is ticked already.
+fn name_note(p: &Path, o: &RunOpts) -> Option<String> {
+    let n = p.file_name()?.to_string_lossy();
+    (!o.neutral && leaf_scrub::name_looks_personal(&n)).then(|| t!("The file name looks like it carries a date or a device name. Tick “Give the files a neutral name” to replace it.").to_string())
+}
+
+/// What the "Verify" button found in one cleaned file: what the lister still finds (empty: nothing left).
+#[derive(Clone)]
+struct Checked {
+    name: String,
+    left: Vec<(String, String)>,
+    error: Option<String>,
+}
+
+fn verify_one(r: &FileResult, o: &RunOpts) -> Option<Checked> {
+    let out = r.output.as_ref().filter(|_| r.error.is_none())?;
+    let name = name_of(out);
+    Some(match leaf_scrub::inspect(out, &o.lib()) {
+        Ok(i) => Checked { name, left: pairs(&i.to_remove().cloned().collect::<Vec<_>>()), error: None },
+        Err(e) => Checked { name, left: vec![], error: Some(e.to_string()) },
+    })
 }
 
 fn pairs(v: &[leaf_scrub::Finding]) -> Vec<(String, String)> {
@@ -71,9 +96,9 @@ fn dry_result(p: &Path, o: &RunOpts) -> FileResult {
         Ok(i) => {
             let refusal = (!i.can_clean).then(|| (t!("This kind of file cannot be cleaned").to_string(), i.refusal.clone().unwrap_or_default()));
             let (removed, kept): (Vec<_>, Vec<_>) = i.findings.iter().cloned().partition(|f| f.remove);
-            FileResult { name, format: i.format, output: None, removed: pairs(&removed), kept: pairs(&kept), notes: i.notes, error: refusal, dry: true }
+            FileResult { name, format: i.format, output: None, removed: pairs(&removed), kept: pairs(&kept), notes: i.notes, error: refusal, dry: true, name_note: name_note(p, o) }
         }
-        Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: true },
+        Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: true, name_note: name_note(p, o) },
     }
 }
 
@@ -113,6 +138,11 @@ pub struct ScrubView {
     results: Vec<FileResult>,
     /// The sheet shows what a run did (not a "Show metadata" listing).
     ran: bool,
+    /// The options of the run that produced `results` (the Verify button reads the cleaned files with the same ones).
+    ran_opts: RunOpts,
+    /// What "Verify" found, per cleaned file; `None` until the button is pressed.
+    verified: Option<Vec<Checked>>,
+    verifying: bool,
     focus: FocusHandle,
     frame_dark: Option<bool>,
 }
@@ -141,6 +171,9 @@ pub fn open(files: Vec<PathBuf>, cx: &mut App) {
                 phase: Phase::Setup,
                 results: Vec::new(),
                 ran: false,
+                ran_opts: RunOpts { remove_profile: false, keep_cover: false, reset_times: false, neutral: false, replace: false },
+                verified: None,
+                verifying: false,
                 focus: cx.focus_handle(),
                 frame_dark: None,
             };
@@ -166,7 +199,28 @@ impl ScrubView {
             let _ = this.update(cx, |v, cx| {
                 v.results = r;
                 v.ran = false;
+                v.verified = None;
                 v.phase = Phase::Done;
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// "Verify": reads every cleaned file again with the lister, the way "Show metadata" does, and shows what is left per file.
+    fn verify(&mut self, cx: &mut Context<Self>) {
+        if self.verifying || !self.ran || self.phase != Phase::Done {
+            return;
+        }
+        self.verifying = true;
+        let (results, o) = (self.results.clone(), self.ran_opts);
+        let task = cx.background_spawn(async move { results.iter().filter_map(|r| verify_one(r, &o)).collect::<Vec<_>>() });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |v, cx| {
+                v.verified = Some(r);
+                v.verifying = false;
                 cx.notify();
             });
         })
@@ -190,6 +244,8 @@ impl ScrubView {
             let _ = view.update(cx, |v, cx| {
                 v.results = r;
                 v.ran = true;
+                v.ran_opts = o;
+                v.verified = None;
                 v.phase = Phase::Done;
                 cx.notify();
             });
@@ -230,13 +286,13 @@ fn work(files: &[PathBuf], o: &RunOpts, t: &Arc<leaf_sys::fileops::Tracker>, out
                         undo.push((oc.output.clone(), b, leaf_dev::review::Stamp::of_file(&oc.output)));
                     }
                 }
-                FileResult { name, format: oc.format, output: Some(oc.output), removed: pairs(&oc.removed), kept: pairs(&oc.kept), notes: oc.notes, error: None, dry: false }
+                FileResult { name, format: oc.format, output: Some(oc.output), removed: pairs(&oc.removed), kept: pairs(&oc.kept), notes: oc.notes, error: None, dry: false, name_note: name_note(src, o) }
             }
             Err(leaf_scrub::ScrubError::Cancelled) => {
                 stopped = true;
-                FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((t!("Cancelled, left untouched").to_string(), String::new())), dry: false }
+                FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((t!("Cancelled, left untouched").to_string(), String::new())), dry: false, name_note: None }
             }
-            Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: false },
+            Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: false, name_note: None },
         };
         out.lock().unwrap().push(r);
         if stopped {
@@ -329,6 +385,33 @@ fn finding_rows(p: &Palette, items: &[(String, String)], out: &mut Vec<AnyElemen
     }
 }
 
+/// The result of "Verify": per cleaned file, "nothing left" or what the lister still finds.
+fn verify_card(p: &Palette, checked: &[Checked]) -> AnyElement {
+    let mut rows: Vec<AnyElement> = vec![div().pt_1().pb(px(2.)).text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text_secondary).child(t!("Check of the cleaned files")).into_any_element()];
+    if checked.is_empty() {
+        rows.push(small(p, t!("No cleaned file to check.").to_string()));
+    }
+    for c in checked {
+        let (icon, color, text) = match (&c.error, c.left.is_empty()) {
+            (Some(e), _) => (L::CircleAlert, p.danger, format!("{}: {e}", t!("could not be read"))),
+            (None, true) => (L::CircleCheck, p.accent, t!("nothing left").to_string()),
+            (None, false) => (L::CircleAlert, p.danger, format!("{}: {}", t!("still found"), c.left.len())),
+        };
+        rows.push(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .text_sm()
+                .child(Icon::new(icon).size(px(14.)).text_color(color).flex_shrink_0())
+                .child(div().flex_1().min_w_0().truncate().child(c.name.clone()))
+                .child(div().text_xs().text_color(color).child(text))
+                .into_any_element(),
+        );
+        finding_rows(p, &c.left, &mut rows);
+    }
+    card(p, rows)
+}
+
 fn file_card(p: &Palette, r: &FileResult, ran: bool) -> AnyElement {
     let mut rows: Vec<AnyElement> = Vec::new();
     let head = if r.format.is_empty() { r.name.clone() } else { format!("{} · {}", r.name, r.format) };
@@ -375,6 +458,9 @@ fn file_card(p: &Palette, r: &FileResult, ran: bool) -> AnyElement {
         finding_rows(p, &r.kept, &mut rows);
     }
     for n in &r.notes {
+        rows.push(small(p, n.clone()));
+    }
+    if let Some(n) = &r.name_note {
         rows.push(small(p, n.clone()));
     }
     card(p, rows)
@@ -431,9 +517,18 @@ impl Render for ScrubView {
                 for r in &self.results {
                     body.push(file_card(&p, r, self.ran));
                 }
+                if let Some(checked) = &self.verified {
+                    body.push(verify_card(&p, checked));
+                } else if self.verifying {
+                    body.push(small(&p, t!("Reading the cleaned files again…").to_string()));
+                }
                 body.push(small(&p, leaf_scrub::NOT_REMOVED_LINE.to_string()));
+                body.push(small(&p, leaf_scrub::REFUSED_LINE.to_string()));
             }
-            Phase::Setup => body.push(small(&p, leaf_scrub::NOT_REMOVED_LINE.to_string())),
+            Phase::Setup => {
+                body.push(small(&p, leaf_scrub::NOT_REMOVED_LINE.to_string()));
+                body.push(small(&p, leaf_scrub::REFUSED_LINE.to_string()));
+            }
         }
 
         let button = |id: &'static str, label: &'static str, primary: bool| {
@@ -487,6 +582,9 @@ impl Render for ScrubView {
                     .border_t_1()
                     .border_color(p.divider)
                     .child(div().flex_1())
+                    .when(self.ran && self.phase == Phase::Done && self.results.iter().any(|r| r.output.is_some()), |d| {
+                        d.child(button("verify", t!("Verify"), false).on_click(cx.listener(|v, _, _, cx| v.verify(cx))))
+                    })
                     .child(button("show", t!("Show metadata"), false).on_click(cx.listener(|v, _, _, cx| v.show_metadata(cx))))
                     .child(button("run", t!("Remove metadata"), true).on_click(cx.listener(|v, _, _, cx| v.run(cx))))
                     .child(button("close", t!("Close"), false).on_click(|_, window, _| window.remove_window())),

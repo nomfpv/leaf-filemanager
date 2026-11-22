@@ -987,6 +987,8 @@ fn create_archive_dialog(items: Vec<PathBuf>, window: &mut Window, cx: &mut App)
     let protect = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let split = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let dict = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    // 1 = clean the files' metadata first: an archive keeps the metadata of the files inside it
+    let scrub_first = std::rc::Rc::new(std::cell::Cell::new(0usize));
     // (None = RAR, WinRAR's format: offered only when its Rar.exe is installed)
     let mut formats = vec![
         ("ZIP", Some(rf_archive::Format::Zip)),
@@ -998,7 +1000,7 @@ fn create_archive_dialog(items: Vec<PathBuf>, window: &mut Window, cx: &mut App)
     if crate::archive_view::winrar().is_some() {
         formats.push(("RAR", None));
     }
-    let choices = vec![
+    let mut choices = vec![
         Choice { label: t!("Format").into(), options: formats.iter().map(|(n, _)| SharedString::from(*n)).collect(), selected: format.clone() },
         Choice {
             label: t!("Compression level").into(),
@@ -1019,7 +1021,19 @@ fn create_archive_dialog(items: Vec<PathBuf>, window: &mut Window, cx: &mut App)
             selected: dict.clone(),
         },
     ];
+    if crate::scrub_ui::offers(&items) {
+        choices.push(Choice {
+            label: t!("Metadata of the files").into(),
+            options: vec![t!("Leave as it is (an archive keeps the metadata of the files inside it)").into(), t!("Clean the files first (opens Remove metadata, no archive is made now)").into()],
+            selected: scrub_first.clone(),
+        });
+    }
     let create = Button::new(t!("Create"), Kind::Primary, move |name, window, cx| {
+        if scrub_first.get() == 1 {
+            let files = items.clone();
+            window.defer(cx, move |_, cx| crate::scrub_ui::open(files, cx));
+            return Ok(());
+        }
         let name = name.unwrap_or_default();
         let name = name.trim();
         if name.is_empty() {

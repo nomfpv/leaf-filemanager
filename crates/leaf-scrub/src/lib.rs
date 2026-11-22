@@ -349,6 +349,39 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
 /// "Formats leaf cannot clean are refused and left untouched": the second fixed line of the result sheet.
 pub const REFUSED_LINE: &str = "Formats leaf cannot clean are refused and left untouched: check the list above.";
 
+/// Does the file NAME look like it carries personal data: a date stamp (`IMG_20261122_142233.jpg`, `Screenshot 2026-11-22 ...`) or a
+/// device / app prefix with a number? The content cleaning cannot change a name; the neutral-name option does.
+pub fn name_looks_personal(name: &str) -> bool {
+    let b = name.as_bytes();
+    let digit = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+    let num = |i: usize, n: usize| (0..n).all(|k| digit(i + k)).then(|| name[i..i + n].parse::<u32>().ok()).flatten();
+    for i in 0..b.len() {
+        // 20261122 / 2026-11-22 / 2026.11.22 / 2026_11_22
+        if let Some(y) = num(i, 4) {
+            if !(1990..=2100).contains(&y) {
+                continue;
+            }
+            let mut j = i + 4;
+            if matches!(b.get(j), Some(b'-' | b'.' | b'_')) {
+                j += 1;
+            }
+            if let Some(m) = num(j, 2) {
+                let mut k = j + 2;
+                if matches!(b.get(k), Some(b'-' | b'.' | b'_')) {
+                    k += 1;
+                }
+                if let Some(d) = num(k, 2) {
+                    if (1..=12).contains(&m) && (1..=31).contains(&d) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    let lower = name.to_ascii_lowercase();
+    ["img_", "img-", "dsc_", "dscn", "dsc0", "pxl_", "vid_", "mvi_", "screenshot", "screen shot", "whatsapp", "photo "].iter().any(|p| lower.starts_with(p)) && b.iter().any(u8::is_ascii_digit)
+}
+
 /// Writes the cleaned copy of `src` to `dst` (which must not exist) and checks it. On any error nothing is left at `dst`.
 pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> bool) -> Result<Outcome> {
     let (fam, name) = family_of(src)?;
