@@ -9,3 +9,9 @@ pub(crate) fn session() -> Option<&'static Connection> {
     static BUS: OnceLock<Option<Connection>> = OnceLock::new();
     BUS.get_or_init(|| Connection::session().map_err(|e| log::info!("no session bus: {e}")).ok()).as_ref()
 }
+
+/// The system bus (udisks2's drive properties), connected once; `None` where there is none.
+pub(crate) fn system() -> Option<&'static Connection> {
+    static BUS: OnceLock<Option<Connection>> = OnceLock::new();
+    BUS.get_or_init(|| Connection::system().map_err(|e| log::info!("no system bus: {e}")).ok()).as_ref()
+}

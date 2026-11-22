@@ -275,3 +275,129 @@ pub fn disk_counters(path: &Path) -> Option<(u64, u64)> {
         Some((f.get(5)?.parse::<u64>().ok()? * 512, f.get(9)?.parse::<u64>().ok()? * 512))
     })
 }
+
+// ---------------------------------------------------------------- health and temperature
+
+pub use leaf_common::drives::{DriveHealth, Health, HealthSource};
+
+/// Disks have no numbers here: the administrator helper's health request is never needed.
+pub fn disk_number(_root: &Path) -> Option<u32> {
+    None
+}
+
+/// Whether reading wear and power-on hours on this system takes the administrator helper: no, the kernel and udisks2 hand out what
+/// they have to every user.
+pub const HEALTH_NEEDS_ADMIN: bool = false;
+
+/// Nothing here needs rights, so the helper has nothing of its own to read.
+pub fn disk_health_admin(_disk: Option<u32>) -> Vec<DriveHealth> {
+    Vec::new()
+}
+
+/// The block device the mount under `path` comes from: its kernel name (`nvme0n1p2`) and the sysfs folder of the WHOLE disk.
+fn block_of(path: &Path) -> Option<(String, PathBuf)> {
+    let text = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let source = text
+        .lines()
+        .filter_map(parse_mount_line)
+        .filter(|(m, _, s)| s.starts_with("/dev/") && path.starts_with(m))
+        .max_by_key(|(m, _, _)| m.len())?
+        .2;
+    let dev = std::fs::canonicalize(&source).ok()?;
+    let name = dev.file_name()?.to_str()?.to_string();
+    let sys = std::fs::canonicalize(Path::new("/sys/class/block").join(&name)).ok()?;
+    // (a partition's folder lies inside its disk's)
+    let disk = if sys.join("partition").exists() { sys.parent()?.to_path_buf() } else { sys };
+    Some((name, disk))
+}
+
+/// Degrees Celsius from a `temp1_input` file (thousandths of a degree).
+fn parse_milli_celsius(text: &str) -> Option<i16> {
+    let m: i64 = text.trim().parse().ok()?;
+    let c = m / 1000;
+    (-40..=150).contains(&c).then_some(c as i16)
+}
+
+/// The temperature the kernel's hardware monitor reports for a disk: NVMe controllers and SATA disks with the `drivetemp` module have
+/// one under their device (`hwmon*/temp1_input`, or `hwmon/hwmon*/temp1_input`). Readable by every user.
+fn hwmon_temperature(disk: &Path) -> Option<i16> {
+    for dev in [disk.join("device"), disk.join("device/device")] {
+        for base in [dev.clone(), dev.join("hwmon")] {
+            let Ok(rd) = std::fs::read_dir(&base) else { continue };
+            let mut names: Vec<_> = rd.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("hwmon")).map(|e| e.path()).collect();
+            names.sort();
+            for h in names {
+                if let Some(t) = std::fs::read_to_string(h.join("temp1_input")).ok().as_deref().and_then(parse_milli_celsius) {
+                    return Some(t);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// What udisks2 keeps about the drive of the block device `name` (it reads the drive's SMART data itself): state, temperature, power-on
+/// hours. Nothing is started: udisks2 is asked only when it already runs, and no SMART update is requested.
+fn udisks_health(name: &str) -> Option<DriveHealth> {
+    use zbus::blocking::{Proxy, fdo::DBusProxy};
+    use zbus::zvariant::OwnedObjectPath;
+    // (an object path holds letters, digits and underscores only: `dm-0` and the like have no drive of their own)
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return None;
+    }
+    let bus = crate::bus::system()?;
+    let running = DBusProxy::new(bus).ok()?.name_has_owner("org.freedesktop.UDisks2".try_into().ok()?).ok()?;
+    if !running {
+        return None;
+    }
+    let dest = "org.freedesktop.UDisks2";
+    let block = Proxy::new(bus, dest, format!("/org/freedesktop/UDisks2/block_devices/{name}"), "org.freedesktop.UDisks2.Block").ok()?;
+    let drive: OwnedObjectPath = block.get_property("Drive").ok()?;
+    let mut h = DriveHealth::unknown(None);
+    let kelvin = |k: f64| (k > 1.0).then(|| (k - 273.15).round() as i16).filter(|c| (-40..=150).contains(c));
+    let ata = Proxy::new(bus, dest, drive.clone(), "org.freedesktop.UDisks2.Drive.Ata").ok()?;
+    if let Ok(updated) = ata.get_property::<u64>("SmartUpdated") {
+        // (0 = udisks never read the drive's SMART data: nothing is known)
+        if updated > 0 {
+            let failing: bool = ata.get_property("SmartFailing").unwrap_or(false);
+            h.health = if failing { Health::Failing } else { Health::Good };
+            h.temperature_c = ata.get_property::<f64>("SmartTemperature").ok().and_then(kelvin);
+            h.power_on_hours = ata.get_property::<u64>("SmartPowerOnSeconds").ok().filter(|s| *s > 0).map(|s| (s / 3600).min(u32::MAX as u64) as u32);
+            h.sources.push(HealthSource::Udisks);
+        }
+        return Some(h);
+    }
+    let nvme = Proxy::new(bus, dest, drive, "org.freedesktop.UDisks2.NVMe.Controller").ok()?;
+    let updated: u64 = nvme.get_property("SmartUpdated").ok()?;
+    if updated > 0 {
+        let warnings: Vec<String> = nvme.get_property("SmartCriticalWarning").unwrap_or_default();
+        h.health = if warnings.iter().any(|w| w == "degraded" || w == "readonly") {
+            Health::Failing
+        } else if warnings.is_empty() {
+            Health::Good
+        } else {
+            Health::Warning
+        };
+        h.temperature_c = nvme.get_property::<u16>("SmartTemperature").ok().and_then(|k| kelvin(k as f64));
+        h.power_on_hours = nvme.get_property::<u64>("SmartPowerOnHours").ok().map(|n| n.min(u32::MAX as u64) as u32);
+        h.sources.push(HealthSource::Udisks);
+    }
+    Some(h)
+}
+
+/// What can be read about the disk under `root` (no rights needed): the kernel's temperature for it, and the health, temperature and
+/// power-on hours udisks2 has from the drive's SMART data. `None` when `root` is not on a plain block device (network and virtual
+/// mounts). Blocking (a bus call): off the UI thread, and not more than about once a minute.
+pub fn disk_health(root: &Path) -> Option<DriveHealth> {
+    let (name, disk) = block_of(root)?;
+    let mut h = DriveHealth::unknown(None);
+    if let Some(t) = hwmon_temperature(&disk) {
+        h.temperature_c = Some(t);
+        h.sources.push(HealthSource::Hwmon);
+    }
+    if let Some(u) = udisks_health(&name) {
+        h.fill_from(&u);
+    }
+    Some(h)
+}

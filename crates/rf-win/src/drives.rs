@@ -291,6 +291,241 @@ pub fn disk_counters(path: &std::path::Path) -> Option<(u64, u64)> {
     }
 }
 
+// ---------------------------------------------------------------- health and temperature
+
+pub use leaf_common::drives::{DriveHealth, Health, HealthSource};
+
+/// An open volume handle with no access rights (enough for a property query); closed when dropped.
+struct Vol(windows::Win32::Foundation::HANDLE);
+
+impl Vol {
+    fn open(path: &std::path::Path) -> Option<Self> {
+        use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+        let b = path.to_str()?.as_bytes();
+        if b.len() < 2 || b[1] != b':' || !b[0].is_ascii_alphabetic() {
+            return None;
+        }
+        let dev = crate::wide::wide(format!(r"\\.\{}:", b[0] as char));
+        unsafe { CreateFileW(PCWSTR(dev.as_ptr()), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, FILE_FLAGS_AND_ATTRIBUTES(0), None) }
+            .map_err(|e| log::debug!("drive health open: {e}"))
+            .ok()
+            .map(Self)
+    }
+}
+
+impl Drop for Vol {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// The number of the physical disk under a drive letter (`IOCTL_STORAGE_GET_DEVICE_NUMBER`, no rights needed); `None` for what is
+/// not a plain disk volume (network paths, optical drives, a volume spread over several disks).
+pub fn disk_number(root: &std::path::Path) -> Option<u32> {
+    use windows::Win32::System::IO::DeviceIoControl;
+    use windows::Win32::System::Ioctl::{IOCTL_STORAGE_GET_DEVICE_NUMBER, STORAGE_DEVICE_NUMBER};
+    let vol = Vol::open(root)?;
+    let mut n = STORAGE_DEVICE_NUMBER::default();
+    let mut got = 0u32;
+    unsafe {
+        DeviceIoControl(
+            vol.0,
+            IOCTL_STORAGE_GET_DEVICE_NUMBER,
+            None,
+            0,
+            Some(&mut n as *mut _ as *mut _),
+            std::mem::size_of::<STORAGE_DEVICE_NUMBER>() as u32,
+            Some(&mut got),
+            None,
+        )
+    }
+    .ok()?;
+    // (FILE_DEVICE_DISK)
+    (n.DeviceType == 7).then_some(n.DeviceNumber)
+}
+
+/// The drive's own temperature in degrees Celsius (`StorageDeviceTemperatureProperty`); `None` when the driver does not answer it
+/// without rights (SATA disks often do not).
+fn device_temperature(vol: &Vol) -> Option<i16> {
+    use windows::Win32::System::IO::DeviceIoControl;
+    use windows::Win32::System::Ioctl::{IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_PROPERTY_QUERY, STORAGE_TEMPERATURE_DATA_DESCRIPTOR, StorageDeviceTemperatureProperty};
+    let q = STORAGE_PROPERTY_QUERY { PropertyId: StorageDeviceTemperatureProperty, QueryType: PropertyStandardQuery, AdditionalParameters: [0] };
+    let mut d = STORAGE_TEMPERATURE_DATA_DESCRIPTOR::default();
+    let mut got = 0u32;
+    unsafe {
+        DeviceIoControl(
+            vol.0,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some(&q as *const _ as *const _),
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            Some(&mut d as *mut _ as *mut _),
+            std::mem::size_of::<STORAGE_TEMPERATURE_DATA_DESCRIPTOR>() as u32,
+            Some(&mut got),
+            None,
+        )
+    }
+    .ok()?;
+    let t = (d.InfoCount > 0).then(|| d.TemperatureInfo[0].Temperature)?;
+    // (the driver answers with a sentinel when there is no sensor)
+    (-40..=150).contains(&t).then_some(t)
+}
+
+/// A connection to the Storage Management provider (`ROOT\Microsoft\Windows\Storage`) on this thread. Reading is allowed to a
+/// normal user for the disks' health; the reliability counters need administrator rights.
+struct Storage {
+    /// (taken out before COM is ended: an interface must not be released after that)
+    svc: Option<windows::Win32::System::Wmi::IWbemServices>,
+    /// COM was started by us on this thread and is ended with the connection.
+    com: bool,
+}
+
+impl Storage {
+    fn connect() -> Option<Self> {
+        use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE};
+        use windows::Win32::System::Wmi::{IWbemLocator, IWbemServices, WbemLocator};
+        use windows::core::BSTR;
+        unsafe {
+            // (S_OK and S_FALSE both count a use that is ended again; another apartment mode on this thread is used as it is)
+            let com = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+            let made = (|| -> windows::core::Result<IWbemServices> {
+                let loc: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)?;
+                let svc = loc.ConnectServer(&BSTR::from(r"ROOT\Microsoft\Windows\Storage"), &BSTR::new(), &BSTR::new(), &BSTR::new(), 0, &BSTR::new(), None)?;
+                // (10 = RPC_C_AUTHN_WINNT, 0 = RPC_C_AUTHZ_NONE)
+                CoSetProxyBlanket(&svc, 10, 0, None, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, None, EOAC_NONE)?;
+                Ok(svc)
+            })();
+            match made {
+                Ok(svc) => Some(Self { svc: Some(svc), com }),
+                Err(e) => {
+                    log::debug!("storage provider: {e}");
+                    if com {
+                        CoUninitialize();
+                    }
+                    None
+                }
+            }
+        }
+    }
+
+    /// The objects a query returns (at most 130: more disks than a machine has).
+    fn query(&self, wql: &str) -> Vec<windows::Win32::System::Wmi::IWbemClassObject> {
+        use windows::Win32::System::Wmi::{WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY, WBEM_INFINITE};
+        use windows::core::BSTR;
+        let mut out = Vec::new();
+        let Some(svc) = &self.svc else { return out };
+        let Ok(rows) = (unsafe { svc.ExecQuery(&BSTR::from("WQL"), &BSTR::from(wql), WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, None) }) else {
+            return out;
+        };
+        while out.len() < 130 {
+            let mut one = [None];
+            let mut got = 0u32;
+            let hr = unsafe { rows.Next(WBEM_INFINITE, &mut one, &mut got) };
+            match one[0].take() {
+                Some(o) if hr.is_ok() && got == 1 => out.push(o),
+                _ => break,
+            }
+        }
+        out
+    }
+}
+
+impl Drop for Storage {
+    fn drop(&mut self) {
+        self.svc = None;
+        if self.com {
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
+
+fn wmi_u32(o: &windows::Win32::System::Wmi::IWbemClassObject, name: &str) -> Option<u32> {
+    let n = crate::wide::wide(name);
+    let mut v = windows::Win32::System::Variant::VARIANT::default();
+    unsafe { o.Get(PCWSTR(n.as_ptr()), 0, &mut v, None, None) }.ok()?;
+    // (a counter the drive does not keep comes back as a null value, not as 0)
+    if v.is_empty() || v.vt() == windows::Win32::System::Variant::VT_NULL {
+        return None;
+    }
+    u32::try_from(&v).ok()
+}
+
+fn wmi_text(o: &windows::Win32::System::Wmi::IWbemClassObject, name: &str) -> Option<String> {
+    let n = crate::wide::wide(name);
+    let mut v = windows::Win32::System::Variant::VARIANT::default();
+    unsafe { o.Get(PCWSTR(n.as_ptr()), 0, &mut v, None, None) }.ok()?;
+    windows::core::BSTR::try_from(&v).ok().map(|b| b.to_string())
+}
+
+/// `MSFT_PhysicalDisk.HealthStatus`: 0 healthy, 1 warning, 2 unhealthy, anything else (5 = unknown) is not said to be good.
+fn health_of(code: Option<u32>) -> Health {
+    match code {
+        Some(0) => Health::Good,
+        Some(1) => Health::Warning,
+        Some(2) => Health::Failing,
+        _ => Health::Unknown,
+    }
+}
+
+/// What can be read about the disk under `root` WITHOUT administrator rights: the Storage Management health status of the physical
+/// disk and, where the driver allows it, the drive's own temperature. `None` when `root` is not on a plain disk. Blocking (a
+/// provider query takes some tens of milliseconds): off the UI thread, and not more than about once a minute.
+///
+/// Wear and power-on hours are not given here: Windows hands those out (the reliability counters) only to administrators, see
+/// [`disk_health_admin`].
+pub fn disk_health(root: &std::path::Path) -> Option<DriveHealth> {
+    let vol = Vol::open(root)?;
+    let disk = disk_number(root)?;
+    let mut h = DriveHealth::unknown(Some(disk));
+    if let Some(t) = device_temperature(&vol) {
+        h.temperature_c = Some(t);
+        h.sources.push(HealthSource::DeviceQuery);
+    }
+    drop(vol);
+    if let Some(st) = Storage::connect() {
+        // (the number comes from the system, not from text: it only ever holds digits)
+        let rows = st.query(&format!("SELECT DeviceId, HealthStatus FROM MSFT_PhysicalDisk WHERE DeviceId='{disk}'"));
+        if let Some(r) = rows.first() {
+            h.health = health_of(wmi_u32(r, "HealthStatus"));
+            h.sources.push(HealthSource::StorageManagement);
+        }
+    }
+    Some(h)
+}
+
+/// Whether reading wear and power-on hours on this system takes the administrator helper (the helper's "drive health" request).
+pub const HEALTH_NEEDS_ADMIN: bool = true;
+
+/// For the administrator helper (READ ONLY): health, temperature, wear and power-on hours of the physical disk `disk`, or of all of
+/// them, from the Storage Management provider's reliability counters, which only an administrator may read. A disk that says
+/// nothing is left out.
+pub fn disk_health_admin(disk: Option<u32>) -> Vec<DriveHealth> {
+    let Some(st) = Storage::connect() else { return Vec::new() };
+    let wql = match disk {
+        Some(n) => format!("SELECT * FROM MSFT_PhysicalDisk WHERE DeviceId='{n}'"),
+        None => "SELECT * FROM MSFT_PhysicalDisk".to_string(),
+    };
+    let mut out = Vec::new();
+    for d in st.query(&wql) {
+        let Some(n) = wmi_text(&d, "DeviceId").and_then(|t| t.trim().parse::<u32>().ok()) else { continue };
+        let mut h = DriveHealth::unknown(Some(n));
+        h.health = health_of(wmi_u32(&d, "HealthStatus"));
+        // the counters hang off the disk (an association, not a class that can be listed alone)
+        if let Some(rel) = wmi_text(&d, "__RELPATH") {
+            let counters = st.query(&format!("ASSOCIATORS OF {{{rel}}} WHERE AssocClass = MSFT_PhysicalDiskToStorageReliabilityCounter"));
+            if let Some(c) = counters.first() {
+                h.temperature_c = wmi_u32(c, "Temperature").filter(|t| (1..=150).contains(t)).map(|t| t as i16);
+                h.wear_percent = wmi_u32(c, "Wear").filter(|w| *w <= 100).map(|w| w as u8);
+                h.power_on_hours = wmi_u32(c, "PowerOnHours");
+            }
+        }
+        h.sources.push(HealthSource::Administrator);
+        out.push(h);
+    }
+    out
+}
+
 #[cfg(test)]
 mod seek_tests {
     #[test]
@@ -300,5 +535,35 @@ mod seek_tests {
         let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
         let _ = super::seek_penalty(std::path::Path::new(&format!("{sys}\\")));
         assert_eq!(super::seek_penalty(std::path::Path::new(r"\\server\share")), None);
+    }
+
+    /// The unelevated health read on the system drive: never panics, never answers "good" without a source, and a network path has
+    /// no health at all. Prints the state and the temperature only (no serial numbers are read).
+    #[test]
+    fn system_drive_health_is_read_without_rights() {
+        let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let got = super::disk_health(std::path::Path::new(&format!("{sys}\\")));
+        if let Some(h) = &got {
+            println!("health {:?}, temperature {:?}, sources {:?}", h.health, h.temperature_c, h.sources);
+            assert!(h.health == super::Health::Unknown || h.sources.contains(&super::HealthSource::StorageManagement));
+            assert!(h.wear_percent.is_none() && h.power_on_hours.is_none());
+        }
+        assert!(super::disk_health(std::path::Path::new(r"\\server\share")).is_none());
+    }
+
+    /// The administrator reading: one entry per disk, each marked as read by the administrator. (Without rights the counters are
+    /// refused and only the state is there.) Prints numbers only.
+    #[test]
+    fn the_administrator_reading_names_its_source_and_one_disk_stays_one_disk() {
+        let all = super::disk_health_admin(None);
+        for h in &all {
+            println!("disk {:?}: {:?}, {:?} C, wear {:?}, hours {:?}", h.disk, h.health, h.temperature_c, h.wear_percent, h.power_on_hours);
+            assert!(h.sources.contains(&super::HealthSource::Administrator));
+        }
+        if let Some(first) = all.first().and_then(|h| h.disk) {
+            let one = super::disk_health_admin(Some(first));
+            assert_eq!(one.len(), 1);
+            assert_eq!(one[0].disk, Some(first));
+        }
     }
 }
