@@ -204,6 +204,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 |---|---|---|
 | Restart leaf | Closes leaf and starts it again with the same tabs. | `Ctrl+Alt+Shift+R` |
 | Save session | Saves the open tabs as a session to open later. |  |
+| About this PC and leaf | Opens a summary in the style of a terminal's system information: the leaf as text art, and beside it the system, processor, memory, graphics, drives (sizes only), display, leaf's version and build, how long the last folder took to open and how many files are indexed. Copy it as text or as a picture. No computer name, user name, serial number or address is shown. |  |
 | Settings | Opens leaf's settings. | `Ctrl+,` |
 | What leaf can do | Lists every command with what it does and its shortcut. |  |
 | Setup guide | Walks through the look, what you use leaf for and which parts of leaf are on. Nothing changes until you finish it. |  |

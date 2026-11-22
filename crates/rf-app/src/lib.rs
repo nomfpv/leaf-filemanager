@@ -44,6 +44,7 @@ mod selection_stats;
 mod numbers_page;
 mod share_card;
 mod speed_hud;
+mod this_pc;
 mod usage;
 mod xfer_history;
 mod diff_view;

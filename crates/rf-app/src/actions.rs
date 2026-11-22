@@ -120,6 +120,7 @@ gpui_kit::actions!(
         ShowTransferHistory,
         ShareCard,
         ToggleSpeedHud,
+        ShowThisPc,
         CopyAsContext,
         ToggleHideIgnored,
         FindBuildJunk,

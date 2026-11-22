@@ -723,3 +723,26 @@ pub fn measure_in_process<T>(f: impl FnOnce() -> T) -> (T, InProcess) {
     let extra = peak.load(Ordering::Relaxed).saturating_sub(start_mem);
     (out, InProcess { ms, cpu_ms: (end_cpu - start_cpu).max(0.0), extra_mb: extra as f64 / 1048576.0 })
 }
+
+/// The names of the graphics adapters ("NVIDIA GeForce RTX ...", "Intel(R) UHD Graphics"), from the display class of the driver
+/// registry; the software adapters Windows adds are left out.
+pub fn gpu_names() -> Vec<String> {
+    const CLASS: &str = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    let mut out: Vec<String> = Vec::new();
+    let Ok(class) = windows_registry::LOCAL_MACHINE.open(CLASS) else { return out };
+    let Ok(keys) = class.keys() else { return out };
+    for k in keys {
+        // (the adapters are "0000", "0001", ...; "Properties" and the like are not)
+        if k.len() != 4 || !k.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(adapter) = class.open(&k) else { continue };
+        let Ok(name) = adapter.get_string("DriverDesc") else { continue };
+        let name = name.trim().to_string();
+        let soft = ["Basic Render", "Basic Display", "Remote Display", "Virtual", "Parsec"].iter().any(|w| name.contains(w));
+        if !name.is_empty() && !soft && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}

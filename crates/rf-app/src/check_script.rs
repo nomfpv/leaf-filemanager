@@ -246,6 +246,7 @@ impl Workspace {
                     "features" => Page::Features,
                     "whatsnew" => Page::WhatsNew,
                     "about" => Page::About,
+                    "thispc" => Page::ThisPc,
                     _ => return false,
                 };
                 crate::settings_view::open_page(page, cx);

@@ -159,3 +159,40 @@ pub fn process_memory(pid: u32) -> Option<(u64, u64, u32)> {
     let handles = std::fs::read_dir(format!("/proc/{pid}/fd")).map_or(0, |d| d.count() as u32);
     Some((rss, private, handles))
 }
+
+/// The graphics adapters: the NVIDIA driver's own model name when it is there, else the vendor of each `/sys/class/drm/card*` with
+/// the driver in use ("AMD (amdgpu)"). Twin of rf-win's `bench::gpu_names`.
+pub fn gpu_names() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Ok(dir) = std::fs::read_dir("/proc/driver/nvidia/gpus") {
+        for g in dir.flatten() {
+            if let Ok(info) = std::fs::read_to_string(g.path().join("information"))
+                && let Some(model) = info.lines().find_map(|l| l.strip_prefix("Model:")).map(|m| m.trim().to_string())
+                && !out.contains(&model)
+            {
+                out.push(model);
+            }
+        }
+    }
+    if let Ok(dir) = std::fs::read_dir("/sys/class/drm") {
+        let mut cards: Vec<_> = dir.flatten().filter(|e| e.file_name().to_string_lossy().strip_prefix("card").is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))).collect();
+        cards.sort_by_key(|e| e.file_name());
+        for c in cards {
+            let dev = c.path().join("device");
+            let vendor = std::fs::read_to_string(dev.join("vendor")).unwrap_or_default();
+            let driver = std::fs::read_link(dev.join("driver")).ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
+            let name = match vendor.trim() {
+                "0x10de" if !out.is_empty() => continue,
+                "0x10de" => "NVIDIA",
+                "0x1002" => "AMD",
+                "0x8086" => "Intel",
+                _ => "Graphics adapter",
+            };
+            let name = if driver.is_empty() { name.to_string() } else { format!("{name} ({driver})") };
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}

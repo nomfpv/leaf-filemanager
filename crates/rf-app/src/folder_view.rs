@@ -2188,6 +2188,7 @@ impl FolderView {
                     self.search_stage = None;
                     self.apply_adaptive();
                     self.load_ms = Some(self.load_started.elapsed().as_millis());
+                    crate::this_pc::note_open(self.load_started.elapsed().as_millis() as u64, self.entries.len());
                     if trace_live() {
                         log::info!("live: listed {} entries in {} ms", self.entries.len(), self.load_started.elapsed().as_millis());
                     }

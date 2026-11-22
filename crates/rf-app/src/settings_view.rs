@@ -45,11 +45,13 @@ pub enum Page {
     Features,
     WhatsNew,
     About,
+    /// "About this PC and leaf" (`this_pc.rs`), listed after About.
+    ThisPc,
     /// The first-run setup (`setup.rs`): no entry in the list of pages, it fills the whole Settings pane.
     Setup,
 }
 
-const PAGES: [(Page, L, &str); 21] = [
+const PAGES: [(Page, L, &str); 22] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -71,6 +73,7 @@ const PAGES: [(Page, L, &str); 21] = [
     (Page::Features, L::Sparkles, "What leaf can do"),
     (Page::WhatsNew, L::Bell, "What's new"),
     (Page::About, L::Info, "About"),
+    (Page::ThisPc, L::Monitor, "About this PC"),
 ];
 
 /// The pages that are experimental: marked with a small "Deneysel" pill in the page list and "(deneysel)" in their title. The mark is
@@ -250,6 +253,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Setup => Vec::new(),
         Page::WhatsNew => crate::whats_new_page::page(p, cx),
         Page::About => about(p, cx),
+        Page::ThisPc => crate::this_pc::page(p, cx),
     }
 }
 
@@ -3697,6 +3701,13 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             "leaf",
             Some(&version),
             button("copy-ver", p, t!("Copy"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("leaf {ver}")))),
+        ),
+        card(
+            p,
+            L::Monitor,
+            t!("About this PC and leaf"),
+            Some(t!("System, memory, graphics, drives and leaf's own numbers, to copy as text or as a picture")),
+            button("about-pc", p, t!("Open"), |_, cx| open_page(Page::ThisPc, cx)),
         ),
         update_card(p, &s),
         update_options_card(p, &s),
