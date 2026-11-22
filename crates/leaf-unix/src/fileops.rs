@@ -95,6 +95,43 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// Puts `bytes` in place of the file at `path` with no moment where the file is half written (the text editor's save): they go to
+/// a temp file beside it with the original's mode (and owner where allowed), which is synced and then renamed over the original.
+/// Any failure removes the temp file and leaves the original as it was. A link is written through to its target, and stays a link.
+pub fn replace_contents(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let real = std::fs::canonicalize(path)?;
+    let meta = std::fs::metadata(&real)?;
+    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut n = 0;
+    let (tmp, mut f) = loop {
+        let tmp = real.with_file_name(format!(".{name}.leaf-save-{}-{n}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 50 => n += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    let r = (|| {
+        f.write_all(bytes)?;
+        f.set_permissions(std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
+        // (another user's file in a shared folder: the owner stays only for root; the mode is what matters)
+        let _ = std::os::unix::fs::fchown(&f, Some(meta.uid()), Some(meta.gid()));
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &real)?;
+        if let Some(dir) = real.parent().and_then(|d| std::fs::File::open(d).ok()) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
 /// `name`, `name (2)`, … (the caller passes the name in the UI language): the created path.
 pub fn new_folder(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let p = unique_name(dir, name, "");

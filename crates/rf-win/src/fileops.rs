@@ -162,6 +162,56 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     unsafe { MoveFileExW(PCWSTR(a.as_ptr()), PCWSTR(b.as_ptr()), MOVE_FILE_FLAGS(0)) }.map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
 }
 
+/// Puts `bytes` in place of the file at `path` with no moment where the file is half written (the text editor's save): they go to
+/// a temp file beside it, which is flushed to the disk and then swapped in by `ReplaceFileW`, which keeps the original's
+/// attributes, ACL, alternate data streams and creation time. Any failure removes the temp file and leaves the original as it was.
+/// A link is written through to its target, and stays a link.
+pub fn replace_contents(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    replace_with(path, |f| f.write_all(bytes))
+}
+
+fn replace_with(path: &Path, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
+    let real = if std::fs::symlink_metadata(path)?.file_type().is_symlink() { std::fs::canonicalize(path)? } else { path.to_path_buf() };
+    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut n = 0;
+    let (tmp, mut f) = loop {
+        let tmp = real.with_file_name(format!(".{name}.leaf-save-{}-{n}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 50 => n += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    let r = (|| {
+        write(&mut f)?;
+        f.sync_all()?;
+        drop(f);
+        swap_in(&real, &tmp)
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
+/// `tmp` takes the place of `real`. Without a backup name ReplaceFileW either does the whole swap or leaves `real` untouched. A
+/// file system that does not know ReplaceFileW gets a plain replacing rename, which is atomic there too but keeps nothing of the
+/// original's own (the new file's ACL is the folder's).
+fn swap_in(real: &Path, tmp: &Path) -> std::io::Result<()> {
+    use windows::Win32::Foundation::{ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED};
+    use windows::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW};
+    let (r, t) = (crate::wide::long_path(real), crate::wide::long_path(tmp));
+    let os_err = |e: windows::core::Error| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF);
+    match unsafe { ReplaceFileW(PCWSTR(r.as_ptr()), PCWSTR(t.as_ptr()), PCWSTR::null(), REPLACEFILE_IGNORE_MERGE_ERRORS, None, None) } {
+        Ok(()) => Ok(()),
+        Err(e) if [ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED, ERROR_INVALID_PARAMETER].iter().any(|c| e.code() == c.to_hresult()) => {
+            unsafe { MoveFileExW(PCWSTR(t.as_ptr()), PCWSTR(r.as_ptr()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }.map_err(os_err)
+        }
+        Err(e) => Err(os_err(e)),
+    }
+}
+
 /// `name`, `name (2)`, … (the caller passes the name in the UI language) — returns the created path.
 pub fn new_folder(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let p = unique_name(dir, name, "");
@@ -322,6 +372,32 @@ pub fn delete_tracked(paths: &[PathBuf], permanent: bool, tracker: Arc<Tracker>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A save that fails half way leaves the original and no temp file; one that works replaces the content and keeps the
+    /// original's attributes (the hidden one here).
+    #[test]
+    fn replace_contents_is_all_or_nothing() {
+        use std::os::windows::fs::MetadataExt;
+        let d = std::env::temp_dir().join(format!("rf-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("notes.txt");
+        std::fs::write(&f, b"original\r\n").unwrap();
+        let _ = std::process::Command::new("attrib").arg("+h").arg(&f).status();
+        let failed = replace_with(&f, |w| {
+            use std::io::Write;
+            w.write_all(b"half")?;
+            Err(std::io::Error::other("disk full"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read(&f).unwrap(), b"original\r\n");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "no temp file is left");
+        replace_contents(&f, b"new text\n").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"new text\n");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "no temp file is left");
+        assert!(std::fs::metadata(&f).unwrap().file_attributes() & 0x2 != 0, "still hidden");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn unique() {
