@@ -247,6 +247,7 @@ pub static WIDGETS: &[Widget] = &[
         since: "0.9.6",
     },
     Widget { id: "transfers", title: "Transfers", icon: L::Activity, sizes: &[Size::Medium, Size::Wide, Size::Large], default_size: Size::Medium, rows: 2, folder: false, render: transfers::widget, header: Some(transfers::header), since: "0.9.6" },
+    Widget { id: "numbers", title: "Your numbers", icon: L::ChartPie, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: transfers::numbers, header: Some(transfers::header), since: "0.9.6" },
     Widget { id: "hosts", title: "Hosts", icon: L::Server, sizes: ANY, default_size: Size::Medium, rows: 1, folder: false, render: crate::hosts_ui::widget, header: None, since: "0.9.5" },
 ];
 

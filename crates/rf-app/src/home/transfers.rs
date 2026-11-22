@@ -214,3 +214,33 @@ pub fn page_section(p: &Palette, s: &Settings) -> Vec<AnyElement> {
     );
     v
 }
+
+/// The "Your numbers" widget: the counters of `usage.rs` in four figures; a click opens the page with all of them (and "Reset").
+pub fn numbers(_: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
+    use crate::usage::Counter as C;
+    let p = &w.p;
+    let (usage, _) = crate::usage::snapshot();
+    if !cx.global::<Settings>().count_usage && usage.since == 0 {
+        return Some(div().text_sm().text_color(p.text_tertiary).child(t!("Counting is off (Settings > Your numbers).")).into_any_element());
+    }
+    let handled = usage.total(C::FilesCopied) + usage.total(C::FilesMoved) + usage.total(C::FilesDeleted) + usage.total(C::FilesRenamed);
+    let figures = [
+        (handled.to_string(), t!("Files handled")),
+        (format::size(usage.total(C::BytesCopied)), t!("Data copied or moved")),
+        (usage.total(C::Searches).to_string(), t!("Searches")),
+        (usage.days_used.max(usage.days.len() as u32).to_string(), t!("days used")),
+    ];
+    let mut grid = div().id("home-numbers").grid().grid_cols(if w.width >= 320. { 4 } else { 2 }).gap_2().cursor_pointer();
+    for (n, label) in figures {
+        grid = grid.child(
+            v_flex()
+                .min_w_0()
+                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(p.text).overflow_hidden().text_ellipsis().whitespace_nowrap().child(n))
+                .child(div().text_xs().text_color(p.text_secondary).child(label)),
+        );
+    }
+    Some(grid.on_click(cx.listener(|_, _, _, cx| {
+        crate::settings_view::open_page(crate::settings_view::Page::Numbers, cx);
+        crate::workspace::show_settings(cx);
+    })).into_any_element())
+}

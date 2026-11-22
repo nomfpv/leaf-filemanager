@@ -18,13 +18,14 @@ fn label(c: Counter) -> &'static str {
         Counter::FilesMoved => t!("Files moved"),
         Counter::FilesDeleted => t!("Files deleted"),
         Counter::FilesRenamed => t!("Files renamed"),
-        Counter::BytesCopied => t!("Data copied"),
+        Counter::BytesCopied => t!("Data copied or moved"),
         Counter::FoldersOpened => t!("Folders opened"),
         Counter::Searches => t!("Searches"),
         Counter::BulkRenames => t!("Bulk renames"),
         Counter::ArchivesMade => t!("Archives made"),
         Counter::ArchivesExtracted => t!("Archives extracted"),
         Counter::Launches => t!("Times Leaf was started"),
+        Counter::TabsOpened => t!("Tabs opened"),
         Counter::FocusSecs => t!("Time with Leaf in front"),
     }
 }
@@ -91,6 +92,8 @@ pub fn page(p: &Palette, s: &Settings, _cx: &mut App) -> Vec<AnyElement> {
             .into_any_element(),
     );
     v.push(section(p, t!("Totals")));
+    let since = (usage.since > 0).then(|| chrono::NaiveDate::from_num_days_from_ce_opt(usage.since)).flatten().map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
+    v.push(div().pb_1().text_sm().text_color(p.text_secondary).child(format!("{} {since}  \u{b7}  {} {}", t!("Counting since"), usage.days_used.max(usage.days.len() as u32), t!("days used"))).into_any_element());
     let mut card_ = shell(p);
     for (i, c) in Counter::ALL.into_iter().enumerate() {
         if i > 0 {

@@ -22,12 +22,13 @@ pub enum Counter {
     ArchivesMade,
     ArchivesExtracted,
     Launches,
+    TabsOpened,
     /// Seconds the window was in front.
     FocusSecs,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 12] = [
+    pub const ALL: [Counter; 13] = [
         Counter::FilesCopied,
         Counter::FilesMoved,
         Counter::FilesDeleted,
@@ -39,6 +40,7 @@ impl Counter {
         Counter::ArchivesMade,
         Counter::ArchivesExtracted,
         Counter::Launches,
+        Counter::TabsOpened,
         Counter::FocusSecs,
     ];
 
@@ -56,6 +58,7 @@ impl Counter {
             Counter::ArchivesMade => "archives_made",
             Counter::ArchivesExtracted => "archives_extracted",
             Counter::Launches => "launches",
+            Counter::TabsOpened => "tabs_opened",
             Counter::FocusSecs => "focus_secs",
         }
     }
@@ -79,6 +82,9 @@ pub struct Usage {
     /// Oldest first, at most [`DAYS_KEPT`].
     #[serde(default)]
     pub days: Vec<Day>,
+    /// How many different days something was counted (the 90 kept days let go of the old ones; this does not).
+    #[serde(default)]
+    pub days_used: u32,
 }
 
 impl Usage {
@@ -93,6 +99,7 @@ impl Usage {
         *self.totals.entry(c.key().to_string()).or_default() += n;
         if self.days.last().is_none_or(|d| d.day < today) {
             self.days.push(Day { day: today, n: BTreeMap::new() });
+            self.days_used += 1;
             let extra = self.days.len().saturating_sub(DAYS_KEPT);
             self.days.drain(..extra);
         }

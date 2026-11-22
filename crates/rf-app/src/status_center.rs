@@ -978,9 +978,7 @@ fn transfer_run(
         if matches!(r, Ok(true)) {
             use crate::usage::{Counter, bump};
             bump(if kind == Transfer::Copy { Counter::FilesCopied } else { Counter::FilesMoved }, sources.len() as u64);
-            if kind == Transfer::Copy {
-                bump(Counter::BytesCopied, t.bytes.get().0);
-            }
+            bump(Counter::BytesCopied, t.bytes.get().0);
         }
         // what now sits directly in the destination: the new item, or the folder a merge went into
         let mut tops: Vec<std::path::PathBuf> = Vec::new();

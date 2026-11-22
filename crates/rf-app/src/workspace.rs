@@ -1270,6 +1270,7 @@ impl Workspace {
 
     pub fn open_tab(&mut self, loc: Location, window: &mut Window, cx: &mut Context<Self>) {
         let view = self.new_view(loc, window, cx);
+        crate::usage::bump(crate::usage::Counter::TabsOpened, 1);
         self.tabs.push(Tab { left: view.clone(), right: None, right_active: false });
         let ix = self.tabs.len() - 1;
         // Settings → Appearance → Animations: the "+" grows into the new tab, then a new "+"
