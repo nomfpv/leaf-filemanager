@@ -430,6 +430,7 @@ pub fn render(p: &Palette, s: &Settings, cx: &mut App) -> AnyElement {
                 window.dispatch_action(Box::new(crate::actions::GoHome), cx);
                 window.dispatch_action(Box::new(crate::actions::ToggleCommandPalette), cx);
             }));
+            body.push(link("setup-guide", L::BookOpen, "The guide", "Short steps for things you may want to do. F1 opens it any time.", |window, cx| leave(Page::Guide, window, cx)));
             body.push(link("setup-can-do", L::Search, "What leaf can do", "Every command with its shortcut.", |window, cx| leave(Page::Features, window, cx)));
         }
     }

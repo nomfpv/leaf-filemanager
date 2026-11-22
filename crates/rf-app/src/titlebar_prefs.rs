@@ -217,6 +217,7 @@ fn main_menu(window: &mut Window, cx: &mut App) {
         Item::action(t!("Always on top"), MenuIcon::Lucide(L::Pin), run::<ToggleAlwaysOnTop>()),
         Item::Separator,
         Item::action(t!("Settings"), MenuIcon::Lucide(L::Settings), run::<GoSettings>()).hint("Ctrl+,"),
+        Item::action(t!("Guide"), MenuIcon::Lucide(L::CircleQuestionMark), run::<ShowGuide>()).hint("F1"),
         Item::action(t!("What leaf can do"), MenuIcon::Lucide(L::Sparkles), run::<ShowFeatures>()),
         Item::action(t!("Restart leaf"), MenuIcon::Lucide(L::RotateCw), run::<RestartApp>()),
     ];

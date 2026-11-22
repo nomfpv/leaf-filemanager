@@ -43,6 +43,8 @@ pub enum Page {
     /// Settings > Features: one switch per part of leaf (`modules.rs`).
     Modules,
     Features,
+    /// Settings > Guide (`guide_page.rs`): "How do I ..." topics.
+    Guide,
     WhatsNew,
     About,
     /// "About this PC and leaf" (`this_pc.rs`), listed after About.
@@ -51,7 +53,7 @@ pub enum Page {
     Setup,
 }
 
-const PAGES: [(Page, L, &str); 22] = [
+const PAGES: [(Page, L, &str); 23] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -71,6 +73,7 @@ const PAGES: [(Page, L, &str); 22] = [
     (Page::Numbers, L::Activity, "Your numbers"),
     (Page::Modules, L::ToggleRight, "Features"),
     (Page::Features, L::Sparkles, "What leaf can do"),
+    (Page::Guide, L::BookOpen, "Guide"),
     (Page::WhatsNew, L::Bell, "What's new"),
     (Page::About, L::Info, "About"),
     (Page::ThisPc, L::Monitor, "About this PC"),
@@ -250,6 +253,7 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Numbers => crate::numbers_page::page(p, s, cx),
         Page::Modules => crate::setup::features_page(p, s, cx),
         Page::Features => crate::features_page::page(p, cx),
+        Page::Guide => crate::guide_page::page(p, cx),
         Page::Setup => Vec::new(),
         Page::WhatsNew => crate::whats_new_page::page(p, cx),
         Page::About => about(p, cx),
@@ -514,6 +518,7 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
         return crate::setup::render(p, &s, cx);
     }
     crate::features_page::ensure_search(window, cx);
+    crate::guide_page::ensure_search(window, cx);
     let search = match ui(cx).search.clone() {
         Some(e) => e,
         None => {

@@ -11,6 +11,8 @@ pub mod bench;
 mod fast_start;
 mod git_share;
 mod features_page;
+mod guide_page;
+mod guide_topics;
 mod whats_new_page;
 mod bench_view;
 mod card_img;
@@ -776,6 +778,7 @@ pub fn main() {
         actions::bind(cx);
         actions::bind_user(cx);
         features_page::init(cx);
+        guide_page::init(cx);
         setup::init(cx);
         custom_actions::init(cx);
         // leaf's VPN: the kill switch, the state the windows show, "Connect when leaf starts"
