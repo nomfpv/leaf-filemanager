@@ -138,10 +138,35 @@ fn quiet() -> Tracker {
     Tracker::new(Box::new(|_, _, _| {}), Default::default())
 }
 
-/// (ok, undo pairs, items that were already gone)
-fn done(r: Reply) -> anyhow::Result<(bool, Vec<(PathBuf, PathBuf)>, u32)> {
+/// What a finished operation said beyond "done": items already gone, move sources that stayed, copies without everything.
+#[derive(Default)]
+struct Left {
+    missing: u32,
+    kept: u32,
+    partial: u32,
+}
+
+impl Left {
+    /// leaf's words for it (`None`: nothing to say).
+    fn text(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.missing > 0 {
+            parts.push(format!("{} {}", t!("no longer at their old place, skipped:"), self.missing));
+        }
+        if self.kept > 0 {
+            parts.push(format!("{} {}", t!("not moved and kept where they are (in use by another program, changed during the copy, or with data a copy would lose):"), self.kept));
+        }
+        if self.partial > 0 {
+            parts.push(format!("{} {}", t!("copied without their extra data streams or encryption:"), self.partial));
+        }
+        (!parts.is_empty()).then(|| format!("{} {}", t!("Done, but items"), parts.join("; ")))
+    }
+}
+
+/// (ok, undo pairs, what was left)
+fn done(r: Reply) -> anyhow::Result<(bool, Vec<(PathBuf, PathBuf)>, Left)> {
     match r {
-        Reply::Done { ok, pairs, missing } => Ok((ok, pairs, missing)),
+        Reply::Done { ok, pairs, missing, kept, partial } => Ok((ok, pairs, Left { missing, kept, partial })),
         _ => Err(words(HelperError::Confused)),
     }
 }
@@ -196,14 +221,14 @@ pub fn retry_transfer(cx: &mut App, kind: Transfer, sources: Vec<PathBuf>, dest:
                 Transfer::Copy => Request::Copy { sources, dest },
                 Transfer::Move => Request::Move { sources, dest },
             };
-            let (ok, pairs, missing) = done(call(req, &t, true, &mut Vec::new())?)?;
+            let (ok, pairs, left) = done(call(req, &t, true, &mut Vec::new())?)?;
             if record && !pairs.is_empty() {
                 crate::undo::push(crate::undo::UndoOp::Transferred { kind, pairs: pairs.clone() });
             }
             *t.results.lock().unwrap() = pairs;
             // (an earlier try that got part of the way: what is no longer at its old place is said, the rest was done)
-            if missing > 0 {
-                anyhow::bail!("{} {missing}", t!("Done; items no longer at their old place, skipped:"));
+            if let Some(text) = left.text() {
+                anyhow::bail!("{text}");
             }
             Ok(ok)
         },
