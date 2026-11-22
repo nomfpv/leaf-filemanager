@@ -275,27 +275,33 @@ pub fn launch(app: &DesktopApp, path: &Path) -> anyhow::Result<()> {
 
 /// Asks which of `apps` to use: kdialog's or zenity's list, whichever is installed. `Ok(None)` = the user closed it.
 fn choose(apps: &[DesktopApp], file: &Path) -> anyhow::Result<Option<usize>> {
-    let title = "Open with";
     let text = format!("Open {} with", file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    let names: Vec<String> = apps.iter().map(|a| a.name.clone()).collect();
+    choose_index("Open with", &text, &names)
+}
+
+/// A list dialog (kdialog's, else zenity's) of `labels`; the index of the one chosen, `Ok(None)` when the user closed it. Argument lists,
+/// no shell. `Err` when neither program is installed.
+pub(crate) fn choose_index(title: &str, text: &str, labels: &[String]) -> anyhow::Result<Option<usize>> {
     if let Some(k) = which("kdialog") {
         let mut c = Command::new(k);
-        c.args(["--title", title, "--menu", &text]);
-        for (i, a) in apps.iter().enumerate() {
-            c.arg(i.to_string()).arg(&a.name);
+        c.args(["--title", title, "--menu", text]);
+        for (i, a) in labels.iter().enumerate() {
+            c.arg(i.to_string()).arg(a);
         }
         let out = c.stdin(Stdio::null()).stderr(Stdio::null()).output()?;
         return Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok()).flatten());
     }
     if let Some(z) = which("zenity") {
         let mut c = Command::new(z);
-        c.args(["--list", "--title", title, "--text", &text, "--column", "#", "--column", "Program", "--hide-column", "1", "--print-column", "1"]);
-        for (i, a) in apps.iter().enumerate() {
-            c.arg(i.to_string()).arg(&a.name);
+        c.args(["--list", "--title", title, "--text", text, "--column", "#", "--column", "Choice", "--hide-column", "1", "--print-column", "1"]);
+        for (i, a) in labels.iter().enumerate() {
+            c.arg(i.to_string()).arg(a);
         }
         let out = c.stdin(Stdio::null()).stderr(Stdio::null()).output()?;
         return Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok()).flatten());
     }
-    anyhow::bail!("neither kdialog nor zenity is installed to choose a program")
+    anyhow::bail!("neither kdialog nor zenity is installed to choose from a list")
 }
 
 /// The chooser for `path`'s media type, then the chosen program is started (`launch`) or, with `make_default`, made the type's default
