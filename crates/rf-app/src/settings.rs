@@ -1531,6 +1531,8 @@ pub fn apply_component_theme(cx: &mut App) {
 
 /// Mutates the global settings, applies side effects, saves in the background and refreshes windows.
 pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
+    // (a look only previewed by the setup is not written with this change)
+    crate::setup::revert_preview(cx);
     let before = cx.global::<Settings>().clone();
     cx.update_global::<Settings, _>(|s, _| f(s));
     // (the VPN's kill switch, DNS choice and place apply to the running tunnel)
@@ -1556,6 +1558,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
 /// Like [`update`] for a control that changes on every step of a drag (a slider): the change is applied and drawn at once, the file is
 /// written once the changes have settled (the pane resize does the same), so a drag is not hundreds of writes.
 pub fn update_live(cx: &mut App, f: impl FnOnce(&mut Settings)) {
+    crate::setup::revert_preview(cx);
     static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     cx.update_global::<Settings, _>(|s, _| f(s));
     cx.global::<Settings>().apply_side_effects();

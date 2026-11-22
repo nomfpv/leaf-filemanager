@@ -156,6 +156,8 @@ struct Setup {
     dfm_was: bool,
     /// The look when the setup opened: what Skip puts back.
     theme0: (String, ThemePref),
+    /// The theme shown now is a preview that was not applied: every way out but "Apply and finish" puts `theme0` back ([`revert_preview`]).
+    previewing: bool,
 }
 impl Global for Setup {}
 
@@ -174,6 +176,7 @@ pub fn begin(cx: &mut App) {
         dfm,
         dfm_was: dfm,
         theme0: (s.theme_name.clone(), s.theme),
+        previewing: false,
     };
     cx.set_global(st);
     settings_view::open_page(Page::Setup, cx);
@@ -194,10 +197,27 @@ pub fn init(cx: &mut App) {
 
 /// The theme and mode shown now, not written: Skip puts the first ones back.
 fn preview(cx: &mut App, f: impl FnOnce(&mut Settings)) {
+    if cx.has_global::<Setup>() {
+        with(cx, |st| st.previewing = true);
+    }
     cx.update_global::<Settings, _>(|s, _| f(s));
     cx.global::<Settings>().apply_side_effects();
     settings::apply_component_theme(cx);
     cx.refresh_windows();
+}
+
+/// Puts the look back when the setup is left any way but "Apply and finish": Skip, another Settings page, a closed window, any other
+/// change of the settings meanwhile (which would write the preview). Nothing happens when no preview is showing.
+pub fn revert_preview(cx: &mut App) {
+    if !cx.has_global::<Setup>() || !with(cx, |st| std::mem::take(&mut st.previewing)) {
+        return;
+    }
+    let (name, mode) = with(cx, |st| st.theme0.clone());
+    preview(cx, |s| {
+        s.theme_name = name;
+        s.theme = mode;
+    });
+    with(cx, |st| st.previewing = false);
 }
 
 /// Leaves the setup for the page that was asked for.
@@ -207,11 +227,7 @@ fn leave(page: Page, window: &mut Window, cx: &mut App) {
 }
 
 fn skip(window: &mut Window, cx: &mut App) {
-    let (name, mode) = with(cx, |st| st.theme0.clone());
-    preview(cx, |s| {
-        s.theme_name = name;
-        s.theme = mode;
-    });
+    revert_preview(cx);
     // (nothing else is written: every part stays on, the system is not touched)
     settings::update(cx, |s| s.setup_done = true);
     cx.defer(|cx| {
@@ -224,7 +240,11 @@ fn skip(window: &mut Window, cx: &mut App) {
 
 /// Reaching Done: the modules, the look and the one system switch are applied.
 fn apply(cx: &mut App) {
-    let (mods, dfm, dfm_was) = with(cx, |st| (st.mods.clone(), st.dfm, st.dfm_was));
+    // (the look shown is the one chosen now: it stays and is written with the rest)
+    let (mods, dfm, dfm_was) = with(cx, |st| {
+        st.previewing = false;
+        (st.mods.clone(), st.dfm, st.dfm_was)
+    });
     settings::update(cx, |s| {
         for (m, on) in Module::ALL.iter().zip(&mods) {
             modules::set(s, *m, *on);

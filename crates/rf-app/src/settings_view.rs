@@ -272,6 +272,9 @@ fn gated(p: &Palette, s: &Settings, m: crate::modules::Module, card: AnyElement)
 }
 
 pub fn open_page(page: Page, cx: &mut App) {
+    if page != Page::Setup {
+        crate::setup::revert_preview(cx);
+    }
     ui(cx).page = page;
 }
 

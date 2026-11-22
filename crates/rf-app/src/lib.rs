@@ -913,6 +913,7 @@ pub fn main() {
         // that cut running copies in half and makes background mode impossible. We decide.
         cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
         cx.on_window_closed(move |cx, id| {
+            setup::revert_preview(cx);
             workspace::save_closed_placement(id, cx);
             last_window::settle(cx);
         })
