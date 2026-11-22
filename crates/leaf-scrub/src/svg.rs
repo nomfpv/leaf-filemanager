@@ -61,7 +61,15 @@ struct Found {
 }
 
 fn scan(xml: &str, opts: &Options) -> Result<Found> {
-    let doc = roxmltree::Document::parse(xml).map_err(|e| ScrubError::Malformed(format!("the SVG could not be read: {e}")))?;
+    let doc = roxmltree::Document::parse(xml).map_err(|e| {
+        let t = e.to_string();
+        if xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY") || t.contains("entity") || t.contains("DTD") {
+            // Illustrator writes its namespaces as entities: not read, refused with the reason
+            ScrubError::Unsupported("the SVG declares entities (as Illustrator writes them), leaf does not read those; save it as plain SVG first".into())
+        } else {
+            ScrubError::Malformed(format!("the SVG could not be read: {e}"))
+        }
+    })?;
     let mut f = Found { ranges: vec![], findings: vec![], notes: vec![], decls: vec![] };
     let root = doc.root_element();
     if root.tag_name().name() != "svg" {
@@ -73,6 +81,11 @@ fn scan(xml: &str, opts: &Options) -> Result<Found> {
             f.findings.push(Finding::new("Comment", n.text().unwrap_or(""), true));
             f.ranges.push((n.range(), String::new()));
         } else if n.is_pi() {
+            // a style sheet instruction decides how the drawing looks: it stays
+            if n.pi().is_some_and(|p| p.target == "xml-stylesheet") {
+                f.notes.push("The style sheet instruction (xml-stylesheet) stays: it decides how the drawing looks.".into());
+                continue;
+            }
             f.findings.push(Finding::new("Processing instruction", n.pi().map(|p| p.target).unwrap_or(""), true));
             f.ranges.push((n.range(), String::new()));
         } else if n.is_element() {

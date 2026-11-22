@@ -444,11 +444,17 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
         return Err(ScrubError::Io(io::Error::new(io::ErrorKind::AlreadyExists, "the target name is taken")));
     }
     let dir = dst.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    // a name of this process and this call: two runs on the same name never share (or delete) each other's temporary file
+    static RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = dir.join(format!(
-        ".leafscrub-{}",
+        ".leafscrub-{}-{run}-{}",
+        std::process::id(),
         dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     ));
-    let _ = fs::remove_file(&tmp);
+    if tmp.exists() {
+        return Err(ScrubError::Io(io::Error::new(io::ErrorKind::AlreadyExists, "a temporary file of the same name is in the way")));
+    }
     let res = (|| -> Result<Vec<String>> {
         if cancel() {
             return Err(ScrubError::Cancelled);

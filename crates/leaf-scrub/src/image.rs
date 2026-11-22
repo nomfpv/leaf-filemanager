@@ -472,6 +472,30 @@ fn latin1(b: &[u8]) -> String {
 
 // ---------------------------------------------------------------- WebP
 
+/// An animation frame keeps its 16-byte header and its picture chunks (ALPH, VP8, VP8L); any other chunk inside it goes.
+fn anmf(body: &[u8], found: &mut Vec<Finding>) -> Result<Vec<u8>> {
+    if body.len() < 16 {
+        return bad("an animation frame is cut off");
+    }
+    let mut out = body[..16].to_vec();
+    let mut pos = 16usize;
+    while pos + 8 <= body.len() {
+        let ty: [u8; 4] = body[pos..pos + 4].try_into().unwrap();
+        let len = u32::from_le_bytes(body[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let end = pos.checked_add(8 + len).filter(|e| *e <= body.len()).ok_or_else(|| ScrubError::Malformed("a chunk in an animation frame runs past it".into()))?;
+        if matches!(&ty, b"ALPH" | b"VP8 " | b"VP8L") {
+            out.extend_from_slice(&body[pos..end]);
+            if len & 1 == 1 {
+                out.push(0);
+            }
+        } else {
+            found.push(Finding::new(format!("Extra chunk in an animation frame ({})", String::from_utf8_lossy(&ty)), format!("{len} bytes"), true));
+        }
+        pos = end + (len & 1);
+    }
+    Ok(out)
+}
+
 fn webp(d: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
     if d.len() < 20 || &d[0..4] != b"RIFF" || &d[8..12] != b"WEBP" {
         return bad("no WebP header");
@@ -501,7 +525,8 @@ fn webp(d: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
                 has_vp8x = true;
                 chunks.push((ty, body.to_vec()));
             }
-            b"VP8 " | b"VP8L" | b"ALPH" | b"ANIM" | b"ANMF" => chunks.push((ty, body.to_vec())),
+            b"VP8 " | b"VP8L" | b"ALPH" | b"ANIM" => chunks.push((ty, body.to_vec())),
+            b"ANMF" => chunks.push((ty, anmf(body, &mut found)?)),
             b"ICCP" => {
                 found.push(Finding::new("Colour profile", "", !opts.keep_color_profile));
                 if opts.keep_color_profile {

@@ -290,6 +290,23 @@ fn analyse(doc: &Document, raw: &[u8]) -> (Vec<Finding>, Vec<String>) {
             piece += 1;
         }
     }
+    let pdfa = doc.objects.values().any(|o| match o {
+        Object::Stream(s) if matches!(s.dict.get(b"Subtype"), Ok(Object::Name(n)) if n == b"XML") => {
+            let mut b = Vec::new();
+            let raw: &[u8] = if s.dict.has(b"Filter") {
+                use std::io::Read;
+                let _ = flate2::read::ZlibDecoder::new(&s.content[..]).take(16 << 20).read_to_end(&mut b);
+                &b
+            } else {
+                &s.content
+            };
+            raw.windows(6).any(|w| w == b"pdfaid")
+        }
+        _ => false,
+    });
+    if pdfa {
+        notes.push("This is a PDF/A file: its archive conformance mark lives in the XMP metadata, so the cleaned file no longer says it is PDF/A.".into());
+    }
     if xmp > 0 {
         f.push(Finding::new("XMP metadata", if xmp == 1 { "1 stream".to_string() } else { format!("{xmp} streams") }, true));
     }

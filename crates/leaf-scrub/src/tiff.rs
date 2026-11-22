@@ -292,8 +292,18 @@ fn plan(d: &[u8], opts: &Options) -> Result<Plan> {
         off = next;
     }
     kept.extend(p.strips.iter().copied());
+    // as disjoint ranges in order: one search per zeroed range
+    kept.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(kept.len());
+    for (a, b) in kept {
+        match merged.last_mut() {
+            Some(l) if a <= l.1 => l.1 = l.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
     for z in &zero {
-        if kept.iter().any(|k| z.0 < k.1 && k.0 < z.1) {
+        let i = merged.partition_point(|k| k.1 <= z.0);
+        if merged.get(i).is_some_and(|k| k.0 < z.1) {
             return Err(ScrubError::Unsupported("metadata shares bytes with the picture data or the picture's own tables, it cannot be erased without damaging the picture".into()));
         }
     }

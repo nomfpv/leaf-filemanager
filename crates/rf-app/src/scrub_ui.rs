@@ -182,6 +182,9 @@ pub fn open(files: Vec<PathBuf>, cx: &mut App) {
     if files.is_empty() {
         return;
     }
+    // on pictures and videos the modified time is often the time the photo was taken: "set the file times to now" starts ticked
+    const TIMED: &[&str] = &["jpg", "jpeg", "png", "webp", "tif", "tiff", "heic", "heif", "avif", "gif", "mp4", "m4v", "mov", "mkv", "avi", "webm"];
+    let timed = files.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| TIMED.iter().any(|k| k.eq_ignore_ascii_case(e))));
     let display = cx.active_window().and_then(|w| w.update(cx, |_, w, cx| w.display(cx).map(|d| d.id())).ok().flatten());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(display, size(px(560.), px(680.)), cx))),
@@ -196,7 +199,7 @@ pub fn open(files: Vec<PathBuf>, cx: &mut App) {
         cx.new(|cx| {
             let v = ScrubView {
                 files,
-                opts: RunOpts::default(),
+                opts: RunOpts { reset_times: timed, ..RunOpts::default() },
                 phase: Phase::Setup,
                 results: Vec::new(),
                 ran: false,

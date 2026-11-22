@@ -283,6 +283,17 @@ fn webp(d: &[u8], opts: &Options) -> Vec<String> {
         if !ok {
             v.push(format!("a {} chunk", String::from_utf8_lossy(&ty)));
         }
+        if &ty == b"ANMF" && body.len() >= 16 {
+            let mut q = 16usize;
+            while q + 8 <= body.len() {
+                let t: [u8; 4] = body[q..q + 4].try_into().unwrap();
+                let n = u32::from_le_bytes(body[q + 4..q + 8].try_into().unwrap()) as usize;
+                if !matches!(&t, b"ALPH" | b"VP8 " | b"VP8L") {
+                    v.push(format!("a {} chunk in an animation frame", String::from_utf8_lossy(&t)));
+                }
+                q += 8 + n + (n & 1);
+            }
+        }
         pos += 8 + len + (len & 1);
     }
     if riff < d.len() {
@@ -603,7 +614,7 @@ fn svg(path: &Path) -> Result<Vec<String>> {
     for n in doc.descendants() {
         if n.is_comment() {
             v.push("a comment".into());
-        } else if n.is_pi() {
+        } else if n.is_pi() && !n.pi().is_some_and(|p| p.target == "xml-stylesheet") {
             v.push("a processing instruction".into());
         } else if n.is_element() {
             let ns = n.tag_name().namespace();
