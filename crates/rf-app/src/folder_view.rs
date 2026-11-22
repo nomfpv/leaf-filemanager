@@ -2221,6 +2221,17 @@ impl FolderView {
                     self.apply_adaptive();
                     self.load_ms = Some(self.load_started.elapsed().as_millis());
                     crate::this_pc::note_open(self.load_started.elapsed().as_millis() as u64, self.entries.len());
+                    crate::ext::emit(cx, || crate::ext::Event::FolderOpened {
+                        path: self.location().path().map(std::path::Path::to_path_buf),
+                        kind: match self.location() {
+                            Location::Path(_) => crate::ext::PlaceKind::Folder,
+                            Location::Remote(_) => crate::ext::PlaceKind::Remote,
+                            Location::Search { .. } | Location::Tag(_) | Location::Library { .. } | Location::Shell { .. } => crate::ext::PlaceKind::List,
+                            _ => crate::ext::PlaceKind::Page,
+                        },
+                        items: self.entries.len(),
+                        load_ms: self.load_started.elapsed().as_millis(),
+                    });
                     if trace_live() {
                         log::info!("live: listed {} entries in {} ms", self.entries.len(), self.load_started.elapsed().as_millis());
                     }

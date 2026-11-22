@@ -736,6 +736,10 @@ pub fn start_with_id(
     if tick {
         keep_ticking(cx, &entity);
     }
+    if crate::ext::active() {
+        let title = entity.read(cx).ops.iter().find(|o| o.id == id).map(|o| o.title.clone()).unwrap_or_default();
+        crate::ext::emit(cx, || crate::ext::Event::OperationStarted { id, title });
+    }
     // the card is due once the operation has run a moment, the attention pulse is over a moment after it began
     notify_in(cx, &entity, xfer::CARD_APPEAR_MS + 50);
     notify_in(cx, &entity, xfer::PULSE_MS + 50);
@@ -791,6 +795,9 @@ pub fn start_with_id(
             let mut finished = false;
             let mut lookup: Vec<std::path::PathBuf> = Vec::new();
             let mut asks = Vec::new();
+            // what the extensions are told once this batch is applied (only built when one is registered)
+            let mut told: Vec<crate::ext::Event> = Vec::new();
+            let mut progressed = false;
             let _ = entity.update(cx, |ops, cx| {
                 if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
                     for e in evs {
@@ -811,6 +818,7 @@ pub fn start_with_id(
                                 if cur.is_some() {
                                     op.current = cur;
                                 }
+                                progressed = t > 0;
                             }
                             Ev::Done(r) => {
                                 finished = true;
@@ -835,8 +843,36 @@ pub fn start_with_id(
                                 if matches!(op.phase, OpPhase::Failed(_)) {
                                     lookup = std::mem::take(&mut op.lock_paths);
                                 }
+                                if crate::ext::active() {
+                                    told.push(crate::ext::Event::OperationFinished {
+                                        id,
+                                        title: op.title.clone(),
+                                        result: match &op.phase {
+                                            OpPhase::Done => crate::ext::OpResult::Done,
+                                            OpPhase::Cancelled => crate::ext::OpResult::Cancelled,
+                                            OpPhase::Failed(e) => crate::ext::OpResult::Failed(e.clone()),
+                                            OpPhase::Running => crate::ext::OpResult::Done,
+                                        },
+                                        bytes: op.bytes.get().0,
+                                        elapsed_ms: op.started.elapsed().as_millis() as u64,
+                                    });
+                                }
                             }
                         }
+                    }
+                    if progressed && !finished && crate::ext::active() {
+                        let (bd, bt) = op.bytes.get();
+                        let units = (op.done, op.total);
+                        let pace = op.stats.pace(op.started.elapsed().as_secs_f64(), units, (bd, bt));
+                        told.push(crate::ext::Event::OperationProgress {
+                            id,
+                            title: op.title.clone(),
+                            items_done: op.done,
+                            items_total: op.total,
+                            bytes: (bt > 0).then_some((bd, bt)),
+                            bytes_per_sec: pace.speed.map(|s| s as u64),
+                            current: op.current.clone(),
+                        });
                     }
                 }
                 if finished {
@@ -859,6 +895,13 @@ pub fn start_with_id(
                 }
                 cx.notify();
             });
+            if !told.is_empty() {
+                cx.update(|cx| {
+                    for ev in told {
+                        crate::ext::emit(cx, || ev);
+                    }
+                });
+            }
             for (list, reply) in asks {
                 cx.update(|cx| {
                     let mode = cx.global::<crate::settings::Settings>().transfer_progress;
@@ -1785,7 +1828,17 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let retry_paths = paths.clone();
     // (as administrator nothing goes to the Recycle Bin: a bin delete is offered again as a permanent one, asked first)
     let offer_retry = true;
-    let on_done: Option<OnDone> = Some(Box::new(move |_, cx: &mut App| {
+    // for the extensions: the names and sizes as they are before the delete (read only when one is registered)
+    let gone = crate::ext::active().then(|| {
+        let shown: Vec<&std::path::PathBuf> = paths.iter().take(200).collect();
+        let names: Vec<String> = shown.iter().map(|p| rf_core::history::display_name(p)).collect();
+        let sizes: Vec<u64> = shown.iter().map(|p| std::fs::symlink_metadata(p).ok().filter(|m| m.is_file()).map_or(0, |m| m.len())).collect();
+        (names, sizes, paths.len())
+    });
+    let on_done: Option<OnDone> = Some(Box::new(move |ok, cx: &mut App| {
+        if ok && let Some((names, sizes, total)) = gone {
+            crate::ext::emit(cx, || crate::ext::Event::ItemsDeleted { names, sizes, permanent, total });
+        }
         if offer_retry && denied_seen.load(Ordering::Relaxed) {
             offer_admin(cx, own_id_done.get(), move |cx| crate::admin::retry_delete(cx, retry_paths.clone(), permanent, record));
         }

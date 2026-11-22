@@ -88,6 +88,7 @@ mod nav_touch;
 mod namespaces;
 mod ui_stall;
 mod places;
+pub mod ext;
 mod platform;
 mod settings;
 mod settings_merge;
@@ -405,7 +406,18 @@ pub(crate) fn start_mark(step: &str) {
     }
 }
 
+/// leaf as it is: no extension.
 pub fn main() {
+    run_with(ext::Extensions::new())
+}
+
+/// The same as [`main`].
+pub fn run() {
+    main()
+}
+
+/// Starts leaf with the given extensions registered (see [`ext`] and `docs/extensions.md`). An empty set is the normal program.
+pub fn run_with(ext: ext::Extensions) {
     start_mark("main");
     wait_for_the_old_one();
     // Not in the installation folder: the updater renames it, and Windows refuses while it is a working directory of this process
@@ -766,6 +778,7 @@ pub fn main() {
             rf_core::textload::set_locale_hint(None);
         }
         settings::apply_component_theme(cx);
+        ext::install(ext, cx);
         cx.set_global(tags::load());
         let ops = cx.new(status_center::Ops::new);
         // the Status Center flyout is its own Acrylic window, opened/closed with `open`

@@ -891,6 +891,8 @@ impl Workspace {
             if window.is_window_active() {
                 this.schedule_behind_sample(window, cx);
             }
+            let focused = window.is_window_active();
+            crate::ext::emit(cx, || crate::ext::Event::WindowFocus { focused });
         })
         .detach();
         let ws = cx.entity().downgrade();
@@ -6024,6 +6026,10 @@ impl Render for Workspace {
             .then(|| crate::transfer_view::cards(&self.ops, &p, if show_statusbar { 44.0 } else { 12.0 }, cx))
             .flatten();
         let status = self.render_statusbar(&p, strip_bar_w, cx);
+        if crate::ext::active() {
+            let (count, bytes, _) = self.active_tab().read(cx).selection_summary();
+            crate::ext::note_selection(count, bytes, cx);
+        }
         // Taskbar title follows the active folder.
         let title = {
             let v = self.active_tab().read(cx);
