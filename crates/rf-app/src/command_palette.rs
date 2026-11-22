@@ -64,6 +64,8 @@ enum Row {
     Tab(usize),
     /// An index into the guide's topics (`guide_topics::TOPICS`): "How do I: ...".
     Guide(usize),
+    /// An index into `ext` (a command an extension registered).
+    Ext(usize),
 }
 
 /// How many rows are listed under the typed path's row.
@@ -79,6 +81,8 @@ pub struct CommandPalette {
     cmds: Vec<Cmd>,
     folders: Vec<crate::folder_history::Visit>,
     tabs: Vec<TabEntry>,
+    /// The extensions' commands (empty in a normal build): id, title, icon, keys.
+    ext: Vec<(String, String, L, String)>,
     /// What matches the query, best first (plus an optional path row at the top).
     filtered: Vec<Row>,
     path: Option<PathBuf>,
@@ -190,7 +194,8 @@ impl CommandPalette {
         });
         input.update(cx, |s, cx| s.focus(window, cx));
         let cmds = if matches!(mode, PaletteMode::Folders | PaletteMode::Tabs | PaletteMode::Worktrees) { Vec::new() } else { commands().into_iter().filter(|c| c.available(cx)).collect() };
-        let mut this = Self { input, mode, cmds, folders, tabs, filtered: Vec::new(), path: None, selected: 0, _sub: sub };
+        let ext = if matches!(mode, PaletteMode::Commands { .. }) { crate::ext::palette_commands() } else { Vec::new() };
+        let mut this = Self { input, mode, cmds, folders, tabs, ext, filtered: Vec::new(), path: None, selected: 0, _sub: sub };
         this.refilter(cx);
         this
     }
@@ -200,6 +205,13 @@ impl CommandPalette {
         // (the tab search takes no typed path)
         self.path = as_path(&raw).filter(|_| !matches!(self.mode, PaletteMode::Tabs | PaletteMode::Worktrees)).map(|_| PathBuf::from(raw.trim().trim_matches('"')));
         self.filtered = if matches!(self.mode, PaletteMode::Tabs | PaletteMode::Worktrees) { filter_tabs(&self.tabs, &raw.trim().to_lowercase()) } else { filter(self.mode, &self.cmds, &self.folders, &raw) };
+        // the extensions' commands that fit what is typed, after leaf's own
+        if !self.ext.is_empty() && matches!(self.mode, PaletteMode::Commands { .. }) {
+            let q = raw.trim().to_lowercase();
+            let mut hits: Vec<(i32, usize)> = self.ext.iter().enumerate().filter_map(|(i, e)| score(&e.1, &q).map(|s| (s, i))).collect();
+            hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            self.filtered.extend(hits.into_iter().map(|(_, i)| Row::Ext(i)));
+        }
         self.selected = 0;
         cx.notify();
     }
@@ -221,6 +233,7 @@ impl CommandPalette {
         match self.filtered.get(ix) {
             Some(Row::Cmd(ci)) => cx.emit(PaletteEvent::Run(self.cmds[*ci].make_action())),
             Some(Row::Folder(p)) => cx.emit(PaletteEvent::Navigate(p.clone())),
+            Some(Row::Ext(ei)) => cx.emit(PaletteEvent::Run(Box::new(crate::ext::RunExtCommand { id: self.ext[*ei].0.clone() }))),
             Some(Row::Guide(ti)) => {
                 crate::guide_page::set_focus(crate::guide_topics::TOPICS[*ti].id, cx);
                 cx.emit(PaletteEvent::Run(Box::new(crate::actions::ShowGuide)));
@@ -288,6 +301,10 @@ impl Render for CommandPalette {
                 Row::Cmd(ci) => {
                     let c = &self.cmds[ci];
                     (c.icon, crate::i18n::t(c.title).to_string(), c.shown_keys().into())
+                }
+                Row::Ext(ei) => {
+                    let e = &self.ext[ei];
+                    (e.2, e.1.clone(), e.3.clone().into())
                 }
                 Row::Guide(ti) => (L::BookOpen, format!("{} {}", crate::t!("How do I:"), crate::i18n::t(crate::guide_topics::TOPICS[ti].title)), crate::t!("Guide").into()),
                 Row::Folder(path) => (

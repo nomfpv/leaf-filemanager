@@ -426,7 +426,12 @@ impl FolderView {
             },
         };
         let me = cx.entity().downgrade();
-        let menu = if background { self.background_menu(&me, &dir, cx) } else { self.items_menu(&me, &dir, &items, cx) };
+        let mut menu = if background { self.background_menu(&me, &dir, cx) } else { self.items_menu(&me, &dir, &items, cx) };
+        // an extension's own entries, at the end (nothing when none is registered)
+        if crate::ext::active() {
+            let ctx = crate::ext::CmdCtx { dir: Some(dir.clone()), selection: items.clone() };
+            crate::ext::extend_menu(&mut menu, crate::ext::target_of(background, &items), &ctx);
+        }
         let menu_view = fluent_menu::show(menu, window.mouse_position(), window, cx);
 
         // Shell items in the background: QueryContextMenu can take a second with slow extensions.
