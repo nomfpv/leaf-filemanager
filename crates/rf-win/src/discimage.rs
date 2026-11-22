@@ -37,11 +37,9 @@ pub fn can_mount(image: &Path) -> bool {
 }
 
 fn ps(script: &str, image: &Path) -> Result<String, String> {
-    let out = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
-        .env("LEAF_IMAGE", image)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).env("LEAF_IMAGE", image).creation_flags(CREATE_NO_WINDOW);
+    let out = leaf_proc::output_helper(&mut cmd, Some(std::time::Duration::from_secs(60)))
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if out.status.success() {

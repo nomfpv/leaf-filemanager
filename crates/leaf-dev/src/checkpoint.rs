@@ -269,6 +269,7 @@ fn store_git(root: &Path, git_dir: &Path, empty_tree: &str, own_index: bool) -> 
 /// Runs `c`: its output when it ends with one of `ok`, else an error with git's own words.
 fn run(mut c: Command, ok: &[i32], timeout: Duration) -> Result<Vec<u8>, Error> {
     c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let _turn = leaf_proc::GIT.enter();
     let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
     let mut out = child.stdout.take().ok_or_else(|| Error::new("git could not be started", ""))?;
     let mut err = child.stderr.take().ok_or_else(|| Error::new("git could not be started", ""))?;

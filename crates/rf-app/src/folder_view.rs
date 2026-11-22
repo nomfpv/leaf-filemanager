@@ -1281,6 +1281,20 @@ impl FolderView {
             self.git_stale = true;
             return;
         }
+        if leaf_sys::window::app_hidden() {
+            // minimised or hidden to the tray: nobody sees the marks, so no git; look again shortly (one waiting at a time)
+            self.git_stale = true;
+            if self.git_soon.is_none() {
+                self.git_soon = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                    let _ = this.update(cx, |v, cx| {
+                        v.git_soon = None;
+                        v.refresh_git(fresh, cx);
+                    });
+                }));
+            }
+            return;
+        }
         self.git_stale = false;
         self.git_last = Some(Instant::now());
         // (the developer-tools module off: no git process is started for this folder)

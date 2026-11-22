@@ -487,3 +487,27 @@ fn park_one(hwnd: isize) {
         let _ = SetWindowPos(h, None, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED);
     }
 }
+
+/// True when none of this process's top-level windows is on screen: all minimised, or hidden to the tray. Background work that only
+/// feeds what is drawn (git marks) waits while this is true.
+pub fn app_hidden() -> bool {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsIconic, IsWindowVisible};
+    use windows::core::BOOL;
+    unsafe extern "system" fn each(h: HWND, l: LPARAM) -> BOOL {
+        let shown = unsafe { &mut *(l.0 as *mut bool) };
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        if pid == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(h) }.as_bool() && !unsafe { IsIconic(h) }.as_bool() {
+            *shown = true;
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+    let mut shown = false;
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut shown as *mut _ as isize));
+    }
+    !shown
+}

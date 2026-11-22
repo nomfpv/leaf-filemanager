@@ -81,3 +81,8 @@ pub fn offscreen() -> bool {
 }
 
 pub fn park_offscreen() {}
+
+/// Whether no window of leaf is on screen (minimised, or hidden to the tray). Not known here: say no.
+pub fn app_hidden() -> bool {
+    false
+}

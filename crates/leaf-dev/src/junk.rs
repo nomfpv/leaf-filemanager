@@ -138,6 +138,7 @@ pub fn git_tracks(dir: &Path) -> Option<bool> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
+    let _turn = leaf_proc::GIT.enter();
     let mut child = leaf_proc::spawn_helper(&mut c).ok()?;
     let mut line = String::new();
     let got = BufReader::new(child.stdout.take()?).read_line(&mut line).ok()?;

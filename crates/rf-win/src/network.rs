@@ -219,13 +219,15 @@ fn run_limited(exe: &Path, args: &[&str], limit: std::time::Duration) -> std::io
     use std::io::Read;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
-    let mut child = Command::new(exe)
+    let mut cmd = Command::new(exe);
+    cmd
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(0x0800_0000)
-        .spawn()?;
+        ;
+    let mut child = leaf_proc::spawn_helper(&mut cmd)?;
     let (mut out, mut err) = (child.stdout.take(), child.stderr.take());
     let reader = std::thread::spawn(move || {
         let mut s = Vec::new();
