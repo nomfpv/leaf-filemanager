@@ -58,7 +58,7 @@ impl FolderView {
         let more = ghosts.len().saturating_sub(MAX_ROWS);
         let root = self.git.as_ref()?.root.clone();
         let tip = t!("Deleted since the last commit; most likely by an agent (a best guess)");
-        let mut strip = v_flex().w_full().flex_shrink_0().px(px(9.)).py_1().border_t_1().border_color(p.divider);
+        let mut strip = v_flex().w_full().flex_shrink_0().px(px(16.)).py_1().border_t_1().border_color(p.divider);
         for (i, g) in ghosts.into_iter().take(MAX_ROWS).enumerate() {
             let name = g.full.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let (rel, full, dismiss_full) = (g.rel.clone(), g.full.clone(), g.full.clone());
