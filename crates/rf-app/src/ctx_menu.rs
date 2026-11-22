@@ -377,6 +377,18 @@ impl FolderView {
         fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
     }
 
+    /// The background of a list that is not a folder (a tag's files): no new, paste or shell items, only the list's own view options.
+    fn show_virtual_background_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let me = cx.entity().downgrade();
+        let items = vec![
+            Item::action(t!("Refresh"), icon(L::RefreshCw), act(&me, |v, _, cx| v.refresh(cx))).hint("F5"),
+            Item::Separator,
+            Item::sub(t!("View"), icon(L::LayoutGrid), layout_items(&me, self.view_mode, self.grid_style)),
+            Item::sub(t!("Sort"), icon(L::ArrowUpDown), sort_items(&me, self.sort, self.sort_offers(cx))),
+        ];
+        fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+    }
+
     /// Opens our context menu for the selection (or the folder background) at the mouse.
     pub fn show_context_menu(&mut self, background: bool, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.location(), rf_core::history::Location::Shell { .. }) {
@@ -397,9 +409,21 @@ impl FolderView {
             self.show_native_menu(background, cx);
             return;
         }
-        let Some(dir) = self.current_dir() else { return };
         let items = if background { Vec::new() } else { self.selection_paths() };
         let background = background || items.is_empty();
+        // A list that is not one folder (a tag, a library not yet resolved) has no folder of its own: its items act on their real
+        // paths, in their own folder. Without items there is only what needs no folder.
+        let dir = match self.current_dir() {
+            Some(d) => d,
+            None if background => {
+                self.show_virtual_background_menu(window, cx);
+                return;
+            }
+            None => match items.first().and_then(|f| f.parent()) {
+                Some(d) => d.to_path_buf(),
+                None => return,
+            },
+        };
         let me = cx.entity().downgrade();
         let menu = if background { self.background_menu(&me, &dir, cx) } else { self.items_menu(&me, &dir, &items, cx) };
         let menu_view = fluent_menu::show(menu, window.mouse_position(), window, cx);
@@ -472,7 +496,8 @@ impl FolderView {
     }
 
     fn quick_clipboard(&self, me: &Me, with_items: bool) -> Vec<Quick> {
-        let paste_ok = leaf_sys::clipboard::can_paste();
+        // (a list with no folder of its own has nowhere to paste to)
+        let paste_ok = leaf_sys::clipboard::can_paste() && self.current_dir().is_some();
         if !with_items {
             return vec![
                 Quick::new(L::ClipboardPaste, t!("Paste  (Ctrl+V)"), paste_ok, act(me, |v, w, cx| v.paste(w, cx))),

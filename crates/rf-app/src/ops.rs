@@ -928,9 +928,10 @@ impl FolderView {
 
     /// The classic Explorer context menu (Shift+right-click) for the selection or background.
     pub fn show_native_menu(&mut self, background: bool, cx: &mut Context<Self>) {
-        let Some(dir) = self.current_dir() else { return };
         let items = if background { Vec::new() } else { self.selection_paths() };
         let background = background || items.is_empty();
+        // (a tag's files have no folder of their own: the items' folder stands in; with no items there is nothing to show)
+        let Some(dir) = self.current_dir().or_else(|| items.first().and_then(|f| f.parent()).map(|d| d.to_path_buf())) else { return };
         // From the listing, not the disk: a stat here could hang on an offline network path.
         let single_dir = items.len() == 1 && self.selected_is_single_dir();
         let item = |id: u32, label: &str| ExtraItem { id, label: label.to_string(), enabled: true };
