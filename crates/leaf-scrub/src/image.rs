@@ -150,8 +150,34 @@ pub(crate) fn exif_block(tiff: &[u8]) -> (Vec<Finding>, Option<u16>) {
             }
             (v, o)
         }
-        Err(_) => (vec![Finding::new("Exif data", "could not be read, removed whole", true)], None),
+        Err(_) => {
+            // the reader gave up (a damaged maker note, an odd value type): the orientation is read straight from the first
+            // directory, so a picture that is not upright does not come out rotated
+            let o = raw_orientation(tiff);
+            let mut v = vec![Finding::new("Exif data", "could not be read, removed whole", true)];
+            if let Some(o) = o {
+                v.push(Finding::new("Orientation", format!("{o} (kept so the picture shows the right way up)"), false));
+            }
+            (v, o)
+        }
     }
+}
+
+/// Tag 0x0112 of the first directory of a TIFF / Exif block, read without the Exif reader (2 to 8; 1 means upright).
+fn raw_orientation(t: &[u8]) -> Option<u16> {
+    let le = match t.get(0..4)? {
+        b"II*\0" => true,
+        b"MM\0*" => false,
+        _ => return None,
+    };
+    let u16_at = |p: usize| t.get(p..p + 2).map(|b| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) });
+    let off = t.get(4..8).map(|b| if le { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) } else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) })? as usize;
+    let n = u16_at(off)? as usize;
+    (0..n).find_map(|i| {
+        let at = off + 2 + 12 * i;
+        (u16_at(at)? == 0x0112 && u16_at(at + 2)? == 3).then(|| u16_at(at + 8)).flatten()
+    })
+    .filter(|o| (2..=8).contains(o))
 }
 
 // ---------------------------------------------------------------- JPEG

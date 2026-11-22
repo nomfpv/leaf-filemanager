@@ -1808,3 +1808,26 @@ fn scrub_tiff_preview_pictures_are_removed_and_the_chain_still_reaches_every_pag
     assert!(!inspect(&src, &keep).unwrap().findings.iter().any(|f| f.label.starts_with("Preview picture")));
     let _ = fs::remove_dir_all(&d);
 }
+
+/// Exif the reader cannot parse is removed whole, but the orientation is read straight from the first directory, so the picture
+/// does not come out rotated.
+#[test]
+fn scrub_jpeg_unreadable_exif_keeps_the_orientation() {
+    let d = tmp_dir("orient");
+    // a directory with the orientation (6) and an entry of a type no reader knows
+    let mut t = b"MM\0*".to_vec();
+    t.extend_from_slice(&8u32.to_be_bytes());
+    t.extend_from_slice(&2u16.to_be_bytes());
+    t.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0]);
+    t.extend_from_slice(&[0x01, 0x0F, 0, 2, 0, 0, 0x10, 0, 0, 0, 0xFF, 0xF0]);
+    t.extend_from_slice(&0u32.to_be_bytes());
+    assert!(exif::Reader::new().read_raw(t.clone()).is_err(), "the test needs Exif the reader rejects");
+    let src = d.join("a.jpg");
+    fs::write(&src, jpeg_bytes(&t, b"x")).unwrap();
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let f = fs::File::open(&dst).unwrap();
+    let ex = exif::Reader::new().read_from_container(&mut std::io::BufReader::new(f)).unwrap();
+    assert_eq!(ex.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(6));
+    let _ = fs::remove_dir_all(&d);
+}
