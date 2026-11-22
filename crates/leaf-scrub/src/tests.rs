@@ -524,6 +524,33 @@ fn scrub_replace_mode_bin_refuses_leaves_exactly_one_file_never_none() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// The second look does not trust the remover: an uncleaned file fails its structural walk, and a "cleaned" file that still holds
+/// a value the original carried somewhere the walk does not look (here: inside the picture data) fails the byte scan.
+#[test]
+fn scrub_second_look_catches_what_the_remover_missed() {
+    let d = tmp_dir("second");
+    let src = d.join("a.jpg");
+    fs::write(&src, jpeg_bytes(&exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()), b"a comment")).unwrap();
+    let before = inspect(&src, &opts()).unwrap();
+    // 1. the original itself, as if nothing had been removed: the structure is not on the allow-list
+    let e = second::second_look(&src, &src, &before, Family::Jpeg, &opts()).unwrap_err();
+    assert!(matches!(e, ScrubError::Verify(_)), "{e}");
+    // 2. a clean structure with the serial hidden in the picture data, just before the end marker
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let mut b = fs::read(&dst).unwrap();
+    let end = b.len() - 2;
+    b.splice(end..end, SERIAL.iter().copied());
+    let fake = d.join("fake.jpg");
+    fs::write(&fake, &b).unwrap();
+    assert!(leftovers(&fake, &opts()).unwrap().is_empty(), "the structure alone looks clean");
+    let e = second::second_look(&src, &fake, &before, Family::Jpeg, &opts()).unwrap_err().to_string();
+    assert!(e.contains("LEAFTESTSERIAL123"), "{e}");
+    // 3. the real cleaned file passes both
+    second::second_look(&src, &dst, &before, Family::Jpeg, &opts()).unwrap();
+    let _ = fs::remove_dir_all(&d);
+}
+
 // ------------------------------------------------------------------------------------------------------------------
 // The independent second lister: the raw bytes of a cleaned file are scanned for the planted markers. This finds data that
 // the structured reader cannot see: slack space, renamed-but-not-emptied boxes, old revisions, unreferenced objects.

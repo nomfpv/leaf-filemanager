@@ -18,9 +18,9 @@ const EDITOR_NS: [&str; 9] = [
     "serif.com",
     "ns.nsc",
 ];
-const SVG_NS: &str = "http://www.w3.org/2000/svg";
+pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
-fn is_editor(uri: Option<&str>) -> bool {
+pub(crate) fn is_editor(uri: Option<&str>) -> bool {
     uri.is_some_and(|u| EDITOR_NS.iter().any(|e| u.contains(e)))
 }
 

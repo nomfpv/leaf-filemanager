@@ -5302,6 +5302,7 @@ dependencies = [
  "libc",
  "lofty",
  "lopdf",
+ "memchr",
  "roxmltree 0.20.0",
  "windows 0.62.2",
  "zip 9.3.0",

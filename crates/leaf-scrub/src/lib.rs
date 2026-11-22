@@ -14,6 +14,7 @@ mod image;
 mod mp4;
 mod office;
 mod pdf;
+mod second;
 mod streams;
 mod svg;
 #[cfg(test)]
@@ -25,6 +26,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub use second::leftovers;
 pub use streams::{list_streams, remove_streams};
 
 /// The one line the result sheet always shows (the brief's fixed wording).
@@ -473,6 +475,9 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
         }
         // Read it back: the same reader that lists metadata must find nothing from the removal list.
         verify(&tmp, opts, fam)?;
+        // and a second, independent look: the structure against the format's allow-list, the bytes against the values the
+        // original carried
+        second::second_look(src, &tmp, &before, fam, opts)?;
         Ok(extra)
     })();
     let extra = match res {

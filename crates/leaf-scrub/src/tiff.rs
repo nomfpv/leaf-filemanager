@@ -13,7 +13,7 @@ use std::path::Path;
 pub(crate) const RAW_TEXT: &str = "camera RAW files carry the camera's data inside the picture data: convert to another format first";
 
 /// Tags that describe the picture itself. ICC (34675) is added when the colour profile is kept.
-const KEEP: &[u16] = &[
+pub(crate) const KEEP: &[u16] = &[
     254, 255, 256, 257, 258, 259, 262, 263, 264, 265, 266, 273, 274, 277, 278, 279, 280, 281, 282, 283, 284, 292, 293, 296, 301, 317, 318, 319,
     320, 322, 323, 324, 325, 338, 339, 340, 341, 347, 512, 513, 514, 515, 517, 518, 519, 520, 521, 529, 530, 531, 532,
 ];

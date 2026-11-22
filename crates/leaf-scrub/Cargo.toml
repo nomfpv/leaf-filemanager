@@ -19,6 +19,8 @@ roxmltree = "0.20"
 crc32fast.workspace = true
 # capped unpacking of PDF object streams before the PDF reader sees them (already in the tree through zip and lopdf)
 flate2.workspace = true
+# the second look's byte scan of cleaned files (MIT OR Unlicense; already in the tree)
+memchr = "2"
 
 [target.'cfg(windows)'.dependencies]
 # FindFirstStreamW / DeleteFileW: alternate data streams

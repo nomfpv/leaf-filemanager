@@ -87,9 +87,15 @@ struct Checked {
 fn verify_one(r: &FileResult, o: &RunOpts) -> Option<Checked> {
     let out = r.output.as_ref().filter(|_| r.error.is_none())?;
     let name = name_of(out);
-    Some(match leaf_scrub::inspect(out, &o.lib()) {
-        Ok(i) => Checked { name, left: pairs(&i.to_remove().cloned().collect::<Vec<_>>()), error: None },
-        Err(e) => Checked { name, left: vec![], error: Some(e.to_string()) },
+    // the lister, and the structural walk of the second look (anything not on the format's allow-list)
+    let listed = leaf_scrub::inspect(out, &o.lib()).map(|i| pairs(&i.to_remove().cloned().collect::<Vec<_>>()));
+    let walked = leaf_scrub::leftovers(out, &o.lib());
+    Some(match (listed, walked) {
+        (Ok(mut left), Ok(more)) => {
+            left.extend(more.into_iter().map(|m| (t!("Not on the list of what the format needs").to_string(), m)));
+            Checked { name, left, error: None }
+        }
+        (Err(e), _) | (_, Err(e)) => Checked { name, left: vec![], error: Some(e.to_string()) },
     })
 }
 
@@ -415,7 +421,7 @@ fn verify_card(p: &Palette, checked: &[Checked]) -> AnyElement {
     for c in checked {
         let (icon, color, text) = match (&c.error, c.left.is_empty()) {
             (Some(e), _) => (L::CircleAlert, p.danger, format!("{}: {e}", t!("could not be read"))),
-            (None, true) => (L::CircleCheck, p.accent, t!("nothing left").to_string()),
+            (None, true) => (L::CircleCheck, p.accent, t!("Read again: nothing leaf looks for was found").to_string()),
             (None, false) => (L::CircleAlert, p.danger, format!("{}: {}", t!("still found"), c.left.len())),
         };
         rows.push(

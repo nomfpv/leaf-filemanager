@@ -211,6 +211,7 @@ fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<F
                 found.push(Finding::new("Leftover data in padding", format!("{} bytes", c.body.len()), true));
                 patches.push((c.off + c.hdr, vec![0u8; c.body.len()]));
             }
+            b"free" | b"skip" | b"edts" | b"tref" | b"tapt" | b"load" | b"imap" | b"txas" | b"clip" | b"matt" | b"kmat" => {}
             b"mdia" => {
                 for m in children(c.body, c.off + c.hdr)? {
                     match &m.ty {
@@ -261,7 +262,7 @@ fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<F
                     }
                 }
             }
-            _ => {}
+            other => rename_free(&c, &odd_label(other), patches, found),
         }
     }
     Ok(t)

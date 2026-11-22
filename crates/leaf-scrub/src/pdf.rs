@@ -18,8 +18,13 @@ const MARKUP: [&[u8]; 15] = [
 /// Dates of an attached file, in the `Params` of its stream.
 const PARAM_KEYS: [&[u8]; 2] = [b"CreationDate", b"ModDate"];
 
+/// An annotation whose `T` is its author's name: every kind except form fields (`Widget`, where `T` is the field's name), links
+/// and pop-ups (the known markup kinds of [`MARKUP`], and the rest: redactions, sounds, movies, screens, watermarks ...).
 fn is_markup(d: &Dictionary) -> bool {
-    matches!(d.get(b"Subtype"), Ok(Object::Name(n)) if MARKUP.contains(&n.as_slice())) && d.has(b"Rect")
+    match d.get(b"Subtype") {
+        Ok(Object::Name(n)) => d.has(b"Rect") && (MARKUP.contains(&n.as_slice()) || !matches!(n.as_slice(), b"Widget" | b"Link" | b"Popup")),
+        _ => false,
+    }
 }
 
 /// The ids of dictionaries used as `Params` of a stream by reference (attached files' dates), and whether a direct one holds dates.

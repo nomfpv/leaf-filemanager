@@ -312,7 +312,7 @@ fn jpeg(d: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
 
 // ---------------------------------------------------------------- PNG
 
-const PNG_KEEP: [&[u8; 4]; 17] = [
+pub(crate) const PNG_KEEP: [&[u8; 4]; 17] = [
     b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"sBIT", b"bKGD", b"hIST", b"pHYs", b"sPLT", b"acTL",
     b"fcTL", b"fdAT", b"cICP",
 ];
