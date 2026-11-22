@@ -105,7 +105,7 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
         crate::videodl::route(cx, Request { sha256, verify: verify_on.get(), vpn: through, ..Request::new(url, dir.clone()) }, after, false);
         Ok(())
     });
-    let mut checks = vec![prompt::Check { label: t!("Verify with the checksum file next to it (address.sha256)").into(), note: "".into(), on: verify, enabled: true }];
+    let mut checks = vec![prompt::Check { label: t!("Verify with the .sha256 file beside it").into(), note: "".into(), on: verify, enabled: true }];
     if offer_vpn {
         checks.push(prompt::Check { label: t!("Through leaf's VPN").into(), note: "".into(), on: vpn, enabled: true });
     }

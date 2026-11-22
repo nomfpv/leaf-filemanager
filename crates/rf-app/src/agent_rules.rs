@@ -479,7 +479,9 @@ pub fn show_rules(dir: PathBuf, window: &mut Window, cx: &mut App) {
         }
     }
     message.push_str(&format!("\n{}", t!("Tick a rule of the project or local file to remove it (the user file is only shown).")));
-    let buttons = vec![
+    // (nothing to tick: no Remove button to press)
+    let has_rules = !rows.is_empty();
+    let mut buttons = vec![]; if has_rules { buttons.push(
         Button::new(t!("Remove ticked…"), BtnKind::Danger, move |_, _, cx| {
             let picked: Vec<(PathBuf, Kind, String)> = rows.iter().filter(|r| r.0.get()).map(|r| (r.1.clone(), r.2, r.3.clone())).collect();
             if !picked.is_empty() {
@@ -490,9 +492,8 @@ pub fn show_rules(dir: PathBuf, window: &mut Window, cx: &mut App) {
                 });
             }
             Ok(())
-        }),
-        Button::new(t!("Close"), BtnKind::Normal, |_, _, _| Ok(())),
-    ];
+        })); }
+    buttons.push(Button::new(t!("Close"), BtnKind::Normal, |_, _, _| Ok(())));
     prompt::show_with_checks(title, Some(message), None, Vec::new(), checks, buttons, window, cx);
 }
 
