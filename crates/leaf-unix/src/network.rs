@@ -226,6 +226,143 @@ fn encode_uri(uri: &str) -> String {
     o
 }
 
+/// How `smb://` and `nfs://` places are mounted on this machine.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Route {
+    /// `gio mount` with the gvfs backend of the scheme (`gvfs-smb`, `gvfs-nfs`): the folder is under `$XDG_RUNTIME_DIR/gvfs`.
+    Gvfs,
+    /// KDE's way: kio-fuse mounts the address through the KIO workers (`kio-extras`) under `$XDG_RUNTIME_DIR/kio-fuse-*`.
+    Kio,
+}
+
+/// The files in the data folders (`$XDG_DATA_HOME`, `$XDG_DATA_DIRS`, the usual two) that mark a package as installed.
+fn has_data_file(rel: &str) -> bool {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(h) = std::env::var_os("XDG_DATA_HOME").filter(|h| !h.is_empty()) {
+        dirs.push(h.into());
+    } else if let Some(h) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(h).join(".local/share"));
+    }
+    match std::env::var_os("XDG_DATA_DIRS").filter(|d| !d.is_empty()) {
+        Some(d) => dirs.extend(std::env::split_paths(&d)),
+        None => dirs.extend(["/usr/local/share", "/usr/share"].map(PathBuf::from)),
+    }
+    dirs.iter().any(|d| d.join(rel).is_file())
+}
+
+fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+}
+
+/// The route for an address: gvfs when `gio` and the scheme's gvfs backend are installed (checked by the backend's mount file,
+/// since `gio` itself is part of glib and is there without gvfs, where it can only say "volume doesn't implement mount"), else
+/// kio-fuse when it is installed and a way to call it is (`gdbus` or `busctl`). Neither: `Unsupported`, naming what is missing.
+fn route_for(uri: &str) -> std::io::Result<Route> {
+    let scheme = uri.split_once("://").map_or("", |(s, _)| s);
+    if on_path("gio") && has_data_file(&format!("gvfs/mounts/{scheme}.mount")) {
+        return Ok(Route::Gvfs);
+    }
+    if has_data_file("dbus-1/services/org.kde.KIOFuse.service") && (on_path("gdbus") || on_path("busctl")) {
+        return Ok(Route::Kio);
+    }
+    let pkg = if scheme == "nfs" { "gvfs-nfs" } else { "gvfs-smb" };
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("This computer cannot open {scheme}:// places: neither the {pkg} package (GNOME and most desktops) nor kio-fuse with kio-extras (KDE) is installed. Install one of them and open the address again"),
+    ))
+}
+
+/// The folder kio-fuse makes for `uri`: its `mountUrl` call on the session bus returns the local path. KDE asks for a password in
+/// its own window when the server wants one (leaf never sees it). Blocks: worker threads only.
+fn kio_mount(uri: &str) -> std::io::Result<PathBuf> {
+    const CALL: [&str; 6] = ["--dest", "org.kde.KIOFuse", "--object-path", "/org/kde/KIOFuse", "--method", "org.kde.KIOFuse.VFS.mountUrl"];
+    let o = if on_path("gdbus") {
+        let mut args = vec!["call", "--session"];
+        args.extend(CALL);
+        args.push(uri);
+        tool("gdbus", &args, Duration::from_secs(120))?
+    } else {
+        tool("busctl", &["--user", "call", "org.kde.KIOFuse", "/org/kde/KIOFuse", "org.kde.KIOFuse.VFS", "mountUrl", "s", uri], Duration::from_secs(120))?
+    };
+    if !o.ok {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, kio_words(uri, &o.text)));
+    }
+    parse_dbus_string(&o.text).map(PathBuf::from).filter(|p| p.is_absolute()).ok_or_else(|| std::io::Error::other("kio-fuse mounted the place but gave no folder for it"))
+}
+
+/// The one string in a `gdbus call` reply (`('/run/user/1000/kio-fuse-x/smb/host/share',)`) or `busctl` reply (`s "/run/..."`).
+fn parse_dbus_string(text: &str) -> Option<String> {
+    let t = text.trim();
+    let (open, close) = if t.starts_with('(') { ('\'', '\'') } else { ('"', '"') };
+    let a = t.find(open)? + 1;
+    let b = t.rfind(close)?;
+    (b > a).then(|| t[a..b].to_string())
+}
+
+/// What kio-fuse said, in words that say what to do. Its own reason is kept after the colon.
+fn kio_words(uri: &str, text: &str) -> String {
+    let reason = text.rsplit_once(": ").map_or(text.trim(), |(_, r)| r.trim());
+    let low = text.to_lowercase();
+    let host_only = uri.split_once("://").and_then(|(_, r)| r.split_once('/')).is_none_or(|(_, p)| p.trim_matches('/').is_empty());
+    let nfs = uri.starts_with("nfs://");
+    if low.contains("could not find") || low.contains("unknown protocol") || low.contains("no such protocol") || low.contains("unsupported protocol") {
+        let scheme = if nfs { "nfs" } else { "smb" };
+        format!("KDE has no {scheme} support installed (the kio-extras package). Install it and open the address again: {reason}")
+    } else if low.contains("serviceunknown") || low.contains("not provided by any .service") || low.contains("no such interface") {
+        format!("kio-fuse is not running and could not be started. Log in to a KDE session or install the kio-fuse package: {reason}")
+    } else if low.contains("access denied") || low.contains("authentication") || low.contains("password") || low.contains("login") || low.contains("permission denied") {
+        format!("The server wants a login or refused it. KDE asks for the password in its own window; open the address again and enter it there: {reason}")
+    } else if nfs && host_only {
+        format!("An NFS address needs the export after the server, for example nfs://nas.example.com/volume1/data: {reason}")
+    } else if nfs {
+        format!("The NFS export could not be mounted. Check that the server exports it to this computer, for example with showmount -e: {reason}")
+    } else {
+        format!("The place could not be mounted through KDE: {reason}")
+    }
+}
+
+/// leaf's words for what `gio mount` said (gio's own sentence stays after the colon). `gio` without gvfs, or a gvfs NFS backend asked
+/// for a server without an export, says "volume doesn't implement mount".
+fn gio_mount_error(kind: std::io::ErrorKind, uri: &str, text: &str) -> std::io::Error {
+    let words = gio_mount_words(uri, text);
+    // (`InvalidInput`: leaf's own sentence, shown as it is)
+    std::io::Error::new(if words == text { kind } else { std::io::ErrorKind::InvalidInput }, words)
+}
+
+fn gio_mount_words(uri: &str, text: &str) -> String {
+    let low = text.to_lowercase();
+    if low.contains("doesn't implement mount") || low.contains("does not implement mount") {
+        if uri.starts_with("nfs://") {
+            format!("An NFS address needs the export after the server, for example nfs://nas.example.com/volume1/data (showmount -e server lists them). If it names one already, the gvfs-nfs package may be missing: {text}")
+        } else {
+            format!("This kind of place cannot be mounted here. The gvfs-smb package may be missing: {text}")
+        }
+    } else {
+        text.to_string()
+    }
+}
+
+/// The exports of an NFS server, as the full paths it lists (`showmount -e`; the server must allow the listing). Without `showmount`
+/// (the nfs-utils package): `Unsupported`.
+pub fn nfs_exports(host: &str) -> std::io::Result<Vec<String>> {
+    if host.is_empty() || host.starts_with('-') || host.contains(['/', '\\', ' ']) {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    let o = tool("showmount", &["-e", "--no-headers", host], Duration::from_secs(15))?;
+    if !o.ok {
+        return Err(std::io::Error::other(o.text.trim().to_string()));
+    }
+    Ok(parse_exports(&o.text))
+}
+
+/// The export paths in the text of `showmount -e`: the first word of each line that starts with `/`.
+fn parse_exports(text: &str) -> Vec<String> {
+    let mut v: Vec<String> = text.lines().filter_map(|l| l.split_whitespace().next()).filter(|w| w.starts_with('/')).map(str::to_string).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 /// The disk path under `$XDG_RUNTIME_DIR/gvfs` that `gio info` names for a mounted place.
 fn parse_local_path(text: &str) -> Option<PathBuf> {
     text.lines().find_map(|l| l.strip_prefix("local path: ")).map(|p| PathBuf::from(p.trim()))
@@ -237,6 +374,9 @@ fn parse_local_path(text: &str) -> Option<PathBuf> {
 /// gio's own).
 pub fn mount_path(uri: &str) -> std::io::Result<PathBuf> {
     let uri = encode_uri(uri);
+    if route_for(&uri)? == Route::Kio {
+        return kio_mount(&uri);
+    }
     let info = |u: &str| -> std::io::Result<Option<PathBuf>> { Ok(gio(&["info", "-a", "standard::name", u], Duration::from_secs(15))?.ok_then_path()) };
     if let Some(p) = info(&uri)? {
         return Ok(p);
@@ -250,7 +390,7 @@ pub fn mount_path(uri: &str) -> std::io::Result<PathBuf> {
         } else {
             std::io::ErrorKind::Other
         };
-        return Err(std::io::Error::new(kind, t));
+        return Err(gio_mount_error(kind, &uri, &t));
     }
     info(&uri)?.ok_or_else(|| std::io::Error::other("the place is mounted but gio gives no folder for it"))
 }
@@ -261,13 +401,17 @@ pub fn mount_path(uri: &str) -> std::io::Result<PathBuf> {
 /// the answer) ends the input, so gio gives up: one try per call, `PermissionDenied`. Blocks: worker threads only.
 pub fn mount_path_login(uri: &str, user: &str, domain: &str, password: &str) -> std::io::Result<PathBuf> {
     let uri = encode_uri(uri);
+    if route_for(&uri)? == Route::Kio {
+        // (the KDE route has no way to take a password that keeps it off a command line: KDE asks for it in its own window)
+        return kio_mount(&uri);
+    }
     let m = gio_answering(&["mount", &uri], Duration::from_secs(90), user, domain, password)?;
     let t = m.text.trim().to_string();
     if !m.ok && !t.contains("already mounted") {
         // (a refusal deletes a saved password: only a question asked again, or gio's own error naming the login; a renamed
         // share, a timeout or a server gone mid-mount stay other errors)
         let kind = if login_refused(&t, m.asked_twice) { std::io::ErrorKind::PermissionDenied } else { std::io::ErrorKind::Other };
-        return Err(std::io::Error::new(kind, t));
+        return Err(gio_mount_error(kind, &uri, &t));
     }
     gio(&["info", "-a", "standard::name", &uri], Duration::from_secs(15))?.ok_then_path().ok_or_else(|| std::io::Error::other("the place is mounted but gio gives no folder for it"))
 }

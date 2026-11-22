@@ -253,6 +253,11 @@ fn run_limited(exe: &Path, args: &[&str], limit: std::time::Duration) -> std::io
     Ok(Ran { text: String::from_utf8_lossy(&bytes).into_owned() })
 }
 
+/// The exports of an NFS server as the server lists them (Linux, `showmount -e`); `Unsupported` here: [`mount_path`] finds the export itself.
+pub fn nfs_exports(_host: &str) -> std::io::Result<Vec<String>> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
 /// `smb://` with a password: only Linux (`gio mount`); `Unsupported` here (Windows logs in with [`connect_share`]).
 pub fn mount_path_login(_uri: &str, _user: &str, _domain: &str, _password: &str) -> std::io::Result<PathBuf> {
     Err(std::io::ErrorKind::Unsupported.into())
