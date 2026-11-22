@@ -4,7 +4,7 @@ use crate::{Family, Finding, Inspection, Options, Result, ScrubError, MAX_IN_MEM
 use std::fs;
 use std::path::Path;
 
-fn read_all(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_all(path: &Path) -> Result<Vec<u8>> {
     let len = fs::metadata(path)?.len();
     if len > MAX_IN_MEMORY {
         return Err(ScrubError::Unsupported("the picture is bigger than 1 GB".into()));
@@ -43,7 +43,12 @@ pub(crate) fn inspect_unwritable(path: &Path, kind: &'static str) -> Inspection 
         findings,
         notes: vec![],
         can_clean: false,
-        refusal: Some(format!("leaf cannot clean {kind} files without a risk of damaging them; the metadata above is listed only")),
+        refusal: Some(match kind {
+            "camera RAW" => crate::tiff::RAW_TEXT.to_string(),
+            "Matroska / WebM" => "Matroska / WebM files cannot be rewritten without re-encoding or a risk of damaging them: they are refused and left untouched; their tags, title and writing program stay inside".to_string(),
+            "AVI" => "AVI files cannot be rewritten without re-encoding or a risk of damaging them: they are refused and left untouched; their tags and writing program stay inside".to_string(),
+            _ => format!("leaf cannot clean {kind} files without a risk of damaging them; the metadata above is listed only"),
+        }),
     }
 }
 
@@ -61,7 +66,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, fam: Family, opts: &Options) -> Re
     Ok(())
 }
 
-fn process(data: &[u8], fam: Family, opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
+pub(crate) fn process(data: &[u8], fam: Family, opts: &Options) -> Result<(Vec<u8>, Vec<Finding>)> {
     match fam {
         Family::Jpeg => jpeg(data, opts),
         Family::Png => png(data, opts),
@@ -131,7 +136,7 @@ fn exif_findings(ex: &exif::Exif, all_remove: bool) -> Vec<Finding> {
 }
 
 /// Findings of an Exif block, and the orientation to keep (if the picture is not upright).
-fn exif_block(tiff: &[u8]) -> (Vec<Finding>, Option<u16>) {
+pub(crate) fn exif_block(tiff: &[u8]) -> (Vec<Finding>, Option<u16>) {
     match exif::Reader::new().read_raw(tiff.to_vec()) {
         Ok(ex) => {
             let o = orientation_of(&ex);

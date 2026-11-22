@@ -8,14 +8,18 @@
 //!   ([`ScrubError`]), never half-cleaned;
 //! - what the removal cannot reach is said so ([`Inspection::notes`]), it is never left unmentioned.
 
+mod gif;
+mod heif;
 mod image;
 mod mp4;
 mod office;
 mod pdf;
 mod streams;
+mod svg;
 #[cfg(test)]
 mod tests;
 mod tags;
+mod tiff;
 
 use std::fs;
 use std::io;
@@ -146,8 +150,17 @@ pub(crate) enum Family {
     Jpeg,
     Png,
     Webp,
-    /// Recognised, listed, but no safe writer: refused on a run.
+    /// Recognised, but no safe writer: refused on a run (the kind decides the wording, see `refusal_text`).
     NoWriter(&'static str),
+    /// HEIC / HEIF / AVIF, cleaned at container level.
+    Heif(&'static str),
+    Tiff,
+    Gif,
+    Svg,
+    /// BMP / ICO: the format has no metadata fields.
+    Bare(&'static str),
+    /// zip (not Office), 7z, tar, gz, rar: not cleaned inside.
+    Archive(&'static str),
     Pdf,
     Ooxml,
     Odf,
@@ -187,14 +200,45 @@ pub(crate) fn family_of(path: &Path) -> io::Result<(Family, &'static str)> {
     if h.len() >= 12 && &h[0..4] == b"RIFF" && &h[8..12] == b"WEBP" {
         return Ok((Family::Webp, "WebP"));
     }
-    if h.starts_with(b"II*\0") || h.starts_with(b"MM\0*") {
-        return Ok((Family::NoWriter("TIFF"), "TIFF"));
+    const RAW_EXT: [&str; 25] = [
+        "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "sr2", "srf", "orf", "rw2", "raf", "pef", "srw", "raw", "3fr", "x3f", "kdc", "dcr", "mrw",
+        "erf", "mef", "mos", "iiq", "rwl",
+    ];
+    if h.starts_with(b"FUJIFILMCCD-RAW") || h.starts_with(b"IIRO") || h.starts_with(b"IIRS") || h.starts_with(b"IIU\0") || h.starts_with(b"MRM\0") || h.starts_with(b"II\x1a\0\0\0HEAPCCDR") {
+        return Ok((Family::NoWriter("camera RAW"), "Camera RAW"));
+    }
+    if h.starts_with(b"II*\0") || h.starts_with(b"MM\0*") || h.starts_with(b"II+\0") || h.starts_with(b"MM\0+") {
+        if RAW_EXT.contains(&ext.as_str()) {
+            return Ok((Family::NoWriter("camera RAW"), "Camera RAW"));
+        }
+        return Ok((Family::Tiff, "TIFF"));
     }
     if h.starts_with(b"GIF8") {
-        return Ok((Family::NoWriter("GIF"), "GIF"));
+        return Ok((Family::Gif, "GIF"));
+    }
+    if h.starts_with(b"BM") && ext == "bmp" {
+        return Ok((Family::Bare("BMP"), "BMP"));
+    }
+    if (h.starts_with(&[0, 0, 1, 0]) || h.starts_with(&[0, 0, 2, 0])) && (ext == "ico" || ext == "cur") {
+        return Ok((Family::Bare("ICO"), "ICO"));
+    }
+    if ext == "svg" && String::from_utf8_lossy(&h).contains("<svg") {
+        return Ok((Family::Svg, "SVG"));
     }
     if h.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
         return Ok((Family::NoWriter("Matroska / WebM"), "Matroska video"));
+    }
+    if h.starts_with(b"7z\xBC\xAF\x27\x1C") {
+        return Ok((Family::Archive("7z archive"), "7z archive"));
+    }
+    if h.starts_with(&[0x1F, 0x8B]) {
+        return Ok((Family::Archive("gzip archive"), "gzip archive"));
+    }
+    if h.starts_with(b"Rar!") {
+        return Ok((Family::Archive("RAR archive"), "RAR archive"));
+    }
+    if h.len() > 262 && &h[257..262] == b"ustar" {
+        return Ok((Family::Archive("tar archive"), "tar archive"));
     }
     if h.len() >= 12 && &h[0..4] == b"RIFF" && &h[8..12] == b"AVI " {
         return Ok((Family::NoWriter("AVI"), "AVI video"));
@@ -204,10 +248,13 @@ pub(crate) fn family_of(path: &Path) -> io::Result<(Family, &'static str)> {
     }
     if h.len() >= 12 && &h[4..8] == b"ftyp" {
         let brand = &h[8..12];
+        if brand == b"crx " {
+            return Ok((Family::NoWriter("camera RAW"), "Camera RAW"));
+        }
         let heif: [&[u8]; 9] = [b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"avif", b"avis", b"heim"];
         if heif.iter().any(|b| *b == brand) {
             let name = if brand.starts_with(b"avi") { "AVIF" } else { "HEIC" };
-            return Ok((Family::NoWriter(name), name));
+            return Ok((Family::Heif(name), name));
         }
         return Ok((Family::Mp4, "MP4 / MOV / M4A"));
     }
@@ -219,7 +266,7 @@ pub(crate) fn family_of(path: &Path) -> io::Result<(Family, &'static str)> {
         match kind {
             Some(office::Kind::Ooxml(name)) => return Ok((Family::Ooxml, name)),
             Some(office::Kind::Odf(name)) => return Ok((Family::Odf, name)),
-            None => return Ok((Family::Plain, "ZIP archive")),
+            None => return Ok((Family::Archive("ZIP archive"), "ZIP archive")),
         }
     }
     let tagged_ext = ["mp3", "flac", "ogg", "oga", "opus", "wav", "wv", "ape"];
@@ -258,6 +305,23 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
     let mut out = match fam {
         Family::Jpeg | Family::Png | Family::Webp => image::inspect(path, fam, opts)?,
         Family::NoWriter(kind) => image::inspect_unwritable(path, kind),
+        Family::Heif(kind) => heif::inspect(path, kind, opts)?,
+        Family::Tiff => tiff::inspect(path, opts)?,
+        Family::Gif => gif::inspect(path, opts)?,
+        Family::Svg => svg::inspect(path, opts)?,
+        Family::Bare(kind) => Inspection {
+            format: kind.to_string(),
+            can_clean: true,
+            notes: vec![format!("Nothing found: {kind} files have no metadata fields.")],
+            ..Default::default()
+        },
+        Family::Archive(kind) => Inspection {
+            format: kind.to_string(),
+            can_clean: false,
+            notes: vec!["An archive keeps the metadata of the files inside it.".into()],
+            refusal: Some("an archive keeps the metadata of the files inside it: clean the files before packing them".into()),
+            ..Default::default()
+        },
         Family::Pdf => pdf::inspect(path)?,
         Family::Ooxml | Family::Odf => office::inspect(path)?,
         Family::Mp4 => mp4::inspect(path)?,
@@ -281,6 +345,9 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
     }
     Ok(out)
 }
+
+/// "Formats leaf cannot clean are refused and left untouched": the second fixed line of the result sheet.
+pub const REFUSED_LINE: &str = "Formats leaf cannot clean are refused and left untouched: check the list above.";
 
 /// Writes the cleaned copy of `src` to `dst` (which must not exist) and checks it. On any error nothing is left at `dst`.
 pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> bool) -> Result<Outcome> {
@@ -307,6 +374,12 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
         let mut extra = Vec::new();
         match fam {
             Family::Jpeg | Family::Png | Family::Webp => image::produce(src, &tmp, fam, opts)?,
+            Family::Heif(_) => heif::produce(src, &tmp, opts)?,
+            Family::Tiff => tiff::produce(src, &tmp, opts)?,
+            Family::Gif => gif::produce(src, &tmp, opts)?,
+            Family::Svg => svg::produce(src, &tmp, opts)?,
+            Family::Bare(_) => copy_without_attrs(src, &tmp)?,
+            Family::Archive(k) => return Err(ScrubError::Unsupported(format!("a {k} keeps the metadata of the files inside it"))),
             Family::Pdf => pdf::produce(src, &tmp)?,
             Family::Ooxml | Family::Odf => office::produce(src, &tmp)?,
             Family::Mp4 => extra.extend(mp4::produce(src, &tmp, opts)?),

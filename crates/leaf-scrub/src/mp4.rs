@@ -94,6 +94,10 @@ fn zero_times(c: &Child<'_>, what: &str, patches: &mut Vec<Patch>, found: &mut V
 fn rename_free(c: &Child<'_>, what: &str, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) {
     found.push(Finding::new(what, format!("{} bytes", c.body.len() + c.hdr as usize), true));
     patches.push((c.off + 4, b"free".to_vec()));
+    // the old content goes too: a renamed box that still holds the tags would only hide them
+    if c.body.iter().any(|b| *b != 0) {
+        patches.push((c.off + c.hdr, vec![0u8; c.body.len()]));
+    }
 }
 
 fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<()> {
@@ -153,6 +157,9 @@ fn plan(path: &Path) -> Result<(Vec<Patch>, Vec<Finding>)> {
         if size < hdr || pos + size > flen {
             return bad("a box runs past the end of the file, it is cut off");
         }
+        if matches!(&ty, b"udta" | b"meta" | b"uuid" | b"free" | b"skip") && size - hdr > MAX_MOOV {
+            return Err(ScrubError::Unsupported("a box that may hold tags is bigger than 512 MB".into()));
+        }
         match &ty {
             b"moov" => {
                 saw_moov = true;
@@ -172,18 +179,29 @@ fn plan(path: &Path) -> Result<(Vec<Patch>, Vec<Finding>)> {
                     }
                 }
             }
-            b"udta" | b"meta" => rename_free(
-                &Child { off: pos, hdr, ty, body: &[] },
-                "Tags and device information",
-                &mut patches,
-                &mut found,
-            ),
+            b"udta" | b"meta" => {
+                let mut body = vec![0u8; (size - hdr) as usize];
+                f.seek(SeekFrom::Start(pos + hdr))?;
+                f.read_exact(&mut body)?;
+                rename_free(&Child { off: pos, hdr, ty, body: &body }, "Tags and device information", &mut patches, &mut found);
+            }
             b"uuid" => {
                 let mut u = [0u8; 16];
                 f.seek(SeekFrom::Start(pos + hdr))?;
                 if size - hdr >= 16 && f.read_exact(&mut u).is_ok() && u == XMP_UUID {
-                    patches.push((pos + 4, b"free".to_vec()));
-                    found.push(Finding::new("XMP", format!("{size} bytes"), true));
+                    let mut body = vec![0u8; (size - hdr) as usize];
+                    f.seek(SeekFrom::Start(pos + hdr))?;
+                    f.read_exact(&mut body)?;
+                    rename_free(&Child { off: pos, hdr, ty, body: &body }, "XMP", &mut patches, &mut found);
+                }
+            }
+            b"free" | b"skip" => {
+                let mut body = vec![0u8; (size - hdr) as usize];
+                f.seek(SeekFrom::Start(pos + hdr))?;
+                f.read_exact(&mut body)?;
+                if body.iter().any(|b| *b != 0) {
+                    found.push(Finding::new("Leftover data in padding", format!("{} bytes", body.len()), true));
+                    patches.push((pos + hdr, vec![0u8; body.len()]));
                 }
             }
             _ => {}

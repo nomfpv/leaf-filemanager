@@ -26,7 +26,10 @@ fn rat(n: u32, d: u32) -> Vec<u8> {
 
 /// A big-endian Exif block with make, orientation 6 and a GPS position (the Eiffel Tower).
 fn exif_tiff() -> Vec<u8> {
-    let make = b"Example Camera\0";
+    exif_tiff_with(b"Example Camera\0", [(48, 1), (51, 1), (30, 1)])
+}
+
+fn exif_tiff_with(make: &[u8], lat: [(u32, u32); 3]) -> Vec<u8> {
     // layout: header 8, IFD0 (3 entries) at 8: 2 + 36 + 4 = 42 -> make at 50, GPS IFD after it
     let ifd0 = 8usize;
     let make_at = ifd0 + 2 + 3 * 12 + 4;
@@ -65,9 +68,9 @@ fn exif_tiff() -> Vec<u8> {
     v.extend_from_slice(&3u32.to_be_bytes());
     v.extend_from_slice(&(lat_at as u32).to_be_bytes());
     v.extend_from_slice(&0u32.to_be_bytes());
-    v.extend_from_slice(&rat(48, 1));
-    v.extend_from_slice(&rat(51, 1));
-    v.extend_from_slice(&rat(30, 1));
+    for (n, d) in lat {
+        v.extend_from_slice(&rat(n, d));
+    }
     v
 }
 
@@ -455,5 +458,365 @@ fn scrub_replace_mode_leaves_the_original_recoverable() {
     let noop = |_: &Path| Ok::<(), String>(());
     assert!(replace(&src2, &src2, &opts(), &no_cancel, &noop).is_err());
     assert_eq!(fs::read(&src2).unwrap(), before);
+    let _ = fs::remove_dir_all(&d);
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// The independent second lister: the raw bytes of a cleaned file are scanned for the planted markers. This finds data that
+// the structured reader cannot see: slack space, renamed-but-not-emptied boxes, old revisions, unreferenced objects.
+
+const SERIAL: &[u8] = b"LEAFTESTSERIAL123";
+const AUTHOR: &[u8] = b"Planted Author";
+
+fn planted_lat() -> [(u32, u32); 3] {
+    [(48, 1), (51, 1), (4_885_837, 100_000)]
+}
+
+/// The made-up coordinate, as the 8 bytes a rational number takes.
+fn coord_bytes() -> Vec<u8> {
+    rat(4_885_837, 100_000)
+}
+
+fn assert_no_markers(file: &Path, what: &str) {
+    let bytes = fs::read(file).unwrap();
+    for (name, m) in [("serial", SERIAL.to_vec()), ("author", AUTHOR.to_vec()), ("coordinate", coord_bytes())] {
+        assert!(!contains(&bytes, &m), "{what}: the planted {name} is still somewhere in the cleaned file");
+    }
+}
+
+fn assert_markers_present(file: &Path, what: &str) {
+    let bytes = fs::read(file).unwrap();
+    assert!(contains(&bytes, SERIAL) && contains(&bytes, AUTHOR), "{what}: the test file must carry the markers");
+}
+
+fn assert_clean_listing(file: &Path) {
+    let after = inspect(file, &opts()).unwrap();
+    assert!(after.to_remove().next().is_none(), "the lister still finds {:?}", after.to_remove().collect::<Vec<_>>());
+}
+
+fn full_box(ty: &[u8; 4], ver: u8, body: &[u8]) -> Vec<u8> {
+    bx(ty, &[&[ver, 0, 0, 0][..], body].concat())
+}
+
+fn infe(id: u16, ty: &[u8; 4], name: &[u8], ct: Option<&[u8]>) -> Vec<u8> {
+    let mut b = id.to_be_bytes().to_vec();
+    b.extend_from_slice(&[0, 0]);
+    b.extend_from_slice(ty);
+    b.extend_from_slice(name);
+    b.push(0);
+    if let Some(c) = ct {
+        b.extend_from_slice(c);
+        b.push(0);
+    }
+    full_box(b"infe", 2, &b)
+}
+
+/// A HEIC-shaped file: the picture is a made-up blob of bytes (the cleaner never decodes it).
+fn make_heic(path: &Path, brand: &[u8; 4]) -> Vec<u8> {
+    let image = (0..64u8).map(|i| i.wrapping_mul(7).wrapping_add(3)).collect::<Vec<u8>>();
+    let mut exif = vec![0, 0, 0, 0];
+    exif.extend(exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()));
+    let xmp = b"<x:xmpmeta><dc:creator>Planted Author</dc:creator></x:xmpmeta>".to_vec();
+    let items: [(u16, &Vec<u8>); 3] = [(1, &image), (2, &exif), (3, &xmp)];
+    let iinf = full_box(
+        b"iinf",
+        0,
+        &[&3u16.to_be_bytes()[..], &infe(1, b"hvc1", b"", None), &infe(2, b"Exif", b"Exif", None), &infe(3, b"mime", b"XMP", Some(b"application/rdf+xml"))].concat(),
+    );
+    let build = |offsets: [u32; 3]| -> Vec<u8> {
+        let mut iloc = vec![0x44, 0x00];
+        iloc.extend_from_slice(&3u16.to_be_bytes());
+        for (k, (id, data)) in items.iter().enumerate() {
+            iloc.extend_from_slice(&id.to_be_bytes());
+            iloc.extend_from_slice(&[0, 0, 0, 0]); // construction method 0, data reference 0
+            iloc.extend_from_slice(&1u16.to_be_bytes());
+            iloc.extend_from_slice(&offsets[k].to_be_bytes());
+            iloc.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        }
+        let hdlr = full_box(b"hdlr", 0, &[&[0u8; 4][..], b"pict", &[0u8; 12], b"\0"].concat());
+        let pitm = full_box(b"pitm", 0, &1u16.to_be_bytes());
+        let ipco = bx(b"ipco", &[bx(b"ispe", &[0u8; 12]), bx(b"irot", &[1])].concat());
+        let iprp = bx(b"iprp", &ipco);
+        let iref = full_box(b"iref", 0, &bx(b"cdsc", &[&2u16.to_be_bytes()[..], &1u16.to_be_bytes(), &1u16.to_be_bytes()].concat()));
+        let meta = full_box(b"meta", 0, &[hdlr, pitm, iinf.clone(), full_box(b"iloc", 1, &iloc), iprp, iref].concat());
+        let udta = bx(b"udta", &bx(b"\xa9xyz", b"owner Planted Author"));
+        let free = bx(b"free", b"stale LEAFTESTSERIAL123 bytes");
+        let mdat_body = [image.clone(), exif.clone(), xmp.clone()].concat();
+        [bx(b"ftyp", &[&brand[..], &[0u8; 4], &brand[..]].concat()), meta, udta, free, bx(b"mdat", &mdat_body)].concat()
+    };
+    let probe = build([0, 0, 0]);
+    let mdat_at = probe.len() - (image.len() + exif.len() + xmp.len()) as usize;
+    let file = build([mdat_at as u32, (mdat_at + image.len()) as u32, (mdat_at + image.len() + exif.len()) as u32]);
+    fs::write(path, &file).unwrap();
+    image
+}
+
+#[test]
+fn scrub_heic_and_avif_leave_no_marker_anywhere_and_keep_picture_and_rotation() {
+    for (brand, ext) in [(b"heic", "heic"), (b"avif", "avif")] {
+        let d = tmp_dir(&format!("heif-{ext}"));
+        let src = d.join(format!("a.{ext}"));
+        let image = make_heic(&src, brand);
+        assert_markers_present(&src, ext);
+        let before = inspect(&src, &opts()).unwrap();
+        assert!(before.findings.iter().any(|f| f.label.contains("GPS")), "{:?}", before.findings);
+        assert!(before.findings.iter().any(|f| f.label == "XMP"));
+        let dst = clean_copy_name(&src);
+        clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+        let (a, b) = (fs::read(&src).unwrap(), fs::read(&dst).unwrap());
+        assert_eq!(a.len(), b.len(), "nothing changes size, no offset moves");
+        assert!(contains(&b, &image), "the coded picture is byte for byte the same");
+        assert!(contains(&b, b"irot"), "rotation stays");
+        assert_no_markers(&dst, ext);
+        assert_clean_listing(&dst);
+        let _ = fs::remove_dir_all(&d);
+    }
+}
+
+#[test]
+fn scrub_heic_refuses_when_metadata_shares_bytes_with_the_picture() {
+    let d = tmp_dir("heif-shared");
+    let src = d.join("a.heic");
+    make_heic(&src, b"heic");
+    let mut b = fs::read(&src).unwrap();
+    // move the Exif item's data onto the picture's first bytes: item 2's iloc offset becomes item 1's
+    // item 1 offset sits at: iloc body + 2 + 2 + (id 2 + method/dref 4 + ext_count 2) ; copy it into item 2's offset
+    let base = b.windows(4).position(|w| w == b"iloc").unwrap() + 4 + 4 + 2 + 2;
+    let item1_off = base + 2 + 4 + 2;
+    let item2_off = base + 14 + 2 + 4 + 2;
+    let v: [u8; 4] = b[item1_off..item1_off + 4].try_into().unwrap();
+    b[item2_off..item2_off + 4].copy_from_slice(&v);
+    fs::write(&src, &b).unwrap();
+    let dst = clean_copy_name(&src);
+    assert!(clean_to(&src, &dst, &opts(), &no_cancel).is_err());
+    assert!(!dst.exists());
+    let _ = fs::remove_dir_all(&d);
+}
+
+fn put_ifd(buf: &mut Vec<u8>, entries: &[(u16, u16, u32, Vec<u8>)]) -> usize {
+    let at = buf.len();
+    let table = 2 + 12 * entries.len() + 4;
+    let mut data_at = at + table;
+    let mut t = (entries.len() as u16).to_be_bytes().to_vec();
+    let mut data = Vec::new();
+    for (tag, ty, count, v) in entries {
+        t.extend_from_slice(&tag.to_be_bytes());
+        t.extend_from_slice(&ty.to_be_bytes());
+        t.extend_from_slice(&count.to_be_bytes());
+        if v.len() <= 4 {
+            let mut x = v.clone();
+            x.resize(4, 0);
+            t.extend_from_slice(&x);
+        } else {
+            t.extend_from_slice(&(data_at as u32).to_be_bytes());
+            data.extend_from_slice(v);
+            if v.len() % 2 == 1 {
+                data.push(0);
+            }
+            data_at = at + table + data.len();
+        }
+    }
+    t.extend_from_slice(&[0; 4]);
+    buf.extend(t);
+    buf.extend(data);
+    at
+}
+
+fn short(v: u16) -> Vec<u8> {
+    let mut b = v.to_be_bytes().to_vec();
+    b.extend_from_slice(&[0, 0]);
+    b
+}
+
+fn long(v: u32) -> Vec<u8> {
+    v.to_be_bytes().to_vec()
+}
+
+fn text(s: &[u8]) -> (u32, Vec<u8>) {
+    let mut v = s.to_vec();
+    v.push(0);
+    (v.len() as u32, v)
+}
+
+/// A big-endian TIFF with one 4x4 grey strip and every kind of tag the remover claims to handle.
+fn make_tiff(path: &Path) -> Vec<u8> {
+    let strip: Vec<u8> = (0..16u8).map(|i| i * 13 + 1).collect();
+    let mut buf = vec![0u8; 8];
+    buf[..4].copy_from_slice(b"MM\0*");
+    buf.extend_from_slice(&strip);
+    let (nl, serial) = text(SERIAL);
+    let mut mk = SERIAL.to_vec();
+    mk.extend_from_slice(b" maker note");
+    let exif_ifd = put_ifd(&mut buf, &[(0x927C, 7, mk.len() as u32, mk), (0xA431, 2, nl, serial.clone())]);
+    let mut lat = Vec::new();
+    for (n, d) in planted_lat() {
+        lat.extend(rat(n, d));
+    }
+    let gps_ifd = put_ifd(&mut buf, &[(1, 2, 2, b"N\0".to_vec()), (2, 5, 3, lat)]);
+    let (al, author) = text(AUTHOR);
+    let (dl, desc) = text(b"a photo of Planted Author");
+    let xmp = b"<x:xmpmeta>Planted Author</x:xmpmeta>".to_vec();
+    let iptc = b"\x1c\x02\x50Planted Author".to_vec();
+    let ifd0 = put_ifd(
+        &mut buf,
+        &[
+            (256, 3, 1, short(4)),
+            (257, 3, 1, short(4)),
+            (258, 3, 1, short(8)),
+            (259, 3, 1, short(1)),
+            (262, 3, 1, short(1)),
+            (270, 2, dl, desc),
+            (271, 2, nl, serial.clone()),
+            (273, 4, 1, long(8)),
+            (274, 3, 1, short(6)),
+            (277, 3, 1, short(1)),
+            (278, 3, 1, short(4)),
+            (279, 4, 1, long(16)),
+            (306, 2, 20, b"2026:11:22 14:22:33\0".to_vec()),
+            (315, 2, al, author),
+            (700, 1, xmp.len() as u32, xmp),
+            (33432, 2, nl, serial),
+            (33723, 7, iptc.len() as u32, iptc),
+            (34665, 4, 1, long(exif_ifd as u32)),
+            (34853, 4, 1, long(gps_ifd as u32)),
+        ],
+    );
+    buf[4..8].copy_from_slice(&(ifd0 as u32).to_be_bytes());
+    fs::write(path, &buf).unwrap();
+    strip
+}
+
+#[test]
+fn scrub_tiff_leaves_no_marker_anywhere_and_keeps_strips_and_orientation() {
+    let d = tmp_dir("tiff");
+    let src = d.join("a.tif");
+    let strip = make_tiff(&src);
+    assert_markers_present(&src, "tiff");
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label.contains("GPS")), "{:?}", before.findings);
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let (a, b) = (fs::read(&src).unwrap(), fs::read(&dst).unwrap());
+    assert_eq!(a.len(), b.len());
+    assert_eq!(&b[8..24], &strip[..], "the strip is byte for byte the same");
+    assert_no_markers(&dst, "tiff");
+    assert_clean_listing(&dst);
+    let ex = exif::Reader::new().read_from_container(&mut std::io::BufReader::new(fs::File::open(&dst).unwrap())).unwrap();
+    assert_eq!(ex.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(6));
+    assert!(ex.get_field(exif::Tag::Make, exif::In::PRIMARY).is_none() && ex.get_field(exif::Tag::GPSLatitude, exif::In::PRIMARY).is_none());
+    assert_eq!(ex.get_field(exif::Tag::ImageWidth, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(4));
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn scrub_camera_raw_is_refused_with_its_own_wording_and_nothing_written() {
+    let d = tmp_dir("raw");
+    let src = d.join("a.dng");
+    make_tiff(&src);
+    let dst = clean_copy_name(&src);
+    let e = clean_to(&src, &dst, &opts(), &no_cancel).unwrap_err();
+    assert!(e.to_string().contains("convert to another format first"), "{e}");
+    assert!(!dst.exists());
+    // a TIFF that carries the DNG version tag is refused even under a .tif name
+    let dng = d.join("b.tif");
+    make_tiff(&dng);
+    let mut b = fs::read(&dng).unwrap();
+    // turn the Software-like tag 306 (DateTime) into DNGVersion (50706)
+    let at = b.windows(4).position(|w| w == [0x01, 0x32, 0x00, 0x02]).unwrap();
+    b[at..at + 2].copy_from_slice(&50706u16.to_be_bytes());
+    fs::write(&dng, &b).unwrap();
+    assert!(clean_to(&dng, &clean_copy_name(&dng), &opts(), &no_cancel).is_err());
+    let _ = fs::remove_dir_all(&d);
+}
+
+fn gif_blocks(pieces: &[&[u8]]) -> Vec<u8> {
+    pieces.concat()
+}
+
+fn sub(data: &[u8]) -> Vec<u8> {
+    let mut v = vec![data.len() as u8];
+    v.extend_from_slice(data);
+    v.push(0);
+    v
+}
+
+#[test]
+fn scrub_gif_leaves_no_marker_anywhere_and_keeps_frames_and_loop() {
+    let d = tmp_dir("gif");
+    let src = d.join("a.gif");
+    let frame = [&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0][..], &[2], &sub(&[0x4C, 0x01])].concat();
+    let netscape = [&[0x21, 0xFF, 11][..], b"NETSCAPE2.0", &sub(&[1, 0, 0])].concat();
+    let comment = [&[0x21, 0xFE][..], &sub(b"made by Planted Author")].concat();
+    let xmp = [&[0x21, 0xFF, 11][..], b"XMP DataXMP", &sub(b"<x:xmpmeta>LEAFTESTSERIAL123</x:xmpmeta>")].concat();
+    let other = [&[0x21, 0xFF, 11][..], b"MYEDITOR1.0", &sub(b"Planted Author")].concat();
+    let gce = [0x21, 0xF9, 4, 0, 10, 0, 0, 0];
+    let file = gif_blocks(&[
+        b"GIF89a", &[1, 0, 1, 0, 0x80, 0, 0], &[0, 0, 0, 255, 255, 255], &netscape, &comment, &xmp, &other, &gce.to_vec(), &frame, &[0x3B],
+        b"trailing LEAFTESTSERIAL123 Planted Author",
+    ]);
+    fs::write(&src, &file).unwrap();
+    assert_markers_present(&src, "gif");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let b = fs::read(&dst).unwrap();
+    assert_no_markers(&dst, "gif");
+    assert_clean_listing(&dst);
+    assert!(contains(&b, &frame) && contains(&b, &netscape) && contains(&b, &gce));
+    assert_eq!(*b.last().unwrap(), 0x3B);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn scrub_svg_leaves_no_marker_anywhere_and_keeps_the_drawing() {
+    let d = tmp_dir("svg");
+    let src = d.join("a.svg");
+    let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<!-- Created by LEAFTESTSERIAL123 -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" width="10" height="10" inkscape:version="1.3 Planted Author" sodipodi:docname="LEAFTESTSERIAL123.svg">
+  <sodipodi:namedview id="nv" inkscape:current-layer="Planted Author"/>
+  <metadata id="m"><rdf:RDF><rdf:Description><dc:creator>Planted Author</dc:creator></rdf:Description></rdf:RDF></metadata>
+  <rect id="r" width="5" height="5" fill="red" inkscape:label="LEAFTESTSERIAL123"/>
+</svg>"##;
+    fs::write(&src, xml).unwrap();
+    assert_markers_present(&src, "svg");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let out = fs::read_to_string(&dst).unwrap();
+    assert_no_markers(&dst, "svg");
+    assert!(!out.contains("inkscape") && !out.contains("sodipodi") && !out.contains("metadata"));
+    assert!(out.contains("<rect") && out.contains("fill=\"red\"") && out.contains("width=\"10\""));
+    roxmltree::Document::parse(&out).unwrap();
+    assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn scrub_mp4_leaves_no_marker_in_renamed_boxes() {
+    let d = tmp_dir("mp4-raw");
+    let src = d.join("a.mp4");
+    let loc = bx(b"\xa9xyz", b"+48.8584+002.2945/ Planted Author LEAFTESTSERIAL123");
+    let meta = bx(b"meta", &[&[0u8; 4][..], &bx(b"hdlr", &[0u8; 24]), &bx(b"ilst", &loc)].concat());
+    let moov = bx(b"moov", &[bx(b"mvhd", &[0u8; 100]), bx(b"udta", &meta)].concat());
+    let file = [bx(b"ftyp", b"isom\0\0\0\0isom"), moov, bx(b"free", b"stale Planted Author"), bx(b"mdat", b"0123456789")].concat();
+    fs::write(&src, &file).unwrap();
+    assert_markers_present(&src, "mp4");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_eq!(fs::read(&dst).unwrap().len(), file.len());
+    assert_no_markers(&dst, "mp4");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn scrub_bmp_says_nothing_found_and_archives_are_refused() {
+    let d = tmp_dir("bmp");
+    let bmp = d.join("a.bmp");
+    fs::write(&bmp, [b"BM".to_vec(), vec![0u8; 60]].concat()).unwrap();
+    let i = inspect(&bmp, &opts()).unwrap();
+    assert!(i.findings.is_empty() && i.notes.iter().any(|n| n.starts_with("Nothing found")));
+    let z = d.join("a.zip");
+    make_zip(&z, &[("a.txt", "x")]);
+    let e = clean_to(&z, &clean_copy_name(&z), &opts(), &no_cancel).unwrap_err();
+    assert!(e.to_string().contains("keeps the metadata of the files inside"), "{e}");
     let _ = fs::remove_dir_all(&d);
 }
