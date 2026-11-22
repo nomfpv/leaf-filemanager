@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The version of this conversation; the helper refuses another.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 /// The helper's program (its file name without the extension), beside `leaf`.
 pub const HELPER_EXE_STEM: &str = "leaf-helper";
 /// The longest request frame the helper reads.
@@ -195,6 +195,10 @@ pub enum Request {
     Cancel,
     /// Leaf is done with the helper: it ends now.
     Bye,
+    /// READ ONLY: the health, temperature, wear and power-on hours of one disk by its number, or of every disk (`None`), read
+    /// through the storage API. Nothing is written and no command is passed to a drive. The number must be at most
+    /// [`crate::drives::MAX_DISK_NUMBER`].
+    DriveHealth { disk: Option<u32> },
 }
 
 impl Request {
@@ -215,6 +219,7 @@ impl Request {
             Self::Answer { .. } => "answer",
             Self::Cancel => "cancel",
             Self::Bye => "bye",
+            Self::DriveHealth { .. } => "drive health",
         }
     }
 }
@@ -245,6 +250,8 @@ pub enum Refusal {
     WrongKind,
     /// The Recycle Bin is not used as administrator (a permanent delete can be asked instead).
     NoRecycle,
+    /// A disk number above [`crate::drives::MAX_DISK_NUMBER`].
+    Disk,
 }
 
 /// The helper's messages to leaf.
@@ -262,6 +269,8 @@ pub enum Reply {
     /// The last page of a listing ([`Client::call`] returns all pages together in it).
     Listing { items: Vec<Item> },
     Stat { item: Option<Item> },
+    /// The answer to [`Request::DriveHealth`]: one entry per disk that answered (at most [`crate::drives::MAX_DISK_NUMBER`] + 1).
+    Health { disks: Vec<crate::drives::DriveHealth> },
     Created { path: PathBuf },
     /// `len` bytes of the file follow as [`FRAME_DATA`] frames, then [`Reply::Done`].
     Reading { len: u64 },
@@ -427,7 +436,7 @@ pub fn paths_of(r: &Request) -> Vec<&Path> {
         Request::Copy { sources, dest } | Request::Move { sources, dest } => sources.iter().map(|p| p.as_path()).chain(std::iter::once(dest.as_path())).collect(),
         Request::Recycle { paths } | Request::DeleteForGood { paths, .. } => paths.iter().map(|p| p.as_path()).collect(),
         Request::WriteFromPart { part, target } => vec![part, target],
-        Request::Hello { .. } | Request::Answer { .. } | Request::Cancel | Request::Bye => Vec::new(),
+        Request::Hello { .. } | Request::Answer { .. } | Request::Cancel | Request::Bye | Request::DriveHealth { .. } => Vec::new(),
     }
 }
 
@@ -441,6 +450,7 @@ pub fn check_request(r: &Request) -> Result<(), Refusal> {
         Request::CreateFolder { name, .. } => check_name(name).map_err(|_| Refusal::Name)?,
         Request::Rename { new_name, .. } => check_name(new_name).map_err(|_| Refusal::Name)?,
         Request::DeleteForGood { asked_user: false, .. } => return Err(Refusal::NotAsked),
+        Request::DriveHealth { disk: Some(n) } if *n > crate::drives::MAX_DISK_NUMBER => return Err(Refusal::Disk),
         _ => {}
     }
     match r {
@@ -714,5 +724,20 @@ mod tests {
         let mut odd = Vec::new();
         write_frame(&mut odd, FRAME_MESSAGE, br#"{"Run":{"command":"x"}}"#).unwrap();
         assert!(recv::<Request>(&mut odd.as_slice(), MAX_REQUEST).is_err());
+    }
+
+    #[test]
+    fn a_drive_health_request_takes_no_disk_or_a_small_disk_number_and_nothing_else() {
+        assert_eq!(check_request(&Request::DriveHealth { disk: None }), Ok(()));
+        assert_eq!(check_request(&Request::DriveHealth { disk: Some(0) }), Ok(()));
+        assert_eq!(check_request(&Request::DriveHealth { disk: Some(crate::drives::MAX_DISK_NUMBER) }), Ok(()));
+        assert_eq!(check_request(&Request::DriveHealth { disk: Some(crate::drives::MAX_DISK_NUMBER + 1) }), Err(Refusal::Disk));
+        assert_eq!(check_request(&Request::DriveHealth { disk: Some(u32::MAX) }), Err(Refusal::Disk));
+        // a text where a number is expected, a negative number and an extra field are not understood
+        for bad in [r#"{"DriveHealth":{"disk":"C:"}}"#, r#"{"DriveHealth":{"disk":-1}}"#, r#"{"DriveHealth":{"disk":1,"path":"C:\\"}}"#] {
+            let mut buf = Vec::new();
+            write_frame(&mut buf, FRAME_MESSAGE, bad.as_bytes()).unwrap();
+            assert!(recv::<Request>(&mut buf.as_slice(), MAX_REQUEST).is_err(), "{bad}");
+        }
     }
 }

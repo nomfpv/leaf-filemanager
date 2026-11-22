@@ -103,6 +103,8 @@ fn act(req: &Request, job: &Job) -> Result<Reply, Fail> {
             }
             Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0, kept: 0, partial: 0 })
         }
+        // READ ONLY: the storage API's numbers for the disks, nothing is written and no command goes to a drive
+        Request::DriveHealth { disk } => Ok(Reply::Health { disks: leaf_sys::drives::disk_health_admin(*disk) }),
         Request::Hello { .. } | Request::Answer { .. } | Request::Cancel | Request::Bye => Err(Refusal::Unexpected.into()),
     }
 }
