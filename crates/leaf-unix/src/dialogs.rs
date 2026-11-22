@@ -1,7 +1,6 @@
-//! Linux backend of rf_win::dialogs. Status: STUB
+//! Linux backend of rf_win::dialogs. Status: PARTIAL (pick, pick_many and the autostart switch are real; never run on a desktop)
 
 use crate::Owner;
-use leaf_common::stub;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,8 +17,191 @@ pub enum Pick<'a> {
     },
 }
 
-pub fn pick(_owner: Owner, _title: &str, _kind: Pick<'_>) -> Option<PathBuf> {
-    stub!("dialogs::pick")
+/// The system's file, folder or save dialog. Order: the desktop's FileChooser portal (KDE then shows its own dialog), else `kdialog`, else
+/// `zenity`; with none of them, nothing is chosen (the log says why). `None` also when the user closes the dialog.
+pub fn pick(_owner: Owner, title: &str, kind: Pick<'_>) -> Option<PathBuf> {
+    match portal_pick(title, &kind) {
+        PortalAnswer::Chosen(p) => return Some(p),
+        PortalAnswer::Closed => return None,
+        PortalAnswer::Unavailable => {}
+    }
+    let (exe, args) = if let Some(k) = crate::shell::which("kdialog") {
+        (k, pick_args_kdialog(title, &kind))
+    } else if let Some(z) = crate::shell::which("zenity") {
+        (z, pick_args_zenity(title, &kind))
+    } else {
+        log::info!("dialogs::pick: no FileChooser portal, kdialog or zenity: nothing chosen");
+        return None;
+    };
+    let out = std::process::Command::new(exe).args(args).env("LC_ALL", "C").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_picked(&out.stdout).into_iter().next()
+}
+
+enum PortalAnswer {
+    Chosen(PathBuf),
+    Closed,
+    Unavailable,
+}
+
+/// `"*.png;*.jpg"` (the Windows-side pattern list) as the portal's `(kind, glob)` pairs; `*.*` is every file.
+fn globs(pattern: &str) -> Vec<(u32, String)> {
+    pattern.split(';').map(str::trim).filter(|g| !g.is_empty()).map(|g| (0u32, if g == "*.*" { "*".to_string() } else { g.to_string() })).collect()
+}
+
+type PortalFilter = (String, Vec<(u32, String)>);
+
+fn portal_filters(filters: &[(&str, &str)]) -> Vec<PortalFilter> {
+    filters.iter().map(|(name, pat)| (name.to_string(), globs(pat))).filter(|(_, g)| !g.is_empty()).collect()
+}
+
+/// `file:///a%20b` -> `/a b`. Only `file:` URIs on this machine are paths.
+fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let rest = uri.strip_prefix("file://")?;
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let b = rest.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    Some(PathBuf::from(OsString::from_vec(out)))
+}
+
+fn portal_pick(title: &str, kind: &Pick<'_>) -> PortalAnswer {
+    use std::collections::HashMap;
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+    const DEST: &str = "org.freedesktop.portal.Desktop";
+    let Ok(conn) = Connection::session() else { return PortalAnswer::Unavailable };
+    let Ok(chooser) = Proxy::new(&conn, DEST, "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser") else { return PortalAnswer::Unavailable };
+    // (no such interface on this desktop: the version property is not there)
+    if chooser.get_property::<u32>("version").is_err() {
+        return PortalAnswer::Unavailable;
+    }
+    let token = format!("leaf_pick_{}_{}", std::process::id(), PICK_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let Some(sender) = conn.unique_name().map(|n| n.as_str().trim_start_matches(':').replace('.', "_")) else { return PortalAnswer::Unavailable };
+    // the answer comes as a signal on the request object, whose path is known from our token: listen before asking
+    let Ok(req) = Proxy::new(&conn, DEST, format!("/org/freedesktop/portal/desktop/request/{sender}/{token}"), "org.freedesktop.portal.Request") else {
+        return PortalAnswer::Unavailable;
+    };
+    let Ok(mut responses) = req.receive_signal("Response") else { return PortalAnswer::Unavailable };
+    let mut o: HashMap<&str, Value> = HashMap::new();
+    o.insert("handle_token", Value::from(token.as_str()));
+    o.insert("modal", Value::from(true));
+    let (method, filters): (&str, Vec<PortalFilter>) = match kind {
+        Pick::File { filters } => ("OpenFile", portal_filters(filters)),
+        Pick::Folder => {
+            o.insert("directory", Value::from(true));
+            ("OpenFile", Vec::new())
+        }
+        Pick::Save { filters, default_name } => {
+            if !default_name.is_empty() {
+                o.insert("current_name", Value::from(*default_name));
+            }
+            ("SaveFile", portal_filters(filters))
+        }
+    };
+    if !filters.is_empty() {
+        o.insert("filters", Value::from(filters));
+    }
+    let called: zbus::Result<OwnedObjectPath> = chooser.call(method, &("", title, o));
+    if let Err(e) = called {
+        log::info!("dialogs::pick: the portal's {method} failed: {e}");
+        return PortalAnswer::Unavailable;
+    }
+    let Some(msg) = responses.next() else { return PortalAnswer::Unavailable };
+    let Ok((code, results)) = msg.body().deserialize::<(u32, HashMap<String, OwnedValue>)>() else { return PortalAnswer::Unavailable };
+    if code != 0 {
+        // 1: the user closed it, 2: it ended some other way; neither is a reason to open a second dialog
+        return PortalAnswer::Closed;
+    }
+    let uris: Vec<String> = results.get("uris").and_then(|v| v.try_clone().ok()).and_then(|v| Vec::<String>::try_from(v).ok()).unwrap_or_default();
+    match uris.iter().find_map(|u| uri_to_path(u)) {
+        Some(p) => PortalAnswer::Chosen(p),
+        None => PortalAnswer::Closed,
+    }
+}
+
+static PICK_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// kdialog's filter text: `*.png *.jpg|Pictures`, filters separated by a line break.
+fn kdialog_filter(filters: &[(&str, &str)]) -> String {
+    let lines: Vec<String> = filters
+        .iter()
+        .map(|(name, pat)| {
+            let g: Vec<String> = globs(pat).into_iter().map(|(_, g)| g).collect();
+            format!("{}|{}", g.join(" "), name)
+        })
+        .collect();
+    lines.join("\n")
+}
+
+fn pick_args_kdialog(title: &str, kind: &Pick<'_>) -> Vec<OsString> {
+    let mut a: Vec<OsString> = vec!["--title".into(), title.into()];
+    match kind {
+        Pick::File { filters } => {
+            a.push("--getopenfilename".into());
+            a.push(".".into());
+            if !filters.is_empty() {
+                a.push(kdialog_filter(filters).into());
+            }
+        }
+        Pick::Folder => {
+            a.push("--getexistingdirectory".into());
+            a.push(".".into());
+        }
+        Pick::Save { filters, default_name } => {
+            a.push("--getsavefilename".into());
+            a.push(if default_name.is_empty() { ".".to_string() } else { format!("./{default_name}") }.into());
+            if !filters.is_empty() {
+                a.push(kdialog_filter(filters).into());
+            }
+        }
+    }
+    a
+}
+
+fn pick_args_zenity(title: &str, kind: &Pick<'_>) -> Vec<OsString> {
+    let mut a: Vec<OsString> = vec!["--file-selection".into(), "--title".into(), title.into()];
+    let filter_args = |filters: &[(&str, &str)]| -> Vec<OsString> {
+        filters
+            .iter()
+            .map(|(name, pat)| {
+                let g: Vec<String> = globs(pat).into_iter().map(|(_, g)| g).collect();
+                OsString::from(format!("--file-filter={name} | {}", g.join(" ")))
+            })
+            .collect()
+    };
+    match kind {
+        Pick::File { filters } => a.extend(filter_args(filters)),
+        Pick::Folder => a.push("--directory".into()),
+        Pick::Save { filters, default_name } => {
+            a.extend(filter_args(filters));
+            a.push("--save".into());
+            a.push("--confirm-overwrite".into());
+            if !default_name.is_empty() {
+                a.push(format!("--filename={default_name}").into());
+            }
+        }
+    }
+    a
 }
 
 /// Several files to choose (rf-win's `pick_many`): kdialog, else zenity (argument lists, no shell); with neither, nothing is chosen.
@@ -111,6 +293,16 @@ X-GNOME-Autostart-enabled=true
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portal_uris_and_filters() {
+        assert_eq!(uri_to_path("file:///a%20b/c%C3%A9.txt"), Some(PathBuf::from("/a b/cé.txt")));
+        assert_eq!(uri_to_path("file://localhost/x"), Some(PathBuf::from("/x")));
+        assert_eq!(uri_to_path("smb://h/s"), None);
+        assert_eq!(globs("*.png; *.jpg"), vec![(0, "*.png".to_string()), (0, "*.jpg".to_string())]);
+        assert_eq!(globs("*.*"), vec![(0, "*".to_string())]);
+        assert_eq!(kdialog_filter(&[("Pictures", "*.png;*.jpg")]), "*.png *.jpg|Pictures");
+    }
 
     #[test]
     fn picked_paths_split_on_newlines() {
