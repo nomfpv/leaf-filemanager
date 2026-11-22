@@ -36,6 +36,8 @@ const MAX_HEADER: usize = 16 << 10;
 static LAST_HEARD: AtomicU64 = AtomicU64::new(0);
 /// What "Connect browsers" did last, for the settings card.
 static STATUS: Mutex<Option<String>> = Mutex::new(None);
+/// What the extension card of the settings page last did (an address copied).
+static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
 /// The extension's message. No `Debug`: the headers are credentials.
 #[derive(Deserialize)]
@@ -271,6 +273,36 @@ pub fn status_text() -> String {
     }
     let heard = if LAST_HEARD.load(Ordering::Relaxed) > 0 { t!("the extension has been heard from") } else { t!("the extension has not been heard from since leaf started") };
     format!("{} {}; {heard}", t!("Connected:"), found.join(", "))
+}
+
+/// The browsers' extension pages and what to call them: leaf cannot open these addresses itself (a browser takes them only from its
+/// own address bar), so the settings card copies them.
+pub const BROWSER_PAGES: [(&str, &str); 4] =
+    [("Chrome", "chrome://extensions"), ("Edge", "edge://extensions"), ("Brave", "brave://extensions"), ("Firefox", "about:debugging#/runtime/this-firefox")];
+
+/// The folder that holds the loadable extension builds (`chromium` and `firefox` inside): `extension/dist` beside the installed
+/// program, or, running from a source tree (`target/debug`, `target/release`), the one in the repository. `None` when neither has
+/// been built (`extensionuild.ps1` writes it).
+pub fn extension_folder() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors().skip(1).take(4).map(|d| d.join("extension").join("dist")).find(|d| d.join("chromium").join("manifest.json").is_file())
+}
+
+/// Copies a browser's extension page address and says so on the settings card.
+pub fn copy_browser_page(browser: &str, address: &str, cx: &mut App) {
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(address.to_string()));
+    *NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{} {address}. {} {browser}.", t!("Copied"), t!("Paste it into the address bar of")));
+    cx.refresh_windows();
+}
+
+/// The last thing the extension card did, for its line.
+pub fn card_note() -> Option<String> {
+    NOTE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Whether the extension has sent leaf a message since leaf started.
+pub fn extension_heard() -> bool {
+    LAST_HEARD.load(Ordering::Relaxed) > 0
 }
 
 /// `leaf nmhost --register` / `--unregister`: the exit code.

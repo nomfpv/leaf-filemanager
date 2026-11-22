@@ -41,6 +41,16 @@ foreach ($f in $files) {
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 foreach ($f in $files) { Copy-Item (Join-Path $rel $f) $stage }
+# the browser extension's two loadable folders (Settings > Advanced > Downloads opens them): built from extension\src, no tools needed
+& powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File (Join-Path $root 'extensionuild.ps1') | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "extensionuild.ps1 failed ($LASTEXITCODE)" }
+foreach ($b in 'chromium', 'firefox') {
+    $src = Join-Path $root "extension\dist\$b"
+    if (-not (Test-Path (Join-Path $src 'manifest.json'))) { throw "extension\dist\$b has no manifest.json" }
+    $dst = Join-Path $stage "extension\dist\$b"
+    New-Item -ItemType Directory -Force $dst | Out-Null
+    Copy-Item (Join-Path $src '*') $dst -Recurse
+}
 Copy-Item (Join-Path $root 'LICENSE') $stage
 Copy-Item (Join-Path $root 'THIRD-PARTY.md') $stage
 Write-Host "staged $($files.Count) programs + licence files in $stage (version $Version)"

@@ -3453,6 +3453,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 .child(button("capture-connect", p, t!("Connect browsers"), |_, cx| crate::capture::connect(cx)))
                 .into_any_element(),
         ),
+        extension_steps_card(p),
         card(
             p,
             L::Gauge,
@@ -4160,6 +4161,64 @@ mod hyperglass_tests {
             assert!(!which.title().is_empty() && !which.desc().is_empty());
         }
     }
+}
+
+/// The three steps that put the browser extension in the browser, with the state of each: Settings > Advanced > Downloads, under
+/// "Connect browsers".
+fn extension_steps_card(p: &Palette) -> AnyElement {
+    let folder = crate::capture::extension_folder();
+    let connected = crate::capture::registered();
+    let heard = crate::capture::extension_heard();
+    let step2 = match &folder {
+        Some(f) => f.to_string_lossy().into_owned(),
+        None => t!("Not found beside leaf. In the leaf source folder, run extension/build.ps1; it writes extension/dist.").to_string(),
+    };
+    let pages: Vec<(&'static str, &'static str)> = crate::capture::BROWSER_PAGES.iter().copied().filter(|(b, _)| connected.is_empty() || connected.contains(b)).collect();
+    let step3 = crate::capture::card_note().unwrap_or_else(|| {
+        t!("Open the browser's extensions page, turn on Developer mode, choose Load unpacked and pick the chromium folder (Firefox: Load Temporary Add-on, then the manifest.json in the firefox folder).").to_string()
+    });
+    v_flex()
+        .w_full()
+        .gap_2()
+        .child(card(
+            p,
+            L::Globe,
+            t!("Browser extension, step 1: connect"),
+            Some(if connected.is_empty() { t!("Press Connect browsers above.") } else { t!("Done: the browsers above are connected.") }),
+            div().into_any_element(),
+        ))
+        .child(card(
+            p,
+            L::FolderOpen,
+            t!("Browser extension, step 2: the extension folder"),
+            Some(step2.as_str()),
+            match folder {
+                Some(f) => button("capture-ext-folder", p, t!("Open the extension folder"), move |_, _| {
+                    leaf_sys::default_fm::open_in_explorer(&f.to_string_lossy());
+                }),
+                None => div().into_any_element(),
+            },
+        ))
+        .child(card(
+            p,
+            L::Copy,
+            t!("Browser extension, step 3: load it in the browser"),
+            Some(step3.as_str()),
+            h_flex()
+                .gap_2()
+                .children(pages.into_iter().map(|(b, a)| {
+                    button(SharedString::from(format!("capture-copy-{b}")), p, format!("{} {b}", t!("Copy the address for")), move |_, cx| crate::capture::copy_browser_page(b, a, cx))
+                }))
+                .into_any_element(),
+        ))
+        .child(card(
+            p,
+            L::Activity,
+            t!("The extension has talked to leaf"),
+            Some(t!("Counted since leaf started: yes once the extension has sent leaf a message.")),
+            div().text_sm().child(if heard { t!("Yes") } else { t!("Not yet") }).into_any_element(),
+        ))
+        .into_any_element()
 }
 
 /// The download categories: one row each with its folder and extensions, "Edit" (and "Remove" inside it), "Add" and "Defaults".
