@@ -311,6 +311,10 @@ impl FolderView {
     }
 
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.location(), rf_core::Location::Shell { parsing, .. } if crate::shell_view::on_device(parsing)) {
+            self.paste_to_device(cx);
+            return;
+        }
         if self.shell_read_only(cx) {
             return;
         }
@@ -524,6 +528,10 @@ impl FolderView {
 
     /// Deletes the selection, asking first per Settings → "Confirm before deleting".
     pub fn delete_selected(&mut self, permanent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.location(), rf_core::Location::Shell { parsing, .. } if crate::shell_view::on_device(parsing)) {
+            self.delete_on_device(window, cx);
+            return;
+        }
         if self.shell_read_only(cx) {
             return;
         }
@@ -606,6 +614,10 @@ impl FolderView {
     }
 
     pub fn create_new(&mut self, folder: bool, cx: &mut Context<Self>) {
+        if folder && matches!(self.location(), rf_core::Location::Shell { parsing, .. } if crate::shell_view::on_device(parsing)) {
+            self.new_folder_on_device(cx);
+            return;
+        }
         if self.shell_read_only(cx) {
             return;
         }

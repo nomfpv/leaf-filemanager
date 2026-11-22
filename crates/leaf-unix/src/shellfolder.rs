@@ -50,3 +50,19 @@ pub fn copy_out(_sources: &[String], _dest: &Path) -> anyhow::Result<bool> {
 pub fn open(_parsing: &str) -> anyhow::Result<()> {
     stub_err!("shellfolder::open")
 }
+
+pub fn copy_in(_sources: &[PathBuf], _dest_parsing: &str, _tracker: std::sync::Arc<leaf_common::fileops::Tracker>) -> anyhow::Result<bool> {
+    // STUB(linux): a data operation never answers success
+    stub::hit("shellfolder::copy_in");
+    Ok(false)
+}
+
+pub fn delete_items(_parsings: &[String], _tracker: std::sync::Arc<leaf_common::fileops::Tracker>) -> anyhow::Result<bool> {
+    // STUB(linux): a data operation never answers success
+    stub::hit("shellfolder::delete_items");
+    Ok(false)
+}
+
+pub fn new_folder(_parent_parsing: &str, _name: &str) -> anyhow::Result<()> {
+    stub_err!("shellfolder::new_folder")
+}

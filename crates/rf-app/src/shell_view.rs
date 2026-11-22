@@ -49,6 +49,111 @@ pub fn copy_items(cx: &mut gpui_kit::App, items: Vec<ShellChild>) {
     });
 }
 
+/// Whether `parsing` is inside a portable device (a phone, a camera: `::{This PC}\\?\usb#...`), the one kind of shell folder that is
+/// written to here. Libraries, Network and the rest stay read-only.
+pub fn on_device(parsing: &str) -> bool {
+    let p = parsing.to_ascii_lowercase();
+    p.starts_with("::{20d04fe0-3aea-1069-a2d8-08002b30309d}") && p.contains(r"\\?\")
+}
+
+/// A short title for what a job on a device is about: the name, or the count.
+fn what(names: &[String]) -> String {
+    match names {
+        [one] => format!("\"{one}\""),
+        many => crate::i18n::items(many.len()),
+    }
+}
+
+impl crate::folder_view::FolderView {
+    /// Ctrl+V in a folder on a phone: the files on the clipboard are copied there as a Status Center job (progress, cancel; the shell's
+    /// own dialog asks about names that exist). A cut is a copy: nothing on this PC is removed because a device took it.
+    pub fn paste_to_device(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        let rf_core::history::Location::Shell { parsing, .. } = self.location().clone() else { return };
+        let (tx, rx) = futures::channel::oneshot::channel();
+        leaf_sys::sta::run(move |owner| {
+            let _ = tx.send(leaf_sys::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
+        });
+        let view = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let Ok(Some((paths, _))) = rx.await else { return };
+            let names: Vec<String> = paths.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+            let title = format!("{} {}", t!("Copying to the device:"), what(&names));
+            cx.update(|cx| {
+                crate::status_center::start_with(
+                    cx,
+                    title,
+                    move |tracker| leaf_sys::shellfolder::copy_in(&paths, &parsing, tracker),
+                    Some(Box::new(move |_, cx| {
+                        let _ = view.update(cx, |v, cx| v.refresh(cx));
+                    })),
+                );
+            });
+        })
+        .detach();
+    }
+
+    /// Delete in a folder on a phone: always asked (a device has no Recycle Bin), then a Status Center job.
+    pub fn delete_on_device(&mut self, window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<Self>) {
+        let items = self.selection_shell();
+        if items.is_empty() {
+            return;
+        }
+        let names: Vec<String> = items.iter().map(|c| c.name.clone()).collect();
+        let parsings: Vec<String> = items.iter().map(|c| c.parsing.clone()).collect();
+        let view = cx.entity().downgrade();
+        let message = format!("{} {}", what(&names), t!("will be deleted from the device and can't be recovered: a phone or camera has no Recycle Bin."));
+        crate::prompt::show(
+            t!("Delete from the device?"),
+            Some(message),
+            None,
+            vec![
+                crate::prompt::Button::new(t!("Delete"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                    let (parsings, view) = (parsings.clone(), view.clone());
+                    let title = format!("{} {}", t!("Deleting from the device:"), crate::i18n::items(parsings.len()));
+                    crate::status_center::start_with(
+                        cx,
+                        title,
+                        move |tracker| leaf_sys::shellfolder::delete_items(&parsings, tracker),
+                        Some(Box::new(move |_, cx| {
+                            let _ = view.update(cx, |v, cx| v.refresh(cx));
+                        })),
+                    );
+                    Ok(())
+                }),
+                crate::prompt::Button::cancel(),
+            ],
+            window,
+            cx,
+        );
+    }
+
+    /// New folder in a folder on a phone: "New folder", or "New folder (2)" and so on when the name is taken.
+    pub fn new_folder_on_device(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        let rf_core::history::Location::Shell { parsing, .. } = self.location().clone() else { return };
+        let taken: std::collections::HashSet<String> = self.shell_items.iter().map(|c| c.name.to_lowercase()).collect();
+        let base = t!("New folder");
+        let name = (1..)
+            .map(|n| if n == 1 { base.to_string() } else { format!("{base} ({n})") })
+            .find(|n| !taken.contains(&n.to_lowercase()))
+            .unwrap_or_else(|| base.to_string());
+        let view = cx.entity().downgrade();
+        let made = name.clone();
+        crate::status_center::start_with(
+            cx,
+            format!("{} {name}", t!("Making a folder on the device:")),
+            move |_| leaf_sys::shellfolder::new_folder(&parsing, &made).map(|()| true),
+            Some(Box::new(move |ok, cx| {
+                let _ = view.update(cx, |v, cx| {
+                    v.refresh(cx);
+                    if ok {
+                        v.select_when_listed(vec![name], cx);
+                    }
+                });
+            })),
+        );
+    }
+}
+
 impl crate::folder_view::FolderView {
     /// Right-click in a shell folder (a phone, Libraries…): the shell's own menu for the selected
     /// items, found by their parsing names (they have no path), or for the folder's background.

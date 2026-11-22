@@ -28,7 +28,7 @@ fn item(p: &Path) -> anyhow::Result<IShellItem> {
     Ok(unsafe { SHCreateItemFromParsingName(PCWSTR(w.as_ptr()), None)? })
 }
 
-fn new_op(flags: u32) -> anyhow::Result<IFileOperation> {
+pub(crate) fn new_op(flags: u32) -> anyhow::Result<IFileOperation> {
     ensure_com();
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL)? };
     unsafe { op.SetOperationFlags(FILEOPERATION_FLAGS(flags))? };
@@ -42,14 +42,14 @@ fn quiet_tracker() -> Arc<Tracker> {
 }
 
 /// Runs an engine job under supervision (a thread of its own, a limit for its start); the job is given the flag the sink raises.
-fn engine<T: Send + 'static>(op: Op, job: impl FnOnce(Arc<Life>) -> anyhow::Result<T> + Send + 'static) -> anyhow::Result<T> {
+pub(crate) fn engine<T: Send + 'static>(op: Op, job: impl FnOnce(Arc<Life>) -> anyhow::Result<T> + Send + 'static) -> anyhow::Result<T> {
     let life = Life::new();
     let seen = life.clone();
     guard::supervise(op, life, move || job(seen))
 }
 
 /// The answer for an operation that only the shell can do: the engine, or a refusal that says why.
-fn needs_shell(op: Op) -> anyhow::Result<()> {
+pub(crate) fn needs_shell(op: Op) -> anyhow::Result<()> {
     match guard::plan(op, guard::shell_present()) {
         Plan::Refuse => Err(NoShellEngine { op }.into()),
         _ => Ok(()),
@@ -324,7 +324,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
 }
 
 /// Performs the operation with the progress sink attached. Ok(true) when everything completed, Ok(false) when the user cancelled part of it.
-fn perform_tracked(op: &IFileOperation, tracker: Arc<Tracker>, life: Arc<Life>) -> anyhow::Result<bool> {
+pub(crate) fn perform_tracked(op: &IFileOperation, tracker: Arc<Tracker>, life: Arc<Life>) -> anyhow::Result<bool> {
     let failed = Arc::new(std::sync::Mutex::new(None));
     let sink: IFileOperationProgressSink = Sink { tracker: tracker.clone(), last: std::sync::Mutex::new((0, 0)), life, failed: failed.clone() }.into();
     let cookie = unsafe { op.Advise(&sink)? };

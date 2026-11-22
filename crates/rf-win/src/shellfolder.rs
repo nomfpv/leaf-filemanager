@@ -76,7 +76,7 @@ fn filetime_ms(ft: FILETIME) -> i64 {
 /// is incorrect (0x80070057)". The storage's name is the one the shell handed out for it (`SIGDN_DESKTOPABSOLUTEPARSING`), but the
 /// portable-device folder does not parse it back. Its parent (the phone) parses, and the storage is among the parent's children
 /// under that very name, so it is found there. (Not seen here: no phone on this PC. The walk is the reading of the report.)
-fn bind(parsing: &str) -> anyhow::Result<IShellItem> {
+pub(crate) fn bind(parsing: &str) -> anyhow::Result<IShellItem> {
     ensure_com();
     let target = parsing.trim();
     match by_name(target) {
@@ -302,6 +302,57 @@ pub fn open(parsing: &str) -> anyhow::Result<()> {
 pub fn last_segment(parsing: &str) -> &str {
     let t = parsing.trim_end_matches('\\');
     t.rsplit('\\').next().unwrap_or(t)
+}
+
+/// Copies the real files `sources` into the shell folder `dest_parsing` (a phone's folder) with the shell's engine, which writes to the
+/// device; progress and cancel through `tracker`, conflicts asked by the shell's own dialog. `Ok(false)` = cancelled. Nothing on this
+/// side is removed (a cut is a copy here).
+pub fn copy_in(sources: &[PathBuf], dest_parsing: &str, tracker: std::sync::Arc<crate::fileops::Tracker>) -> anyhow::Result<bool> {
+    use windows::Win32::UI::Shell::{FOF_NOCONFIRMMKDIR, FOF_SILENT};
+    crate::fileops::needs_shell(crate::engine_guard::Op::Copy)?;
+    let (sources, dest) = (sources.to_vec(), dest_parsing.to_string());
+    crate::fileops::engine(crate::engine_guard::Op::Copy, move |life| {
+        let op = crate::fileops::new_op(FOF_SILENT.0 as u32 | FOF_NOCONFIRMMKDIR.0 as u32)?;
+        let dest = bind(&dest)?;
+        for s in &sources {
+            let w = wide(s);
+            let it: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR(w.as_ptr()), None)? };
+            unsafe { op.CopyItem(&it, &dest, PCWSTR::null(), None)? };
+        }
+        crate::fileops::perform_tracked(&op, tracker, life)
+    })
+}
+
+/// Deletes shell items (by parsing name) on a device. A device has no Recycle Bin: this is for good. Progress and cancel through
+/// `tracker`. `Ok(false)` = cancelled.
+pub fn delete_items(parsings: &[String], tracker: std::sync::Arc<crate::fileops::Tracker>) -> anyhow::Result<bool> {
+    use windows::Win32::UI::Shell::{FOF_NOERRORUI, FOF_SILENT};
+    crate::fileops::needs_shell(crate::engine_guard::Op::PermanentDelete)?;
+    let parsings = parsings.to_vec();
+    crate::fileops::engine(crate::engine_guard::Op::PermanentDelete, move |life| {
+        let op = crate::fileops::new_op(FOF_SILENT.0 as u32 | FOF_NOERRORUI.0 as u32)?;
+        for p in &parsings {
+            unsafe { op.DeleteItem(&bind(p)?, None)? };
+        }
+        crate::fileops::perform_tracked(&op, tracker, life)
+    })
+}
+
+/// Makes a folder called `name` in the shell folder `parent_parsing`.
+pub fn new_folder(parent_parsing: &str, name: &str) -> anyhow::Result<()> {
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+    use windows::Win32::UI::Shell::FOF_SILENT;
+    crate::fileops::needs_shell(crate::engine_guard::Op::Copy)?;
+    let (parent, name) = (parent_parsing.to_string(), name.to_string());
+    crate::fileops::engine(crate::engine_guard::Op::Copy, move |life| {
+        let op = crate::fileops::new_op(FOF_SILENT.0 as u32)?;
+        let dest = bind(&parent)?;
+        let w = wide(&name);
+        unsafe { op.NewItem(&dest, FILE_ATTRIBUTE_DIRECTORY.0, PCWSTR(w.as_ptr()), PCWSTR::null(), None)? };
+        let quiet = std::sync::Arc::new(crate::fileops::Tracker::new(Box::new(|_, _, _| {}), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))));
+        anyhow::ensure!(crate::fileops::perform_tracked(&op, quiet, life)?, "the folder was not made");
+        Ok(())
+    })
 }
 
 #[cfg(test)]
