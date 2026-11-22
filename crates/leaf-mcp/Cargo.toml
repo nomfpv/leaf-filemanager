@@ -1,6 +1,6 @@
 [package]
 name = "leaf-mcp"
-description = "leaf: a small MCP server (stdio) that lets an assistant show a file in the running leaf and ask the user to pick files"
+description = "leaf: a small MCP server (stdio) that lets an assistant show and pick files in the running leaf, search and list the project folder, and (when the user allows it) copy, move, rename, create folders and move to the Trash through leaf"
 version.workspace = true
 edition.workspace = true
 license = "MIT"
