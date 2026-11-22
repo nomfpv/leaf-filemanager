@@ -32,7 +32,8 @@ if (-not $NoBuild) {
     } finally { Pop-Location }
 }
 
-# (b) stage: a clean folder with exactly what an install holds
+# (b) stage: a clean folder with exactly what an install holds. (leaf-helper.exe, the administrator helper, is only used from a
+# per-machine install: in a folder the user can write to, leaf does not start it elevated.)
 $files = @('leaf.exe', 'leaf-look.exe', 'leaf-open.exe', 'leaf-mcp.exe', 'leaf-nmhost.exe', 'leaf-helper.exe')
 foreach ($f in $files) {
     if (-not (Test-Path (Join-Path $rel $f))) { throw "$f is missing in $rel (build first, or drop -NoBuild)" }

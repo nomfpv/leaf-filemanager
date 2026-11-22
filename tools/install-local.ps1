@@ -1,6 +1,9 @@
 # A plain local install without Velopack: copies dist\stage (made by tools\package.ps1) to %LOCALAPPDATA%\Programs\leaf and makes a
 # Start menu shortcut "leaf". The dev copy in target\ is never touched. Updates do not apply to this kind of install (it is not
 # a Velopack install): run this script again with a newer stage.
+# "Retry as administrator" does not work in this kind of install: the folder belongs to the user, so leaf-helper.exe could be
+# swapped by any program of the user, and leaf refuses to start it elevated from there (it says so). It needs a per-machine install
+# (Program Files, writable only by administrators).
 #   tools\install-local.ps1 [-Uninstall] [-Force]
 param(
     [switch]$Uninstall,
