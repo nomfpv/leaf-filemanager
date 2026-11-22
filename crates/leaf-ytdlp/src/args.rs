@@ -39,7 +39,8 @@ pub struct Job {
     pub cookies_from: Option<String>,
     /// Bytes per second; 0 = none.
     pub limit: u64,
-    /// A proxy address for yt-dlp (leaf's VPN proxy): the traffic goes through it or the download does not start.
+    /// A proxy address for yt-dlp (leaf's VPN proxy): the traffic goes through it or the download does not start. It may hold a user
+    /// name and password, so it is never put on the command line: [`proxy_env`] makes the environment of the yt-dlp process from it.
     pub proxy: Option<String>,
 }
 
@@ -129,10 +130,6 @@ pub fn args(job: &Job) -> Vec<OsString> {
         put("--cookies-from-browser");
         put(b);
     }
-    if let Some(p) = job.proxy.as_deref() {
-        put("--proxy");
-        put(p);
-    }
     // the template: a `%` in the folder's own name is doubled, or yt-dlp would read it as a field
     let stem = if job.playlist { LIST_STEM } else { SINGLE_STEM };
     let mut out = OsString::new();
@@ -143,6 +140,20 @@ pub fn args(job: &Job) -> Vec<OsString> {
     a.push("--".into());
     a.push(job.url.clone().into());
     a
+}
+
+/// The environment variables that send yt-dlp through `proxy` (it reads them when it has no `--proxy`), set on that one process only:
+/// where other programs of the user can list command lines, they do not see them. Both spellings, and no exceptions, so that nothing
+/// goes direct because the system's own settings say so.
+pub fn proxy_env(proxy: &str) -> Vec<(String, String)> {
+    let mut v = Vec::new();
+    for name in ["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        v.push((name.to_string(), proxy.to_string()));
+    }
+    for name in ["NO_PROXY", "no_proxy"] {
+        v.push((name.to_string(), String::new()));
+    }
+    v
 }
 
 #[cfg(test)]

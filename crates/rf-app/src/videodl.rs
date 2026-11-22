@@ -468,7 +468,8 @@ fn work(tr: &Tracker, m: &MediaRequest, plan: Plan, arrived: &Mutex<Vec<PathBuf>
     }
     let job = yt::Job { url: m.req.url.clone(), work_dir: work_dir.clone(), kind: m.kind, subtitles: m.subtitles, playlist: m.playlist, ffmpeg: plan.ffmpeg, cookies_from: m.cookies_from.clone(), limit: plan.limit, proxy };
     let args = yt::args(&job);
-    let ctl = yt::RunCtl { cancel: tr.cancel.clone(), paused: tr.paused.clone() };
+    // (the VPN proxy's password goes in the process's environment, not on its command line)
+    let ctl = yt::RunCtl { cancel: tr.cancel.clone(), paused: tr.paused.clone(), env: job.proxy.as_deref().map(yt::proxy_env).unwrap_or_default() };
     (tr.on_progress)(0, 0, Some(t!("Connecting").to_string()));
     let name = if m.title.is_empty() { String::new() } else { m.title.clone() };
     let end = yt::run(&plan.exe, &args, &ctl, &mut |ev| match ev {

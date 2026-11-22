@@ -17,6 +17,8 @@ use crate::{Error, command};
 pub struct RunCtl {
     pub cancel: Arc<AtomicBool>,
     pub paused: Arc<AtomicBool>,
+    /// Environment variables for the yt-dlp process only (the proxy with its password: not on the command line).
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -136,7 +138,7 @@ pub fn run(exe: &Path, args: &[OsString], ctl: &RunCtl, on: &mut dyn FnMut(Event
             return Ok(end);
         }
         let mut c = command(exe);
-        c.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.args(args).envs(ctl.env.iter().map(|(k, v)| (k, v))).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = c.spawn().map_err(|e| Error::Start(e.to_string()))?;
         let (tx, rx) = channel();
         if let Some(o) = child.stdout.take() {
