@@ -23,12 +23,15 @@ use crate::theme::{self, Palette};
 enum Measure {
     Bytes(Metric),
     Tokens,
+    /// How many agent sessions wrote the file (a folder: the sum below it); from the sessions' own files.
+    Activity,
 }
 
 /// The scan with the token counts beside it (when they were made): `weight` and `sorted_children` take the measure.
 struct Weighed<'a> {
     tree: &'a DiskTree,
     tokens: Option<&'a [u64]>,
+    activity: Option<&'a [u64]>,
 }
 
 impl std::ops::Deref for Weighed<'_> {
@@ -39,21 +42,22 @@ impl std::ops::Deref for Weighed<'_> {
 }
 
 impl<'a> Weighed<'a> {
-    fn of(tree: &'a Option<DiskTree>, tokens: &'a Option<Vec<u64>>) -> Option<Weighed<'a>> {
-        tree.as_ref().map(|tree| Weighed { tree, tokens: tokens.as_deref() })
+    fn of(tree: &'a Option<DiskTree>, tokens: &'a Option<Vec<u64>>, activity: &'a Option<Vec<u64>>) -> Option<Weighed<'a>> {
+        tree.as_ref().map(|tree| Weighed { tree, tokens: tokens.as_deref(), activity: activity.as_deref() })
     }
 
     fn weight(&self, i: u32, m: Measure) -> u64 {
         match m {
             Measure::Bytes(b) => self.tree.weight(i, b),
             Measure::Tokens => self.tokens.and_then(|t| t.get(i as usize)).copied().unwrap_or(0),
+            Measure::Activity => self.activity.and_then(|t| t.get(i as usize)).copied().unwrap_or(0),
         }
     }
 
     fn sorted_children(&self, i: u32, m: Measure) -> Vec<u32> {
         match m {
             Measure::Bytes(b) => self.tree.sorted_children(i, b),
-            Measure::Tokens => {
+            Measure::Tokens | Measure::Activity => {
                 let mut v: Vec<u32> = self.tree.children(i).collect();
                 v.sort_unstable_by(|&a, &b| self.weight(b, m).cmp(&self.weight(a, m)).then_with(|| self.tree.name(a).cmp(self.tree.name(b))));
                 v
@@ -98,6 +102,7 @@ fn show(m: Measure, w: u64) -> String {
             let (n, u) = show_parts(m, w);
             format!("~{n}{u}")
         }
+        Measure::Activity => w.to_string(),
     }
 }
 
@@ -111,6 +116,7 @@ fn show_parts(m: Measure, w: u64) -> (String, String) {
         Measure::Tokens if w >= 1_000_000 => (format!("{:.1}", w as f64 / 1e6), "M tok".into()),
         Measure::Tokens if w >= 1000 => (format!("{:.1}", w as f64 / 1e3), "k tok".into()),
         Measure::Tokens => (w.to_string(), " tok".into()),
+        Measure::Activity => (w.to_string(), if w == 1 { " session" } else { " sessions" }.into()),
     }
 }
 
@@ -201,6 +207,8 @@ pub struct DiskUsageView {
     metric: Measure,
     /// Estimated tokens below every entry (text-like files only), made when the Tokens measure is first chosen.
     tokens: Option<Vec<u64>>,
+    /// Agent sessions that wrote every entry, made when the Agent activity measure is first chosen.
+    activity: Option<Vec<u64>>,
     /// Children of `cur`, biggest first.
     kids: Vec<u32>,
     /// `kids` in the list's order (the chosen sort; the treemap keeps `kids`).
@@ -231,6 +239,7 @@ impl DiskUsageView {
             cur: 0,
             metric: Measure::Bytes(Metric::Logical),
             tokens: None,
+            activity: None,
             kids: Vec::new(),
             rows: Vec::new(),
             sort: SortCol::Size,
@@ -264,6 +273,7 @@ impl DiskUsageView {
                     if let Some(t) = scan.take() {
                         v.tree = Some(t);
                         v.tokens = None;
+                        v.activity = None;
                         v.scan = None;
                         v.cur = 0;
                         v.refresh_kids();
@@ -285,14 +295,14 @@ impl DiskUsageView {
     fn refresh_kids(&mut self) {
         self.cells = None;
         self.arcs = None;
-        self.kids = Weighed::of(&self.tree, &self.tokens).map(|t| t.sorted_children(self.cur, self.metric)).unwrap_or_default();
+        self.kids = Weighed::of(&self.tree, &self.tokens, &self.activity).map(|t| t.sorted_children(self.cur, self.metric)).unwrap_or_default();
         self.sort_rows();
     }
 
     /// Puts `kids` in the list's order.
     fn sort_rows(&mut self) {
         let mut rows = self.kids.clone();
-        if let Some(t) = Weighed::of(&self.tree, &self.tokens) {
+        if let Some(t) = Weighed::of(&self.tree, &self.tokens, &self.activity) {
             let m = self.metric;
             // ascending for the column, then flipped for descending; kids come biggest first, which is Size/Share descending
             match self.sort {
@@ -350,7 +360,7 @@ impl DiskUsageView {
 
     fn ensure_arcs(&mut self) {
         if self.arcs.is_none()
-            && let Some(t) = Weighed::of(&self.tree, &self.tokens)
+            && let Some(t) = Weighed::of(&self.tree, &self.tokens, &self.activity)
         {
             self.arcs = Some(sunburst(&ring_nodes(&t, self.metric, &self.kids, 0)));
         }
@@ -376,9 +386,50 @@ impl DiskUsageView {
             if m == Measure::Tokens && self.tokens.is_none() {
                 self.tokens = self.tree.as_ref().map(token_counts);
             }
+            if m == Measure::Activity && self.activity.is_none() {
+                self.read_activity(cx);
+            }
             self.refresh_kids();
             cx.notify();
         }
+    }
+
+    /// Reads which files the agent sessions wrote (their own session files, off the UI thread) and counts them into the tree.
+    fn read_activity(&mut self, cx: &mut Context<Self>) {
+        let sessions = crate::agents::sessions(cx);
+        cx.spawn(async move |this, cx| {
+            let files = cx
+                .background_executor()
+                .spawn(async move {
+                    let adapters = leaf_agents::adapters();
+                    let cancel = std::sync::atomic::AtomicBool::new(false);
+                    sessions
+                        .iter()
+                        .map(|s| adapters.iter().find(|a| a.id() == s.agent).and_then(|a| a.session_file(&s.id)).map(|f| leaf_agents::transcript::files_touched(&f, &cancel)).unwrap_or_default())
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                let Some(t) = &v.tree else { return };
+                let mut out = vec![0u64; t.len()];
+                for session in files {
+                    for f in session {
+                        let mut at = t.find(std::path::Path::new(&f));
+                        if at.is_some_and(|i| t.is_dir(i)) {
+                            at = None;
+                        }
+                        while let Some(i) = at {
+                            out[i as usize] += 1;
+                            at = t.parent(i);
+                        }
+                    }
+                }
+                v.activity = Some(out);
+                v.refresh_kids();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Click on a row or rectangle: folders open, files get selected; a double click on a
@@ -443,7 +494,7 @@ impl DiskUsageView {
     fn layout(&mut self, w: f32, h: f32) -> &[Cell] {
         let key = (self.cur, self.metric, self.mode, w as i32, h as i32);
         if self.cells.as_ref().is_none_or(|(k, _)| *k != key) {
-            let cells = Weighed::of(&self.tree, &self.tokens).map(|t| if self.mode == Mode::Skyline { build_bars(&t, self.metric, &self.kids, w, h) } else { build_cells(&t, self.metric, &self.kids, w, h) }).unwrap_or_default();
+            let cells = Weighed::of(&self.tree, &self.tokens, &self.activity).map(|t| if self.mode == Mode::Skyline { build_bars(&t, self.metric, &self.kids, w, h) } else { build_cells(&t, self.metric, &self.kids, w, h) }).unwrap_or_default();
             self.cells = Some((key, cells));
         }
         self.cells.as_ref().map(|(_, c)| c.as_slice()).unwrap_or(&[])
@@ -513,12 +564,12 @@ impl Render for DiskUsageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::for_window(window);
         // (the agent layer was switched off while Tokens was showing: back to sizes)
-        if self.metric == Measure::Tokens && !cx.global::<crate::settings::Settings>().ai_layer {
+        if matches!(self.metric, Measure::Tokens | Measure::Activity) && !cx.global::<crate::settings::Settings>().ai_layer {
             self.metric = Measure::Bytes(Metric::Logical);
             self.refresh_kids();
         }
         let tokens_on = cx.global::<crate::settings::Settings>().ai_layer;
-        let Some(tw) = Weighed::of(&self.tree, &self.tokens) else {
+        let Some(tw) = Weighed::of(&self.tree, &self.tokens, &self.activity) else {
             return self.render_scanning(&p).into_any_element();
         };
         let t = &tw;
@@ -606,6 +657,7 @@ impl Render for DiskUsageView {
                 Measure::Bytes(Metric::OnDisk) => t!("Size on disk"),
                 Measure::Bytes(Metric::Logical) => t!("Size"),
                 Measure::Tokens => t!("Tokens (estimate)"),
+                Measure::Activity => t!("Agent activity"),
             },
             show(metric, t.weight(cur, metric)),
             format!("{} {}", count(t.files(cur) as u64), t!("files"))
@@ -638,7 +690,8 @@ impl Render for DiskUsageView {
                     .bg(p.pressed)
                     .child(seg("m-logical", t!("Size"), Measure::Bytes(Metric::Logical)))
                     .child(seg("m-disk", t!("Size on disk"), Measure::Bytes(Metric::OnDisk)))
-                    .children(tokens_on.then(|| seg("m-tokens", t!("Tokens (estimate)"), Measure::Tokens))),
+                    .children(tokens_on.then(|| seg("m-tokens", t!("Tokens (estimate)"), Measure::Tokens)))
+                    .children(tokens_on.then(|| seg("m-activity", t!("Agent activity"), Measure::Activity))),
             );
 
         // ---- list
@@ -760,7 +813,7 @@ impl Render for DiskUsageView {
         };
         let flat = mode == Mode::Skyline;
         let cells: Vec<(u32, Rect, bool, bool)> = if mode == Mode::Sunburst { Vec::new() } else { self.layout(aw, ah).iter().map(|c| (c.id, c.rect, c.head, c.nested)).collect() };
-        let tw = Weighed::of(&self.tree, &self.tokens).expect("tree");
+        let tw = Weighed::of(&self.tree, &self.tokens, &self.activity).expect("tree");
         let t = &tw;
         let mut map = div().relative().size_full().overflow_hidden();
         for (i, &(id, r, head, nested)) in cells.iter().enumerate() {
