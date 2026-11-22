@@ -11,7 +11,7 @@ fn tmp_dir(name: &str) -> PathBuf {
 }
 
 fn opts() -> Options {
-    Options { keep_color_profile: true, keep_cover_art: false, reset_times: false }
+    Options { keep_color_profile: true, keep_cover_art: false, reset_times: false, remove_signatures: false, keep_subtitles: false }
 }
 
 fn no_cancel() -> bool {
@@ -1055,6 +1055,91 @@ fn scrub_docx_xlsx_pptx_leave_no_marker_anywhere_in_any_entry() {
     assert_no_markers_in_zip(&dst, "pptx");
     assert!(zip_text(&dst, "ppt/comments/comment1.xml").contains("<p:text>look</p:text>"));
     assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Excel: the folder path with the user name, the reservation name and the save ids of `xl/workbook.xml` go; a sheet's
+/// `pageSetup r:id` loses the attribute when its printer settings go; every reference of the cleaned file resolves.
+#[test]
+fn scrub_xlsx_workbook_path_and_printer_reference_and_package_stays_consistent() {
+    let d = tmp_dir("xlsx-wb");
+    let ct = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Default Extension=\"bin\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.printerSettings\"/><Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/docProps/thumbnail.jpeg\" ContentType=\"image/jpeg\"/></Types>";
+    let rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail\" Target=\"docProps/thumbnail.jpeg\"/></Relationships>";
+    let wb_rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>";
+    let wb = "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:x15ac=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr10=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision10\" mc:Ignorable=\"x15ac xr xr10\"><fileVersion appName=\"xl\"/><fileSharing userName=\"Planted Author\"/><workbookPr/><mc:AlternateContent><mc:Choice Requires=\"x15\"><x15ac:absPath url=\"C:\\Users\\Planted Author\\Documents\\\"/></mc:Choice></mc:AlternateContent><xr:revisionPtr revIDLastSave=\"0\" documentId=\"8_{LEAFTESTSERIAL123}\" xr10:uidLastSave=\"{LEAFTESTSERIAL123}\"/><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+    let sheet = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>kept</t></is></c></row></sheetData><pageSetup orientation=\"portrait\" r:id=\"rId1\"/></worksheet>";
+    let sheet_rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings\" Target=\"../printerSettings/printerSettings1.bin\"/></Relationships>";
+    let src = d.join("a.xlsx");
+    make_zip_bytes(
+        &src,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("_rels/.rels", rels.as_bytes()),
+            ("xl/workbook.xml", wb.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+            ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+            ("xl/printerSettings/printerSettings1.bin", b"printer of Planted Author"),
+            ("docProps/thumbnail.jpeg", b"\xFF\xD8\xFF\xD9"),
+        ],
+    );
+    let before = inspect(&src, &opts()).unwrap();
+    for want in ["Folder path where the workbook was saved", "Name of the user who reserved the workbook", "Save and co-authoring ids (revisionPtr, uid)"] {
+        assert!(before.findings.iter().any(|f| f.label == want), "{want} missing from {:?}", before.findings);
+    }
+    assert!(before.findings.iter().any(|f| f.value.contains("Planted Author\\Documents")), "the path itself is shown");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "xlsx workbook");
+    assert_clean_listing(&dst);
+    let wb2 = zip_text(&dst, "xl/workbook.xml");
+    assert!(!wb2.contains("absPath") && !wb2.contains("AlternateContent") && !wb2.contains("revisionPtr") && wb2.contains("<sheet name=\"S\""));
+    roxmltree::Document::parse(&wb2).unwrap();
+    let sh = zip_text(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sh.contains("<pageSetup orientation=\"portrait\"/>") && sh.contains("kept"), "{sh}");
+    assert!(!zip_text(&dst, "xl/worksheets/_rels/sheet1.xml.rels").contains("rId1"));
+    let types = zip_text(&dst, "[Content_Types].xml");
+    assert!(!types.contains("thumbnail") && !types.contains("Extension=\"bin\"") && types.contains("sheet1.xml"), "{types}");
+    assert!(office::broken_references(&dst).unwrap().is_empty(), "{:?}", office::broken_references(&dst));
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A signed Office document is refused by default (removing metadata would break the signature); with the tick the signature
+/// parts and their relationship go, and the signer's name with them.
+#[test]
+fn scrub_signed_docx_is_refused_unless_signatures_are_removed() {
+    let d = tmp_dir("docx-signed");
+    let ct = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"sigs\" ContentType=\"application/vnd.openxmlformats-package.digital-signature-origin\"/><Override PartName=\"/_xmlsignatures/sig1.xml\" ContentType=\"application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml\"/></Types>";
+    let rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"r1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/><Relationship Id=\"r9\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin\" Target=\"_xmlsignatures/origin.sigs\"/></Relationships>";
+    let origin_rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"s1\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/signature\" Target=\"sig1.xml\"/></Relationships>";
+    let sig = "<Signature xmlns=\"http://www.w3.org/2000/09/xmldsig#\"><KeyInfo><X509Data><X509SubjectName>CN=Planted Author, SERIALNUMBER=LEAFTESTSERIAL123</X509SubjectName></X509Data></KeyInfo></Signature>";
+    let src = d.join("s.docx");
+    make_zip_bytes(
+        &src,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("_rels/.rels", rels.as_bytes()),
+            ("word/document.xml", format!("<w:document {W}><w:body><w:p><w:r><w:t>signed text</w:t></w:r></w:p></w:body></w:document>").as_bytes()),
+            ("_xmlsignatures/origin.sigs", b""),
+            ("_xmlsignatures/_rels/origin.sigs.rels", origin_rels.as_bytes()),
+            ("_xmlsignatures/sig1.xml", sig.as_bytes()),
+        ],
+    );
+    let i = inspect(&src, &opts()).unwrap();
+    assert!(!i.can_clean && i.refusal.as_deref().unwrap().contains("signed"));
+    assert!(i.findings.iter().any(|f| f.label.starts_with("Digital signature") && f.value.contains("Planted Author")));
+    let dst = clean_copy_name(&src);
+    assert!(matches!(clean_to(&src, &dst, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))));
+    assert!(!dst.exists());
+    let o = Options { remove_signatures: true, ..opts() };
+    let out = clean_to(&src, &dst, &o, &no_cancel).unwrap();
+    assert!(out.removed.iter().any(|f| f.label.starts_with("Digital signature")));
+    assert_no_markers_in_zip(&dst, "signed docx");
+    let mut z = zip::ZipArchive::new(fs::File::open(&dst).unwrap()).unwrap();
+    assert!((0..z.len()).all(|i| !z.by_index(i).unwrap().name().unwrap().starts_with("_xmlsignatures")));
+    assert!(!zip_text(&dst, "_rels/.rels").contains("digital-signature") && !zip_text(&dst, "[Content_Types].xml").contains("sig"));
+    assert!(zip_text(&dst, "word/document.xml").contains("signed text"));
+    assert!(office::broken_references(&dst).unwrap().is_empty());
     let _ = fs::remove_dir_all(&d);
 }
 

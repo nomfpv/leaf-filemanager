@@ -40,6 +40,12 @@ pub struct Options {
     pub keep_cover_art: bool,
     /// Give the cleaned file the current time as its times instead of the original's.
     pub reset_times: bool,
+    /// A signed document (PDF, Office, OpenDocument) is refused unless this is set: removing metadata breaks a signature. When set,
+    /// the signatures are removed completely (signer name, time, place, reason, contact, certificate) and the result says so.
+    pub remove_signatures: bool,
+    /// Keep plain subtitle / caption tracks of a video (MP4 / MOV). Off: they are emptied like every other track that is not
+    /// picture or sound.
+    pub keep_subtitles: bool,
 }
 
 /// One thing a file carries.
