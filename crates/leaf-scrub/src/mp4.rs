@@ -91,6 +91,14 @@ fn zero_times(c: &Child<'_>, what: &str, patches: &mut Vec<Patch>, found: &mut V
     patches.push((c.off + c.hdr + 4, vec![0u8; len]));
 }
 
+fn odd_label(ty: &[u8; 4]) -> String {
+    match ty {
+        b"uuid" => "Vendor data box (uuid: can hold the camera model and serial)".to_string(),
+        b"prft" => "Producer time stamp (prft)".to_string(),
+        other => format!("Box leaf does not know ({})", String::from_utf8_lossy(other).trim()),
+    }
+}
+
 fn rename_free(c: &Child<'_>, what: &str, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) {
     found.push(Finding::new(what, format!("{} bytes", c.body.len() + c.hdr as usize), true));
     patches.push((c.off + 4, b"free".to_vec()));
@@ -199,6 +207,10 @@ fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<F
                 }
             }
             b"udta" | b"meta" => rename_free(&c, "Track tags and device information", patches, found),
+            b"free" | b"skip" if c.body.iter().any(|b| *b != 0) => {
+                found.push(Finding::new("Leftover data in padding", format!("{} bytes", c.body.len()), true));
+                patches.push((c.off + c.hdr, vec![0u8; c.body.len()]));
+            }
             b"mdia" => {
                 for m in children(c.body, c.off + c.hdr)? {
                     match &m.ty {
@@ -277,6 +289,7 @@ fn track_kind(t: &Track) -> String {
 
 /// Tracks that are not picture or sound (and not a subtitle track the user keeps): their samples are overwritten with zeros in
 /// place and the track is disabled; each is named. Refused when that cannot be done safely.
+#[allow(clippy::too_many_arguments)]
 fn plan_tracks(
     f: &mut fs::File,
     tracks: &[Track],
@@ -286,7 +299,7 @@ fn plan_tracks(
     patches: &mut Vec<Patch>,
     zero_runs: &mut Vec<(u64, u64)>,
     found: &mut Vec<Finding>,
-) -> Result<()> {
+) -> Result<Vec<(u64, u64)>> {
     let keeps = |t: &Track| &t.handler == b"vide" || &t.handler == b"soun" || (opts.keep_subtitles && SUBTITLE_HANDLERS.contains(&&t.handler));
     let mut kept: Vec<(u64, u64)> = Vec::new();
     for t in tracks.iter().filter(|t| keeps(t)) {
@@ -353,7 +366,7 @@ fn plan_tracks(
             found.push(Finding::new(format!("Track that is not picture or sound ({kind})"), format!("{} chunks of samples emptied, track disabled", t.chunks.len()), true));
         }
     }
-    Ok(())
+    Ok(kept)
 }
 
 /// What a run writes: byte patches, and runs of zeros (file position, length) over the samples of emptied tracks.
@@ -367,6 +380,8 @@ fn plan(path: &Path, opts: &Options) -> Result<PlanOut> {
     let mut tracks: Vec<Track> = Vec::new();
     let mut mdats: Vec<(u64, u64)> = Vec::new();
     let mut fragmented = false;
+    // top-level boxes that are not on the list of what a player needs: (position, header, size, type)
+    let mut odd: Vec<(u64, u64, u64, [u8; 4])> = Vec::new();
     let mut pos = 0u64;
     let mut saw_moov = false;
     while pos < flen {
@@ -411,7 +426,15 @@ fn plan(path: &Path, opts: &Options) -> Result<PlanOut> {
                         b"trak" => tracks.push(walk_trak(c.body, c.off + c.hdr, &mut patches, &mut found)?),
                         b"mvex" => fragmented = true,
                         b"uuid" if c.body.len() >= 16 && c.body[..16] == XMP_UUID => rename_free(&c, "XMP", &mut patches, &mut found),
-                        _ => {}
+                        b"iods" => {}
+                        b"free" | b"skip" => {
+                            if c.body.iter().any(|b| *b != 0) {
+                                found.push(Finding::new("Leftover data in padding", format!("{} bytes", c.body.len()), true));
+                                patches.push((c.off + c.hdr, vec![0u8; c.body.len()]));
+                            }
+                        }
+                        b"cmov" => return Err(ScrubError::Unsupported("the movie header is compressed, leaf cannot read it".into())),
+                        other => rename_free(&c, &odd_label(other), &mut patches, &mut found),
                     }
                 }
             }
@@ -429,6 +452,8 @@ fn plan(path: &Path, opts: &Options) -> Result<PlanOut> {
                     f.seek(SeekFrom::Start(pos + hdr))?;
                     f.read_exact(&mut body)?;
                     rename_free(&Child { off: pos, hdr, ty, body: &body }, "XMP", &mut patches, &mut found);
+                } else {
+                    odd.push((pos, hdr, size, ty));
                 }
             }
             b"free" | b"skip" => {
@@ -442,7 +467,8 @@ fn plan(path: &Path, opts: &Options) -> Result<PlanOut> {
             }
             b"mdat" => mdats.push((pos + hdr, pos + size)),
             b"moof" => fragmented = true,
-            _ => {}
+            b"ftyp" | b"wide" | b"mfra" | b"sidx" | b"ssix" | b"styp" | b"pdin" | b"emsg" => {}
+            _ => odd.push((pos, hdr, size, ty)),
         }
         pos += size;
     }
@@ -450,7 +476,19 @@ fn plan(path: &Path, opts: &Options) -> Result<PlanOut> {
         return bad("no movie header");
     }
     let mut zero_runs = Vec::new();
-    plan_tracks(&mut f, &tracks, &mdats, fragmented, opts, &mut patches, &mut zero_runs, &mut found)?;
+    let kept = plan_tracks(&mut f, &tracks, &mdats, fragmented, opts, &mut patches, &mut zero_runs, &mut found)?;
+    // a vendor box (camera model, serial, owner), a producer time stamp or any box leaf does not know: renamed to `free` and
+    // emptied, unless a picture or sound sample lies in it (then the file is refused)
+    for (at, hdr, size, ty) in odd {
+        let (a, end) = (at, at + size);
+        let i = kept.partition_point(|k| k.1 <= a);
+        if kept.get(i).is_some_and(|(s, _)| *s < end) {
+            return Err(ScrubError::Unsupported(format!("a box leaf does not know ({}) holds picture or sound data", String::from_utf8_lossy(&ty))));
+        }
+        found.push(Finding::new(odd_label(&ty), format!("{size} bytes"), true));
+        patches.push((at + 4, b"free".to_vec()));
+        zero_runs.push((at + hdr, size - hdr));
+    }
     Ok((patches, zero_runs, found))
 }
 

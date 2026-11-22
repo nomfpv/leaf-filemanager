@@ -970,6 +970,38 @@ fn scrub_mp4_telemetry_and_timecode_tracks_are_emptied_and_named_video_untouched
     let _ = fs::remove_dir_all(&d);
 }
 
+/// Boxes that are not on the list of what a player needs (a vendor `uuid` with a serial, a producer time stamp, an unknown box in
+/// the movie header, stale padding inside it) are emptied and renamed in place in MP4 and HEIC, and named.
+#[test]
+fn scrub_mp4_and_heic_unknown_and_vendor_boxes_are_emptied() {
+    let d = tmp_dir("odd-boxes");
+    let ftyp = bx(b"ftyp", b"isom\0\0\0\0isom");
+    let vendor = bx(b"uuid", &[&[0x11u8; 16][..], SERIAL].concat());
+    let moov = bx(b"moov", &[bx(b"mvhd", &[0u8; 100]), bx(b"xyzw", AUTHOR), bx(b"free", b"stale Planted Author")].concat());
+    let file = [ftyp, vendor, bx(b"prft", &[0u8; 16]), moov, bx(b"mdat", b"0123456789")].concat();
+    let src = d.join("a.mp4");
+    fs::write(&src, &file).unwrap();
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Vendor data box")));
+    assert!(before.findings.iter().any(|f| f.label.contains("xyzw")));
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_eq!(fs::read(&dst).unwrap().len(), file.len());
+    assert_no_markers(&dst, "mp4 vendor boxes");
+    assert_clean_listing(&dst);
+    // HEIC: a vendor uuid at the top
+    let heic = d.join("a.heic");
+    make_heic(&heic, b"heic");
+    let mut b = fs::read(&heic).unwrap();
+    b.extend_from_slice(&bx(b"uuid", &[&[0x22u8; 16][..], b"LEAFTESTSERIAL123 Planted Author"].concat()));
+    fs::write(&heic, &b).unwrap();
+    let dst = clean_copy_name(&heic);
+    clean_to(&heic, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "heic vendor box");
+    assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}
+
 #[test]
 fn scrub_bmp_says_nothing_found_and_archives_are_refused() {
     let d = tmp_dir("bmp");

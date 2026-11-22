@@ -270,6 +270,8 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
     let mut found = Vec::new();
     let mut notes = Vec::new();
     let mut meta: Option<B> = None;
+    // boxes that are not on the list of what a reader needs to show the picture: emptied and renamed to `free` below
+    let mut odd: Vec<B> = Vec::new();
     for b in &top {
         match &b.ty {
             b"meta" => {
@@ -293,7 +295,8 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
                     patches.push((b.body(), zeros(b.end - b.body())));
                 }
             }
-            _ => {}
+            b"ftyp" | b"mdat" => {}
+            _ => odd.push(*b),
         }
     }
     let meta = meta.ok_or_else(|| ScrubError::Malformed("no meta box: not a HEIF / AVIF picture".into()))?;
@@ -316,7 +319,9 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
                 found.push(Finding::new("Leftover data in padding", format!("{} bytes", k.end - k.body()), true));
                 patches.push((k.body(), zeros(k.end - k.body())));
             }
-            _ => {}
+            b"hdlr" | b"pitm" | b"iloc" | b"iinf" | b"iref" | b"iprp" | b"idat" | b"dinf" | b"grpl" | b"free" | b"skip" | b"ipro" => {}
+            // `xml ` / `bxml` (XML metadata of the file) and any box leaf does not know
+            _ => odd.push(*k),
         }
     }
     for it in items.iter().filter(|i| i.goes()) {
@@ -352,6 +357,18 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
         if keep_ranges.iter().any(|(s, t)| a < *t && *s < b) {
             return Err(ScrubError::Unsupported("the metadata shares bytes with the picture data, it cannot be erased without damaging the picture".into()));
         }
+    }
+    for b in odd {
+        if keep_ranges.iter().any(|(s, t)| b.off < *t && *s < b.end) {
+            return Err(ScrubError::Unsupported(format!("a box leaf does not know ({}) holds picture data", String::from_utf8_lossy(&b.ty))));
+        }
+        let label = match &b.ty {
+            b"xml " | b"bxml" => "Embedded XML metadata".to_string(),
+            b"uuid" => "Vendor data box (uuid: can hold the camera model and serial)".to_string(),
+            t => format!("Box leaf does not know ({})", String::from_utf8_lossy(t).trim()),
+        };
+        found.push(Finding::new(label, format!("{} bytes", b.end - b.off), true));
+        free_box(b, &mut patches, d);
     }
     notes.push("The coded picture is not touched. Rotation and mirroring stay. The metadata items were overwritten with zeros of the same length and marked as unused: they are not deleted from the item table, because deleting would move the picture data.".into());
     Ok((patches, found, notes))
