@@ -2765,6 +2765,13 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         agents_only(s, card(
             p,
             L::Brain,
+            t!("Ghost files"),
+            Some(t!("In a folder of a project with agent sessions, files deleted since the last commit show as faint rows under the list, with Restore (from the last commit; never over an existing file) and Dismiss. Which session deleted a file is a best guess.")),
+            sw("ghost-files", p, s.ghost_files, |s, v| s.ghost_files = v),
+        )),
+        agents_only(s, card(
+            p,
+            L::Brain,
             t!("Agent budget ring"),
             Some(t!("A small ring in the status bar: how much of this daily amount of new agent tokens (input, output, cache writes; an estimate from the session files) the last 24 hours used. It never warns and never blocks anything.")),
             dropdown(

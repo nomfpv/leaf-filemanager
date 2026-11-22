@@ -33,6 +33,8 @@ mod auto_cols;
 pub(crate) mod prop_cols;
 /// Sorting by tag, by path and by sync state.
 pub(crate) mod sort_ext;
+/// Ghost rows: files an agent session deleted since the last commit, shown faint under the list (display only).
+mod ghosts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -620,6 +622,9 @@ pub struct FolderView {
     _ignore_task: Option<Task<()>>,
     /// Git status of the repository containing this folder (if any).
     pub git: Option<Arc<leaf_sys::git::GitStatus>>,
+    /// Ghost rows (files deleted since the last commit) the user dismissed in this tab, by full path; and the last restore's answer.
+    ghost_dismissed: HashSet<PathBuf>,
+    ghost_note: Option<String>,
     /// Last commit per child of the current folder (commit columns), keyed by name.
     git_commits: Option<Arc<std::collections::HashMap<String, leaf_sys::git::Commit>>>,
     /// Columns view: listings of ancestor / next folders (sorted, filtered).
@@ -840,6 +845,8 @@ impl FolderView {
             dup_selected: None,
             changes: None,
             git: None,
+            ghost_dismissed: HashSet::new(),
+            ghost_note: None,
             git_commits: None,
             column_cache: Default::default(),
             column_pending: HashSet::new(),
@@ -5713,6 +5720,7 @@ impl FolderView {
                         }
                     }))
                     .child(body)
+                    .children(self.ghost_strip(p, cx))
                     // last child: painted over the list, so its clicks and drags come first. Shown
                     // while scrolling and fading out after, like File Explorer's on Windows 11,
                     // so it doesn't sit over the right-aligned Size column; always, when Windows is
