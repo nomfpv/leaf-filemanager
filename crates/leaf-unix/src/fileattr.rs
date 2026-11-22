@@ -117,3 +117,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Cloud files' "Always keep" / "Free up space" (rf-win fileattr.rs): there are no sync roots of that kind here.
+pub fn set_cloud_pin(_p: &Path, _keep: bool) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "not available on this system"))
+}

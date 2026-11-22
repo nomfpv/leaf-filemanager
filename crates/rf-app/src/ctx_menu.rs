@@ -552,7 +552,41 @@ impl FolderView {
                 })));
             }
         }
+        // OneDrive and other sync roots: what is kept on this device and what is freed (the documented attributes; nothing is read)
+        if !in_archive && !items.is_empty() && self.in_cloud_folder(items, cx) {
+            menu_items.push(Item::Separator);
+            menu_items.push(Item::action(t!("Always keep on this device"), icon(L::CircleCheck), act(me, |v, _, cx| v.cloud_keep(true, cx))));
+            menu_items.push(Item::action(t!("Free up space"), icon(L::Cloud), act(me, |v, _, cx| v.cloud_keep(false, cx))));
+        }
         Menu { quick, items: menu_items }
+    }
+
+    /// Whether the items lie in a folder a sync provider keeps (or carry its marks): the rows for the cloud are offered then.
+    fn in_cloud_folder(&self, items: &[PathBuf], cx: &Context<Self>) -> bool {
+        const PINNED: u32 = 0x8_0000;
+        const UNPINNED: u32 = 0x10_0000;
+        let marked = self.selected.iter().filter_map(|&i| self.entries.get(i as usize)).any(|e| e.is_cloud_placeholder() || e.attrs & (PINNED | UNPINNED) != 0);
+        marked || {
+            let roots = &self.places.read(cx).cloud;
+            items.iter().any(|p| roots.iter().any(|r| p.starts_with(&r.path)))
+        }
+    }
+
+    /// "Always keep on this device" (`keep`) / "Free up space" on the selection, off the UI thread; the list is read again after.
+    pub(crate) fn cloud_keep(&mut self, keep: bool, cx: &mut Context<Self>) {
+        let paths = self.selection_paths();
+        let work = cx.background_spawn(async move {
+            for p in &paths {
+                if let Err(e) = leaf_sys::fileattr::set_cloud_pin(p, keep) {
+                    log::warn!("cloud: {}: {e}", p.display());
+                }
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            work.await;
+            let _ = this.update(cx, |v, cx| v.refresh(cx));
+        })
+        .detach();
     }
 
     /// The folder background's menu: made from the rows of `menu_model` for this context.
