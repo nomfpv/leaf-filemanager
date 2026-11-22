@@ -99,6 +99,29 @@ pub(super) fn start(window: &mut Window, cx: &mut Context<Workspace>) {
                     }
                     sleep(350).await;
                 }
+                // `scroll x y dy`: the mouse wheel over that point, dy in window pixels (negative = the content moves up)
+                "scroll" => {
+                    let n: Vec<f32> = arg.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                    if let [x, y, dy] = n[..] {
+                        let _ = cx.update(|window, cx| {
+                            let at = point(px(x / window.scale_factor()), px(y / window.scale_factor()));
+                            window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: at, pressed_button: None, modifiers: Modifiers::default() }), cx);
+                            window.dispatch_event(
+                                PlatformInput::Scroll(ScrollEvent {
+                                    position: at,
+                                    delta: ScrollDelta::Pixels(point(px(0.), px(dy / window.scale_factor()))),
+                                    modifiers: Modifiers::default(),
+                                    touch_phase: TouchPhase::Moved,
+                                    source: Default::default(),
+                                }),
+                                cx,
+                            );
+                        });
+                    } else {
+                        log::warn!("check script: unknown line: {line}");
+                    }
+                    sleep(350).await;
+                }
                 "type" | "key" => {
                     // outside the workspace's own update: the keystroke reaches the workspace again (the focused field is its child)
                     match keystrokes(cmd, arg) {
@@ -180,8 +203,16 @@ impl Workspace {
             }
             // `tag <name>`: toggles the tag (one of the defined ones, by name) on the selected items; `gototag <name>`: the tag's page
             "tag" | "gototag" => {
-                let id = cx.global::<crate::tags::Tags>().0.defs.iter().find(|d| d.name.eq_ignore_ascii_case(arg)).map(|d| d.id);
-                let Some(id) = id else { return false };
+                let found = cx.global::<crate::tags::Tags>().0.defs.iter().find(|d| d.name.eq_ignore_ascii_case(arg)).map(|d| d.id);
+                // (a tag that does not exist yet is made, so a check on a fresh config can tag a file and open that tag's list)
+                let id = match found {
+                    Some(id) => id,
+                    None => {
+                        let mut made = 0;
+                        crate::tags::update(cx, |t| made = t.add(arg, 0x3b82f6));
+                        made
+                    }
+                };
                 if cmd == "gototag" {
                     self.navigate(rf_core::Location::Tag(id), window, cx);
                 } else {
