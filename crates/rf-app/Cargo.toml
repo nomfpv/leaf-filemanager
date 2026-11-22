@@ -13,6 +13,11 @@ path = "src/main.rs"
 name = "leaf-look"
 path = "src/bin/leaf-look.rs"
 
+# the folder handler Windows starts while leaf is the default file manager (starts leaf, or the real Explorer when leaf is gone)
+[[bin]]
+name = "leaf-open"
+path = "src/bin/leaf-open.rs"
+
 [dependencies]
 rf-core.workspace = true
 leaf-sys.workspace = true
@@ -29,6 +34,8 @@ zeroize = "1"
 leaf-sync.workspace = true
 # shared folders with a friend's leaf (Share with a friend..., Join shared folder...)
 leaf-share.workspace = true
+# leaf-open.exe, built next to leaf.exe
+leaf-open.workspace = true
 leaf-agents.workspace = true
 # cache file names of fetched server files (a hash of the address)
 sha2.workspace = true

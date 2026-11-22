@@ -5181,6 +5181,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-open"
+version = "0.9.4"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "leaf-remote"
 version = "0.9.4"
 dependencies = [
@@ -7702,6 +7709,7 @@ dependencies = [
  "leaf-decode",
  "leaf-dev",
  "leaf-download",
+ "leaf-open",
  "leaf-remote",
  "leaf-share",
  "leaf-sync",

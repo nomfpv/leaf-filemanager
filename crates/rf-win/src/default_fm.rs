@@ -46,25 +46,93 @@ fn command_keys(classes_root: &str) -> Vec<String> {
         .collect()
 }
 
+/// The launcher (crate `leaf-open`): what the verbs start when this leaf has it beside itself. It starts the leaf.exe its path
+/// file names, or the real Explorer when that leaf is gone, so a rebuilt, cleaned or deleted leaf never leaves Windows without a
+/// folder handler.
+const LAUNCHER_STEM: &str = "leaf-open";
+/// The launcher's path file (`leaf_open::PATH_FILE`, kept the same by hand: rf-win does not depend on the launcher).
+const LAUNCHER_PATH_FILE: &str = "leaf-exe.txt";
+
+/// The launcher shipped next to `exe` (built next to leaf.exe, installed next to it).
+fn launcher_source(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let p = exe.with_file_name(crate::exe_name(LAUNCHER_STEM));
+    p.is_file().then_some(p)
+}
+
+/// Whether this leaf has the launcher beside it (then even a copy in a build folder is safe to register).
+pub fn launcher_beside(exe: &std::path::Path) -> bool {
+    launcher_source(exe).is_some()
+}
+
+fn is_launcher_path(p: &std::path::Path) -> bool {
+    p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(LAUNCHER_STEM))
+}
+
+/// The leaf.exe a registered launcher starts (its path file).
+fn launcher_target(launcher: &std::path::Path) -> Option<std::path::PathBuf> {
+    let t = std::fs::read_to_string(launcher.with_file_name(LAUNCHER_PATH_FILE)).ok()?;
+    Some(std::path::PathBuf::from(t.trim())).filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Puts the launcher in place for `exe`: copied into the state folder (when it differs from the one there) and its path file
+/// naming `exe`. Its path; None when this leaf has none beside it or it could not be put there (leaf.exe is registered then).
+fn install_launcher(exe: &str, classes_root: &str) -> Option<std::path::PathBuf> {
+    let src = launcher_source(std::path::Path::new(exe))?;
+    let dir = journal::state_dir(classes_root);
+    std::fs::create_dir_all(&dir).ok()?;
+    let dest = dir.join(crate::exe_name(LAUNCHER_STEM));
+    let same = matches!((std::fs::read(&src), std::fs::read(&dest)), (Ok(a), Ok(b)) if a == b);
+    if !same {
+        // a temp copy renamed over: a launcher that is running at that moment keeps the old one, which works as well
+        let tmp = dir.join(format!("{LAUNCHER_STEM}.tmp"));
+        let copied = std::fs::copy(&src, &tmp).is_ok() && std::fs::rename(&tmp, &dest).is_ok();
+        let _ = std::fs::remove_file(&tmp);
+        if !copied && !dest.is_file() {
+            return None;
+        }
+    }
+    let file = dir.join(LAUNCHER_PATH_FILE);
+    let tmp = dir.join(format!("{LAUNCHER_PATH_FILE}.tmp"));
+    (std::fs::write(&tmp, exe).is_ok() && std::fs::rename(&tmp, &file).is_ok()).then_some(dest)
+}
+
+/// The launcher copy and its path file go (when turned off).
+fn remove_launcher(classes_root: &str) {
+    let dir = journal::state_dir(classes_root);
+    let _ = std::fs::remove_file(dir.join(crate::exe_name(LAUNCHER_STEM)));
+    let _ = std::fs::remove_file(dir.join(LAUNCHER_PATH_FILE));
+}
+
 /// Registers `exe` under `classes_root` (normally `CLASSES`; tests pass a scratch key). What was there before is recorded first
 /// (see `default_fm_journal.rs`); already on, the record from the first time stays. All or nothing.
+///
+/// The verbs start the launcher when this leaf has one beside it (see [`LAUNCHER_STEM`]), else `exe` itself. The archive
+/// registration always names `exe`: an archive is not something Windows needs to open to work.
 pub fn enable(exe: &str, classes_root: &str) -> anyhow::Result<()> {
-    let cmd = format!("\"{exe}\" \"%1\"");
+    let was_on = is_enabled(classes_root);
+    let launcher = install_launcher(exe, classes_root);
+    let target = launcher.as_ref().map_or_else(|| exe.to_string(), |l| l.display().to_string());
+    let target = target.as_str();
+    let cmd = format!("\"{target}\" \"%1\"");
     let keys = command_keys(classes_root);
     let mut writes = Vec::new();
-    for (key, cmd) in [(&keys[0], cmd.clone()), (&keys[1], cmd), (&keys[2], format!("\"{exe}\""))] {
+    for (key, cmd) in [(&keys[0], cmd.clone()), (&keys[1], cmd), (&keys[2], format!("\"{target}\""))] {
         writes.push(Write::sz(key.as_str(), "", cmd));
         writes.push(Write::sz(key.as_str(), "DelegateExecute", ""));
     }
     writes.extend(app_writes(exe, classes_root));
-    journal::record_and_apply(exe, classes_root, &keys, &writes, || {
+    let r = journal::record_and_apply(target, classes_root, &keys, &writes, || {
         // leaf's own older keys (not recorded: they were never anyone else's)
         remove_archive_verbs(classes_root);
         // a plain command: `DelegateExecute` (needed above to beat HKLM's) would make Windows list this handler as File Explorer
         if let Ok(base) = CURRENT_USER.open(classes_root) {
             let _ = base.remove_tree(format!(r"{PROGID}\shell"));
         }
-    })
+    });
+    if r.is_err() && !was_on {
+        remove_launcher(classes_root);
+    }
+    r
 }
 
 /// Archive types leaf browses, offered in Windows' Default apps and "Open with". Which
@@ -150,11 +218,11 @@ fn command_exe(command: &str) -> Option<&str> {
     .filter(|e| !e.is_empty())
 }
 
-/// Whether `exe` is this app: its file name is `leaf.exe` (any case). A file-name test, not a substring one: a path such as
-/// `D:/leaf-filemanager/other.exe` or a program called `leafpad.exe` is somebody else's.
+/// Whether `exe` is this app: its file name is `leaf.exe` or the launcher's `leaf-open.exe` (any case). A file-name test, not a
+/// substring one: a path such as `D:/leaf-filemanager/other.exe` or a program called `leafpad.exe` is somebody else's.
 fn is_our_exe(exe: &str) -> bool {
     let p = std::path::Path::new(exe);
-    p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(crate::APP_EXE_STEM))
+    p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(crate::APP_EXE_STEM) || s.to_string_lossy().eq_ignore_ascii_case(LAUNCHER_STEM))
         && p.extension().is_none_or(|e| e.eq_ignore_ascii_case("exe"))
 }
 
@@ -191,6 +259,9 @@ pub fn add_archives(exe: &str, classes_root: &str) -> bool {
 pub fn disable(classes_root: &str) -> anyhow::Result<()> {
     if let Some(r) = journal::restore_recorded(classes_root) {
         remove_archive_verbs(classes_root);
+        if r.is_ok() {
+            remove_launcher(classes_root);
+        }
         return r;
     }
     let base = CURRENT_USER.create(classes_root)?;
@@ -200,6 +271,7 @@ pub fn disable(classes_root: &str) -> anyhow::Result<()> {
     }
     remove_archive_verbs(classes_root);
     unregister_app(classes_root);
+    remove_launcher(classes_root);
     Ok(())
 }
 
@@ -218,7 +290,8 @@ pub fn registered_exe(classes_root: &str) -> Option<std::path::PathBuf> {
 }
 
 /// While we are the default, a registered exe that no longer exists (moved, rebuilt elsewhere,
-/// its folder cleaned) would leave Windows unable to open any folder: point it at `current`.
+/// its folder cleaned) would leave Windows unable to open any folder: point it at `current`. With the launcher registered, the
+/// same for the leaf its path file names (the launcher opens Explorer meanwhile).
 /// Returns true when it re-registered.
 ///
 /// Also a registration that lost its `open` verb while its `explore` verb is still ours (issue 97: on a reporter's PC `Folder\shell\open`
@@ -234,7 +307,11 @@ pub fn heal(current: &str, classes_root: &str) -> bool {
         return false;
     }
     match registered_exe(classes_root) {
+        // the launcher: it, or the leaf its path file names, is gone (a moved or deleted leaf: Explorer opens folders meanwhile)
+        Some(l) if is_launcher_path(&l) => (!l.exists() || launcher_target(&l).is_none_or(|t| !t.exists())) && enable(current, classes_root).is_ok(),
         Some(old) if !old.exists() => enable(current, classes_root).is_ok(),
+        // this leaf registered itself before it had the launcher: the launcher takes its place
+        Some(old) if launcher_beside(&old) && old.to_string_lossy().eq_ignore_ascii_case(current) => enable(current, classes_root).is_ok(),
         Some(_) => false,
         None if verb_command(classes_root, r"Folder\shell\explore").is_some_and(|c| is_our_command(&c)) => {
             enable(current, classes_root).is_ok()

@@ -3081,9 +3081,12 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         t!("switches")
     );
     let dfm_on = crate::DEFAULT_FM.load(std::sync::atomic::Ordering::Relaxed);
-    // a copy run from a cargo build folder is not turned into the folder handler: each rebuild replaces the exe, a clean removes it,
-    // and Windows would be left with no program for folders until leaf starts again
-    let dfm_dev = !dfm_on && std::env::current_exe().is_ok_and(|e| is_build_folder_exe(&e)) && std::env::var_os("LEAF_DFM_ALLOW_BUILD").is_none();
+    // a copy run from a cargo build folder without the launcher (leaf-open.exe) beside it is not turned into the folder handler:
+    // each rebuild replaces the exe, a clean removes it, and Windows would be left with no program for folders until leaf starts
+    // again. With the launcher, folders open in Explorer meanwhile.
+    let dfm_dev = !dfm_on
+        && std::env::current_exe().is_ok_and(|e| is_build_folder_exe(&e) && !leaf_sys::default_fm::launcher_beside(&e))
+        && std::env::var_os("LEAF_DFM_ALLOW_BUILD").is_none();
     // while leaf is the default file manager: archives can be given to it too (only the
     // user can pick the default app, in Windows' own page)
     let archives = (dfm_on && cfg!(windows)).then(|| {
@@ -3336,7 +3339,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             L::AppWindow,
             t!("Set as default file manager"),
             Some(if dfm_dev {
-                t!("This copy of leaf runs from a build folder (target). Every rebuild replaces it and a clean removes it, which would leave Windows with no program to open folders. Turn this on from an installed leaf.")
+                t!("This copy of leaf runs from a build folder (target) and leaf-open.exe is not next to it. Every rebuild replaces leaf and a clean removes it, which would leave Windows with no program to open folders. Build leaf-open too (it is built with leaf), or turn this on from an installed leaf.")
             } else if cfg!(windows) {
                 t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time. It also covers Win+E and 'Show in folder' from other programs, and turning it off restores what was there before.")
             } else {

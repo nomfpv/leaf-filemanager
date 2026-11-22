@@ -53,14 +53,19 @@ struct Journal {
     keys: Vec<Saved>,
 }
 
-/// The journal for `classes_root`: the real one for HKCU's classes, one in the temp folder for the tests' scratch roots.
-pub(super) fn journal_path(classes_root: &str) -> PathBuf {
+/// Where the journal and the launcher live for `classes_root`: `%LOCALAPPDATA%\leaf-default-fm` for HKCU's classes, a folder in
+/// temp for the tests' scratch roots.
+pub(super) fn state_dir(classes_root: &str) -> PathBuf {
     if classes_root == super::CLASSES {
-        std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, PathBuf::from).join("leaf-default-fm").join("journal.json")
+        std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, PathBuf::from).join("leaf-default-fm")
     } else {
         let tag: String = classes_root.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-        std::env::temp_dir().join(format!("leaf-journal-{tag}.json"))
+        std::env::temp_dir().join(format!("leaf-journal-{tag}"))
     }
+}
+
+fn journal_path(classes_root: &str) -> PathBuf {
+    state_dir(classes_root).join("journal.json")
 }
 
 fn undo_reg_path(journal: &Path) -> PathBuf {

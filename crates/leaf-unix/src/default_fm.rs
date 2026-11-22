@@ -204,6 +204,11 @@ pub fn reveal_in_explorer(_file: &Path) -> bool {
     false
 }
 
+/// rf-win's folder-handler launcher (leaf-open.exe); none here, so a copy in a build folder is still refused.
+pub fn launcher_beside(_exe: &Path) -> bool {
+    false
+}
+
 /// True when the argument should be handed back to the system's file manager (shell namespaces, non-folders).
 pub fn should_forward_to_explorer(arg: &str) -> bool {
     let a = arg.trim().trim_matches('"');

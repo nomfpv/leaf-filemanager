@@ -1,0 +1,15 @@
+[package]
+name = "leaf-open"
+description = "leaf: the folder handler Windows starts while leaf is the default file manager; starts leaf, or the real Explorer when leaf is gone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The program itself is rf-app's `leaf-open` bin (src/bin/leaf-open.rs), so `cargo build -p rf-app` puts leaf-open.exe next to
+# leaf.exe as it does leaf-look.exe; this crate holds what it does.
+[lib]
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
