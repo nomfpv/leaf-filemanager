@@ -3,9 +3,13 @@
 //! resume after a restart, par2 verify and repair, unpack, cleanup and the move into the category folder. Blocking threads
 //! only, no async runtime; leafs Status Center is the face (rf-apps `usenet.rs`).
 
+pub mod dial;
+pub mod nntp;
 pub mod nzb;
+pub mod server;
 
 pub use nzb::{Nzb, NzbFile, ParseError, Segment, parse};
+pub use server::{Password, Priority, Server};
 
 /// Reads and parses an NZB file (its name gives the title and a `{{password}}`).
 pub fn read(path: &std::path::Path) -> Result<Nzb, ParseError> {
