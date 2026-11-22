@@ -5,8 +5,8 @@
 //! remembered: no service, no scheduled task, no registry entry. It lives for one leaf process and ends when leaf's end of the
 //! conversation closes, when leaf's process ends, or after [`leaf_common::admin::IDLE_LIMIT`] without a request.
 //!
-//! What it accepts is the fixed list of typed requests in [`leaf_common::admin::Request`]; [`exec`] runs them, with leaf's own copy
-//! and delete engines (`leaf_sys::fastcopy`, `fastdelete`, `fileops`). Who may talk to it, and how a path is opened so that a link
+//! What it accepts is the fixed list of typed requests in [`leaf_common::admin::Request`]; [`exec`] runs them. Delete, copy and move
+//! are the helper's own walk relative to open handles ([`tree`], [`node`]), not leaf's path-based engines. Who may talk to it, and how a path is opened so that a link
 //! swapped in after the check cannot redirect the operation, is per system: [`os`] (`win.rs`, `unix.rs`). Every place where the
 //! check and the action are not one step says so in a comment starting with "CHECK-THEN-ACT".
 

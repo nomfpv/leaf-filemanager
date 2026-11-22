@@ -11,8 +11,9 @@
 //!
 //! Paths are walked one part at a time with `openat(O_PATH | O_NOFOLLOW)` from `/`, so a symbolic link anywhere on the way is
 //! refused. Linux has no way to keep a folder from being renamed while it is open, so what [`Held`] holds here is the folders'
-//! file descriptors, not their names: the operations that can work on the descriptor (listing, stat, read, the editor's write)
-//! do, the ones that go through leaf's engines take the path again (CHECK-THEN-ACT: see `exec.rs`).
+//! file descriptors, not their names: every operation works through those descriptors (the tree walk of `tree.rs` with
+//! `node_unix.rs`, the listing, stat, read and the editor's write); removals are by name in the held folder (CHECK-THEN-ACT: see
+//! `node_unix.rs`).
 //!
 //! Compile-checked only from the Windows PC this was written on; not run.
 
