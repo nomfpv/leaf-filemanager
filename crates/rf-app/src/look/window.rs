@@ -50,6 +50,8 @@ pub struct LookWindow {
     /// The bar over the content is on the screen (only for `overlay_titlebar`; the other bar is always there).
     chrome_shown: bool,
     more_open: bool,
+    /// The line of keys at the bottom is shown (the first three windows of all: `LookSettings::look_hint_seen`).
+    hint: bool,
     pub(crate) busy: bool,
     /// Gövdeden sürükleme dosyayı dışarı sürükler (kendi sürüklemesi olmayan içerikte).
     pub(crate) drag_by_body: bool,
@@ -212,6 +214,7 @@ impl LookWindow {
             overlay_titlebar: false,
             chrome_shown: false,
             more_open: false,
+            hint: false,
             busy: false,
             drag_by_body: true,
             drag_from: None,
@@ -232,6 +235,11 @@ impl LookWindow {
         let b = window.bounds();
         v.programmatic = (f32::from(b.size.width), f32::from(b.size.height));
         v.apply(prepared, false, window, cx);
+        // the first three windows say the keys once, at the bottom; after that the line is gone
+        if cx.global::<LookSettings>().look_hint_seen < 3 {
+            v.hint = true;
+            crate::look::config::update(cx, |s| s.look_hint_seen += 1);
+        }
         v
     }
 
@@ -636,6 +644,27 @@ impl LookWindow {
                         cx.notify();
                     }))
             }))
+            // the keys of this kind of file (while editing, the editor's own are the items above)
+            .when(!self.viewer.editing(cx), |d| {
+                d.child(div().mx_2().my_1().h(px(1.)).bg(p.divider))
+                    .child(div().px_3().pt_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text_secondary).child(t!("Keys")))
+                    .children(keys_for(self.viewer.name()).iter().map(|(k, what)| {
+                        h_flex()
+                            .px_3()
+                            .py_0p5()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(p.text_secondary)
+                            .child(div().w(px(76.)).flex_shrink_0().text_color(p.text).child(*k))
+                            .child(div().flex_1().min_w_0().child(crate::i18n::t(what)))
+                    }))
+            })
+            .child(div().mx_2().my_1().h(px(1.)).bg(p.divider))
+            .child(item("more-guide", t!("How to use the viewer")).on_click(cx.listener(|v, _, _, cx| {
+                v.more_open = false;
+                super::app::open_guide();
+                cx.notify();
+            })))
     }
 
     /// Görüntüleyicinin içeriği; gövdeden sürükleme dosyayı dışarı sürükler.
@@ -661,6 +690,30 @@ impl LookWindow {
             .child(inner)
             .into_any_element()
     }
+}
+
+/// The keys of the viewer for this kind of file (`Viewer::name`): the ones every file has, then the file type's own. The same keys the
+/// window and the viewers handle (`on_key` here and in `viewers/`).
+fn keys_for(name: &str) -> Vec<(&'static str, &'static str)> {
+    let mut k: Vec<(&'static str, &'static str)> = vec![
+        ("Space, Esc", "Closes the viewer"),
+        ("Arrows", "The next and the previous item"),
+        ("Enter", "Opens it with its own program"),
+        ("F5", "Reads the file again"),
+        ("F11", "Full screen"),
+    ];
+    match name {
+        "text" => k.extend([
+            ("E", "Edits the file"),
+            ("Alt+L", "Line numbers on or off"),
+            ("Alt+Z", "Word wrap on or off"),
+            ("Alt+F", "Follows the end of a growing file"),
+        ]),
+        "markdown" | "csv" => k.push(("E", "Edits the file")),
+        "image" => k.extend([("R", "Turns it to the right"), ("Shift+R", "Turns it to the left"), ("S", "Slideshow of the folder")]),
+        _ => {}
+    }
+    k
 }
 
 fn file_title(p: &std::path::Path) -> SharedString {
@@ -768,6 +821,29 @@ impl Render for LookWindow {
                 }
             })
             .when_some(more, |d, m| d.child(m))
+            .when(self.hint && !self.viewer.editing(cx), |d| {
+                // (a video has its controls at the bottom: the line stands above them)
+                let lift = if self.viewer.name() == "video" { 64. } else { 10. };
+                let text = match self.viewer.name() {
+                    "text" | "markdown" | "csv" => t!("Space closes, E edits, arrows step"),
+                    "image" => t!("Space closes, R turns, arrows step"),
+                    _ => t!("Space closes, arrows step"),
+                };
+                d.child(
+                    div().absolute().bottom(px(lift)).left_0().right_0().flex().justify_center().child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .rounded_full()
+                            .bg(p.card_bg)
+                            .border_1()
+                            .border_color(p.border)
+                            .text_xs()
+                            .text_color(p.text_secondary)
+                            .child(text),
+                    ),
+                )
+            })
             // questions (unsaved edits, a file changed on disk) are drawn over the window
             .children(crate::prompt::current(window, cx))
     }

@@ -85,6 +85,8 @@ pub enum ToApp {
     LookClosed,
     /// Ayarlar → leaf-look sayfasını aç.
     OpenSettings,
+    /// The viewer's "How to use the viewer": leaf's guide, on the viewer's topic.
+    OpenGuide,
     /// An arrow key in leaf-look: the list's selection moves to the next (true) or the previous item, and leaf-look shows that.
     Step(bool),
 }
@@ -94,6 +96,7 @@ impl ToApp {
         match self {
             ToApp::LookClosed => format!("{TO_APP_PREFIX}closed"),
             ToApp::OpenSettings => format!("{TO_APP_PREFIX}settings"),
+            ToApp::OpenGuide => format!("{TO_APP_PREFIX}guide"),
             ToApp::Step(true) => format!("{TO_APP_PREFIX}next"),
             ToApp::Step(false) => format!("{TO_APP_PREFIX}prev"),
         }
@@ -103,6 +106,7 @@ impl ToApp {
         match s.strip_prefix(TO_APP_PREFIX)? {
             "closed" => Some(ToApp::LookClosed),
             "settings" => Some(ToApp::OpenSettings),
+            "guide" => Some(ToApp::OpenGuide),
             "next" => Some(ToApp::Step(true)),
             "prev" => Some(ToApp::Step(false)),
             _ => None,
@@ -171,7 +175,7 @@ mod tests {
 
     #[test]
     fn messages_to_leaf() {
-        for m in [ToApp::LookClosed, ToApp::OpenSettings, ToApp::Step(true), ToApp::Step(false)] {
+        for m in [ToApp::LookClosed, ToApp::OpenSettings, ToApp::OpenGuide, ToApp::Step(true), ToApp::Step(false)] {
             assert_eq!(ToApp::decode(&m.encode()), Some(m));
         }
         assert_eq!(ToApp::decode(r"C:\Windows"), None);

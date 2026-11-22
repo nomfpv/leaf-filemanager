@@ -650,6 +650,11 @@ pub fn route_ipc_shown(msg: String, cx: &mut App) -> bool {
             crate::settings_view::open_page(crate::settings_view::Page::Look, cx);
             return show_settings(cx);
         }
+        Some(crate::look::ipc::ToApp::OpenGuide) => {
+            crate::guide_page::set_focus("viewer", cx);
+            crate::settings_view::open_page(crate::settings_view::Page::Guide, cx);
+            return show_settings(cx);
+        }
         None => {}
     }
     // `leaf download <address> [folder]`

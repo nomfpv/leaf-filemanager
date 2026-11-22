@@ -44,6 +44,8 @@ pub struct LookSettings {
     pub look_text_detect_format: bool,
     pub look_text_font: String,
     pub look_text_font_size: f32,
+    /// How many viewer windows have shown the one line of keys at the bottom ("Space closes, E edits, arrows step"); it goes after 3.
+    pub look_hint_seen: u32,
 }
 
 impl Default for LookSettings {
@@ -75,6 +77,7 @@ impl Default for LookSettings {
             look_text_detect_format: true,
             look_text_font: String::new(),
             look_text_font_size: 14.0,
+            look_hint_seen: 0,
         }
     }
 }

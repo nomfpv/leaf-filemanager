@@ -798,6 +798,10 @@ pub fn main() {
                     "modules" => settings_view::Page::Modules,
                     "whatsnew" => settings_view::Page::WhatsNew,
                     "advanced" => settings_view::Page::Advanced,
+                    "guide" => {
+                        guide_page::set_focus("viewer", cx);
+                        settings_view::Page::Guide
+                    }
                     _ => settings_view::Page::Look,
                 },
                 cx,

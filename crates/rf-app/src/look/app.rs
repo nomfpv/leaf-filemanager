@@ -53,6 +53,18 @@ fn open_settings() {
     });
 }
 
+/// The guide's topic for the viewer, in leaf (leaf is started when it is not running).
+pub(crate) fn open_guide() {
+    std::thread::spawn(|| {
+        if leaf_sys::single_instance::send_to(&leaf_sys::single_instance::instance_name(), &ToApp::OpenGuide.encode()) {
+            return;
+        }
+        if let Ok(me) = std::env::current_exe() {
+            let _ = std::process::Command::new(me.with_file_name(leaf_sys::exe_name(leaf_sys::APP_EXE_STEM))).arg("--settings=guide").spawn();
+        }
+    });
+}
+
 /// leaf-look's own icon: when its setting is on and leaf has none (leaf running in
 /// the background has one, with the settings in its menu): one icon, not two.
 fn tray_wanted(cx: &App) -> bool {
