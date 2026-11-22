@@ -917,7 +917,8 @@ impl FrameSurface {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // (named imports: the toolkit's glob brings a `test` of its own that would replace the standard `#[test]`)
+    use super::{ACTIVE, Cell, Extensions, NAME_HOOK, Path, REG, RefCell, Registry, Rc, Ordering, display_name};
 
     /// A display-name hook changes what is shown and nothing else: the path it is asked about is the real one and the real name
     /// stays what `Path` says.
