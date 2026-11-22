@@ -23,6 +23,8 @@ pub fn open(v: VPath, cx: &mut App) {
         display_id: display,
         window_min_size: Some(size(px(400.), px(380.))),
         window_background: crate::theme::window_material(WindowBackgroundAppearance::MicaBackdrop),
+        // Linux: the window draws its own caption buttons, edges and shadow (Windows ignores this)
+        window_decorations: Some(gpui_kit::WindowDecorations::Client),
         ..TitleBar::window_options()
     };
     if let Err(e) = gpui_kit::open_window(options, cx, move |window, cx| {

@@ -148,6 +148,8 @@ impl LookManager {
             window_min_size: Some(gpui_kit::size(px(320.), px(180.))),
             window_background: backdrop(&s),
             focus: s.look_focus_on_open && !leaf_sys::window::offscreen(),
+            // Linux: the window draws its own caption buttons, edges and shadow (Windows ignores this)
+            window_decorations: Some(gpui_kit::WindowDecorations::Client),
             ..TitleBar::window_options()
         };
         let show_in_taskbar = s.look_show_in_taskbar;

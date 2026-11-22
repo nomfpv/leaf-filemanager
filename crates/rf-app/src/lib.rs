@@ -262,6 +262,8 @@ pub fn open_main_window_made(
         window_background: crate::theme::window_material(WindowBackgroundAppearance::MicaBackdrop),
         // Wayland app id / X11 WM_CLASS: the desktop file leaf.desktop gives the window its icon and name
         app_id: (!cfg!(windows)).then(|| "leaf".to_string()),
+        // Linux: the window draws its own caption buttons, edges and shadow (Windows ignores this)
+        window_decorations: Some(gpui_kit::WindowDecorations::Client),
         ..TitleBar::window_options()
     };
     let opened = gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| Workspace::new(start, ipc, window, cx)));
