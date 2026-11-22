@@ -63,6 +63,9 @@ pub struct ShareRec {
     pub exclude: Vec<String>,
     #[serde(default)]
     pub invites: Vec<InviteRec>,
+    /// This friend's extension messages are passed on to the app (off unless the user turned it on; see `ext_msg`).
+    #[serde(default)]
+    pub allow_ext: bool,
 }
 
 fn yes() -> bool {

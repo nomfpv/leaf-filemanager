@@ -14,6 +14,7 @@ use tokio::sync::{Notify, oneshot};
 use crate::folder::{Folder, err_kind};
 use crate::store::{INVITE_LIFE_MS, Invite, InviteRec, PeerRec, Role, ShareRec, Store, random_hex, sha256_hex};
 use crate::transport::{Link, Quic, RecvHalf, SendHalf, Transport};
+use crate::ext_msg;
 use crate::wire::{self, Notice, Op, Open, OpenReply, PROTO, PairConfirm, Reply, Request};
 
 /// How long a user has to confirm the code.
@@ -78,6 +79,8 @@ pub trait ShareListener: Send + Sync {
     fn joined(&self, share: &str, result: Result<(), String>);
     /// A share stopped by itself (a refusal of the sync, the friend left): for a notice.
     fn paused(&self, share: &str, name: &str, reason: &str);
+    /// A message for the app's extensions from the friend of `share`, already checked (allowed, small, not too often).
+    fn ext_message(&self, _share: &str, _friend_name: &str, _kind: u16, _payload: Vec<u8>) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,11 +107,16 @@ pub struct ShareInfo {
     pub state: State,
     pub last_sync_ms: i64,
     pub last_result: String,
+    /// Extension messages from this friend are passed on to the app.
+    pub allow_ext: bool,
 }
 
 pub(crate) struct Session {
     pub(crate) link: Arc<dyn Link>,
     ctl: tokio::sync::Mutex<SendHalf>,
+    /// The rate of extension messages in each direction on this link.
+    ext_rx: Mutex<ext_msg::Limiter>,
+    ext_tx: Mutex<ext_msg::Limiter>,
 }
 
 impl Session {
@@ -144,6 +152,8 @@ pub(crate) struct Inner {
     stopped: AtomicBool,
     /// A retry of the listener runs (the port was taken: by the service stopping before a restart, or another program).
     retrying: AtomicBool,
+    /// "Allow extension messages", the global switch (off at start; the app sets it from its settings).
+    allow_ext: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -214,6 +224,7 @@ impl ShareService {
             live: Mutex::new(HashMap::new()),
             stopped: AtomicBool::new(false),
             retrying: AtomicBool::new(false),
+            allow_ext: AtomicBool::new(false),
         });
         if !ids.is_empty() {
             let _ = inner.ensure_transport();
@@ -278,6 +289,7 @@ impl ShareService {
                 last_result: String::new(),
                 exclude: Vec::new(),
                 invites: Vec::new(),
+                allow_ext: false,
             });
             store.save();
             id
@@ -414,6 +426,37 @@ impl ShareService {
         self.inner.listener.changed();
     }
 
+    /// The global switch for extension messages from every friend (off at start).
+    pub fn set_allow_ext_global(&self, on: bool) {
+        self.inner.allow_ext.store(on, Ordering::Relaxed);
+    }
+
+    /// The switch for one friend (the share's other PC): whether its extension messages are passed on. Off by default.
+    pub fn set_allow_ext(&self, share: &str, on: bool) {
+        {
+            let mut store = lock(&self.inner.store);
+            let Some(s) = store.get_mut(share) else { return };
+            if s.allow_ext == on {
+                return;
+            }
+            s.allow_ext = on;
+            store.save();
+        }
+        self.inner.listener.changed();
+    }
+
+    /// Sends one message to the friend of `share` over the existing link (see [`crate::ext_msg`] for the limits). Fails when the
+    /// friend is not connected, the payload is too long or messages are sent too often; nothing is queued.
+    pub fn send_ext(&self, share: &str, kind: u16, payload: &[u8]) -> Result<(), String> {
+        let notice = ext_msg::encode(kind, payload)?;
+        let sess = self.inner.session(share).ok_or("The friend is not connected")?;
+        if !lock(&sess.ext_tx).allow(std::time::Instant::now()) {
+            return Err("Messages are sent too often".into());
+        }
+        self.inner.rt.spawn(async move { sess.notice(&notice).await });
+        Ok(())
+    }
+
     /// A sync soon (after the quiet time).
     pub fn sync_now(&self, share: &str) {
         self.inner.wake(share);
@@ -502,6 +545,24 @@ impl Inner {
             state,
             last_sync_ms: s.last_sync_ms,
             last_result: s.last_result.clone(),
+            allow_ext: s.allow_ext,
+        }
+    }
+
+    /// An extension message arrived on `share`'s link: passed on only when both switches allow it, it is small and not too frequent.
+    fn ext_in(&self, share: &str, sess: &Session, kind: u16, hex: &str) {
+        let friend = {
+            let store = lock(&self.store);
+            match store.get(share) {
+                Some(s) if s.allow_ext => s.peer.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+                _ => return,
+            }
+        };
+        if !self.allow_ext.load(Ordering::Relaxed) || !lock(&sess.ext_rx).allow(std::time::Instant::now()) {
+            return;
+        }
+        if let Some(payload) = ext_msg::decode(hex) {
+            self.listener.ext_message(share, &friend, kind, payload);
         }
     }
 
@@ -786,11 +847,11 @@ impl Inner {
 
     /// The friend's side of a connection: answers the sharing PC's file requests and hears its notices.
     fn start_guest_session(self: &Arc<Self>, id: &str, folder: PathBuf, link: Arc<dyn Link>, ctl: SendHalf, mut ctl_recv: RecvHalf) {
-        let sess = Arc::new(Session { link: link.clone(), ctl: tokio::sync::Mutex::new(ctl) });
+        let sess = Arc::new(Session { link: link.clone(), ctl: tokio::sync::Mutex::new(ctl), ext_rx: Mutex::default(), ext_tx: Mutex::default() });
         self.put_session(id, sess.clone());
         let (inner, share) = (self.clone(), id.to_string());
         self.rt.spawn(async move {
-            while let Ok(n) = wire::read_frame::<_, Notice>(&mut ctl_recv).await {
+            while let Ok(n) = wire::read_frame_max::<_, Notice>(&mut ctl_recv, ext_msg::MAX_NOTICE_FRAME).await {
                 match n {
                     Notice::Left => {
                         let who = lock(&inner.store).get(&share).and_then(|s| s.peer.as_ref().map(|p| p.name.clone())).unwrap_or_default();
@@ -808,6 +869,7 @@ impl Inner {
                         inner.listener.changed();
                     }
                     Notice::Changed => {}
+                    Notice::Ext { kind, hex } => inner.ext_in(&share, &sess, kind, &hex),
                 }
             }
         });
@@ -882,6 +944,7 @@ impl Inner {
                 last_result: String::new(),
                 exclude: Vec::new(),
                 invites: Vec::new(),
+                allow_ext: false,
             });
             store.save();
         }
@@ -1008,12 +1071,12 @@ impl Inner {
 
     /// The sharing PC's side of a connection: hears the friend's notices; syncs on connect.
     fn start_host_session(self: &Arc<Self>, id: &str, link: Arc<dyn Link>, ctl: SendHalf, mut ctl_recv: RecvHalf) {
-        let sess = Arc::new(Session { link, ctl: tokio::sync::Mutex::new(ctl) });
+        let sess = Arc::new(Session { link, ctl: tokio::sync::Mutex::new(ctl), ext_rx: Mutex::default(), ext_tx: Mutex::default() });
         self.put_session(id, sess.clone());
         self.wake(id);
         let (inner, share) = (self.clone(), id.to_string());
         self.rt.spawn(async move {
-            while let Ok(n) = wire::read_frame::<_, Notice>(&mut ctl_recv).await {
+            while let Ok(n) = wire::read_frame_max::<_, Notice>(&mut ctl_recv, ext_msg::MAX_NOTICE_FRAME).await {
                 match n {
                     Notice::Changed => inner.wake(&share),
                     Notice::Left => {
@@ -1023,6 +1086,7 @@ impl Inner {
                         break;
                     }
                     Notice::CanWrite { .. } => {}
+                    Notice::Ext { kind, hex } => inner.ext_in(&share, &sess, kind, &hex),
                 }
             }
             inner.drop_session(&share, &sess);

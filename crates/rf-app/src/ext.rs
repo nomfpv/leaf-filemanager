@@ -945,3 +945,24 @@ mod tests {
         NAME_HOOK.store(false, Ordering::Relaxed);
     }
 }
+
+// ------------------------------------------------------------------------------------------------------------------------- peer channel
+
+/// The side channel to a linked friend's leaf (`docs/extensions.md`, "Peer channel"): small typed messages over the link a shared
+/// folder already has. Only between friends already linked, only when the user allowed extension messages (a global switch and one
+/// per friend, both off by default), at most a few a second, at most [`peer::MAX_PAYLOAD`] bytes. A message is bytes for the
+/// extension and nothing more: it cannot touch files or settings.
+pub mod peer {
+    pub use leaf_share::ext_msg::{BURST, MAX_PAYLOAD, PER_SEC};
+
+    /// The friends that can be sent to right now: `(friend id, name)`. The id is the one in [`super::Event::PeerMessage`].
+    pub fn friends(cx: &gpui_kit::App) -> Vec<(String, String)> {
+        crate::share_ui::connected_friends(cx)
+    }
+
+    /// Sends one message to a friend (see the limits above). Fails, without queueing, when the friend is not connected, the payload is
+    /// too long or messages go out too often.
+    pub fn send(cx: &gpui_kit::App, friend: &str, kind: u16, payload: &[u8]) -> Result<(), String> {
+        crate::share_ui::send_ext(cx, friend, kind, payload)
+    }
+}

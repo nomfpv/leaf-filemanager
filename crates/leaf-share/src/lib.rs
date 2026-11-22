@@ -16,6 +16,7 @@
 //! The transport is behind two small traits ([`transport::Transport`], [`transport::Link`]): today QUIC to a typed address (a
 //! WireGuard or LAN address); a relayed one can be added for people without a VPN.
 
+pub mod ext_msg;
 pub mod folder;
 pub mod remote;
 mod service;

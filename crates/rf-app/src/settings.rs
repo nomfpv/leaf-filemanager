@@ -953,6 +953,9 @@ pub struct Settings {
     pub nearby_localsend_pin: String,
     /// The UDP port shared folders listen on (only while a folder is shared with a friend or joined).
     pub share_port: u16,
+    /// Messages an extension sends between linked friends are passed on (off; needs the friend's own switch too). Only shown while
+    /// an extension is registered.
+    pub ext_messages: bool,
 }
 
 /// Settings -> General: what a new tab opens.
@@ -1187,6 +1190,7 @@ impl Default for Settings {
             nearby_localsend_receive: false,
             nearby_localsend_pin: String::new(),
             share_port: leaf_share::DEFAULT_PORT,
+            ext_messages: false,
         }
     }
 }

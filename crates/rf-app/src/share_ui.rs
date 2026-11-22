@@ -25,6 +25,7 @@ enum Ev {
     Code { share: String, peer: String, code: String },
     Joined { result: Result<(), String> },
     Paused { name: String, reason: String },
+    Ext { share: String, name: String, kind: u16, payload: Vec<u8> },
 }
 
 struct Listener(mpsc::UnboundedSender<Ev>);
@@ -41,6 +42,9 @@ impl ShareListener for Listener {
     }
     fn paused(&self, _share: &str, name: &str, reason: &str) {
         let _ = self.0.unbounded_send(Ev::Paused { name: name.into(), reason: reason.into() });
+    }
+    fn ext_message(&self, share: &str, friend_name: &str, kind: u16, payload: Vec<u8>) {
+        let _ = self.0.unbounded_send(Ev::Ext { share: share.into(), name: friend_name.into(), kind, payload });
     }
 }
 
@@ -127,6 +131,7 @@ fn ensure(cx: &mut App) -> Option<Arc<ShareService>> {
     cfg.runtime = Some(leaf_remote::runtime_handle());
     match ShareService::start(cfg, Arc::new(Listener(tx))) {
         Ok(svc) => {
+            svc.set_allow_ext_global(cx.global::<Settings>().ext_messages);
             let ui = cx.global_mut::<ShareUi>();
             ui.service = Some(svc.clone());
             ui.started = Some((name, port));
@@ -219,6 +224,7 @@ fn on_event(ev: Ev, cx: &mut App) {
                 Err(e) => crate::prompt::notice(t!("The shared folder could not be joined"), e, window, cx),
             });
         }
+        Ev::Ext { share, name, kind, payload } => crate::ext::emit(cx, || crate::ext::Event::PeerMessage { friend: share, friend_name: name, kind, payload }),
         Ev::Paused { name, reason } => {
             refresh(cx);
             crate::status_center::start_with_id(cx, format!("{} {name}", t!("Shared folder paused:")), move |_| Err(anyhow::anyhow!(reason)), None);
@@ -414,6 +420,23 @@ pub fn section(p: &Palette, cx: &mut App) -> Option<Div> {
         .child(div().flex_1().min_w_0().text_sm().text_color(p.text).child(t!("Shared folders")))
         .child(crate::sync_ui::small_button("share-join", t!("Join shared folder\u{2026}"), p).on_click(|_, window, cx| join_dialog(window, cx)));
     let mut rows = v_flex().p_1();
+    if crate::ext::active() {
+        let on = cx.global::<Settings>().ext_messages;
+        rows = rows.child(
+            h_flex()
+                .px_3()
+                .py_1()
+                .gap_2()
+                .items_center()
+                .child(div().flex_1().text_xs().text_color(p.text_secondary).child(t!("Allow extension messages from friends (each friend has its own switch too)")))
+                .child(crate::settings_view::switch("share-ext-all", p, on, move |_, cx| {
+                    settings::update(cx, |s| s.ext_messages = !on);
+                    if let Some(svc) = service(cx) {
+                        svc.set_allow_ext_global(!on);
+                    }
+                })),
+        );
+    }
     if let Some(problem) = problem {
         rows = rows.child(div().px_3().py_1().text_xs().text_color(p.danger).child(problem));
     }
@@ -432,6 +455,16 @@ pub fn section(p: &Palette, cx: &mut App) -> Option<Div> {
         let host = s.role == Role::Host;
         let (s1, s2, s3, s4, s5) = (s.clone(), s.clone(), s.clone(), s.clone(), s.clone());
         let mut buttons = h_flex().gap_2().items_center().flex_shrink_0();
+        // (only while an extension is registered: its messages from this friend, off until switched on here and in the global switch)
+        if crate::ext::active() && !s.peer_name.is_empty() {
+            let (on, id) = (s.allow_ext, s.id.clone());
+            buttons = buttons.child(div().text_xs().text_color(p.text_secondary).child(t!("Allow extension messages"))).child(crate::settings_view::switch(("share-ext", i), p, on, move |_, cx| {
+                if let Some(svc) = service(cx) {
+                    svc.set_allow_ext(&id, !on);
+                }
+                refresh(cx);
+            }));
+        }
         if host && !s.peer_name.is_empty() {
             let can = s.friend_can_write;
             buttons = buttons.child(div().text_xs().text_color(p.text_secondary).child(t!("They can change files"))).child(crate::settings_view::switch(
@@ -532,4 +565,15 @@ pub(crate) fn settings_cards(p: &Palette, s: &Settings, cx: &mut App) -> Vec<Any
             }),
         ),
     ]
+}
+
+// ------------------------------------------------------------------------------------------------------------------ extension messages
+
+/// The friends of the shared folders, `(share id, name)` (the id names the friend for [`send_ext`]).
+pub fn connected_friends(cx: &App) -> Vec<(String, String)> {
+    cx.try_global::<ShareUi>().map(|u| u.shares.iter().filter(|s| !s.peer_name.is_empty()).map(|s| (s.id.clone(), s.peer_name.clone())).collect()).unwrap_or_default()
+}
+
+pub fn send_ext(cx: &App, share: &str, kind: u16, payload: &[u8]) -> Result<(), String> {
+    service(cx).ok_or_else(|| "Shared folders are not running".to_string())?.send_ext(share, kind, payload)
 }

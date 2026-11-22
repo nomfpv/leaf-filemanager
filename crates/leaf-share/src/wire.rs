@@ -48,6 +48,8 @@ pub enum Notice {
     Left,
     /// What the sender's setting for the friend's changes is now (the sharing PC tells the friend).
     CanWrite { can_write: bool },
+    /// A message for the app's extensions (`ext_msg`): the payload as lower-case hex. Dropped unless the receiver allowed it.
+    Ext { kind: u16, hex: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,10 +123,15 @@ pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized, T: Serialize>(w: &mut W
 }
 
 pub async fn read_frame<R: AsyncRead + Unpin + ?Sized, T: DeserializeOwned>(r: &mut R) -> anyhow::Result<T> {
+    read_frame_max(r, MAX_FRAME).await
+}
+
+/// [`read_frame`] with a smaller limit, checked before the buffer is allocated (the control stream: notices are small).
+pub async fn read_frame_max<R: AsyncRead + Unpin + ?Sized, T: DeserializeOwned>(r: &mut R, max: usize) -> anyhow::Result<T> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len).await?;
     let len = u32::from_be_bytes(len) as usize;
-    anyhow::ensure!(len <= MAX_FRAME, "a frame of {len} bytes is too large");
+    anyhow::ensure!(len <= max, "a frame of {len} bytes is too large");
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf).await?;
     Ok(serde_json::from_slice(&buf)?)
