@@ -18,6 +18,102 @@ use crate::icons;
 use crate::t;
 use crate::theme::{self, Palette};
 
+/// What the sizes in the view measure: bytes (the scan's two) or, with the agent layer on, an estimate of the tokens in text files.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Measure {
+    Bytes(Metric),
+    Tokens,
+}
+
+/// The scan with the token counts beside it (when they were made): `weight` and `sorted_children` take the measure.
+struct Weighed<'a> {
+    tree: &'a DiskTree,
+    tokens: Option<&'a [u64]>,
+}
+
+impl std::ops::Deref for Weighed<'_> {
+    type Target = DiskTree;
+    fn deref(&self) -> &DiskTree {
+        self.tree
+    }
+}
+
+impl<'a> Weighed<'a> {
+    fn of(tree: &'a Option<DiskTree>, tokens: &'a Option<Vec<u64>>) -> Option<Weighed<'a>> {
+        tree.as_ref().map(|tree| Weighed { tree, tokens: tokens.as_deref() })
+    }
+
+    fn weight(&self, i: u32, m: Measure) -> u64 {
+        match m {
+            Measure::Bytes(b) => self.tree.weight(i, b),
+            Measure::Tokens => self.tokens.and_then(|t| t.get(i as usize)).copied().unwrap_or(0),
+        }
+    }
+
+    fn sorted_children(&self, i: u32, m: Measure) -> Vec<u32> {
+        match m {
+            Measure::Bytes(b) => self.tree.sorted_children(i, b),
+            Measure::Tokens => {
+                let mut v: Vec<u32> = self.tree.children(i).collect();
+                v.sort_unstable_by(|&a, &b| self.weight(b, m).cmp(&self.weight(a, m)).then_with(|| self.tree.name(a).cmp(self.tree.name(b))));
+                v
+            }
+        }
+    }
+}
+
+/// Estimated tokens below every entry, from the sizes the scan already holds: a text-like file counts its size by the byte rule
+/// "Copy as context" uses (bytes / 4), a folder the sum of its files. No file is read.
+fn token_counts(t: &DiskTree) -> Vec<u64> {
+    let mut out = vec![0u64; t.len()];
+    for id in 0..t.len() as u32 {
+        if t.is_dir(id) || !text_like(t.name(id)) {
+            continue;
+        }
+        let n = leaf_dev::context::estimate_tokens(t.size(id));
+        let mut at = Some(id);
+        while let Some(i) = at {
+            out[i as usize] += n;
+            at = t.parent(i);
+        }
+    }
+    out
+}
+
+/// A name leaf reads as text (source, plain text, the extensions the Space viewer shows as text).
+fn text_like(name: &str) -> bool {
+    let Some((_, ext)) = name.rsplit_once('.') else { return false };
+    let ext = ext.to_ascii_lowercase();
+    let cat = icons::category_for_ext(&ext);
+    matches!(cat, icons::Category::Code | icons::Category::Text)
+        || (cat == icons::Category::Other && crate::look::viewers::text::EXTENSIONS.contains(&ext.as_str()))
+        || matches!(ext.as_str(), "csv" | "gitignore" | "env" | "editorconfig" | "gitattributes" | "srt")
+}
+
+/// A weight as shown: a size, or "~12.4k" tokens.
+fn show(m: Measure, w: u64) -> String {
+    match m {
+        Measure::Bytes(_) => format::size(w),
+        Measure::Tokens => {
+            let (n, u) = show_parts(m, w);
+            format!("~{n}{u}")
+        }
+    }
+}
+
+/// The number and the unit of a weight, for the list's two columns.
+fn show_parts(m: Measure, w: u64) -> (String, String) {
+    match m {
+        Measure::Bytes(_) => {
+            let (n, u) = format::size_parts(w);
+            (n.to_string(), u.to_string())
+        }
+        Measure::Tokens if w >= 1_000_000 => (format!("{:.1}", w as f64 / 1e6), "M tok".into()),
+        Measure::Tokens if w >= 1000 => (format!("{:.1}", w as f64 / 1e3), "k tok".into()),
+        Measure::Tokens => (w.to_string(), " tok".into()),
+    }
+}
+
 /// Rows in the list (the biggest ones; the treemap shows the rest by area).
 const LIST_MAX: usize = 400;
 /// Rectangles smaller than this (either side) are not drawn.
@@ -60,7 +156,7 @@ fn sun_geom(w: f32, h: f32) -> (f32, f32, f32, f32) {
     (w / 2., h / 2., outer * 0.24, outer)
 }
 
-fn ring_nodes(t: &DiskTree, m: Metric, ids: &[u32], depth: u8) -> Vec<RingNode> {
+fn ring_nodes(t: &Weighed, m: Measure, ids: &[u32], depth: u8) -> Vec<RingNode> {
     ids.iter()
         .take(RING_KIDS)
         .map(|&id| {
@@ -102,7 +198,9 @@ pub struct DiskUsageView {
     progress: (u64, u64),
     tree: Option<DiskTree>,
     cur: u32,
-    metric: Metric,
+    metric: Measure,
+    /// Estimated tokens below every entry (text-like files only), made when the Tokens measure is first chosen.
+    tokens: Option<Vec<u64>>,
     /// Children of `cur`, biggest first.
     kids: Vec<u32>,
     /// `kids` in the list's order (the chosen sort; the treemap keeps `kids`).
@@ -113,7 +211,7 @@ pub struct DiskUsageView {
     hover: Option<u32>,
     /// Size of the treemap area, measured while drawing.
     area: Size<Pixels>,
-    cells: Option<((u32, Metric, Mode, i32, i32), Vec<Cell>)>,
+    cells: Option<((u32, Measure, Mode, i32, i32), Vec<Cell>)>,
     mode: Mode,
     /// Top left of the drawing area in the window, measured while drawing (the sunburst needs it for the pointer).
     origin: Point<Pixels>,
@@ -131,7 +229,8 @@ impl DiskUsageView {
             progress: (0, 0),
             tree: None,
             cur: 0,
-            metric: Metric::Logical,
+            metric: Measure::Bytes(Metric::Logical),
+            tokens: None,
             kids: Vec::new(),
             rows: Vec::new(),
             sort: SortCol::Size,
@@ -164,6 +263,7 @@ impl DiskUsageView {
                     v.progress = scan.progress();
                     if let Some(t) = scan.take() {
                         v.tree = Some(t);
+                        v.tokens = None;
                         v.scan = None;
                         v.cur = 0;
                         v.refresh_kids();
@@ -185,14 +285,14 @@ impl DiskUsageView {
     fn refresh_kids(&mut self) {
         self.cells = None;
         self.arcs = None;
-        self.kids = self.tree.as_ref().map(|t| t.sorted_children(self.cur, self.metric)).unwrap_or_default();
+        self.kids = Weighed::of(&self.tree, &self.tokens).map(|t| t.sorted_children(self.cur, self.metric)).unwrap_or_default();
         self.sort_rows();
     }
 
     /// Puts `kids` in the list's order.
     fn sort_rows(&mut self) {
         let mut rows = self.kids.clone();
-        if let Some(t) = &self.tree {
+        if let Some(t) = Weighed::of(&self.tree, &self.tokens) {
             let m = self.metric;
             // ascending for the column, then flipped for descending; kids come biggest first, which is Size/Share descending
             match self.sort {
@@ -250,9 +350,9 @@ impl DiskUsageView {
 
     fn ensure_arcs(&mut self) {
         if self.arcs.is_none()
-            && let Some(t) = &self.tree
+            && let Some(t) = Weighed::of(&self.tree, &self.tokens)
         {
-            self.arcs = Some(sunburst(&ring_nodes(t, self.metric, &self.kids, 0)));
+            self.arcs = Some(sunburst(&ring_nodes(&t, self.metric, &self.kids, 0)));
         }
     }
 
@@ -270,9 +370,12 @@ impl DiskUsageView {
         }
     }
 
-    fn set_metric(&mut self, m: Metric, cx: &mut Context<Self>) {
+    fn set_metric(&mut self, m: Measure, cx: &mut Context<Self>) {
         if self.metric != m {
             self.metric = m;
+            if m == Measure::Tokens && self.tokens.is_none() {
+                self.tokens = self.tree.as_ref().map(token_counts);
+            }
             self.refresh_kids();
             cx.notify();
         }
@@ -340,14 +443,14 @@ impl DiskUsageView {
     fn layout(&mut self, w: f32, h: f32) -> &[Cell] {
         let key = (self.cur, self.metric, self.mode, w as i32, h as i32);
         if self.cells.as_ref().is_none_or(|(k, _)| *k != key) {
-            let cells = self.tree.as_ref().map(|t| if self.mode == Mode::Skyline { build_bars(t, self.metric, &self.kids, w, h) } else { build_cells(t, self.metric, &self.kids, w, h) }).unwrap_or_default();
+            let cells = Weighed::of(&self.tree, &self.tokens).map(|t| if self.mode == Mode::Skyline { build_bars(&t, self.metric, &self.kids, w, h) } else { build_cells(&t, self.metric, &self.kids, w, h) }).unwrap_or_default();
             self.cells = Some((key, cells));
         }
         self.cells.as_ref().map(|(_, c)| c.as_slice()).unwrap_or(&[])
     }
 }
 
-fn build_bars(t: &DiskTree, m: Metric, kids: &[u32], w: f32, h: f32) -> Vec<Cell> {
+fn build_bars(t: &Weighed, m: Measure, kids: &[u32], w: f32, h: f32) -> Vec<Cell> {
     let weights: Vec<u64> = kids.iter().map(|&k| t.weight(k, m)).collect();
     // room under the bars for nothing: they stand on the bottom edge
     skyline(&weights, Rect::new(0., 0., w, h), 3., 14., 96.)
@@ -358,7 +461,7 @@ fn build_bars(t: &DiskTree, m: Metric, kids: &[u32], w: f32, h: f32) -> Vec<Cell
         .collect()
 }
 
-fn build_cells(t: &DiskTree, m: Metric, kids: &[u32], w: f32, h: f32) -> Vec<Cell> {
+fn build_cells(t: &Weighed, m: Measure, kids: &[u32], w: f32, h: f32) -> Vec<Cell> {
     let mut out = Vec::new();
     let weights: Vec<u64> = kids.iter().map(|&k| t.weight(k, m)).collect();
     let rects = squarify(&weights, Rect::new(0., 0., w, h));
@@ -409,9 +512,16 @@ fn count(n: u64) -> String {
 impl Render for DiskUsageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::for_window(window);
-        let Some(t) = self.tree.as_ref() else {
+        // (the agent layer was switched off while Tokens was showing: back to sizes)
+        if self.metric == Measure::Tokens && !cx.global::<crate::settings::Settings>().ai_layer {
+            self.metric = Measure::Bytes(Metric::Logical);
+            self.refresh_kids();
+        }
+        let tokens_on = cx.global::<crate::settings::Settings>().ai_layer;
+        let Some(tw) = Weighed::of(&self.tree, &self.tokens) else {
             return self.render_scanning(&p).into_any_element();
         };
+        let t = &tw;
         let metric = self.metric;
         let cur = self.cur;
         let total = t.weight(cur, metric).max(1);
@@ -461,7 +571,7 @@ impl Render for DiskUsageView {
             .rounded(theme::RADIUS_SM)
             .when(can_up, |d| d.cursor_pointer().hover(|s| s.bg(p.hover)).on_click(cx.listener(|v, _, _, cx| v.up(cx))))
             .child(Icon::new(L::ArrowUp).size(px(16.)).text_color(if can_up { p.text } else { p.text_tertiary }));
-        let seg = |id: &'static str, label: &'static str, m: Metric| {
+        let seg = |id: &'static str, label: &'static str, m: Measure| {
             let on = metric == m;
             div()
                 .id(id)
@@ -492,8 +602,12 @@ impl Render for DiskUsageView {
         };
         let summary = format!(
             "{}: {} · {}",
-            if metric == Metric::OnDisk { t!("Size on disk") } else { t!("Size") },
-            format::size(t.weight(cur, metric)),
+            match metric {
+                Measure::Bytes(Metric::OnDisk) => t!("Size on disk"),
+                Measure::Bytes(Metric::Logical) => t!("Size"),
+                Measure::Tokens => t!("Tokens (estimate)"),
+            },
+            show(metric, t.weight(cur, metric)),
             format!("{} {}", count(t.files(cur) as u64), t!("files"))
         );
         let header = h_flex()
@@ -522,8 +636,9 @@ impl Render for DiskUsageView {
                     .p_0p5()
                     .rounded(theme::RADIUS_SM)
                     .bg(p.pressed)
-                    .child(seg("m-logical", t!("Size"), Metric::Logical))
-                    .child(seg("m-disk", t!("Size on disk"), Metric::OnDisk)),
+                    .child(seg("m-logical", t!("Size"), Measure::Bytes(Metric::Logical)))
+                    .child(seg("m-disk", t!("Size on disk"), Measure::Bytes(Metric::OnDisk)))
+                    .children(tokens_on.then(|| seg("m-tokens", t!("Tokens (estimate)"), Measure::Tokens))),
             );
 
         // ---- list
@@ -572,7 +687,7 @@ impl Render for DiskUsageView {
             let is_dir = t.is_dir(id);
             let sel = self.selected == Some(id);
             let hov = self.hover == Some(id);
-            let (num, unit) = format::size_parts(w);
+            let (num, unit) = show_parts(metric, w);
             let bar = if is_dir { p.accent } else { theme::kind_color(cat, p.dark) };
             list = list.child(
                 h_flex()
@@ -645,7 +760,8 @@ impl Render for DiskUsageView {
         };
         let flat = mode == Mode::Skyline;
         let cells: Vec<(u32, Rect, bool, bool)> = if mode == Mode::Sunburst { Vec::new() } else { self.layout(aw, ah).iter().map(|c| (c.id, c.rect, c.head, c.nested)).collect() };
-        let t = self.tree.as_ref().expect("tree");
+        let tw = Weighed::of(&self.tree, &self.tokens).expect("tree");
+        let t = &tw;
         let mut map = div().relative().size_full().overflow_hidden();
         for (i, &(id, r, head, nested)) in cells.iter().enumerate() {
             let is_dir = t.is_dir(id);
@@ -700,11 +816,11 @@ impl Render for DiskUsageView {
                     .text_color(label_color)
                     .whitespace_nowrap()
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(t.name(id).to_string()))
-                    .when(r.w > 56., |d| d.child(div().flex_shrink_0().child(format::size(t.weight(id, metric)))));
+                    .when(r.w > 56., |d| d.child(div().flex_shrink_0().child(show(metric, t.weight(id, metric)))));
             } else if !is_dir && r.w > 44. && r.h > 20. {
                 let big = r.w > 80. && r.h > 36.;
                 cell = cell.p_1().text_xs().text_color(label_color).child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().child(t.name(id).to_string())).when(big, |d| {
-                    d.child(div().overflow_hidden().whitespace_nowrap().opacity(0.8).child(format::size(t.weight(id, metric))))
+                    d.child(div().overflow_hidden().whitespace_nowrap().opacity(0.8).child(show(metric, t.weight(id, metric))))
                 });
             } else if is_dir && !head && !cells.iter().any(|&(i2, _, h2, _)| h2 && i2 == id) && r.w > 44. && r.h > 20. {
                 // a folder without room for its children (or one inside another folder): just its name
@@ -775,7 +891,7 @@ impl Render for DiskUsageView {
             .size_full();
             let focus = hover.or(selected).filter(|&f| f != cur);
             let centre_name = focus.map_or_else(|| root_label(t, cur, &self.root), |f| t.name(f).to_string());
-            let centre_size = format::size(t.weight(focus.unwrap_or(cur), metric));
+            let centre_size = show(metric, t.weight(focus.unwrap_or(cur), metric));
             let can_up = t.parent(cur).is_some();
             let centre = v_flex()
                 .absolute()
@@ -823,7 +939,7 @@ impl Render for DiskUsageView {
             let path = t.path(focus);
             let w = t.weight(focus, metric);
             let share = |of: u64| if of == 0 { 0. } else { w as f32 / of as f32 * 100. };
-            let mut s = format!("{}  ·  {}", path.to_string_lossy(), format::size(w));
+            let mut s = format!("{}  ·  {}", path.to_string_lossy(), show(metric, w));
             if focus != cur {
                 s.push_str(&format!("  ·  {} {}", crate::i18n::pct(share(t.weight(cur, metric))), t!("of this folder")));
             }
