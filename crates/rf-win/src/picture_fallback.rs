@@ -88,3 +88,40 @@ pub fn svg_thumbnail(path: &Path, size: u32) -> Option<Bgra> {
         }
     }
 }
+
+/// A format the `image` crate reads and Windows has no thumbnail for (the Space viewer decodes these the same way).
+pub fn is_crate_format(path: &Path) -> bool {
+    matches!(ext(path).as_str(), "tga" | "qoi" | "exr" | "hdr" | "dds" | "pnm" | "pbm" | "pgm" | "ppm" | "pam")
+}
+
+/// Largest file decoded for a thumbnail by `image_thumbnail`.
+const MAX_CRATE_FILE: u64 = 64 << 20;
+
+/// The picture at `size` pixels on its long side, decoded by the `image` crate. `None`: too big, unreadable, or the decoder
+/// gave up (never panics). The decoder's own allocation limit caps a header that claims a huge picture.
+pub fn image_thumbnail(path: &Path, size: u32) -> Option<Bgra> {
+    if std::fs::metadata(path).ok()?.len() > MAX_CRATE_FILE {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let drawn = std::panic::catch_unwind(|| crate::look::decode::with_image_crate(&bytes, size.clamp(16, 1024))).ok()?;
+    match drawn {
+        Ok(mut d) if !d.frames.is_empty() => Some(d.frames.swap_remove(0).0),
+        Ok(_) => None,
+        Err(e) => {
+            log::debug!("{}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// A thumbnail leaf draws itself for the files Windows has none for: SVG, and the `image` crate's formats (and a plain `.ico`).
+pub fn own_thumbnail(path: &Path, size: u32) -> Option<Bgra> {
+    if is_svg(path) {
+        svg_thumbnail(path, size)
+    } else if is_crate_format(path) || ext(path) == "ico" {
+        image_thumbnail(path, size)
+    } else {
+        None
+    }
+}

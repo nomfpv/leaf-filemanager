@@ -109,10 +109,8 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
             match factory.GetImage(sz, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_RESIZETOFIT.0 | SIIGBF_BIGGERSIZEOK.0)) {
                 Ok(h) => h,
                 Err(_) => {
-                    if crate::picture_fallback::is_svg(path) {
-                        if let Some(b) = crate::picture_fallback::svg_thumbnail(path, size) {
-                            return Ok(b);
-                        }
+                    if let Some(b) = crate::picture_fallback::own_thumbnail(path, size) {
+                        return Ok(b);
                     }
                     // no codec for a JPEG XL / AVIF file: our own decoder (nothing runs for any other file)
                     if crate::picture_fallback::handles(path) {
@@ -255,9 +253,9 @@ fn urgent_image(path: &Path, size: u32, kind: Kind) -> Option<Bgra> {
         if let Ok(b) = crate::pane_picture::decode(path, size) {
             return Some(b);
         }
-    } else if kind.wants_picture() && crate::picture_fallback::is_svg(path) {
-        // SVG / SVGZ: drawn here (the shell has no thumbnail for it unless a browser extension is installed)
-        if let Some(b) = crate::picture_fallback::svg_thumbnail(path, size) {
+    } else if kind.wants_picture() && (crate::picture_fallback::is_svg(path) || crate::picture_fallback::is_crate_format(path)) {
+        // SVG / SVGZ and TGA, QOI, EXR, HDR, DDS, PNM: drawn here (the shell has no thumbnail for them unless an extension is installed)
+        if let Some(b) = crate::picture_fallback::own_thumbnail(path, size) {
             return Some(b);
         }
     } else if kind.wants_picture() && crate::picture_fallback::handles(path) {
