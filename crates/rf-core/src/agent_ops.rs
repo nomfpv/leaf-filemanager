@@ -37,7 +37,11 @@ pub const DEFAULT_SEARCH: usize = 50;
 pub const MAX_LIST: usize = 1000;
 /// The longest request taken (bytes of JSON).
 pub const MAX_REQUEST: usize = 256 * 1024;
-/// Most items looked at inside a folder to check it against the agent rules; a bigger folder is refused.
+/// Most files (all items inside the folders counted) and most bytes one `trash` call may move: an agent's call never comes
+/// near what Windows would not take into the Recycle Bin (it would ask about deleting for good).
+pub const MAX_TRASH_FILES: u64 = 2_000;
+pub const MAX_TRASH_BYTES: u64 = 1 << 30;
+/// Most items looked at inside a folder (for links and against the agent rules); a bigger folder is refused.
 const DEEP_CAP: usize = 50_000;
 /// Most entries a search walks where leaf's index does not cover the folder.
 const WALK_CAP: usize = 200_000;
@@ -122,7 +126,7 @@ impl Op {
     }
 }
 
-/// Parses and bounds one request. The agent's name is cut to something fit to show (printable, at most 60 characters).
+/// Parses and bounds one request. The agent's name keeps letters, digits, spaces and `-_.` only, at most 40 of them.
 pub fn parse_request(text: &str) -> Result<Request, String> {
     if text.len() > MAX_REQUEST {
         return Err("the request is too long".into());
@@ -131,7 +135,7 @@ pub fn parse_request(text: &str) -> Result<Request, String> {
     if !(16..=64).contains(&r.session.len()) || !r.session.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("the request has no valid session id".into());
     }
-    let agent: String = r.agent.chars().filter(|c| !c.is_control()).take(60).collect();
+    let agent: String = r.agent.chars().filter(|c| c.is_alphanumeric() || " -_.".contains(*c)).take(40).collect();
     r.agent = if agent.trim().is_empty() { "an agent".into() } else { agent.trim().to_string() };
     if r.root.is_empty() || r.root.len() > MAX_TEXT || r.root.contains('\0') {
         return Err("the request has no valid project folder".into());
@@ -222,9 +226,49 @@ fn refusal_text(r: Refusal) -> &'static str {
     }
 }
 
+/// What a project folder may not be, beyond the organizer's list.
+pub struct RootLimits {
+    /// The organizer's places (Windows, Program Files, AppData, leaf's own, the user folder itself).
+    pub protected: ProtectedPaths,
+    /// Folders that may not be the root themselves (Documents, Desktop, Downloads, ..., the OneDrive folder).
+    pub not_itself: Vec<PathBuf>,
+    /// Folders the root may not be in or be (`~/.claude`, `~/.ssh`).
+    pub not_within: Vec<PathBuf>,
+    /// Whether a real path is on a local fixed drive (not a network, removable, optical or unknown one).
+    pub local_fixed: Box<dyn Fn(&Path) -> bool + Send + Sync>,
+}
+
+impl RootLimits {
+    /// No limits but the built-in ones (tests).
+    pub fn none() -> RootLimits {
+        RootLimits { protected: ProtectedPaths::default(), not_itself: Vec::new(), not_within: Vec::new(), local_fixed: Box::new(|_| true) }
+    }
+}
+
+/// `p` and, when it resolves to another place, its real path.
+fn both(p: &Path) -> Vec<PathBuf> {
+    let mut v = vec![p.to_path_buf()];
+    if let Ok(r) = real(p)
+        && norm(&r) != norm(p)
+    {
+        v.push(r);
+    }
+    v
+}
+
+/// The organizer's list with every place also in its resolved form (a junction or `subst` drive leading into one is caught too).
+fn canonical_too(p: &ProtectedPaths) -> ProtectedPaths {
+    let many = |v: &[PathBuf]| v.iter().flat_map(|x| both(x)).collect::<Vec<_>>();
+    let mut c = p.clone();
+    c.program_files = many(&p.program_files);
+    c.app_data = many(&p.app_data);
+    c.app_dirs = many(&p.app_dirs);
+    c
+}
+
 impl Root {
-    /// Resolves the project folder given at connection. `protected` are the places no agent may work in (the organizer's list).
-    pub fn open(given: &str, protected: &ProtectedPaths) -> Result<Root, String> {
+    /// Resolves the project folder given at connection, against the places no agent may work in.
+    pub fn open(given: &str, limits: &RootLimits) -> Result<Root, String> {
         let p = Path::new(given);
         if !p.is_absolute() {
             return Err(refusal_text(Refusal::NotAbsolute).into());
@@ -236,11 +280,38 @@ impl Root {
         if !r.is_dir() {
             return Err("the project folder is not a folder".into());
         }
-        // the text and the real place both (a link from an innocent name to C:\ is refused like C:\)
+        let unc = |x: &Path| cfg!(windows) && x.to_string_lossy().replace('/', "\\").starts_with(r"\\");
+        if unc(p) || unc(&r) || !(limits.local_fixed)(&r) {
+            return Err("the project folder must be on a local fixed drive (not a network share, a removable or an optical drive)".into());
+        }
+        // the text and the real place both (a link from an innocent name to C:\ is refused like C:\), against the list as given
+        // and resolved
+        let canon = canonical_too(&limits.protected);
+        let single = |x: &Option<PathBuf>| x.as_ref().map(|w| both(w)).unwrap_or_default();
+        let mut lists = vec![limits.protected.clone(), canon.clone()];
+        for w in single(&limits.protected.windows).into_iter().skip(1) {
+            lists.push(ProtectedPaths { windows: Some(w), ..canon.clone() });
+        }
+        for u in single(&limits.protected.user_profile).into_iter().skip(1) {
+            lists.push(ProtectedPaths { user_profile: Some(u), ..canon.clone() });
+        }
         for f in [p, r.as_path()] {
-            if let Some(why) = protected.refuse(f, true) {
-                return Err(refusal_text(why).into());
+            for l in &lists {
+                if let Some(why) = l.refuse(f, true) {
+                    return Err(refusal_text(why).into());
+                }
             }
+            let k = norm(f);
+            if limits.not_itself.iter().flat_map(|x| both(x)).any(|x| norm(&x) == k) {
+                return Err("the project folder may not be one of the user's own folders itself (Documents, Desktop, Downloads, Pictures, Music, Videos, OneDrive); use a project folder inside it".into());
+            }
+            if limits.not_within.iter().flat_map(|x| both(x)).any(|x| is_inside(&k, &norm(&x))) {
+                return Err("the project folder may not be in the agent's own settings folder or in .ssh".into());
+            }
+        }
+        // a project, not any folder an agent happened to start in
+        if !(r.join(".git").exists() || r.join(".claude").is_dir()) {
+            return Err("the project folder has no .git or .claude at its top; leaf takes only project folders".into());
         }
         Ok(Root { key: norm(&r), given_key: norm(p), real: r })
     }
@@ -368,6 +439,34 @@ impl Root {
 pub struct Rules {
     sets: Vec<(PathBuf, ignore::gitignore::Gitignore)>,
     everything: Option<String>,
+    /// Places no change may touch whatever the rules say: the settings files the rules come from and their folders (see
+    /// [`Rules::guard`]); `.claude` and `.git` are added by name in [`Rules::check`].
+    fixed: Vec<String>,
+}
+
+/// How far [`Rules::check`] looks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Deep {
+    /// The item only.
+    No,
+    /// Everything inside a folder too.
+    Inside,
+    /// Everything inside, and a link or junction anywhere inside refuses (copy, move, trash: a link inside would be followed or
+    /// carried along).
+    NoLinks,
+}
+
+/// What [`Rules::check`] counted: items and bytes, the item itself included.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Walked {
+    pub items: u64,
+    pub bytes: u64,
+}
+
+/// `.claude` anywhere on the way from the root to `p` (the item or a folder it is in), or `p` named `.git`.
+fn fixed_name(root: &Root, p: &Path) -> bool {
+    let rel: Vec<String> = p.components().skip(root.real.components().count()).map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect();
+    rel.iter().any(|c| c == ".claude") || rel.last().is_some_and(|c| c == ".git")
 }
 
 const FILE_TOOLS: &[&str] = &["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -380,6 +479,21 @@ impl Rules {
     /// No rule at all (nothing to look at inside folders).
     pub fn is_empty(&self) -> bool {
         self.sets.is_empty() && self.everything.is_none()
+    }
+
+    /// The settings file `file` and its folder are never changed, moved or removed by an agent, nor anything inside the folder
+    /// (taking the rules away would lift the protection).
+    pub fn guard(&mut self, file: &Path) {
+        for p in [Some(file), file.parent()].into_iter().flatten() {
+            for x in both(p) {
+                self.fixed.push(norm(&x));
+            }
+        }
+    }
+
+    fn fixed_hit(&self, root: &Root, p: &Path) -> bool {
+        let k = norm(p);
+        fixed_name(root, p) || self.fixed.iter().any(|f| is_inside(&k, f))
     }
 
     /// Everything is refused, with this reason (a settings file that could not be read).
@@ -443,6 +557,11 @@ impl Rules {
                 return false;
             }
             let rel: PathBuf = p.components().skip(base.components().count()).collect();
+            // (never handed to the matcher with a root or a drive in it: it asserts on that; such a rule is not understood, which
+            // protects everything)
+            if rel.has_root() || rel.components().any(|c| matches!(c, Component::Prefix(_) | Component::RootDir | Component::ParentDir)) {
+                return true;
+            }
             if rel.as_os_str().is_empty() {
                 // the settings' own folder: its rules are about what is inside it
                 return false;
@@ -452,40 +571,54 @@ impl Rules {
         })
     }
 
-    /// Refuses `p` when it is protected, and with `deep` also when anything inside the folder `p` is (links inside are not
-    /// followed; a folder with more than a set number of items inside is refused rather than half checked).
-    pub fn check(&self, root: &Root, p: &Path, deep: bool, what: &str) -> Result<(), String> {
+    /// Refuses `p` when it is protected (by a rule, or as a settings file, a `.claude` folder or a `.git`), and with `deep` also
+    /// when anything inside the folder `p` is; with [`Deep::NoLinks`] also when anything inside is a link or junction. Links
+    /// inside are never followed; a folder with more than a set number of items inside is refused rather than half checked.
+    pub fn check(&self, root: &Root, p: &Path, deep: Deep, what: &str) -> Result<Walked, String> {
         if let Some(why) = &self.everything {
             return Err(format!("{what} is protected: {why}"));
         }
-        let is_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+        let meta = std::fs::symlink_metadata(p).ok();
+        let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
+        if self.fixed_hit(root, p) {
+            return Err(format!("{} is the agent's settings or the repository (.claude, .git); leaf does not let an agent change it", root.shown(p)));
+        }
         if self.blocks(p, is_dir) {
             return Err(format!("{} is protected by the agent rules of this project", root.shown(p)));
         }
-        if !deep || !is_dir || self.is_empty() {
-            return Ok(());
+        let mut w = Walked { items: 1, bytes: meta.as_ref().filter(|m| !m.is_dir()).map_or(0, |m| m.len()) };
+        if deep == Deep::No || !is_dir {
+            return Ok(w);
         }
-        let mut seen = 0usize;
+        let unreadable = |d: &Path| format!("{} cannot be read to check what is inside", root.shown(d));
         let mut stack = vec![p.to_path_buf()];
         while let Some(d) = stack.pop() {
-            let rd = std::fs::read_dir(&d).map_err(|_| format!("{} cannot be read to check it against the agent rules", root.shown(&d)))?;
-            for e in rd {
-                let e = e.map_err(|_| format!("{} cannot be read to check it against the agent rules", root.shown(&d)))?;
-                seen += 1;
-                if seen > DEEP_CAP {
-                    return Err(format!("{what} holds too many items to check against the agent rules; it is refused"));
+            for e in std::fs::read_dir(&d).map_err(|_| unreadable(&d))? {
+                let e = e.map_err(|_| unreadable(&d))?;
+                w.items += 1;
+                if w.items as usize > DEEP_CAP {
+                    return Err(format!("{what} holds too many items to check; it is refused"));
                 }
-                let ft = e.file_type().map_err(|_| format!("{} cannot be read", root.shown(&e.path())))?;
-                let dir = ft.is_dir() && !ft.is_symlink();
+                let m = std::fs::symlink_metadata(e.path()).map_err(|_| unreadable(&e.path()))?;
+                let link = is_link(&m);
+                if link && deep == Deep::NoLinks {
+                    return Err(format!("{what} holds a link or junction ({}); leaf does not copy, move or trash a folder with a link inside for an agent", root.shown(&e.path())));
+                }
+                let dir = m.is_dir() && !link;
+                if self.fixed_hit(root, &e.path()) {
+                    return Err(format!("{what} holds {}, the agent's settings or a repository (.claude, .git); leaf does not let an agent change it", root.shown(&e.path())));
+                }
                 if self.blocks(&e.path(), dir) {
                     return Err(format!("{what} holds {}, which is protected by the agent rules of this project", root.shown(&e.path())));
                 }
                 if dir {
                     stack.push(e.path());
+                } else if !link {
+                    w.bytes += m.len();
                 }
             }
         }
-        Ok(())
+        Ok(w)
     }
 }
 
@@ -515,7 +648,8 @@ pub enum Plan {
     Transfer { moving: bool, sources: Vec<PathBuf>, dest: PathBuf, targets: Vec<PathBuf> },
     Rename { from: PathBuf, to: PathBuf },
     CreateFolder { path: PathBuf },
-    Trash { paths: Vec<PathBuf> },
+    /// `bytes`: what they hold in all.
+    Trash { paths: Vec<PathBuf>, bytes: u64 },
 }
 
 fn nth(what: &str, i: usize, n: usize) -> String {
@@ -546,7 +680,7 @@ pub fn check(root: &Root, rules: &Rules, op: &Op) -> Result<Plan, String> {
                 return Err(format!("give between 1 and {MAX_SOURCES} sources"));
             }
             let dest = root.folder(destination, "the destination")?;
-            rules.check(root, &dest, false, "the destination")?;
+            rules.check(root, &dest, Deep::No, "the destination")?;
             let n = sources.len();
             let mut srcs = Vec::with_capacity(n);
             let mut targets: Vec<PathBuf> = Vec::with_capacity(n);
@@ -560,13 +694,13 @@ pub fn check(root: &Root, rules: &Rules, op: &Op) -> Result<Plan, String> {
                     return Err(format!("{what} is a folder the destination is in; it cannot go into itself"));
                 }
                 // a copy only reads the source, a move takes it away: both are refused on a protected one
-                rules.check(root, &src, true, &what)?;
+                rules.check(root, &src, Deep::NoLinks, &what)?;
                 let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let target = root.free_target(&dest, &name)?;
                 if targets.iter().any(|t| norm(t) == norm(&target)) {
                     return Err(format!("two sources have the name \"{name}\"; they would land on one target"));
                 }
-                rules.check(root, &target, false, "the target")?;
+                rules.check(root, &target, Deep::No, "the target")?;
                 srcs.push(src);
                 targets.push(target);
             }
@@ -574,10 +708,10 @@ pub fn check(root: &Root, rules: &Rules, op: &Op) -> Result<Plan, String> {
         }
         Op::Rename { path, new_name } => {
             let from = root.item(path, "the item")?;
-            rules.check(root, &from, true, "the item")?;
+            rules.check(root, &from, Deep::Inside, "the item")?;
             let dir = from.parent().ok_or("the item has no folder")?;
             let to = root.free_target(dir, new_name.trim_end_matches(['\r', '\n']))?;
-            rules.check(root, &to, false, "the new name")?;
+            rules.check(root, &to, Deep::No, "the new name")?;
             Ok(Plan::Rename { from, to })
         }
         Op::CreateFolder { path } => {
@@ -585,7 +719,7 @@ pub fn check(root: &Root, rules: &Rules, op: &Op) -> Result<Plan, String> {
             let (Some(parent), Some(name)) = (full.parent(), full.file_name()) else { return Err("the new folder is the project folder itself".into()) };
             let parent = root.folder_at(parent, "the folder the new folder goes in")?;
             let path = root.free_target(&parent, &name.to_string_lossy())?;
-            rules.check(root, &path, false, "the new folder")?;
+            rules.check(root, &path, Deep::No, "the new folder")?;
             Ok(Plan::CreateFolder { path })
         }
         Op::Trash { paths } => {
@@ -597,16 +731,25 @@ pub fn check(root: &Root, rules: &Rules, op: &Op) -> Result<Plan, String> {
             }
             let n = paths.len();
             let mut out: Vec<PathBuf> = Vec::with_capacity(n);
+            let mut all = Walked::default();
             for (i, s) in paths.iter().enumerate() {
                 let what = nth("item", i, n);
                 let p = root.item(s, &what)?;
                 if out.iter().any(|q| is_inside(&norm(&p), &norm(q)) || is_inside(&norm(q), &norm(&p))) {
                     return Err(format!("{what} is listed twice or is inside another listed item"));
                 }
-                rules.check(root, &p, true, &what)?;
+                let w = rules.check(root, &p, Deep::NoLinks, &what)?;
+                all.items += w.items;
+                all.bytes += w.bytes;
+                if all.items > MAX_TRASH_FILES || all.bytes > MAX_TRASH_BYTES {
+                    return Err(format!(
+                        "at most {MAX_TRASH_FILES} files and {} MB in all go to the Recycle Bin / Trash in one call (folders counted with what is inside); this is more",
+                        MAX_TRASH_BYTES >> 20
+                    ));
+                }
                 out.push(p);
             }
-            Ok(Plan::Trash { paths: out })
+            Ok(Plan::Trash { paths: out, bytes: all.bytes })
         }
     }
 }
@@ -648,7 +791,8 @@ pub fn list(rules: &Rules, dir: &Path) -> Result<(Vec<Listed>, bool), String> {
     Ok((out, cut))
 }
 
-/// Of what a search found, what may go back to the agent: inside the root, not protected, at most `max`.
+/// Of what a search found, what may go back to the agent: inside the root by its text AND by the real path of its folder (nothing
+/// found through a link or junction inside the root), not protected, at most `max`.
 pub fn keep_found(root: &Root, rules: &Rules, found: impl IntoIterator<Item = PathBuf>, max: usize) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for p in found {
@@ -656,7 +800,12 @@ pub fn keep_found(root: &Root, rules: &Rules, found: impl IntoIterator<Item = Pa
             break;
         }
         if root.holds(&p) && !root.is_root(&p) && !rules.blocks(&p, p.is_dir()) {
-            out.push(p);
+            let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else { continue };
+            let Ok(dir) = real(parent) else { continue };
+            if !root.holds(&dir) {
+                continue;
+            }
+            out.push(dir.join(name));
         }
     }
     out
@@ -709,10 +858,11 @@ mod tests {
         let base = std::env::temp_dir().join(format!("leaf-agent-ops-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("proj").join("sub")).unwrap();
+        std::fs::create_dir_all(base.join("proj").join(".git")).unwrap();
         std::fs::create_dir_all(base.join("outside")).unwrap();
         std::fs::write(base.join("proj").join("a.txt"), b"a").unwrap();
         std::fs::write(base.join("outside").join("secret.txt"), b"s").unwrap();
-        let root = Root::open(&base.join("proj").to_string_lossy(), &ProtectedPaths::default()).unwrap();
+        let root = Root::open(&base.join("proj").to_string_lossy(), &RootLimits::none()).unwrap();
         (Tmp(base), root)
     }
 
@@ -813,7 +963,7 @@ mod tests {
         let many: Vec<String> = (0..51).map(|i| format!("f{i}.txt")).collect();
         let e = check(&root, &rules, &Op::Trash { paths: many.clone() }).unwrap_err();
         assert!(e.contains("at most 50"), "{e}");
-        assert!(matches!(check(&root, &rules, &Op::Trash { paths: many[..50].to_vec() }), Ok(Plan::Trash { paths }) if paths.len() == 50));
+        assert!(matches!(check(&root, &rules, &Op::Trash { paths: many[..50].to_vec() }), Ok(Plan::Trash { paths, .. }) if paths.len() == 50));
         assert!(root.path().join("f50.txt").exists());
     }
 
@@ -830,5 +980,67 @@ mod tests {
         let mut all = Rules::new();
         all.add(root.path(), &["Edit".into()], None);
         assert!(check(&root, &all, &Op::Trash { paths: vec!["a.txt".into()] }).is_err());
+    }
+
+    #[test]
+    fn agent_ops_source_folder_with_a_junction_inside_is_refused() {
+        let (tmp, root) = setup("inner-link");
+        let rules = Rules::new();
+        let docs = root.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("readme.txt"), b"r").unwrap();
+        if !link_dir(&docs.join("cfg"), &tmp.0.join("outside")) {
+            eprintln!("no link could be made here: not run");
+            return;
+        }
+        let before: Vec<_> = std::fs::read_dir(root.path().join("sub")).unwrap().flatten().map(|e| e.file_name()).collect();
+        for op in [
+            Op::Copy { sources: vec!["docs".into()], destination: "sub".into() },
+            Op::Move { sources: vec!["docs".into()], destination: "sub".into() },
+            Op::Trash { paths: vec!["docs".into()] },
+        ] {
+            let e = check(&root, &rules, &op).unwrap_err();
+            assert!(e.contains("link or junction"), "{op:?}: {e}");
+            assert!(!e.contains("secret") && !e.contains("outside\\") && !e.contains("outside/"), "{e}");
+        }
+        let after: Vec<_> = std::fs::read_dir(root.path().join("sub")).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(before, after, "nothing was written");
+        assert!(docs.join("readme.txt").exists() && tmp.0.join("outside").join("secret.txt").exists());
+    }
+
+    #[test]
+    fn agent_ops_claude_settings_cannot_be_renamed_moved_trashed_or_overwritten() {
+        let (_tmp, root) = setup("settings");
+        let claude = root.path().join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        let settings = claude.join("settings.json");
+        std::fs::write(&settings, br#"{"permissions":{"deny":["Edit(/sub/**)"]}}"#).unwrap();
+        std::fs::create_dir_all(root.path().join("sub").join("inner").join(".claude")).unwrap();
+        std::fs::write(root.path().join("settings.json"), b"{}").unwrap();
+        let mut rules = Rules::new();
+        // as leaf's app loads them: every file read is guarded, whether it holds rules or not
+        rules.guard(&settings);
+        rules.guard(&claude.join("settings.local.json"));
+        for op in [
+            Op::Rename { path: ".claude".into(), new_name: "old".into() },
+            Op::Rename { path: ".claude/settings.json".into(), new_name: "x.json".into() },
+            Op::Move { sources: vec![".claude".into()], destination: "sub".into() },
+            Op::Move { sources: vec![".claude/settings.json".into()], destination: ".".into() },
+            Op::Copy { sources: vec!["settings.json".into()], destination: ".claude".into() },
+            Op::Copy { sources: vec!["a.txt".into()], destination: ".claude".into() },
+            Op::CreateFolder { path: ".claude/new".into() },
+            Op::Trash { paths: vec![".claude".into()] },
+            Op::Trash { paths: vec![".claude/settings.json".into()] },
+            // a folder that holds a .claude, and the repository folder
+            Op::Trash { paths: vec!["sub/inner".into()] },
+            Op::Trash { paths: vec![".git".into()] },
+            Op::Rename { path: ".git".into(), new_name: "git-old".into() },
+            Op::Move { sources: vec![".git".into()], destination: "sub".into() },
+        ] {
+            assert!(check(&root, &rules, &op).is_err(), "{op:?} was let through");
+        }
+        assert_eq!(std::fs::read(&settings).unwrap(), br#"{"permissions":{"deny":["Edit(/sub/**)"]}}"#);
+        // other files are not caught by this
+        assert!(check(&root, &rules, &Op::Rename { path: "a.txt".into(), new_name: "b.txt".into() }).is_ok());
     }
 }
