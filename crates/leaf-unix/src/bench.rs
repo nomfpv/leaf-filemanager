@@ -148,3 +148,14 @@ pub struct InProcess {
     pub cpu_ms: f64,
     pub extra_mb: f64,
 }
+
+/// (resident set, private bytes, open handles) of a running process, from `/proc/<pid>/status` (`VmRSS`, `RssAnon`) and the entries of
+/// `/proc/<pid>/fd`. Twin of rf-win's `bench::process_memory`.
+pub fn process_memory(pid: u32) -> Option<(u64, u64, u32)> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let kb = |key: &str| status.lines().find_map(|l| l.strip_prefix(key)?.split_whitespace().next()?.parse::<u64>().ok()).map(|v| v * 1024);
+    let rss = kb("VmRSS:")?;
+    let private = kb("RssAnon:").unwrap_or(rss);
+    let handles = std::fs::read_dir(format!("/proc/{pid}/fd")).map_or(0, |d| d.count() as u32);
+    Some((rss, private, handles))
+}

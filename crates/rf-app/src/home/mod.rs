@@ -370,6 +370,7 @@ pub fn init(cx: &mut App) {
         cx.refresh_windows();
     });
     crate::share_card::init(cx);
+    crate::speed_hud::init(cx);
     cx.on_action(|_: &crate::actions::ShowTransferHistory, cx| {
         crate::settings_view::open_page(crate::settings_view::Page::Numbers, cx);
         crate::workspace::show_settings(cx);

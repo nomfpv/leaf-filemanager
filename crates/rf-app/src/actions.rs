@@ -119,6 +119,7 @@ gpui_kit::actions!(
         ResetHome,
         ShowTransferHistory,
         ShareCard,
+        ToggleSpeedHud,
         CopyAsContext,
         ToggleHideIgnored,
         FindBuildJunk,

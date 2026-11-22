@@ -837,7 +837,9 @@ impl Workspace {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(800)).await;
                 let now = (crate::platform::gpui::hybrid::switch_count(), crate::platform::gpui::hybrid::mode());
-                if now != last {
+                // (the speed overlay, while it is on, is drawn again with each beat)
+                let hud = this.update(cx, |_, cx| crate::speed_hud::on(cx)).unwrap_or(false);
+                if now != last || hud {
                     last = now;
                     if this.update(cx, |_, cx| cx.notify()).is_err() {
                         break;
@@ -5621,6 +5623,13 @@ impl Render for Workspace {
             self.focus_active(window, cx);
         }
         let p = Palette::for_window(window);
+        // (the speed overlay's figures: only read while it is on)
+        let (hud_open, hud_items) = if crate::speed_hud::on(cx) {
+            let t = self.active_tab().read(cx);
+            (t.load_ms, t.item_count())
+        } else {
+            (None, 0)
+        };
         // Mica / frame follow the app's theme, not only the system one (re-applied when either
         // changes: GPUI resets it on a system theme switch)
         let prefs = cx.global::<crate::settings::Settings>();
@@ -6508,6 +6517,7 @@ impl Render for Workspace {
             // Last children = painted on top.
             .children(crate::status_center::render_flyout(&self.ops, &p, theme::TITLEBAR_H + px(44.), cx))
             .children(crate::status_center::update_toast(&p, false))
+            .children(crate::speed_hud::overlay(&p, hud_open, hud_items, cx))
             .children(quick_look_layer)
             .children(self.palette.clone())
             .children(crate::fluent_menu::current(window, cx))

@@ -117,6 +117,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 |---|---|---|
 | Customize Home | Opens Home with buttons to add, remove, resize and reorder its widgets. |  |
 | Share card | Draws a picture of some of your own totals (files moved, data copied, fastest transfer, days in a row) in leaf's look with the leaf logo, to copy or save. A list first shows every line with its value and a tick box; no folder, file or user names are on the picture, and nothing is sent anywhere. |  |
+| Speed overlay | Shows or hides a small readout in the corner of the window: how long the current folder took to open (and its item count), how long the last frame took, and how much memory leaf holds. Off by default; it costs nothing while off. |  |
 | Transfer history | Lists the copies, moves, downloads and uploads that finished (what, from, to, size, time, speed, result), with Clear history and the switch that turns recording off. Kept on this PC only. |  |
 | Reset Home | Puts the Home page back to its default widgets. |  |
 | Show/hide hidden items | Shows or hides hidden files and folders. | `Ctrl+H` |

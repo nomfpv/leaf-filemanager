@@ -3465,6 +3465,13 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             Some(t!("Folder listing time and renderer (GPU / CPU)")),
             sw("perf-info", p, s.show_perf_info, |s, v| s.show_perf_info = v),
         ),
+        card(
+            p,
+            L::Gauge,
+            t!("Speed overlay"),
+            Some(t!("A small readout in the corner of the window: the time the folder took to open, the last frame and the memory leaf holds. Also a command in the palette.")),
+            sw("speed-hud", p, s.speed_hud, |s, v| s.speed_hud = v),
+        ),
         shell(p)
             .child(card_body(
                 p,

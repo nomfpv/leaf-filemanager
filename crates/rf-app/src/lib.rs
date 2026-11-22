@@ -43,6 +43,7 @@ mod disk_usage;
 mod selection_stats;
 mod numbers_page;
 mod share_card;
+mod speed_hud;
 mod usage;
 mod xfer_history;
 mod diff_view;

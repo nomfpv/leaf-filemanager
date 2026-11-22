@@ -871,6 +871,8 @@ pub struct Settings {
     pub show_token_estimate: bool,
     /// The status line adds lines, play time and pixels of the selected files (read off the UI thread); a click on it breaks the selection down by type.
     pub selection_details: bool,
+    /// A small readout in the window's corner: folder open time, last frame time and leaf's memory (`speed_hud.rs`).
+    pub speed_hud: bool,
     /// Counts what is done with Leaf (files copied, folders opened, ...) for the "Your numbers" page; the numbers stay in the config folder.
     pub count_usage: bool,
     /// Keeps a history of finished transfers (copy, move, download, upload) for Home and "Your numbers"; paths and numbers, on this PC only.
@@ -1152,6 +1154,7 @@ impl Default for Settings {
             checkpoint_cap_mb: 2048,
             show_token_estimate: false,
             selection_details: false,
+            speed_hud: false,
             count_usage: true,
             record_transfers: true,
             fresh_tint: false,
