@@ -4574,12 +4574,24 @@ impl Workspace {
             }
         }
         let network = self.places.read(cx).network.clone();
-        if !network.is_empty() && shown("network") {
+        // (the servers the network announces, found once on a worker: none of them is no error, a calm line says so)
+        let servers = self.places.read(cx).servers.clone();
+        let servers: Vec<(String, PathBuf)> = servers.unwrap_or_default().into_iter().filter(|(_, u)| !network.iter().any(|(_, t)| t == u)).collect();
+        let nothing_found = leaf_sys::network::DISCOVERS && network.is_empty() && servers.is_empty() && self.places.read(cx).servers.is_some();
+        if (!network.is_empty() || !servers.is_empty() || nothing_found) && shown("network") {
             col = col.child(header(t!("Network")));
             for (i, (name, target)) in network.into_iter().enumerate() {
                 let loc = crate::remote::network_place(target);
                 let active = cur == loc;
                 col = col.child(self.sidebar_item(("sb-net", i).into(), L::Network, p.text_secondary, name, loc, active, None, p, cx));
+            }
+            for (i, (name, target)) in servers.into_iter().enumerate() {
+                let loc = crate::remote::network_place(target);
+                let active = cur == loc;
+                col = col.child(self.sidebar_item(("sb-net-srv", i).into(), L::Server, p.text_secondary, name, loc, active, None, p, cx));
+            }
+            if nothing_found && !rail {
+                col = col.child(div().px_2().h(px(24.)).flex().items_center().text_size(px(p.fs_xs)).text_color(p.text_tertiary).child(t!("No servers found on the network")));
             }
         }
         // saved hosts (Settings > Hosts), only while there are any

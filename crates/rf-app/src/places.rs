@@ -124,6 +124,8 @@ pub struct Places {
     pub libraries: Vec<leaf_sys::libraries::Library>,
     /// Network locations ("Add a network location" shortcuts): (name, target).
     pub network: Vec<(String, std::path::PathBuf)>,
+    /// Servers the local network announces (`None` until the look-up is done; it takes seconds, so it runs once, apart from `refresh`).
+    pub servers: Option<Vec<(String, std::path::PathBuf)>>,
     /// Devices under This PC that are not drives (MTP phones, cameras): browsed as shell
     /// folders.
     pub devices: Vec<leaf_sys::shellfolder::ShellChild>,
@@ -131,13 +133,15 @@ pub struct Places {
     /// The recent items and the cloud / WSL entries are in too (they come a little after `loaded`: see `refresh`).
     pub extras_loaded: bool,
     _task: Option<Task<()>>,
+    _disco: Option<Task<()>>,
 }
 
 impl Places {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let mut this =
-            Self { drives: Vec::new(), cloud: Vec::new(), pinned: Vec::new(), recent: Vec::new(), libraries: Vec::new(), network: Vec::new(), devices: Vec::new(), loaded: false, extras_loaded: false, _task: None };
+            Self { drives: Vec::new(), cloud: Vec::new(), pinned: Vec::new(), recent: Vec::new(), libraries: Vec::new(), network: Vec::new(), servers: None, devices: Vec::new(), loaded: false, extras_loaded: false, _task: None, _disco: None };
         this.refresh(cx);
+        this.discover_servers(cx);
         // the drives the user hides (Settings > Files and folders, a drive's own menu) leave and come back at once
         let mut hidden = leaf_sys::drives::hidden();
         // and the pins, when they change anywhere (a pinned folder deleted or renamed: `pins_follow`)
@@ -195,6 +199,23 @@ impl Places {
         })
         .detach();
         this
+    }
+
+    /// Asks the network for its servers (avahi, smbtree: seconds) on a worker, once; the sidebar's Network section lists them.
+    fn discover_servers(&mut self, cx: &mut Context<Self>) {
+        if !leaf_sys::network::DISCOVERS || crate::mockup_demo::on() {
+            return;
+        }
+        let work = cx.background_spawn(async move {
+            leaf_sys::network::servers().into_iter().map(|s| (s.name, std::path::PathBuf::from(s.uri))).collect::<Vec<_>>()
+        });
+        self._disco = Some(cx.spawn(async move |this, cx| {
+            let found = work.await;
+            let _ = this.update(cx, |p, cx| {
+                p.servers = Some(found);
+                cx.notify();
+            });
+        }));
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {

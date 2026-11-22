@@ -69,6 +69,21 @@ pub fn shares(server: &str) -> std::io::Result<Vec<Share>> {
     Ok(out)
 }
 
+/// A machine of the local network that offers files (TYPE-COPY of leaf-unix src/network.rs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Server {
+    pub name: String,
+    pub uri: String,
+}
+
+/// Whether [`servers`] looks the network up itself. Windows does not: the shell's Network folder and `\\server` addresses do that.
+pub const DISCOVERS: bool = false;
+
+/// Servers found on the local network: none here (see [`DISCOVERS`]).
+pub fn servers() -> Vec<Server> {
+    Vec::new()
+}
+
 /// Folders under `%APPDATA%\Microsoft\Windows\Network Shortcuts` ("Add a network location").
 /// Each is a folder holding `target.lnk`; returns (display name, target).
 pub fn network_shortcuts() -> Vec<(String, PathBuf)> {

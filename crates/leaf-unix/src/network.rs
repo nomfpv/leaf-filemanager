@@ -58,6 +58,9 @@ pub struct Server {
     pub uri: String,
 }
 
+/// Whether [`servers`] looks the network up (it does here).
+pub const DISCOVERS: bool = true;
+
 /// Servers on the local network, the way a KDE desktop's Network place lists them: DNS-SD (`avahi-browse -ptr`, for `_smb._tcp`,
 /// `_nfs._tcp`, `_sftp-ssh._tcp`, `_ftp._tcp`, `_webdav._tcp`) and, for Windows-style neighbours that do not announce themselves, `smbtree -N -S`
 /// when installed. Each source only when its program exists; none: an empty list. Blocks (a few seconds): worker threads only.
