@@ -77,7 +77,7 @@ fn act(req: &Request, job: &Job) -> Result<Reply, Fail> {
             let dir = node::held_node(&held, false)?;
             let name = path.file_name().ok_or(Refusal::WrongKind)?;
             node::rename_in(&dir, name, std::ffi::OsStr::new(new_name))?;
-            Ok(Reply::Done { ok: true, pairs: vec![(path.clone(), path.with_file_name(new_name))], missing: 0 })
+            Ok(Reply::Done { ok: true, pairs: vec![(path.clone(), path.with_file_name(new_name))], missing: 0, kept: 0, partial: 0 })
         }
         Request::Copy { sources, dest } => done(tree::transfer(Transfer::Copy, sources, dest, &tracker(job))?),
         Request::Move { sources, dest } => done(tree::transfer(Transfer::Move, sources, dest, &tracker(job))?),
@@ -86,7 +86,7 @@ fn act(req: &Request, job: &Job) -> Result<Reply, Fail> {
         Request::DeleteForGood { paths, .. } => done(tree::delete(paths, &tracker(job))?),
         Request::WriteFromPart { part, target } => {
             os::write_from_part(part, target)?;
-            Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0 })
+            Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0, kept: 0, partial: 0 })
         }
         Request::ReadFile { path } => {
             let bytes = os::read_file(path)?;
@@ -101,7 +101,7 @@ fn act(req: &Request, job: &Job) -> Result<Reply, Fail> {
                     return Err(gone());
                 }
             }
-            Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0 })
+            Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0, kept: 0, partial: 0 })
         }
         Request::Hello { .. } | Request::Answer { .. } | Request::Cancel | Request::Bye => Err(Refusal::Unexpected.into()),
     }
@@ -112,7 +112,7 @@ fn gone() -> Fail {
 }
 
 fn done(o: tree::Outcome) -> Result<Reply, Fail> {
-    Ok(Reply::Done { ok: o.ok, pairs: o.pairs, missing: o.missing })
+    Ok(Reply::Done { ok: o.ok, pairs: o.pairs, missing: o.missing, kept: o.kept, partial: o.partial })
 }
 
 /// A tracker like the Status Center's: progress goes back to leaf at most 20 times a second, a question about names that exist
@@ -300,6 +300,78 @@ mod tests {
         }
         assert!(src.join("inner").join("a.txt").exists() && elsewhere.join("secret.txt").exists());
         let _ = std::fs::remove_dir(src.join("inner").join("j"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A job whose questions about existing names are all answered "Replace".
+    fn job_replacing() -> Job {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<Vec<Choice>>>();
+        let tx = Mutex::new(tx);
+        Job {
+            cancel: Arc::new(AtomicBool::new(false)),
+            send: Arc::new(move |r| {
+                if let Reply::Ask { clashes } = r {
+                    let _ = tx.lock().unwrap().send(Some(vec![Choice::Replace; clashes.len()]));
+                }
+                true
+            }),
+            send_data: Arc::new(|_| true),
+            answers: Arc::new(Mutex::new(rx)),
+        }
+    }
+
+    #[test]
+    fn admin_replace_onto_itself_leaves_everything_intact() {
+        let job = job_replacing();
+        let d = temp("itself");
+        let x = d.join("x");
+        std::fs::create_dir_all(x.join("folder")).unwrap();
+        std::fs::write(x.join("f.txt"), b"file").unwrap();
+        std::fs::write(x.join("folder").join("inner.txt"), b"inner").unwrap();
+        let intact = || {
+            assert_eq!(std::fs::read(x.join("f.txt")).unwrap(), b"file");
+            assert_eq!(std::fs::read(x.join("folder").join("inner.txt")).unwrap(), b"inner");
+            let names: Vec<_> = std::fs::read_dir(&x).unwrap().flatten().map(|e| e.file_name()).collect();
+            assert_eq!(names.len(), 2, "nothing added or left behind: {names:?}");
+        };
+        // a file moved and copied onto itself (into the folder it is in), "Replace" answered
+        for req in [Request::Move { sources: vec![x.join("f.txt")], dest: x.clone() }, Request::Copy { sources: vec![x.join("f.txt")], dest: x.clone() }] {
+            let r = run(&req, &job);
+            assert!(matches!(r, Reply::Done { .. }), "{r:?}");
+            intact();
+        }
+        // a folder moved into its own parent
+        let r = run(&Request::Move { sources: vec![x.join("folder")], dest: x.clone() }, &job);
+        assert!(matches!(r, Reply::Done { .. }), "{r:?}");
+        intact();
+        // a folder into itself, and a folder into a folder inside it (the second in other letter case: compared by identity)
+        let inside = PathBuf::from(x.join("folder").to_string_lossy().to_uppercase());
+        for req in [
+            Request::Move { sources: vec![x.join("folder")], dest: x.join("folder") },
+            Request::Copy { sources: vec![x.clone()], dest: if cfg!(windows) { inside.clone() } else { x.join("folder") } },
+        ] {
+            let r = run(&req, &job);
+            assert!(matches!(r, Reply::Refused { .. }), "{r:?}");
+            intact();
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn admin_move_source_that_changed_during_the_copy_is_kept() {
+        let (job, _tx) = job();
+        let d = temp("grow");
+        let (src, dst) = (d.join("src"), d.join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("log.txt"), b"first part").unwrap();
+        // the source "grows" by 5 bytes while it is copied (as seen by the size check after the copy)
+        crate::tree::GROW.with(|g| g.set(5));
+        let r = run(&Request::Move { sources: vec![src.join("log.txt")], dest: dst.clone() }, &job);
+        crate::tree::GROW.with(|g| g.set(0));
+        assert!(matches!(r, Reply::Done { ok: false, kept: 1, .. }), "{r:?}");
+        assert_eq!(std::fs::read(src.join("log.txt")).unwrap(), b"first part", "the source stays");
+        assert_eq!(std::fs::read_dir(&dst).unwrap().count(), 0, "no copy and no temp file left at the destination");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The version of this conversation; the helper refuses another.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 /// The helper's program (its file name without the extension), beside `leaf`.
 pub const HELPER_EXE_STEM: &str = "leaf-helper";
 /// The longest request frame the helper reads.
@@ -268,7 +268,9 @@ pub enum Reply {
     /// The operation ended: `ok` false = cancelled or not all done (as leaf's own engines answer `Ok(false)`). `pairs` = (source,
     /// result) of what was done, for leaf's undo list.
     /// `missing`: named items that were already gone (a delete counts them as done, a copy or move skipped them).
-    Done { ok: bool, pairs: Vec<(PathBuf, PathBuf)>, missing: u32 },
+    /// `kept`: move sources that stayed (in use by another program, changed during the copy, with data a copy would lose);
+    /// `partial`: copies without something of their source (alternate data streams, encryption).
+    Done { ok: bool, pairs: Vec<(PathBuf, PathBuf)>, missing: u32, kept: u32, partial: u32 },
     /// Refused before anything was done.
     Refused { why: Refusal },
     /// Tried and failed. `denied`: the system said "access denied" even to the administrator. `detail` is the system's text,
