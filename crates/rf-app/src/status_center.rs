@@ -66,6 +66,34 @@ pub struct OpState {
     lock_paths: Vec<std::path::PathBuf>,
     /// Says what a transfer is, so that its end goes into the history of transfers (`xfer_history`).
     note: Option<crate::xfer_history::Note>,
+    /// Its engine waits while `paused` is set (set by the code that starts it, see [`set_pausable`]). A job that does not look at
+    /// the flag cannot be held by "Pause all": it is listed as "cannot pause, finishing".
+    pausable: bool,
+}
+
+/// "Pause all" while it is on: since when, and the jobs it holds (only those it paused itself: a job the user had paused
+/// stays paused when everything goes on).
+struct AllPause {
+    since: Instant,
+    held: Vec<u64>,
+}
+
+/// The pause flags "Pause all" set: the saved download and Usenet lists do not write them as a pause of the user's (a restart
+/// starts without it).
+static HELD_FLAGS: std::sync::Mutex<Vec<Arc<AtomicBool>>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether "Pause all" (not the user's own pause button) holds this pause flag.
+pub fn held_by_all(flag: &Arc<AtomicBool>) -> bool {
+    HELD_FLAGS.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|f| Arc::ptr_eq(f, flag))
+}
+
+/// What the status bar's switch and its list say about "Pause all".
+pub struct PauseAllView {
+    pub secs: f32,
+    /// (job title, how long it has been held)
+    pub held: Vec<(String, f32)>,
+    /// Running jobs that cannot be held.
+    pub cannot: Vec<String>,
 }
 
 /// A question from the copy engine, kept here so every window's strip or card can ask it, not
@@ -110,6 +138,7 @@ impl OpState {
             undo_mark: None,
             lock_paths: Vec::new(),
             note: None,
+            pausable: false,
         }
     }
 
@@ -142,6 +171,8 @@ pub struct Ops {
     done_epoch: u64,
     /// A once-a-second wake-up task is running (see [`keep_ticking`]).
     ticking: bool,
+    /// "Pause all" is on.
+    all_paused: Option<AllPause>,
 }
 
 /// Finished operations kept in the list (Files keeps them until "Clear").
@@ -163,7 +194,7 @@ impl Ops {
     }
 
     fn blank() -> Self {
-        Self { ops: Vec::new(), next: 1, open: false, unseen_failure: false, owner: None, in_window: false, auto_closed: None, busy_since: None, pulse: None, pulse_count: 0, all_done: None, done_epoch: 0, ticking: false }
+        Self { ops: Vec::new(), next: 1, open: false, unseen_failure: false, owner: None, in_window: false, auto_closed: None, busy_since: None, pulse: None, pulse_count: 0, all_done: None, done_epoch: 0, ticking: false, all_paused: None }
     }
 
     pub fn toggle(&mut self, owner: AnyWindowHandle, cx: &mut Context<Self>) {
@@ -251,7 +282,52 @@ impl Ops {
     /// Something runs that is not waiting: its speed and time left change by the clock, not only
     /// by progress reports (a disk that stops answering sends none).
     fn wants_tick(&self) -> bool {
-        self.ops.iter().any(|o| o.phase == OpPhase::Running && !o.paused.load(Ordering::Relaxed))
+        self.all_paused.is_some() || self.ops.iter().any(|o| o.phase == OpPhase::Running && !o.paused.load(Ordering::Relaxed))
+    }
+
+    /// "Pause all": every running job that can wait is held (the ones already paused by the user are left as they are).
+    fn all_paused_on(&mut self) {
+        if self.all_paused.is_some() {
+            return;
+        }
+        let mut held = Vec::new();
+        for op in self.ops.iter_mut().filter(|o| o.phase == OpPhase::Running && o.pausable) {
+            if !op.paused.load(Ordering::Relaxed) {
+                op.paused.store(true, Ordering::Relaxed);
+                op.stats.pause();
+                held.push(op.id);
+                HELD_FLAGS.lock().unwrap_or_else(|e| e.into_inner()).push(op.paused.clone());
+            }
+        }
+        self.all_paused = Some(AllPause { since: Instant::now(), held });
+    }
+
+    /// "Resume all": the jobs it held go on; the others were not its to touch.
+    fn all_paused_off(&mut self) {
+        let Some(all) = self.all_paused.take() else { return };
+        for id in all.held {
+            if let Some(op) = self.ops.iter_mut().find(|o| o.id == id) {
+                if op.paused.load(Ordering::Relaxed) {
+                    op.paused.store(false, Ordering::Relaxed);
+                    let t = op.secs();
+                    op.stats.resume(t);
+                }
+            }
+        }
+        HELD_FLAGS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// What the switch shows; `None` while it is off.
+    pub fn pause_all_view(&self) -> Option<PauseAllView> {
+        let all = self.all_paused.as_ref()?;
+        let held = self
+            .ops
+            .iter()
+            .filter(|o| o.phase == OpPhase::Running && all.held.contains(&o.id))
+            .map(|o| (o.title.clone(), o.secs() as f32))
+            .collect();
+        let cannot = self.ops.iter().filter(|o| o.phase == OpPhase::Running && !o.pausable).map(|o| o.title.clone()).collect();
+        Some(PauseAllView { secs: all.since.elapsed().as_secs_f32(), held, cannot })
     }
 
     /// An operation ended. When it was the last one of a run long enough to be noticed, the ring
@@ -335,6 +411,11 @@ impl Ops {
         if let Some(op) = self.ops.iter_mut().find(|o| o.id == id) {
             let now_paused = !op.paused.load(Ordering::Relaxed);
             op.paused.store(now_paused, Ordering::Relaxed);
+            // the user's own click takes the job out of what "Pause all" holds
+            if let Some(all) = &mut self.all_paused {
+                all.held.retain(|h| *h != id);
+            }
+            HELD_FLAGS.lock().unwrap_or_else(|e| e.into_inner()).retain(|f| !Arc::ptr_eq(f, &op.paused));
             if now_paused {
                 op.stats.pause();
             } else {
@@ -1016,6 +1097,10 @@ fn transfer_run(
     own_id.set(id);
     set_extras(cx, id, Some(words), Some(open_dest), record.then_some(mark));
     set_lock_paths(cx, id, lock_paths);
+    // (only leaf's own engine waits while the flag is set; the system's does not look at it)
+    if fast {
+        set_pausable(cx, id);
+    }
     set_transfer(cx, id, crate::xfer_history::Note { kind: if kind == Transfer::Copy { crate::xfer_history::Kind::Copy } else { crate::xfer_history::Kind::Move }, what: note_what, from: note_from, to: note_to });
 }
 
@@ -1027,6 +1112,53 @@ fn offer_admin(cx: &mut App, id: u64, retry: impl Fn(&mut App) + 'static) {
     }
     set_result(cx, id, None, Some((t!("Retry as administrator").to_string(), std::rc::Rc::new(retry))));
 }
+
+/// The job's engine waits while its pause flag is set, so "Pause all" can hold it. While "Pause all" is on, a job that starts
+/// and can wait is held at once.
+pub fn set_pausable(cx: &mut App, id: u64) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    entity.update(cx, |ops, cx| {
+        let on = ops.all_paused.is_some();
+        if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
+            op.pausable = true;
+            if on && !op.paused.load(Ordering::Relaxed) {
+                op.paused.store(true, Ordering::Relaxed);
+                op.stats.pause();
+                HELD_FLAGS.lock().unwrap_or_else(|e| e.into_inner()).push(op.paused.clone());
+                if let Some(all) = &mut ops.all_paused {
+                    all.held.push(id);
+                }
+            }
+        }
+        cx.notify();
+    });
+}
+
+/// "Pause all" / "Resume all": the command and the status bar's switch.
+pub fn set_pause_all(cx: &mut App, on: bool) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    entity.update(cx, |ops, cx| {
+        if on {
+            ops.all_paused_on();
+        } else {
+            ops.all_paused_off();
+        }
+        // (the saved download list does not keep this as a pause of the user's)
+        crate::downloads::persist_soon();
+        cx.notify();
+    });
+    // the Usenet queue holds its waiting jobs back too, as its own "Pause all" does (only when the user had not paused it already)
+    if on {
+        if !leaf_nzb::queue::all_paused() {
+            crate::usenet::pause_all(true);
+            USENET_BY_ALL.store(true, Ordering::Relaxed);
+        }
+    } else if USENET_BY_ALL.swap(false, Ordering::Relaxed) {
+        crate::usenet::pause_all(false);
+    }
+}
+
+static USENET_BY_ALL: AtomicBool = AtomicBool::new(false);
 
 /// Marks a running job as a transfer: when it ends, it is written to the history of transfers.
 pub fn set_transfer(cx: &mut App, id: u64, note: crate::xfer_history::Note) {
@@ -1456,7 +1588,7 @@ pub fn no_trash_asker(cx: &mut App) -> NoTrashTx {
 /// The Trash step of a revert: moves `p` to the Trash and gives the (original, in the Trash) pairs. Anything short of the file
 /// being in the Trash and gone from its place (the job cancelled: `Ok(false)`, nothing recorded, the file still there) is an
 /// `Err`, so the revert never writes over a file whose content was not kept.
-fn trash_for_revert(p: &std::path::Path, t: &Arc<Tracker>) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf)>, String> {
+pub(crate) fn trash_for_revert(p: &std::path::Path, t: &Arc<Tracker>) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf)>, String> {
     match fileops::delete_tracked(&[p.to_path_buf()], false, t.clone()) {
         Ok(true) => {}
         Ok(false) => return Err(t!("Moving the current version to the Trash was stopped; nothing was changed").to_string()),

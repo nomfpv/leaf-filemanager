@@ -788,6 +788,7 @@ pub fn download(cx: &mut App, items: Vec<(VPath, bool)>, dest: PathBuf, after: O
         to: dest.to_string_lossy().into_owned(),
     };
     let id = crate::status_center::start_with_id(cx, title, move |tr| download_work(&tr, &items, &dest, &arrived), done);
+    crate::status_center::set_pausable(cx, id);
     crate::status_center::set_transfer(cx, id, note);
 }
 
@@ -1083,6 +1084,7 @@ pub fn transfer(cx: &mut App, items: Vec<(VPath, bool)>, dest: VPath, mv: bool, 
         to: dest.to_string(),
     };
     let id = crate::status_center::start_with_id(cx, title, move |tr| transfer_work(&tr, &items, &dest, mv, &offer), Some(done));
+    crate::status_center::set_pausable(cx, id);
     crate::status_center::set_transfer(cx, id, note);
 }
 

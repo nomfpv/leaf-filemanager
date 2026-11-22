@@ -269,7 +269,7 @@ fn persist() {
         let mut st = store();
         for s in &mut st.active {
             if let Some(l) = live.iter().find(|l| l.key == s.key) {
-                s.paused = l.paused.load(Ordering::Relaxed) && !l.by_schedule;
+                s.paused = l.paused.load(Ordering::Relaxed) && !l.by_schedule && !crate::status_center::held_by_all(&l.paused);
                 s.priority = l.priority;
             }
         }
@@ -519,6 +519,7 @@ fn run_job(job: SavedJob, cx: &mut App) {
     };
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_job, &s, &limit, &got, &fail_flag), Some(on_done));
     id_cell.set(id);
+    crate::status_center::set_pausable(cx, id);
     if id != 0 {
         let queue: crate::status_center::ResultAction = (t!("Queue…").to_string(), std::rc::Rc::new(move |cx: &mut App| queue_dialog(key, cx)));
         crate::status_center::set_live_action(cx, id, queue);

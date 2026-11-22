@@ -412,6 +412,7 @@ fn start_run(plan: Plan, cx: &mut App) {
         })),
     );
     id_cell.set(id);
+    crate::status_center::set_pausable(cx, id);
 }
 
 /// Will the Trash take `p` by a move? Not on a network drive or a stick without a Recycle Bin, not when the drive's bin is off or

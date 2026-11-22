@@ -425,6 +425,7 @@ pub fn start_media(cx: &mut App, m: MediaRequest, after: After) {
     };
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_m, plan, &got, &fail_flag), Some(on_done));
     id_cell.set(id);
+    crate::status_center::set_pausable(cx, id);
 }
 
 /// leaf's VPN proxy as yt-dlp takes it, when the VPN is up and lets other programs use it.

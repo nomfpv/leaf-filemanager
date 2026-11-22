@@ -344,7 +344,7 @@ pub fn persist_soon() {
         let mut st = store();
         for s in &mut st.active {
             if let Some(l) = live.iter().find(|l| l.key == s.key) {
-                s.paused = l.paused.load(Ordering::Relaxed) && !l.by_schedule;
+                s.paused = l.paused.load(Ordering::Relaxed) && !l.by_schedule && !crate::status_center::held_by_all(&l.paused);
             }
         }
         st.clone()
@@ -491,6 +491,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     LIVE.lock().unwrap_or_else(|e| e.into_inner()).push(live);
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_req, key, settings, through_vpn, (&limit, &got), &fail_flag), Some(on_done));
     id_cell.set(id);
+    crate::status_center::set_pausable(cx, id);
     crate::status_center::set_transfer(
         cx,
         id,
