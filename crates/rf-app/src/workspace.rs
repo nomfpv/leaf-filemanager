@@ -4224,9 +4224,9 @@ impl Workspace {
                     // (Index: a plain square)
                     .when(tag && p.square_marks, |d| d.size(px(16.)).flex().items_center().justify_center().child(div().size(px(9.)).bg(icon_color)))
                     .when(!tag, |d| {
-                        // a saved host: its device icon (the clean set; the realistic one is too thin at this size)
+                        // a saved host: its device icon
                         let size = if rail { 18. } else { 16. };
-                        match host_kind.and_then(|k| crate::host_icons::element(k, false, size, icon_color, p.accent)) {
+                        match host_kind.and_then(|k| crate::host_icons::element(k, size, icon_color, p.accent)) {
                             Some(el) => d.child(el),
                             None => d.child(Icon::new(icon).size(px(size)).text_color(icon_color)),
                         }

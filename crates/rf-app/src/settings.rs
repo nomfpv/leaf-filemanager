@@ -804,8 +804,6 @@ pub struct Settings {
     /// The thumbnail cache's limit in MB (the cache is in memory); `None` = the default, 64 MB, and no key in the file.
     pub thumb_cache_mb: Option<u32>,
     pub show_libraries: bool,
-    /// Host and device icons: the realistic set instead of the clean line set (Settings > Appearance > Device icons).
-    pub realistic_device_icons: bool,
     /// A "Klasörler" section in the sidebar: the folder tree (drives and the profile folder as roots). Off by default.
     pub sidebar_tree: bool,
     /// The tree opens the branch to the open folder, marks it and scrolls it into view after every navigation.
@@ -1080,7 +1078,6 @@ impl Default for Settings {
             transfer_progress: TransferProgress::StatusBar,
             thumb_cache_mb: None,
             show_libraries: false,
-            realistic_device_icons: false,
             sidebar_tree: false,
             sidebar_tree_follow: true,
             address_commands: true,

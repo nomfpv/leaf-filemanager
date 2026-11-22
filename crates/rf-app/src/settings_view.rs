@@ -1628,13 +1628,6 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             dropdown("visibility", p, s.visibility, vec![(Visibility::High, t!("High").into()), (Visibility::Standard, t!("Standard").into())], |s, v| s.visibility = v),
         ),
         accent_card(p, s),
-        card(
-            p,
-            L::Server,
-            t!("Device icons"),
-            Some(t!("The pictures of hosts and devices on Home and in Settings > Hosts. Clean: line icons in the theme's colours. Realistic: detailed pictures. The sidebar keeps the clean ones in both modes (the realistic ones are too fine at its size).")),
-            dropdown("device-icons", p, s.realistic_device_icons, vec![(false, t!("Clean").into()), (true, t!("Realistic").into())], |s, v| s.realistic_device_icons = v),
-        ),
         icons_card(p, s),
         backdrop_card(p, s),
         themes_folder_card(p),

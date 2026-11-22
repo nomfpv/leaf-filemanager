@@ -248,7 +248,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
         if let Some(k) = &h.key_file {
             desc.push_str(&format!("  ·  {} {k}", t!("key")));
         }
-        let icon = device_icon(h.kind, 20., p, cx);
+        let icon = device_icon(h.kind, 20., p);
         v.push(shell(p).child(card_body_with(p, icon, h.name.clone().into(), Some(desc.into()), Some(controls))).into_any_element());
     }
     v.extend(saved_section(p, cx));
@@ -501,7 +501,7 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
                     h_flex()
                         .gap_3()
                         .items_center()
-                        .child(device_icon(h.kind, 28., p, cx))
+                        .child(device_icon(h.kind, 28., p))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -550,10 +550,8 @@ mod vpn_probe_tests {
     }
 }
 
-/// A host kind's device icon (Settings > Appearance > Device icons picks the clean or the realistic set); the line server icon
-/// if the picture cannot be made.
-fn device_icon(kind: HostKind, size: f32, p: &Palette, cx: &App) -> AnyElement {
-    let realistic = cx.global::<crate::settings::Settings>().realistic_device_icons;
-    crate::host_icons::element(kind, realistic, size, p.text_secondary, p.accent)
+/// A host kind's device icon; the line server icon if the picture cannot be made.
+fn device_icon(kind: HostKind, size: f32, p: &Palette) -> AnyElement {
+    crate::host_icons::element(kind, size, p.text_secondary, p.accent)
         .unwrap_or_else(|| Icon::new(L::Server).size(px(size)).text_color(p.text_secondary).into_any_element())
 }
