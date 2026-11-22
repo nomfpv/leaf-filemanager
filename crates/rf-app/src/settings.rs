@@ -883,6 +883,10 @@ pub struct Settings {
     /// Ghost rows (Settings > Developer): files deleted since the last commit in a project with agent sessions show faint under the list,
     /// with Restore and Dismiss. Needs the agent layer.
     pub ghost_files: bool,
+    /// "Let agents move and delete files through leaf" (Settings > Developer, plan F9): leaf-mcp's tools that copy, move, rename,
+    /// create folders and move to the Recycle Bin are offered and taken. Off (the default): they are not even listed, and leaf
+    /// refuses them. Each session still asks the user once, in leaf, before its first change.
+    pub agent_file_ops: bool,
     /// A day's budget of new agent tokens in thousands (Settings > Developer); 0: no budget ring. The ring is calm, it never alerts.
     pub agent_budget_k: u32,
     /// Where a new lane's worktree goes (Settings > Developer): `<repo>` is the repository's folder, `<name>` the lane's name; a
@@ -1153,6 +1157,7 @@ impl Default for Settings {
             fresh_tint: false,
             ai_layer: true,
             ghost_files: true,
+            agent_file_ops: false,
             agent_budget_k: 0,
             lane_folder: "<repo>-wt/<name>".into(),
             modules: Default::default(),

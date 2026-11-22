@@ -4,7 +4,11 @@
 //! - `pick` + a prompt: leaf asks the user with the open dialog (several files can be chosen, the prompt is its title) and answers
 //!   the chosen paths, none when the dialog is cancelled.
 //!
-//! Neither changes, moves or deletes anything. The requests are not shown to the user as launches: a launch message never starts
+//! - `op:` + a JSON request: search, list a folder, copy, move, rename, create a folder, move to the Recycle Bin / Trash, all
+//!   checked and run by [`crate::agent_files`] (the changing ones only with the switch in Settings > Developer on).
+//! - `caps`: answers `files=on` or `files=off`, the switch.
+//!
+//! `show` and `pick` change, move or delete nothing. The requests are not shown to the user as launches: a launch message never starts
 //! with [`PREFIX`].
 
 use gpui_kit::App;
@@ -43,6 +47,15 @@ pub fn handle(req: String, ack: leaf_sys::handover::Ack, cx: &mut App) {
             }
         })
         .detach();
+    } else if let Some(json) = req.strip_prefix("op:") {
+        // search, list a folder, and the changes (agent_files, which checks everything again here)
+        crate::agent_files::handle(json.to_string(), ack, cx);
+    } else if req == "caps" {
+        // what leaf-mcp may list: the changing tools only with the switch on
+        ack.reply(if crate::agent_files::enabled(cx) { "files=on" } else { "files=off" });
+        if ack.done() {
+            crate::last_window::settle(cx);
+        }
     } else {
         ack.refuse();
     }

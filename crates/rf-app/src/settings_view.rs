@@ -2762,6 +2762,13 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             Some(t!("Shows what coding agents (Claude Code) are doing: the Agents page, a small dot on the folder and the tab of a running session, and a line in the status bar. Reads the agent's own session files on this PC, never changes them. Off: nothing is read and nothing is shown.")),
             sw("ai-layer", p, s.ai_layer, |s, v| s.ai_layer = v),
         ),
+        card(
+            p,
+            L::Lock,
+            t!("Let agents move and delete files through leaf"),
+            Some(t!("Coding agents connected through leaf-mcp may copy, move, rename, create folders and move items to the Recycle Bin / Trash, only inside the project folder of their session. The first change of a session asks you here. Every change shows in the Status Center and can be undone; nothing is overwritten and nothing is deleted for good. Off: these tools are not offered at all.")),
+            sw("agent-file-ops", p, s.agent_file_ops, |s, v| s.agent_file_ops = v),
+        ),
         agents_only(s, card(
             p,
             L::Brain,
