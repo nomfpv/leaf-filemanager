@@ -781,12 +781,7 @@ pub fn download(cx: &mut App, items: Vec<(VPath, bool)>, dest: PathBuf, after: O
             after(v, cx)
         })
     });
-    let note = crate::xfer_history::Note {
-        kind: crate::xfer_history::Kind::Download,
-        what: what.clone(),
-        from: items.first().map(|(v, _)| v.to_string()).unwrap_or_default(),
-        to: dest.to_string_lossy().into_owned(),
-    };
+    let note = crate::xfer_history::Note::new(crate::xfer_history::Kind::Download, what.clone(), items.first().map(|(v, _)| v.to_string()).unwrap_or_default(), dest.to_string_lossy().into_owned());
     let id = crate::status_center::start_with_id(cx, title, move |tr| download_work(&tr, &items, &dest, &arrived), done);
     crate::status_center::set_pausable(cx, id);
     crate::status_center::set_transfer(cx, id, note);
@@ -1077,12 +1072,12 @@ pub fn transfer(cx: &mut App, items: Vec<(VPath, bool)>, dest: VPath, mv: bool, 
             offer_verify(local, remote, cx);
         }
     });
-    let note = crate::xfer_history::Note {
-        kind: if mv { crate::xfer_history::Kind::Move } else if items[0].0.scheme() == "file" { crate::xfer_history::Kind::Upload } else { crate::xfer_history::Kind::Copy },
-        what: what.clone(),
-        from: items[0].0.to_string(),
-        to: dest.to_string(),
-    };
+    let note = crate::xfer_history::Note::new(
+        if mv { crate::xfer_history::Kind::Move } else if items[0].0.scheme() == "file" { crate::xfer_history::Kind::Upload } else { crate::xfer_history::Kind::Copy },
+        what.clone(),
+        items[0].0.to_string(),
+        dest.to_string(),
+    );
     let id = crate::status_center::start_with_id(cx, title, move |tr| transfer_work(&tr, &items, &dest, mv, &offer), Some(done));
     crate::status_center::set_pausable(cx, id);
     crate::status_center::set_transfer(cx, id, note);

@@ -517,12 +517,50 @@ fn run_job(job: SavedJob, cx: &mut App) {
             }
         })
     };
+    let saved_folder = got.clone();
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_job, &s, &limit, &got, &fail_flag), Some(on_done));
     id_cell.set(id);
     crate::status_center::set_pausable(cx, id);
+    // (the download page lists it, and the history of transfers keeps it; the NZB file is what "Retry" starts again from)
+    crate::status_center::set_transfer(
+        cx,
+        id,
+        crate::xfer_history::Note {
+            kind: crate::xfer_history::Kind::Download,
+            what: job.title.clone(),
+            from: job.nzb.to_string_lossy().into_owned(),
+            to: job.dest.to_string_lossy().into_owned(),
+            via: Some(crate::xfer_history::Via::Usenet),
+            saved: Some(std::sync::Arc::new(move || saved_folder.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect())),
+        },
+    );
     if id != 0 {
+        let page_queue: std::rc::Rc<dyn Fn(crate::status_center::QueueAct)> = std::rc::Rc::new(move |act| queue_act(key, act));
+        crate::status_center::set_download_queue(cx, id, page_queue);
         let queue: crate::status_center::ResultAction = (t!("Queue…").to_string(), std::rc::Rc::new(move |cx: &mut App| queue_dialog(key, cx)));
         crate::status_center::set_live_action(cx, id, queue);
+    }
+}
+
+/// The download page's move up / move down / priority for a job (the same calls as the card's "Queue…").
+fn queue_act(key: u64, act: crate::status_center::QueueAct) {
+    use crate::status_center::QueueAct as A;
+    match act {
+        A::Up | A::Down => leaf_nzb::queue::move_by(key, act == A::Up),
+        A::High | A::Low => {
+            let now = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|l| l.key == key).map(|l| l.priority).unwrap_or_default();
+            let want = match act {
+                A::High if now == JobPriority::High => JobPriority::Normal,
+                A::High => JobPriority::High,
+                _ if now == JobPriority::Low => JobPriority::Normal,
+                _ => JobPriority::Low,
+            };
+            leaf_nzb::queue::set_priority(key, want);
+            if let Some(l) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|l| l.key == key) {
+                l.priority = want;
+            }
+            persist();
+        }
     }
 }
 

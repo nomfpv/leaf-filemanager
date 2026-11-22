@@ -18,6 +18,16 @@ pub enum Kind {
     Upload,
 }
 
+/// How a download came to leaf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Via {
+    Web,
+    Video,
+    Usenet,
+    Browser,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -38,9 +48,21 @@ pub struct Record {
     pub result: Outcome,
     /// When it ended, ms since 1970.
     pub at_ms: i64,
+    /// For a download of the download manager: the way it came. `None` on older records and on transfers of other kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<Via>,
 }
 
 impl Record {
+    /// The way a download of the download manager came; older records are told by their address (a web address is a web download;
+    /// a download from a server of the Hosts list is not the manager's).
+    pub fn download_via(&self) -> Option<Via> {
+        if self.kind != Kind::Download {
+            return None;
+        }
+        self.via.or_else(|| (self.from.starts_with("http://") || self.from.starts_with("https://")).then_some(Via::Web))
+    }
+
     /// Bytes a second over the whole run (None when nothing was counted or it took no time).
     pub fn speed(&self) -> Option<f64> {
         (self.bytes > 0 && self.millis > 0).then(|| self.bytes as f64 / (self.millis as f64 / 1000.0))
@@ -93,7 +115,7 @@ mod tests {
     use super::*;
 
     fn rec(i: u64) -> Record {
-        Record { kind: Kind::Copy, what: format!("f{i}"), from: "C:/a".into(), to: "D:/b".into(), bytes: 1000 * i, millis: 500, result: Outcome::Done, at_ms: i as i64 }
+        Record { kind: Kind::Copy, what: format!("f{i}"), from: "C:/a".into(), to: "D:/b".into(), bytes: 1000 * i, millis: 500, result: Outcome::Done, at_ms: i as i64, via: None }
     }
 
     #[test]

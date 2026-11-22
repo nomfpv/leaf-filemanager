@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-pub use rf_core::xfer_log::{Kind, Outcome, Record};
+pub use rf_core::xfer_log::{Kind, Outcome, Record, Via};
 use rf_core::xfer_log::{self, Log};
 
 static ON: AtomicBool = AtomicBool::new(true);
@@ -19,6 +19,19 @@ pub struct Note {
     pub what: String,
     pub from: String,
     pub to: String,
+    /// A download of the download manager: how it came.
+    pub via: Option<Via>,
+    /// The files it made, asked when it ends (a download's saved file; `to` is only the folder it was asked to go into).
+    pub saved: Option<Saved>,
+}
+
+/// What a job calls its result files with once it is over.
+pub type Saved = std::sync::Arc<dyn Fn() -> Vec<std::path::PathBuf> + Send + Sync>;
+
+impl Note {
+    pub fn new(kind: Kind, what: String, from: String, to: String) -> Self {
+        Self { kind, what, from, to, via: None, saved: None }
+    }
 }
 
 fn path() -> Option<std::path::PathBuf> {
@@ -45,8 +58,10 @@ pub fn record(n: Note, bytes: u64, millis: u64, result: Outcome) {
         return;
     }
     let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    // (a download: where the file went, not only the folder it was asked to go into)
+    let to = n.saved.as_ref().and_then(|f| f().into_iter().next()).map_or(n.to, |p| p.to_string_lossy().into_owned());
     with(|log| {
-        log.push(Record { kind: n.kind, what: n.what, from: n.from, to: n.to, bytes, millis, result, at_ms });
+        log.push(Record { kind: n.kind, what: n.what, from: n.from, to, bytes, millis, result, at_ms, via: n.via });
         if let Some(p) = path() {
             let _ = xfer_log::save(&p, log);
         }
@@ -56,6 +71,16 @@ pub fn record(n: Note, bytes: u64, millis: u64, result: Outcome) {
 /// The records, newest first.
 pub fn recent() -> Vec<Record> {
     with(|log| log.records.iter().rev().cloned().collect())
+}
+
+/// Forgets the records `gone` says (the download page's "Remove from the list" and "Clear finished"): the entries only, never a file.
+pub fn forget(gone: impl Fn(&Record) -> bool) {
+    with(|log| log.records.retain(|r| !gone(r)));
+    with(|log| {
+        if let Some(p) = path() {
+            let _ = xfer_log::save(&p, log);
+        }
+    });
 }
 
 /// Forgets every record, in memory and in the file.

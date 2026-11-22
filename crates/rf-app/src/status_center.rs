@@ -69,6 +69,8 @@ pub struct OpState {
     /// Its engine waits while `paused` is set (set by the code that starts it, see [`set_pausable`]). A job that does not look at
     /// the flag cannot be held by "Pause all": it is listed as "cannot pause, finishing".
     pausable: bool,
+    /// What the download page (`dlist`) knows about this job when it is one of the download manager's; kept after the job ends.
+    dl: Option<DlMeta>,
 }
 
 /// "Pause all" while it is on: since when, and the jobs it holds (only those it paused itself: a job the user had paused
@@ -94,6 +96,54 @@ pub struct PauseAllView {
     pub held: Vec<(String, f32)>,
     /// Running jobs that cannot be held.
     pub cannot: Vec<String>,
+}
+
+/// A download manager job as the page lists it.
+struct DlMeta {
+    via: crate::xfer_history::Via,
+    name: String,
+    from: String,
+    to: String,
+    saved: Option<crate::xfer_history::Saved>,
+    /// A queue of its own (Usenet) that can move the job and give it a priority.
+    queue: Option<std::rc::Rc<dyn Fn(QueueAct)>>,
+}
+
+/// What the download page asks a job's own queue for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum QueueAct {
+    Up,
+    Down,
+    High,
+    Low,
+}
+
+/// A download manager job, copied out of [`Ops`] for the download page.
+pub struct LiveDl {
+    pub id: u64,
+    pub via: crate::xfer_history::Via,
+    pub name: String,
+    /// The address (without a query or a sign-in), or for Usenet the NZB file.
+    pub from: String,
+    /// The folder it was asked to go into.
+    pub to: String,
+    /// The files it made (a finished job).
+    pub saved: Vec<std::path::PathBuf>,
+    pub phase: OpPhase,
+    pub paused: bool,
+    /// What it says it is doing ("Connecting", "Waiting for the downloads before it (2)").
+    pub current: Option<String>,
+    pub bytes: Option<(u64, u64)>,
+    pub frac: Option<f32>,
+    pub speed: Option<f64>,
+    pub eta_secs: Option<f64>,
+    /// When it began, ms since 1970.
+    pub started_ms: i64,
+    /// How long it ran (so far).
+    pub ran_ms: u64,
+    /// "Retry" on a failed one: starts it again like the card's button.
+    pub retry: Option<ResultAction>,
+    pub can_queue: bool,
 }
 
 /// A question from the copy engine, kept here so every window's strip or card can ask it, not
@@ -139,6 +189,7 @@ impl OpState {
             lock_paths: Vec::new(),
             note: None,
             pausable: false,
+            dl: None,
         }
     }
 
@@ -1101,7 +1152,7 @@ fn transfer_run(
     if fast {
         set_pausable(cx, id);
     }
-    set_transfer(cx, id, crate::xfer_history::Note { kind: if kind == Transfer::Copy { crate::xfer_history::Kind::Copy } else { crate::xfer_history::Kind::Move }, what: note_what, from: note_from, to: note_to });
+    set_transfer(cx, id, crate::xfer_history::Note::new(if kind == Transfer::Copy { crate::xfer_history::Kind::Copy } else { crate::xfer_history::Kind::Move }, note_what, note_from, note_to));
 }
 
 /// A failed operation's card gets "Retry as administrator" (the click starts the helper, or uses the one that runs).
@@ -1165,9 +1216,66 @@ pub fn set_transfer(cx: &mut App, id: u64, note: crate::xfer_history::Note) {
     let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
     entity.update(cx, |ops, _| {
         if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
+            if let Some(via) = note.via {
+                op.dl = Some(DlMeta { via, name: note.what.clone(), from: note.from.clone(), to: note.to.clone(), saved: note.saved.clone(), queue: None });
+            }
             op.note = Some(note);
         }
     });
+}
+
+/// The download manager's own queue (Usenet) for a job: what moves it up or down and sets its priority.
+pub fn set_download_queue(cx: &mut App, id: u64, queue: std::rc::Rc<dyn Fn(QueueAct)>) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    entity.update(cx, |ops, _| {
+        if let Some(d) = ops.ops.iter_mut().find(|o| o.id == id).and_then(|o| o.dl.as_mut()) {
+            d.queue = Some(queue);
+        }
+    });
+}
+
+/// Moves a job in its own queue (see [`set_download_queue`]).
+pub fn queue_act(cx: &mut App, id: u64, act: QueueAct) {
+    let Some(entity) = cx.try_global::<OpsGlobal>().map(|g| g.0.clone()) else { return };
+    let q = entity.read(cx).ops.iter().find(|o| o.id == id).and_then(|o| o.dl.as_ref()).and_then(|d| d.queue.clone());
+    if let Some(q) = q {
+        q(act);
+    }
+    entity.update(cx, |_, cx| cx.notify());
+}
+
+impl Ops {
+    /// The download manager's jobs, running and ended (the ended stay while the Status Center keeps them), oldest first.
+    pub fn downloads(&self) -> Vec<LiveDl> {
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        self.ops
+            .iter()
+            .filter_map(|o| {
+                let d = o.dl.as_ref()?;
+                let v = o.view();
+                let ran_ms = o.ended.unwrap_or_else(Instant::now).duration_since(o.started).as_millis() as u64;
+                Some(LiveDl {
+                    id: o.id,
+                    via: d.via,
+                    name: d.name.clone(),
+                    from: d.from.clone(),
+                    to: d.to.clone(),
+                    saved: d.saved.as_ref().map(|f| f()).unwrap_or_default(),
+                    phase: o.phase.clone(),
+                    paused: v.paused,
+                    current: o.current.clone(),
+                    bytes: v.bytes.or_else(|| Some(o.bytes.get()).filter(|b| b.0 > 0)),
+                    frac: v.frac,
+                    speed: v.pace.speed,
+                    eta_secs: v.pace.eta_secs,
+                    started_ms: now_ms - o.started.elapsed().as_millis() as i64,
+                    ran_ms,
+                    retry: o.action.clone().filter(|(label, _)| *label == t!("Retry")),
+                    can_queue: d.queue.is_some(),
+                })
+            })
+            .collect()
+    }
 }
 
 /// The running jobs' pace for Home's transfers widget: (title, speed bars of the last minute, bytes a second).

@@ -423,9 +423,23 @@ pub fn start_media(cx: &mut App, m: MediaRequest, after: After) {
             }
         })
     };
+    let saved = crate::downloads::saved_of(&got);
     let id = crate::status_center::start_with_id(cx, title, move |tr| work(&tr, &work_m, plan, &got, &fail_flag), Some(on_done));
     id_cell.set(id);
     crate::status_center::set_pausable(cx, id);
+    // (the download page lists it, and the history of transfers keeps it)
+    crate::status_center::set_transfer(
+        cx,
+        id,
+        crate::xfer_history::Note {
+            kind: crate::xfer_history::Kind::Download,
+            what: name.clone(),
+            from: crate::xfer_history::plain_url(&m.req.url),
+            to: m.req.dest.to_string_lossy().into_owned(),
+            via: Some(crate::xfer_history::Via::Video),
+            saved: Some(saved),
+        },
+    );
 }
 
 /// leaf's VPN proxy as yt-dlp takes it, when the VPN is up and lets other programs use it.

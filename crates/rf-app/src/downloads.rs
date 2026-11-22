@@ -445,6 +445,7 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
     let failed = Arc::new(AtomicBool::new(false));
     let id_cell = std::rc::Rc::new(std::cell::Cell::new(0u64));
     let (work_req, got, fail_flag) = (req.clone(), arrived.clone(), failed.clone());
+    let arrived_note = arrived.clone();
     let on_done: crate::status_center::OnDone = {
         let id_cell = id_cell.clone();
         let req = req.clone();
@@ -500,6 +501,8 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
             what: dl::file_name(None, &req.url),
             from: crate::xfer_history::plain_url(&req.url),
             to: req.dest.to_string_lossy().into_owned(),
+            via: Some(if req.browser { crate::xfer_history::Via::Browser } else { crate::xfer_history::Via::Web }),
+            saved: Some(saved_of(&arrived_note)),
         },
     );
     if id != 0 {
@@ -509,6 +512,19 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
             crate::status_center::set_live_action(cx, id, ask);
         }
     }
+}
+
+/// What a job's note asks for the files it saved: what the job's thread has put in `arrived` so far (the history writes it when the
+/// job ends, before `on_done` takes the list).
+pub fn saved_of(arrived: &Arc<Mutex<Vec<PathBuf>>>) -> crate::xfer_history::Saved {
+    let arrived = arrived.clone();
+    Arc::new(move || arrived.lock().unwrap_or_else(|e| e.into_inner()).clone())
+}
+
+/// The whole address of a download that ended, for "Retry" after a restart: the saved list keeps it (the history of transfers does not
+/// keep the query). `plain` is what the history has; `None` when no download of that address and folder is remembered.
+pub fn past_url(plain: &str, dest: &Path) -> Option<String> {
+    store().history.iter().find(|p| crate::xfer_history::plain_url(&p.url) == plain && (p.dest == dest || dest.starts_with(&p.dest))).map(|p| p.url.clone())
 }
 
 /// "Limit speed" on a running download's card: asks for the limit in MB/s (0 = none) and applies it at once.

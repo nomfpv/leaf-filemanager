@@ -14,7 +14,7 @@ use crate::settings::app_dir;
 pub(crate) fn home(cx: &mut App) {
     use rf_core::usage::Counter as C;
     use rf_core::xfer_log::{Kind, Outcome};
-    let note = |kind, what: &str, from: &str, to: &str| crate::xfer_history::Note { kind, what: what.into(), from: from.into(), to: to.into() };
+    let note = |kind, what: &str, from: &str, to: &str| crate::xfer_history::Note::new(kind, what.into(), from.into(), to.into());
     crate::xfer_history::record(note(Kind::Copy, "holiday-photos", "D:/Pictures", "E:/Backup"), 3_400_000_000, 41_000, Outcome::Done);
     crate::xfer_history::record(note(Kind::Download, "example-setup.exe", "https://example.com/files/example-setup.exe", "D:/Downloads"), 86_000_000, 9_000, Outcome::Done);
     crate::xfer_history::record(note(Kind::Upload, "report.pdf", "D:/Documents", "sftp://nas.example.com/docs"), 2_100_000, 1_300, Outcome::Done);
