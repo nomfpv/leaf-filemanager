@@ -97,6 +97,8 @@ fn write_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // (a link to the file, as dotfile managers make, is written through: the rename would replace the link itself)
+    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let tmp = path.with_extension(format!("leaf-tmp-{}", std::process::id()));
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path).inspect_err(|_| {
@@ -115,6 +117,10 @@ pub(crate) fn exec_quote(exe: &str) -> anyhow::Result<String> {
     for c in exe.chars() {
         if matches!(c, '"' | '`' | '$') {
             s.push('\\');
+        }
+        // (a percent sign is a field code to the launcher: a literal one is written twice)
+        if c == '%' {
+            s.push('%');
         }
         s.push(c);
     }
@@ -217,7 +223,8 @@ pub fn should_forward_to_explorer(arg: &str) -> bool {
 
 /// Forwards are remembered for a few seconds to break a loop (what we hand to the system's folder handler can come straight back).
 fn forward_log() -> PathBuf {
-    std::env::temp_dir().join(format!("leaf-forward-{}.txt", unsafe { libc::getuid() }))
+    // (the user's own runtime folder when there is one: a name in a shared /tmp can be a link someone else planted)
+    std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("leaf-forward-{}.txt", unsafe { libc::getuid() }))
 }
 
 fn now_ms() -> u128 {

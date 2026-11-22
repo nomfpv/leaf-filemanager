@@ -1,8 +1,8 @@
 //! Linux backend of rf_win::look::decode. Status: REAL for pictures
 //!
 //! Pictures are decoded in this process: the `image` crate (PNG, JPEG, GIF incl. animation, WebP incl. animation, BMP, ICO, TIFF,
-//! TGA, QOI, EXR, HDR, DDS, PNM) and `leaf-decode` (JPEG XL, AVIF, PSD, the JPEG inside a RAW file). EXIF orientation is applied. Not here: SVG, design
-//! files, HEIC (each answers an error, and the viewer shows its "could not be opened" line).
+//! TGA, QOI, EXR, HDR, DDS, PNM) and `leaf-decode` (JPEG XL, AVIF, HEIC, PSD, RAW: the embedded JPEG, developed from the sensor data when that is small). EXIF orientation is applied. Not here: SVG, design
+//! files (each answers an error, and the viewer shows its "could not be opened" line).
 
 use std::io::Cursor;
 use std::path::Path;

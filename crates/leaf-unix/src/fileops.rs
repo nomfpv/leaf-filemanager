@@ -103,7 +103,11 @@ pub fn replace_contents(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let real = std::fs::canonicalize(path)?;
     let meta = std::fs::metadata(&real)?;
-    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // (the temp name adds about 40 bytes: a name near the 255 limit would not fit)
+    while name.len() > 100 {
+        name.pop();
+    }
     let mut n = 0;
     let (tmp, mut f) = loop {
         let tmp = real.with_file_name(format!(".{name}.leaf-save-{}-{n}.tmp", std::process::id()));
@@ -115,9 +119,10 @@ pub fn replace_contents(path: &Path, bytes: &[u8]) -> io::Result<()> {
     };
     let r = (|| {
         f.write_all(bytes)?;
-        f.set_permissions(std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
-        // (another user's file in a shared folder: the owner stays only for root; the mode is what matters)
+        // (another user's file in a shared folder: the owner stays only for root; the mode is what matters). The owner goes first: a
+        // chown clears the setuid and setgid bits, which the mode then puts back.
         let _ = std::os::unix::fs::fchown(&f, Some(meta.uid()), Some(meta.gid()));
+        f.set_permissions(std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
         f.sync_all()?;
         drop(f);
         std::fs::rename(&tmp, &real)?;
