@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod csv;
 pub mod document;
+pub mod edit;
 pub mod email;
 pub mod font;
 pub mod hex;

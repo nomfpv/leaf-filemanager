@@ -90,10 +90,7 @@ fn handle(msg: Msg, cx: &mut App) {
             cx.set_global(crate::settings::Settings::load());
             sync_tray(cx);
         }
-        Msg::Quit => {
-            leaf_sys::tray::hide();
-            cx.quit();
-        }
+        Msg::Quit => LookManager::quit(cx),
         Msg::Wake => {}
     }
 }

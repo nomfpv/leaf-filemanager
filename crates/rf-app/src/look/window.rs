@@ -152,11 +152,15 @@ impl LookWindow {
     ) -> Self {
         let mut subs = vec![cx.observe_window_activation(window, |this: &mut Self, window, cx| {
             if window.is_window_active() {
-                // tıklanınca ya da öne gelince tuşlar (Esc, Boşluk, F11…) bu pencereye gelsin
-                window.focus(&this.focus, cx);
+                // tıklanınca ya da öne gelince tuşlar (Esc, Boşluk, F11…) bu pencereye gelsin; a question on the screen keeps the
+                // keyboard, a file being edited gets it back in its editor
+                if crate::prompt::current(window, cx).is_none() && !this.viewer.take_focus(window, cx) {
+                    window.focus(&this.focus, cx);
+                }
                 return;
             }
-            if this.pinned {
+            // (a file being edited keeps the window: the user went to another program for a moment)
+            if this.pinned || this.viewer.editing(cx) {
                 return;
             }
             if cx.global::<LookSettings>().look_close_on_lost_focus {
@@ -180,6 +184,18 @@ impl LookWindow {
                 this.programmatic = now;
             }
         }));
+        // the window's close button (and Alt+F4): unsaved edits are asked about first
+        let me = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            me.update(cx, |v, cx| {
+                if !v.viewer.has_unsaved(cx) {
+                    return true;
+                }
+                v.close(window, cx);
+                false
+            })
+            .unwrap_or(true)
+        });
         let focus = cx.focus_handle();
         if cx.global::<LookSettings>().look_focus_on_open {
             window.focus(&focus, cx);
@@ -316,7 +332,8 @@ impl LookWindow {
                 last = now;
                 if reload {
                     let _ = this.update_in(cx, |v, window, cx| {
-                        if v.path == path {
+                        // (not under the editor: a change on disk is asked about when the edits are saved)
+                        if v.path == path && !v.viewer.editing(cx) {
                             v.reload_viewer(false, window, cx);
                         }
                     });
@@ -325,14 +342,48 @@ impl LookWindow {
         }));
     }
 
+    /// Runs `go` now, or, while there are unsaved edits, once the user saved them or gave them up; Cancel runs nothing. Every way
+    /// out of a file (another file, a reload, closing) goes through here, so none drops edits without asking.
+    fn leave_then(&mut self, window: &mut Window, cx: &mut Context<Self>, go: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static) {
+        if !self.viewer.has_unsaved(cx) {
+            return go(self, window, cx);
+        }
+        let me = cx.weak_entity();
+        self.viewer.ask_to_leave(
+            Box::new(move |window, cx| {
+                let _ = me.update(cx, |v, cx| go(v, window, cx));
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Closes the window, asking first about unsaved edits. True: closed now.
+    pub(crate) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let now = !self.viewer.has_unsaved(cx);
+        self.leave_then(window, cx, |_, window, _| window.remove_window());
+        now
+    }
+
+    /// leaf-look is to quit: true when this window asked about unsaved edits first (`then` runs once they are saved or given up).
+    pub(crate) fn ask_before_quit(&mut self, then: fn(&mut App), window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.viewer.has_unsaved(cx) {
+            return false;
+        }
+        self.leave_then(window, cx, move |_, _, cx| cx.defer(then));
+        true
+    }
+
     pub(crate) fn set_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.path = path;
-        self.reload_viewer(true, window, cx);
+        self.leave_then(window, cx, move |v, window, cx| {
+            v.path = path;
+            v.reload_viewer(true, window, cx);
+        });
     }
 
     /// F5 / Yeniden yükle: aynı dosya, aynı boyut.
     pub(crate) fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reload_viewer(false, window, cx);
+        self.leave_then(window, cx, |v, window, cx| v.reload_viewer(false, window, cx));
     }
 
     pub(crate) fn set_topmost(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -463,9 +514,11 @@ impl LookWindow {
                 self.button("look-openwith", L::SquareArrowOutUpRight, t!("Open with").into(), false, p)
                     .on_click(cx.listener(|v, _, _, _| v.open_with())),
             )
-            .child(self.button("look-open", L::ExternalLink, run_tip, false, p).on_click(cx.listener(|v, _, window, _| {
-                v.open_file();
-                window.remove_window();
+            .child(self.button("look-open", L::ExternalLink, run_tip, false, p).on_click(cx.listener(|v, _, window, cx| {
+                v.leave_then(window, cx, |v, window, _| {
+                    v.open_file();
+                    window.remove_window();
+                });
             })))
             .when(show_reload, |d| {
                 d.child(self.button("look-reload", L::RefreshCw, t!("Reload").into(), false, p).on_click(cx.listener(|v, _, window, cx| {
@@ -503,6 +556,8 @@ impl LookWindow {
                             .items_center()
                             .text_xs()
                             .when(self.busy, |d| d.child(Icon::new(L::LoaderCircle).size(px(14.)).flex_shrink_0()))
+                            // unsaved edits: a dot before the name
+                            .when(self.viewer.has_unsaved(cx), |d| d.child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(p.accent)))
                             .child(div().flex_1().min_w_0().truncate().child(self.title.clone())),
                     )
                     .child(buttons.flex_shrink_0()),
@@ -565,8 +620,9 @@ impl LookWindow {
             .id("look-content")
             .size_full()
             // dosyayı pencereden sürükleyip bırakma (Explorer'a, masaüstüne…)
-            .on_mouse_down(MouseButton::Left, cx.listener(|v, ev: &MouseDownEvent, _, _| {
-                v.drag_from = (v.drag_by_body && ev.click_count == 1).then_some(ev.position);
+            // (not while editing: a drag there selects text)
+            .on_mouse_down(MouseButton::Left, cx.listener(|v, ev: &MouseDownEvent, _, cx| {
+                v.drag_from = (v.drag_by_body && ev.click_count == 1 && !v.viewer.editing(cx)).then_some(ev.position);
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|v, _: &MouseUpEvent, _, _| v.drag_from = None))
             .on_mouse_move(cx.listener(|v, ev: &MouseMoveEvent, _, _| {
@@ -617,8 +673,22 @@ impl Render for LookWindow {
             .when_some(cx.global::<LookSettings>().look_backdrop_color, |d, c| d.bg(rgb(c)))
             .on_mouse_move(cx.listener(|v, ev: &MouseMoveEvent, window, cx| v.pointer_moved(ev.position, window, cx)))
             .on_key_down(cx.listener(|v, ev: &KeyDownEvent, window, cx| {
+                // (a question on the screen has the keys)
+                if crate::prompt::current(window, cx).is_some() {
+                    return;
+                }
                 let k = ev.keystroke.key.as_str();
                 let m = &ev.keystroke.modifiers;
+                // While a file is being edited its keys are the editor's (Space and the arrows must not close or step): only Esc,
+                // which the editor passes on when it has nothing to close, and the modified keys (Ctrl+S) reach the viewer.
+                if v.viewer.editing(cx) {
+                    if m.control || m.alt || m.platform || (k == "escape" && !m.shift) {
+                        if v.viewer.on_key(k, m, window, cx) {
+                            cx.notify();
+                        }
+                    }
+                    return;
+                }
                 if m.control || m.alt || m.shift || m.platform {
                     if v.viewer.on_key(k, m, window, cx) {
                         cx.notify();
@@ -626,10 +696,18 @@ impl Render for LookWindow {
                     return;
                 }
                 match k {
-                    "escape" | "space" => window.remove_window(),
-                    "enter" => {
+                    "escape" | "space" => {
+                        v.close(window, cx);
+                    }
+                    "enter" => v.leave_then(window, cx, |v, window, _| {
                         v.open_file();
                         window.remove_window();
+                    }),
+                    // E: the text viewer's editor
+                    "e" => {
+                        if v.viewer.on_key(k, m, window, cx) {
+                            cx.notify();
+                        }
                     }
                     "f11" => window.toggle_fullscreen(),
                     "f5" => v.reload(window, cx),
@@ -665,6 +743,8 @@ impl Render for LookWindow {
                 }
             })
             .when_some(more, |d, m| d.child(m))
+            // questions (unsaved edits, a file changed on disk) are drawn over the window
+            .children(crate::prompt::current(window, cx))
     }
 }
 

@@ -172,9 +172,26 @@ impl LookManager {
     }
 
     pub fn close(cx: &mut App) {
-        Self::with_active(cx, |_, w, _| w.remove_window());
+        // (unsaved edits are asked about first; the window stays the active one until it really closes)
+        if Self::with_active(cx, |v, w, cx| v.close(w, cx)) == Some(false) {
+            return;
+        }
         Self::global(cx).active = None;
         Self::report_windows(cx);
+    }
+
+    /// leaf-look quits, once every window's unsaved edits are saved or given up (a window with some asks, and this runs again
+    /// after the answer; Cancel there keeps leaf-look running).
+    pub fn quit(cx: &mut App) {
+        let m = Self::global(cx);
+        let all: Vec<_> = m.active.iter().chain(m.pinned.iter()).copied().collect();
+        for h in all {
+            if h.update(cx, |v, w, cx| v.ask_before_quit(Self::quit, w, cx)).unwrap_or(false) {
+                return;
+            }
+        }
+        leaf_sys::tray::hide();
+        cx.quit();
     }
 
     pub fn reload(cx: &mut App) {

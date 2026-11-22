@@ -133,6 +133,24 @@ pub trait Viewer: 'static {
         false
     }
     fn cleanup(&mut self) {}
+    /// A file is being edited (the text viewer's editor): the window leaves the keys to the editor (only Esc and the modified ones
+    /// come to [`Viewer::on_key`]), does not close when it loses the focus, and does not reload the file under the editor.
+    fn editing(&self, _cx: &App) -> bool {
+        false
+    }
+    /// There are edits not saved yet.
+    fn has_unsaved(&self, _cx: &App) -> bool {
+        false
+    }
+    /// Asks what becomes of the unsaved edits (save, don't save, cancel) and runs `go` once they are saved or given up; Cancel
+    /// runs nothing.
+    fn ask_to_leave(&mut self, go: Box<dyn FnOnce(&mut Window, &mut App)>, window: &mut Window, cx: &mut App) {
+        go(window, cx)
+    }
+    /// The window came to the front: puts the keyboard where the viewer wants it (the editor). False: the window takes it.
+    fn take_focus(&mut self, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
 }
 
 /// Öncelik sırasıyla ilk işleyebilen görüntüleyici (eşit öncelikte kayıt sırası); hiçbiri yoksa Bilgi kartı.

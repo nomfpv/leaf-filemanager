@@ -2,9 +2,12 @@
 //! yalnız ekrandaki satırlar çözülür ve çizilir (çok büyük günlük dosyaları da anında açılır).
 //! 2 MB'a kadar bilinen kod dosyaları syntect ile arka planda renklendirilir.
 //! Alt+L satır numaraları, Alt+Z sözcük kaydırma (ayar olarak saklanır).
+//! E edits the file (`edit.rs`) when it can be edited: a real file up to 8 MB that decodes cleanly; Esc goes back to this view.
 
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,8 +17,10 @@ use gpui_kit::*;
 use parking_lot::RwLock;
 use rf_core::textload::TextFile;
 
-use crate::look::viewer::{Prepared, Probe, Viewer, looks_like_text};
+use super::edit::{EditView, Leave, Offer};
+use crate::look::viewer::{MoreItem, Prepared, Probe, Viewer, looks_like_text};
 use crate::look::config::LookSettings;
+use crate::t;
 
 /// Bilinen metin uzantıları; bunların dışında içerik metne benziyorsa da açılır.
 pub const EXTENSIONS: &[&str] = &[
@@ -37,6 +42,15 @@ const LINE_MAX_CHARS: usize = 20_000;
 #[derive(Default)]
 pub struct TextViewer {
     view: Option<Entity<TextView>>,
+    /// Whether the file may be edited, and whether it is being edited: the "More" menu reads them (it gets no `App`).
+    offer: Rc<RefCell<Offer>>,
+    editing: Rc<Cell<bool>>,
+}
+
+impl TextViewer {
+    fn editor(&self, cx: &App) -> Option<Entity<EditView>> {
+        self.view.as_ref().and_then(|v| v.read(cx).edit.clone())
+    }
 }
 
 impl Viewer for TextViewer {
@@ -63,13 +77,57 @@ impl Viewer for TextViewer {
     fn prepare(&mut self, f: &Probe, cx: &mut App) -> Prepared {
         let name = super::file_name(&f.path);
         let path = f.path.clone();
-        self.view = Some(cx.new(|cx| TextView::new(&path, cx)));
+        self.offer = Rc::new(RefCell::new(Offer::Checking));
+        self.editing = Rc::new(Cell::new(false));
+        let (offer, editing) = (self.offer.clone(), self.editing.clone());
+        self.view = Some(cx.new(|cx| TextView::new(&path, offer, editing, cx)));
         Prepared::new((900.0, 700.0), name)
     }
     fn render(&mut self, _window: &mut Window, _cx: &mut App) -> AnyElement {
         self.view.as_ref().map_or_else(|| div().into_any_element(), |v| v.clone().into_any_element())
     }
-    fn on_key(&mut self, key: &str, mods: &Modifiers, _window: &mut Window, cx: &mut App) -> bool {
+    fn more_menu(&self) -> Vec<MoreItem> {
+        let Some(view) = self.view.clone() else { return vec![] };
+        let item = |label: &'static str, f: fn(&mut EditView, &mut Window, &mut Context<EditView>)| {
+            let view = view.clone();
+            MoreItem {
+                label: label.into(),
+                action: Rc::new(move |window, cx| {
+                    if let Some(e) = view.read(cx).edit.clone() {
+                        e.update(cx, |e, cx| f(e, window, cx));
+                    }
+                }),
+            }
+        };
+        if self.editing.get() {
+            return vec![item(t!("Save (Ctrl+S)"), EditView::save), item(t!("Go to line (Ctrl+G)"), EditView::go_to_line), item(t!("Stop editing (Esc)"), EditView::done)];
+        }
+        // (offered also when the file can't be edited: choosing it says why)
+        let label = if matches!(*self.offer.borrow(), Offer::No(_)) { t!("Why can't this file be edited?") } else { t!("Edit (E)") };
+        vec![MoreItem { label: label.into(), action: Rc::new(move |window, cx| view.update(cx, |v, cx| v.start_edit(window, cx))) }]
+    }
+    fn on_key(&mut self, key: &str, mods: &Modifiers, window: &mut Window, cx: &mut App) -> bool {
+        let plain = !mods.control && !mods.alt && !mods.shift && !mods.platform;
+        let ctrl = mods.control && !mods.alt && !mods.shift;
+        if let Some(e) = self.editor(cx) {
+            match key {
+                "escape" if plain => e.update(cx, |e, cx| e.done(window, cx)),
+                "s" if ctrl => e.update(cx, |e, cx| e.save(window, cx)),
+                "g" if ctrl => e.update(cx, |e, cx| e.go_to_line(window, cx)),
+                "l" | "z" if mods.alt && !mods.control && !mods.shift => {
+                    crate::look::config::update(cx, |s| if key == "l" { s.look_text_line_numbers = !s.look_text_line_numbers } else { s.look_text_wrap = !s.look_text_wrap });
+                    e.update(cx, |e, cx| e.apply_settings(window, cx));
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        if key == "e" && plain {
+            if let Some(v) = &self.view {
+                v.update(cx, |v, cx| v.start_edit(window, cx));
+            }
+            return true;
+        }
         // Alt+F: follow mode, the end of a growing log stays in view
         if mods.alt && !mods.control && !mods.shift && key == "f" {
             if let Some(v) = &self.view {
@@ -94,6 +152,23 @@ impl Viewer for TextViewer {
     fn cleanup(&mut self) {
         self.view = None;
     }
+    fn editing(&self, cx: &App) -> bool {
+        self.editor(cx).is_some()
+    }
+    fn has_unsaved(&self, cx: &App) -> bool {
+        self.editor(cx).is_some_and(|e| e.read(cx).is_dirty())
+    }
+    fn ask_to_leave(&mut self, go: Box<dyn FnOnce(&mut Window, &mut App)>, window: &mut Window, cx: &mut App) {
+        match self.editor(cx) {
+            Some(e) => e.update(cx, |e, cx| e.ask_to_leave(go, window, cx)),
+            None => go(window, cx),
+        }
+    }
+    fn take_focus(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        let Some(e) = self.editor(cx) else { return false };
+        e.update(cx, |e, cx| e.focus(window, cx));
+        true
+    }
 }
 
 /// Satır başına renk aralıkları (bayt aralığı, renk 0xRRGGBB).
@@ -115,6 +190,19 @@ pub struct TextView {
     /// Longest line drawn so far (characters) and the view's width: the horizontal range.
     cols: std::rc::Rc<std::cell::Cell<usize>>,
     view_w: std::rc::Rc<std::cell::Cell<f32>>,
+    path: PathBuf,
+    /// Whether the file may be edited (worked out off the UI thread), shared with the viewer.
+    offer: Rc<RefCell<Offer>>,
+    _offer_task: Option<Task<()>>,
+    /// The editor while the file is edited (E); the list comes back when it is left.
+    edit: Option<Entity<EditView>>,
+    editing: Rc<Cell<bool>>,
+    _edit_sub: Option<Subscription>,
+    /// The keyboard's place in the read-only view (it comes back here when editing ends).
+    focus: FocusHandle,
+    /// A short note at the bottom (why the file can't be edited).
+    note: Option<SharedString>,
+    _note_task: Option<Task<()>>,
 }
 
 pub(crate) fn syntax_highlight(path: &Path, text: &str, dark: bool) -> Option<Spans> {
@@ -152,9 +240,31 @@ pub(crate) fn syntax_highlight(path: &Path, text: &str, dark: bool) -> Option<Sp
 }
 
 impl TextView {
-    fn new(path: &Path, cx: &mut Context<Self>) -> Self {
+    fn new(path: &Path, offer: Rc<RefCell<Offer>>, editing: Rc<Cell<bool>>, cx: &mut Context<Self>) -> Self {
         let list = ListState::new(0, ListAlignment::Top, px(400.));
-        let mut v = Self { file: None, error: None, list, spans: Default::default(), _tasks: Vec::new(), follow: false, _follow_task: None, _follow_index: None, hoff: 0., cols: Default::default(), view_w: Default::default() };
+        let mut v = Self {
+            file: None,
+            error: None,
+            list,
+            spans: Default::default(),
+            _tasks: Vec::new(),
+            follow: false,
+            _follow_task: None,
+            _follow_index: None,
+            hoff: 0.,
+            cols: Default::default(),
+            view_w: Default::default(),
+            path: path.to_path_buf(),
+            offer,
+            _offer_task: None,
+            edit: None,
+            editing,
+            _edit_sub: None,
+            focus: cx.focus_handle(),
+            note: None,
+            _note_task: None,
+        };
+        v.check_offer(cx);
         match TextFile::open(path) {
             Ok(f) => {
                 let f = Arc::new(f);
@@ -311,6 +421,69 @@ impl TextView {
         }));
     }
 
+    /// Off the UI thread: may the file be edited? (The button and the menu follow the answer.)
+    fn check_offer(&mut self, cx: &mut Context<Self>) {
+        *self.offer.borrow_mut() = Offer::Checking;
+        let (path, offer) = (self.path.clone(), self.offer.clone());
+        let task = cx.background_spawn(async move { super::edit::check(&path) });
+        self._offer_task = Some(cx.spawn(async move |this, cx| {
+            let answer = task.await;
+            *offer.borrow_mut() = answer;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
+    }
+
+    fn say(&mut self, note: SharedString, cx: &mut Context<Self>) {
+        self.note = Some(note);
+        self._note_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(6)).await;
+            let _ = this.update(cx, |v, cx| {
+                v.note = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// E: the file goes into the editor, read afresh with every test (when it can't be edited the note says why). The read-only
+    /// view lets go of the file meanwhile, so the save can swap it.
+    pub(crate) fn start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
+        match super::edit::load(&self.path) {
+            Ok(loaded) => {
+                self.follow = false;
+                self._follow_task = None;
+                self._follow_index = None;
+                self._tasks.clear();
+                self.file = None;
+                *self.spans.write() = None;
+                let path = self.path.clone();
+                let ed = cx.new(|cx| EditView::new(path, loaded, window, cx));
+                self._edit_sub = Some(cx.subscribe_in(&ed, window, |this, _, _: &Leave, window, cx| this.stop_edit(window, cx)));
+                self.edit = Some(ed);
+                self.editing.set(true);
+                cx.notify();
+            }
+            Err(why) => {
+                *self.offer.borrow_mut() = Offer::No(why.clone());
+                self.say(why, cx);
+            }
+        }
+    }
+
+    /// Editing is over: the file is read again, so this view shows what was saved.
+    fn stop_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit = None;
+        self._edit_sub = None;
+        self.editing.set(false);
+        let path = self.path.clone();
+        self.reload(&path, cx);
+        self.check_offer(cx);
+        window.focus(&self.focus, cx);
+    }
+
     /// Satır numarası ya da kaydırma değişti: satırlar yeniden ölçülür.
     fn relayout(&mut self, cx: &mut Context<Self>) {
         self.list.remeasure();
@@ -340,6 +513,9 @@ impl DarkAppearance for App {
 
 impl Render for TextView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(ed) = &self.edit {
+            return ed.clone().into_any_element();
+        }
         let p = crate::theme::Palette::for_window(window);
         let s = cx.global::<LookSettings>();
         let (numbers, wrap) = (s.look_text_line_numbers, s.look_text_wrap);
@@ -361,9 +537,12 @@ impl Render for TextView {
         let hoff = self.hoff;
         let cols = self.cols.clone();
         let vw = self.view_w.clone();
+        let can_edit = *self.offer.borrow() == Offer::Yes;
+        let note = self.note.clone();
         div()
             .size_full()
             .relative()
+            .track_focus(&self.focus)
             .bg(p.content_bg)
             // Shift+wheel or a sideways swipe scrolls long lines (vertical scrolling is the list's)
             .on_scroll(cx.listener(move |this, ev: &ScrollEvent, _, cx| {
@@ -378,8 +557,38 @@ impl Render for TextView {
                     cx.stop_propagation();
                 }
             }))
-            .when(self.follow, |d| {
-                d.child(div().absolute().top(px(4.)).right(px(12.)).px_2().rounded_full().bg(p.accent).text_color(p.content_bg).text_size(px(11.)).child(crate::t!("Following (Alt+F)")))
+            .child(
+                h_flex()
+                    .absolute()
+                    .top(px(4.))
+                    .right(px(12.))
+                    .gap_1()
+                    .when(self.follow, |d| d.child(div().px_2().rounded_full().bg(p.accent).text_color(p.content_bg).text_size(px(11.)).child(crate::t!("Following (Alt+F)"))))
+                    .when(can_edit, |d| {
+                        d.child(
+                            h_flex()
+                                .id("look-text-edit")
+                                .gap_1()
+                                .px_2()
+                                .h(px(20.))
+                                .items_center()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(p.border)
+                                .bg(p.card_bg)
+                                .text_color(p.text_secondary)
+                                .text_size(px(11.))
+                                .hover(|s| s.bg(p.hover).text_color(p.text))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Pencil).size(px(11.)))
+                                .child(crate::t!("Edit"))
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::t!("Edit this file (E)")).build(w, cx))
+                                .on_click(cx.listener(|this, _, window, cx| this.start_edit(window, cx))),
+                        )
+                    }),
+            )
+            .when_some(note, |d, n| {
+                d.child(div().absolute().bottom(px(10.)).left(px(12.)).max_w(px(560.)).px_3().py_1().rounded(crate::theme::RADIUS_SM).border_1().border_color(p.border).bg(p.card_bg).text_color(p.text).text_size(px(12.)).child(n))
             })
             .child(canvas(move |b, _, _| vw.set(f32::from(b.size.width)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
             .font_family(font)
