@@ -97,7 +97,7 @@ impl Viewer for TextViewer {
 }
 
 /// Satır başına renk aralıkları (bayt aralığı, renk 0xRRGGBB).
-type Spans = Vec<Vec<(Range<usize>, u32)>>;
+pub(crate) type Spans = Vec<Vec<(Range<usize>, u32)>>;
 
 pub struct TextView {
     file: Option<Arc<TextFile>>,
@@ -117,7 +117,7 @@ pub struct TextView {
     view_w: std::rc::Rc<std::cell::Cell<f32>>,
 }
 
-fn syntax_highlight(path: &Path, text: &str, dark: bool) -> Option<Spans> {
+pub(crate) fn syntax_highlight(path: &Path, text: &str, dark: bool) -> Option<Spans> {
     use syntect::easy::HighlightLines;
     use syntect::highlighting::ThemeSet;
     use syntect::parsing::SyntaxSet;

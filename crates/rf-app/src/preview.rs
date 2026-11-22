@@ -18,7 +18,9 @@ use crate::theme::{self, Palette};
 #[path = "preview_wide.rs"]
 mod wide;
 
-const TEXT_LIMIT: usize = 48 * 1024;
+/// How much of a text file the pane reads, and how many of its lines it shows.
+const TEXT_LIMIT: usize = 96 * 1024;
+const TEXT_LINES: usize = 1000;
 const PREVIEW_PX: u32 = 384;
 
 /// Shared folder-size cache (Size column, preview pane, Properties window).
@@ -29,6 +31,8 @@ pub fn size_cache() -> &'static leaf_sys::foldersize::FolderSizeCache {
 pub struct Preview {
     target: Option<(PathBuf, Entry)>,
     text: Option<(PathBuf, SharedString)>,
+    /// The colours of `text` (syntect, as the Space viewer does), made on the same background thread; none for plain text.
+    text_marks: Option<(PathBuf, std::sync::Arc<Vec<(std::ops::Range<usize>, HighlightStyle)>>)>,
     folder_size: Option<(PathBuf, Option<leaf_sys::foldersize::FolderSize>)>,
     hash: Option<Entity<crate::hash_panel::HashPanel>>,
     /// Media/document properties (duration, resolution, …) for the current target.
@@ -110,7 +114,10 @@ fn is_markdown(e: &Entry) -> bool {
 }
 
 fn is_text_like(e: &Entry) -> bool {
-    matches!(icons::category(e), Category::Code | Category::Text)
+    let cat = icons::category(e);
+    matches!(cat, Category::Code | Category::Text)
+        // every extension the Space viewer reads as text (not a known other kind: "ts" is a video as often as TypeScript)
+        || (cat == Category::Other && crate::look::viewers::text::EXTENSIONS.contains(&&*e.ext))
         || matches!(&*e.ext, "csv" | "gitignore" | "env" | "editorconfig" | "gitattributes" | "srt")
 }
 
@@ -120,6 +127,7 @@ impl Preview {
         Self {
             target: None,
             text: None,
+            text_marks: None,
             folder_size: None,
             hash: None,
             media: None,
@@ -233,7 +241,7 @@ impl Preview {
                 .rounded(theme::RADIUS_SM)
                 .bg(p.content_bg)
                 .text_sm()
-                .when(!is_markdown(&e), |d| d.font_family(crate::platform::fonts::mono()).child(text.clone()))
+                .when(!is_markdown(&e), |d| d.font_family(crate::platform::fonts::mono()).child(text_body(&path, &text, &self.text_marks)))
                 .when(is_markdown(&e), |d| d.child(gpui_kit::component::text::TextView::markdown("ql-md", text.clone())))
                 .into_any_element()
         } else {
@@ -864,18 +872,31 @@ impl Preview {
                 self._diff_sub = Some(cx.observe(&pane, |_, _, cx| cx.notify()));
                 self.diff = Some(pane);
             }
-            if !e.is_dir() && is_text_like(e) && e.size > 0 && !e.is_cloud_placeholder() && (!in_archive || e.size <= crate::archive_view::PREVIEW_EXTRACT_MAX) {
+            // a file of a kind nobody knows (a made-up extension, none at all) is read as text when its first bytes look like text
+            let sniff = !is_text_like(e) && !is_markdown(e) && icons::category(e) == Category::Other;
+            if !e.is_dir() && (is_text_like(e) || sniff) && e.size > 0 && !e.is_cloud_placeholder() && (!in_archive || e.size <= crate::archive_view::PREVIEW_EXTRACT_MAX) {
                 let path = path.clone();
                 let p2 = path.clone();
+                let dark = pane_dark(cx);
+                let markdown = is_markdown(e);
                 let read = cx.background_spawn(async move {
+                    // a Windows handler shows such a file better than its bytes do
+                    if sniff && leaf_sys::preview_host::handler_for(&p2).is_some() {
+                        return None;
+                    }
                     // inside an archive: the extracted copy (small members only)
-                    let real = if p2.exists() { Some(p2) } else { crate::archive_view::real_copy(&p2) };
-                    real.and_then(|r| read_text_head(&r))
+                    let real = if p2.exists() { Some(p2.clone()) } else { crate::archive_view::real_copy(&p2) };
+                    let text = real.and_then(|r| read_text_head(&r, sniff))?;
+                    // colours here, off the UI thread (markdown has its own look)
+                    let marks = if markdown { None } else { text_marks(&p2, &text, dark) };
+                    Some((text, marks))
                 });
                 self._task = Some(cx.spawn(async move |this, cx| {
-                    let text = read.await;
+                    let got = read.await;
                     let _ = this.update(cx, |v, cx| {
-                        v.text = text.map(|t| (path, t.into()));
+                        let (text, marks) = got.unzip();
+                        v.text = text.map(|t| (path.clone(), t.into()));
+                        v.text_marks = marks.flatten().map(|m| (path, std::sync::Arc::new(m)));
                         cx.notify();
                     });
                 }));
@@ -885,7 +906,38 @@ impl Preview {
     }
 }
 
-fn read_text_head(path: &Path) -> Option<String> {
+/// Whether the pane's colours are the dark ones (the theme setting, else the system's).
+fn pane_dark(cx: &App) -> bool {
+    match crate::settings::theme_override() {
+        crate::settings::ThemePref::Light => false,
+        crate::settings::ThemePref::System => matches!(cx.window_appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
+        _ => true,
+    }
+}
+
+/// The colour runs of `text` (as the Space viewer's highlighter finds them), over the whole text: `None` for plain text.
+fn text_marks(path: &Path, text: &str, dark: bool) -> Option<Vec<(std::ops::Range<usize>, HighlightStyle)>> {
+    let lines = crate::look::viewers::text::syntax_highlight(path, text, dark)?;
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (line, spans) in syntect::util::LinesWithEndings::from(text).zip(lines) {
+        for (r, c) in spans {
+            out.push((start + r.start..start + r.end, HighlightStyle { color: Some(rgb(c).into()), ..Default::default() }));
+        }
+        start += line.len();
+    }
+    Some(out)
+}
+
+/// The text block's contents: coloured when the colours of this very file are ready, else plain.
+fn text_body(path: &Path, text: &SharedString, marks: &Option<(PathBuf, std::sync::Arc<Vec<(std::ops::Range<usize>, HighlightStyle)>>)>) -> AnyElement {
+    match marks.as_ref().filter(|(mp, _)| mp == path) {
+        Some((_, m)) => StyledText::new(text.clone()).with_highlights(m.iter().cloned()).into_any_element(),
+        None => text.clone().into_any_element(),
+    }
+}
+
+fn read_text_head(path: &Path, sniff: bool) -> Option<String> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = vec![0u8; TEXT_LIMIT];
@@ -894,6 +946,9 @@ fn read_text_head(path: &Path) -> Option<String> {
     if buf.iter().take(4096).filter(|&&b| b == 0).count() > 2 {
         return None; // binary
     }
+    if sniff && !crate::look::viewer::looks_like_text(&buf[..buf.len().min(4096)]) {
+        return None;
+    }
     // UTF-16 LE BOM
     if buf.starts_with(&[0xFF, 0xFE]) {
         let u: Vec<u16> = buf[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
@@ -901,8 +956,8 @@ fn read_text_head(path: &Path) -> Option<String> {
     }
     // UTF-8 (with or without BOM), else the locale's legacy ANSI page (Turkish: Windows-1254)
     let s = leaf_sys::encoding::decode_text(buf.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&buf));
-    // keep it light: at most 400 lines
-    Some(s.lines().take(400).collect::<Vec<_>>().join("\n"))
+    // keep it light: a thousand lines at most
+    Some(s.lines().take(TEXT_LINES).collect::<Vec<_>>().join("\n"))
 }
 
 impl Preview {
@@ -1132,7 +1187,7 @@ impl Render for Preview {
                         .border_1()
                         .border_color(p.border)
                         .text_xs()
-                        .when(!md, |d| d.font_family(crate::platform::fonts::mono()).text_color(p.text_secondary).child(text.clone()))
+                        .when(!md, |d| d.font_family(crate::platform::fonts::mono()).text_color(p.text_secondary).child(text_body(&path, text, &self.text_marks)))
                         .when(md, |d| d.child(gpui_kit::component::text::TextView::markdown("pv-md", text.clone()))),
                 );
             }
