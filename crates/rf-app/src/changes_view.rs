@@ -171,12 +171,18 @@ impl ChangesView {
         this._poll = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                if this.update(cx, |v, cx| v.dirty.swap(false, Ordering::AcqRel).then(|| v.refresh(cx))).is_err() {
+                // (a page whose tab is not shown keeps its flag and reads again when the tab comes back)
+                if this.update(cx, |v, cx| (v.tab_shown(cx) && v.dirty.swap(false, Ordering::AcqRel)).then(|| v.refresh(cx))).is_err() {
                     return;
                 }
             }
         }));
         this
+    }
+
+    /// The tab this page is in is on screen (a closed tab counts as shown: the page is going away anyway).
+    fn tab_shown(&self, cx: &App) -> bool {
+        self.tab.upgrade().is_none_or(|t| t.read(cx).is_shown())
     }
 
     pub fn dir(&self) -> &Path {
@@ -264,10 +270,13 @@ impl ChangesView {
 
     fn watch(&mut self, root: &Path) {
         let dirty = self.dirty.clone();
+        let ignore = leaf_dev::gitignore::matcher_for(root);
         self._watch = leaf_sys::tree_watch::watch_tree(root, std::time::Duration::from_millis(900), move |c| {
             // git's own bookkeeping inside .git is not a change of the files
             let only_git = !c.rescan && !c.paths.is_empty() && c.paths.iter().all(|p| p.components().any(|x| x.as_os_str() == ".git"));
-            if !only_git {
+            // (build output and other ignored files are not changes either)
+            let only_ignored = !c.rescan && !c.paths.is_empty() && ignore.as_ref().is_some_and(|m| c.paths.iter().all(|p| m.is_ignored(p, p.is_dir())));
+            if !only_git && !only_ignored {
                 dirty.store(true, Ordering::Release);
             }
         })

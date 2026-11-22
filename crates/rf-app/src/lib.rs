@@ -7,6 +7,7 @@ mod background;
 mod cli;
 pub mod bench;
 mod fast_start;
+mod git_share;
 mod features_page;
 mod whats_new_page;
 mod bench_view;

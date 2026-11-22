@@ -138,12 +138,48 @@ fn git_cmd(root: &Path) -> Command {
     c
 }
 
+/// How long a `git status` may run before it is killed (a hung one, a share that does not answer, must not live on).
+const STATUS_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+/// The same for the `git log` behind the commit columns.
+const LOG_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `Command::output` with a time limit: a git still running after `limit` is killed and the call fails.
+fn output_within(c: &mut Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    let mut child = c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let (so, se) = (child.stdout.take(), child.stderr.take());
+    let drain = |p: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            if let Some(mut p) = p {
+                let _ = p.read_to_end(&mut b);
+            }
+            b
+        })
+    };
+    let (t_out, t_err) = (drain(so.map(|p| Box::new(p) as _)), drain(se.map(|p| Box::new(p) as _)));
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "git took too long"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    Ok(std::process::Output { status, stdout: t_out.join().unwrap_or_default(), stderr: t_err.join().unwrap_or_default() })
+}
+
 /// Runs `git status` for the repository at `repo_root` (use [`repo_root`] to find it).
 /// Errors when git is not installed or the command fails.
 pub fn status(repo_root: &Path) -> Result<GitStatus> {
-    let out = git_cmd(repo_root)
-        .args(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal", "--ignored=traditional"])
-        .output()
+    let out = output_within(
+        git_cmd(repo_root).args(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal", "--ignored=traditional"]),
+        STATUS_LIMIT,
+    )
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 anyhow::anyhow!("Git not found (not installed or not on PATH)")
@@ -816,6 +852,24 @@ pub fn last_commits_of_children(root: &Path, dir: &Path, names: &[String], max_c
         ;
     let Ok(mut child) = c.spawn() else { return out };
     let Some(stdout) = child.stdout.take() else { return out };
+    // a watchdog ends a git that runs past LOG_LIMIT (the read below then reaches its end)
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (child, done) = (child.clone(), done.clone());
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                if start.elapsed() > LOG_LIMIT {
+                    if let Ok(mut c) = child.lock() {
+                        let _ = c.kill();
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+    }
     let mut current: Option<Commit> = None;
     let mut commits = 0usize;
     for line in std::io::BufReader::new(stdout).split(b'\n') {
@@ -848,8 +902,11 @@ pub fn last_commits_of_children(root: &Path, dir: &Path, names: &[String], max_c
             }
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut c) = child.lock() {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
     out
 }
 

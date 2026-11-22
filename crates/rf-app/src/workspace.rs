@@ -1075,6 +1075,7 @@ impl Workspace {
         self.tabs[ix].left.update(cx, |v, _| v.dual = true);
         self.tabs[ix].right = Some(view);
         self.tabs[ix].right_active = active;
+        self.sync_shown(cx);
     }
 
     /// LEAF_MOCKUP_DEMO: opens the mockup's three tabs (the first split, its right pane a grid of the holiday pictures), then
@@ -1407,6 +1408,7 @@ impl Workspace {
             self.tabs[ix].right = Some(view);
             self.tabs[ix].right_active = true;
         }
+        self.sync_shown(cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1440,11 +1442,24 @@ impl Workspace {
         }
     }
 
+    /// Tells every folder view whether it is on screen (the panes of the active tab): the others do not run git for file changes.
+    fn sync_shown(&self, cx: &mut Context<Self>) {
+        let views: Vec<(Entity<FolderView>, bool)> =
+            self.tabs.iter().enumerate().flat_map(|(i, t)| std::iter::once(&t.left).chain(t.right.as_ref()).map(move |v| (v.clone(), i == self.active))).collect();
+        // (deferred: a view being updated right now cannot be updated from here)
+        cx.defer(move |cx| {
+            for (v, on) in views {
+                v.update(cx, |v, cx| v.set_shown(on, cx));
+            }
+        });
+    }
+
     fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.tabs.len() {
             return;
         }
         self.active = ix;
+        self.sync_shown(cx);
         let q = self.active_tab().read(cx).filter.query.clone();
         self.search.update(cx, |s, cx| s.set_value(q, window, cx));
         self.editing_address = false;
@@ -1548,6 +1563,7 @@ impl Workspace {
         let t = self.tabs.remove(from);
         self.tabs.insert(to, t);
         self.active = self.tabs.iter().position(|t| t.left == active_left).unwrap_or(0);
+        self.sync_shown(cx);
         let _ = window;
         cx.notify();
     }
@@ -2055,6 +2071,7 @@ impl Workspace {
         }
         t.right_active = false;
         t.left.update(cx, |v, _| v.dual = false);
+        self.sync_shown(cx);
         self.focus_active(window, cx);
         cx.notify();
     }
