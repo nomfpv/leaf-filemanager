@@ -1831,3 +1831,47 @@ fn scrub_jpeg_unreadable_exif_keeps_the_orientation() {
     assert_eq!(ex.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(6));
     let _ = fs::remove_dir_all(&d);
 }
+
+/// A PDF made from phone photos keeps the photos' Exif inside the picture streams: it goes, the picture still decodes the same;
+/// a redaction mark loses its author and date like every other comment.
+#[test]
+fn scrub_pdf_pictures_lose_their_exif_and_redactions_their_author() {
+    use lopdf::{Dictionary, Document, Object, Stream, dictionary};
+    let d = tmp_dir("pdf-pics");
+    let photo = jpeg_bytes(&exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()), b"Planted Author");
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let img = doc.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Filter" => "DCTDecode", "Width" => 8, "Height" => 8, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8 }, photo.clone()));
+    let content = doc.add_object(Stream::new(Dictionary::new(), b"q 8 0 0 8 0 0 cm /Im1 Do Q".to_vec()));
+    let redact = doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Redact", "Rect" => vec![0.into(), 0.into(), 4.into(), 4.into()],
+        "T" => Object::string_literal("Planted Author"), "M" => Object::string_literal("D:20261122142233"),
+    });
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content, "Annots" => vec![redact.into()],
+        "Resources" => dictionary! { "XObject" => dictionary! { "Im1" => img } },
+        "MediaBox" => vec![0.into(), 0.into(), 8.into(), 8.into()],
+    });
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog);
+    let src = d.join("scan.pdf");
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    fs::write(&src, &bytes).unwrap();
+    assert_markers_present(&src, "pdf pictures");
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Picture metadata inside the pages")));
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "pdf pictures");
+    let again = Document::load(&dst).unwrap();
+    let pic = again.objects.values().find_map(|o| match o {
+        Object::Stream(s) if s.content.starts_with(&[0xFF, 0xD8]) => Some(s.content.clone()),
+        _ => None,
+    });
+    let pic = pic.expect("the picture is still there");
+    assert_eq!(::image::load_from_memory(&pic).unwrap().to_rgb8().into_raw(), ::image::load_from_memory(&photo).unwrap().to_rgb8().into_raw());
+    assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}

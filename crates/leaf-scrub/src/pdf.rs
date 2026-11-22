@@ -218,6 +218,28 @@ fn signatures(doc: &Document) -> (Vec<String>, bool) {
 /// The refusal of a signed PDF when the signatures are not to be removed.
 const SIGNED_TEXT: &str = "this PDF is signed: removing metadata breaks the signature. Tick “Remove digital signatures too” to clean it without them";
 
+/// The JPEG pictures of the document (streams whose only filter is DCTDecode), with their bytes.
+fn dct_pictures(doc: &Document) -> impl Iterator<Item = (lopdf::ObjectId, &[u8])> {
+    doc.objects.iter().filter_map(|(id, o)| match o {
+        Object::Stream(s) if is_dct(&s.dict) && s.content.starts_with(&[0xFF, 0xD8]) => Some((*id, s.content.as_slice())),
+        _ => None,
+    })
+}
+
+fn is_dct(d: &Dictionary) -> bool {
+    match d.get(b"Filter") {
+        Ok(Object::Name(n)) => n == b"DCTDecode",
+        Ok(Object::Array(a)) => a.len() == 1 && matches!(&a[0], Object::Name(n) if n == b"DCTDecode"),
+        _ => false,
+    }
+}
+
+/// Does a JPEG carry Exif, XMP, IPTC, comments (anything the picture remover takes out except the colour profile)?
+fn jpeg_metadata(c: &[u8]) -> bool {
+    let keep = Options { keep_color_profile: true, ..Default::default() };
+    crate::image::process(c, crate::Family::Jpeg, &keep).is_ok_and(|(_, f)| f.iter().any(|x| x.remove))
+}
+
 fn info_dict<'a>(doc: &'a Document) -> Option<&'a Dictionary> {
     match doc.trailer.get(b"Info").ok()? {
         Object::Reference(id) => doc.get_object(*id).ok()?.as_dict().ok(),
@@ -353,7 +375,13 @@ fn analyse(doc: &Document, raw: &[u8]) -> (Vec<Finding>, Vec<String>) {
     if doc.catalog().map(|c| c.has(b"OCProperties")).unwrap_or(false) {
         notes.push("Still inside: hidden and visible layers are not touched.".into());
     }
-    notes.push("Pictures inside the pages keep their own metadata.".into());
+    let pics = dct_pictures(doc).filter(|(_, c)| jpeg_metadata(c)).count();
+    if pics > 0 {
+        f.push(Finding::new("Picture metadata inside the pages (camera, GPS, XMP of JPEG pictures)", format!("{pics} pictures"), true));
+    }
+    if doc.objects.values().any(|o| matches!(o, Object::Stream(s) if matches!(s.dict.get(b"Filter"), Ok(Object::Name(n)) if n == b"JPXDecode"))) {
+        notes.push("Still inside: JPEG 2000 pictures in the pages keep their own metadata.".into());
+    }
     (f, notes)
 }
 
@@ -434,6 +462,18 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
         if let Some(Object::Dictionary(p)) = doc.objects.get_mut(&id) {
             for k in PARAM_KEYS {
                 p.remove(k);
+            }
+        }
+    }
+    // the JPEG pictures in the pages: their own Exif / XMP / IPTC go, the picture data is copied byte for byte (the colour
+    // profile inside stays: the page's colour space decides how it looks)
+    let keep = Options { keep_color_profile: true, ..opts.clone() };
+    let pics: Vec<lopdf::ObjectId> = dct_pictures(&doc).filter(|(_, c)| jpeg_metadata(c)).map(|(id, _)| id).collect();
+    for id in pics {
+        if let Some(Object::Stream(st)) = doc.objects.get_mut(&id) {
+            match crate::image::process(&st.content, crate::Family::Jpeg, &keep) {
+                Ok((clean, _)) => st.set_content(clean),
+                Err(_) => return Err(ScrubError::Unsupported("a picture inside the PDF is damaged, leaf cannot clean it".into())),
             }
         }
     }
