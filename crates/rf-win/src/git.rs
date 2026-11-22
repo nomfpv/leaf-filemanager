@@ -103,7 +103,18 @@ impl GitStatus {
 /// Walks up from `dir` looking for a `.git` entry (directory, or file for worktrees and
 /// submodules). Pure filesystem check, cheap enough for every navigation.
 pub fn repo_root(dir: &Path) -> Option<PathBuf> {
-    dir.ancestors().find(|a| a.join(".git").exists()).map(Path::to_path_buf)
+    dir.ancestors().find(|a| a.join(".git").exists()).filter(|a| !too_wide(a)).map(Path::to_path_buf)
+}
+
+/// A `.git` in the user's home folder or at the top of a drive is not treated as a project: a status there walks the whole
+/// profile or drive (seen: a stray home-folder repository kept `git status` busy for hours on every folder under it).
+fn too_wide(root: &Path) -> bool {
+    if root.parent().is_none() {
+        return true;
+    }
+    let plain = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from);
+    home.is_some_and(|h| plain(&h) == plain(root))
 }
 
 /// Settings in a repository's own `.git/config` that make `git status` run a program: a
