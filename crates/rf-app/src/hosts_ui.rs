@@ -414,6 +414,8 @@ struct Probe {
     waits_vpn: bool,
     /// The open connection reaches the files through shell commands (no SFTP there); `Some(false)`: names only from `ls`.
     shell: Option<bool>,
+    /// When the host last answered (unix ms) in this run of leaf: shown on a tile that is offline now.
+    seen_ms: Option<i64>,
 }
 
 #[derive(Default)]
@@ -443,7 +445,7 @@ fn probe_way(h: &Host, tunnel_up: bool) -> ProbeWay {
     }
 }
 
-fn probe_host(h: &Host) -> Probe {
+fn probe_host(h: &Host, seen_before: Option<i64>) -> Probe {
     use std::net::ToSocketAddrs;
     let scheme = h.scheme.to_ascii_lowercase();
     let port = h.port.unwrap_or(match scheme.as_str() {
@@ -456,7 +458,7 @@ fn probe_host(h: &Host) -> Probe {
     let started = std::time::Instant::now();
     let limit = std::time::Duration::from_secs(2);
     let online = match probe_way(h, leaf_vpn::tunnel().is_some()) {
-        ProbeWay::None => return Probe { waits_vpn: true, at: Some(std::time::Instant::now()), ..Probe::default() },
+        ProbeWay::None => return Probe { waits_vpn: true, at: Some(std::time::Instant::now()), seen_ms: seen_before, ..Probe::default() },
         ProbeWay::Tunnel => leaf_vpn::dial_blocking(&h.host, port, limit).is_ok_and(|s| s.through_tunnel()),
         ProbeWay::Direct => (h.host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.find_map(|a| std::net::TcpStream::connect_timeout(&a, limit).ok())).is_some(),
     };
@@ -464,7 +466,8 @@ fn probe_host(h: &Host) -> Probe {
     let free = if online { VPath::parse(&h.address()).ok().and_then(|v| leaf_remote::free_if_connected(&v)) } else { None };
     // (never connects and runs nothing on the host: it looks at the connection that is open)
     let shell = VPath::parse(&h.address()).ok().and_then(|v| leaf_remote::shell_access(&v));
-    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false, waits_vpn: false, shell }
+    let seen_ms = if online { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as i64) } else { seen_before };
+    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false, waits_vpn: false, shell, seen_ms }
 }
 
 /// Starts the probes of the hosts whose answer is old (the page is redrawn when one comes back).
@@ -473,13 +476,13 @@ fn refresh_probes(hosts: &[Host], cx: &mut Context<crate::folder_view::FolderVie
         cx.set_global(Probes::default());
     }
     for h in hosts {
-        let stale = {
+        let (stale, seen_before) = {
             let p = cx.global_mut::<Probes>().0.entry(h.name.clone()).or_default();
             let stale = !p.running && p.at.is_none_or(|t| t.elapsed() > PROBE_EVERY);
             if stale {
                 p.running = true;
             }
-            stale
+            (stale, p.seen_ms)
         };
         if !stale {
             continue;
@@ -487,7 +490,7 @@ fn refresh_probes(hosts: &[Host], cx: &mut Context<crate::folder_view::FolderVie
         let h = h.clone();
         cx.spawn(async move |this, cx| {
             let name = h.name.clone();
-            let got = cx.background_spawn(async move { probe_host(&h) }).await;
+            let got = cx.background_spawn(async move { probe_host(&h, seen_before) }).await;
             let _ = cx.update(|cx| {
                 if cx.has_global::<Probes>() {
                     cx.global_mut::<Probes>().0.insert(name, got);
@@ -515,7 +518,10 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
             _ if probe.waits_vpn => (p.text_tertiary, t!("Waits for the VPN").to_string()),
             (Some(true), Some(ms)) => (p.success, format!("{} \u{b7} {ms} ms", t!("Online"))),
             (Some(true), None) => (p.success, t!("Online").to_string()),
-            (Some(false), _) => (p.danger, t!("Not reachable").to_string()),
+            (Some(false), _) => match probe.seen_ms {
+                Some(ms) => (p.danger, format!("{} \u{b7} {} {}", t!("Not reachable"), t!("last seen"), crate::agents::ago(ms))),
+                None => (p.danger, t!("Not reachable").to_string()),
+            },
             (None, _) => (p.text_tertiary, t!("Checking...").to_string()),
         };
         let state = match probe.free {
