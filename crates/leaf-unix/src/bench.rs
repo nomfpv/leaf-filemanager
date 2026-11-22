@@ -1,4 +1,4 @@
-﻿//! Linux backend of rf_win::bench. Status: STUB
+﻿//! Linux backend of rf_win::bench. Status: PARTIAL (`machine` is read from /proc and os-release; the comparison with Windows file managers does not apply: `detect` finds none)
 
 use leaf_common::{stub, stub_err};
 use std::path::Path;

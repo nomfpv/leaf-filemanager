@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::settingscat. Status: STUB
+//! Linux backend of rf_win::settingscat. Status: N/A (Windows Settings pages: none listed, opening says it is not supported)
 
 use leaf_common::{stub, stub_err};
 use std::path::Path;

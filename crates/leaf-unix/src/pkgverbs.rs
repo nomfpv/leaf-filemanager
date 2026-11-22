@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::pkgverbs. Status: STUB
+//! Linux backend of rf_win::pkgverbs. Status: N/A (Windows packaged-app (MSIX) menu commands: none here, the list is empty)
 
 use leaf_common::{stub, stub_err};
 use std::path::PathBuf;

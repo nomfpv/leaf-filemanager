@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::signature. Status: STUB
+//! Linux backend of rf_win::signature. Status: N/A (Authenticode: Linux files carry no such signature, read finds none)
 
 use leaf_common::stub;
 use std::path::Path;

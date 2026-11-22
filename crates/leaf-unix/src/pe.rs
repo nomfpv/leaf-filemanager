@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::pe. Status: STUB
+//! Linux backend of rf_win::pe. Status: N/A (Windows PE version resources: the Windows reader uses the version API, not shareable; an ELF file's facts are read by leaf_common::elf for the info card)
 
 use leaf_common::stub;
 use std::path::Path;

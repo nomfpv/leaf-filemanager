@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::apppkg. Status: STUB
+//! Linux backend of rf_win::apppkg. Status: N/A (MSIX, APK, IPA and NuGet package cards: not offered, kind_of finds none; the Kind enum is the app's to match, so no .deb or .rpm variant is added blind)
 
 use leaf_common::stub;
 use std::path::Path;

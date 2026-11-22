@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::cert. Status: STUB
+//! Linux backend of rf_win::cert. Status: N/A (Authenticode certificates: none on Linux)
 
 use leaf_common::stub;
 use std::path::Path;

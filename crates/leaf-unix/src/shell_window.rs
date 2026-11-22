@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::shell_window. Status: STUB
+//! Linux backend of rf_win::shell_window. Status: N/A (Explorer windows: none to follow)
 
 use leaf_common::stub;
 use std::path::Path;

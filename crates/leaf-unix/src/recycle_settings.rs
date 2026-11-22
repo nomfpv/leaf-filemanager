@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::recycle_settings. Status: STUB
+//! Linux backend of rf_win::recycle_settings. Status: N/A (the freedesktop Trash has no per-bin size settings; read and write answer an error, not success)
 
 use leaf_common::stub_err;
 

@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::shellfolder. Status: STUB
+//! Linux backend of rf_win::shellfolder. Status: N/A (Windows shell namespace; phones and cameras arrive as gvfs/MTP mounts through the drives list; copy_in, copy_out and delete_items answer false, never success)
 
 use leaf_common::{stub, stub_err};
 use std::path::Path;
