@@ -632,6 +632,10 @@ pub fn main() {
                 }
             }
         }
+        // a switch between a per-user and an all-users install: the registrations that name the other one come here
+        if registers {
+            crate::installer::follow_install();
+        }
         // the browsers' host registration follows a moved or updated leaf
         if registers {
             crate::capture::refresh();

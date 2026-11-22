@@ -18,6 +18,79 @@ pub fn is_installed() -> bool {
     std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())).is_some_and(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("current")) && d.parent().is_some_and(|r| r.join("Update.exe").is_file()))
 }
 
+/// How this copy of leaf was put on the PC. Decides whether it may update itself and what Settings says about administrator mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallKind {
+    /// In Program Files (`tools\install-local.ps1 -AllUsers`, or a per-machine Velopack setup): only administrators can change the
+    /// files, so the administrator helper may be started; no self-update (the installer is run again).
+    AllUsers,
+    /// In the user's own folders (`install-local.ps1` to `%LOCALAPPDATA%\Programs\leaf`, or the per-user Velopack setup).
+    PerUser,
+    /// A build folder, a portable copy or any other folder.
+    Other,
+}
+
+/// The kind of install for the program file `exe`. `program_dirs`: the Program Files folders of this PC; `velopack`: the
+/// updater's layout ([`is_installed`]).
+pub fn kind_for(exe: &Path, program_dirs: &[std::path::PathBuf], local_programs: Option<&Path>, velopack: bool) -> InstallKind {
+    let inside = |dir: &Path| {
+        let (e, d) = (exe.to_string_lossy().to_lowercase().replace('/', "\\"), dir.to_string_lossy().to_lowercase().replace('/', "\\"));
+        let d = d.trim_end_matches('\\');
+        !d.is_empty() && e.strip_prefix(d).is_some_and(|rest| rest.starts_with('\\'))
+    };
+    if program_dirs.iter().any(|d| inside(d)) {
+        InstallKind::AllUsers
+    } else if velopack || local_programs.is_some_and(inside) {
+        InstallKind::PerUser
+    } else {
+        InstallKind::Other
+    }
+}
+
+/// The kind of this running copy (worked out once).
+pub fn install_kind() -> InstallKind {
+    static KIND: std::sync::OnceLock<InstallKind> = std::sync::OnceLock::new();
+    *KIND.get_or_init(|| {
+        let Ok(exe) = std::env::current_exe() else { return InstallKind::Other };
+        let program_dirs: Vec<std::path::PathBuf> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"].iter().filter_map(|v| std::env::var_os(v)).map(Into::into).collect();
+        let local = std::env::var_os("LOCALAPPDATA").map(|l| std::path::PathBuf::from(l).join("Programs"));
+        kind_for(&exe, &program_dirs, local.as_deref(), is_installed())
+    })
+}
+
+/// The kind of install a registration's program file `leaf` belongs to (the same rules; for Velopack's layout the folder above
+/// `current`).
+fn kind_of_registered(leaf: &Path) -> InstallKind {
+    let program_dirs: Vec<std::path::PathBuf> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"].iter().filter_map(|v| std::env::var_os(v)).map(Into::into).collect();
+    let local = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    let velopack = leaf.parent().is_some_and(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("current")) && d.parent().is_some_and(|r| r.join("Update.exe").is_file()));
+    // %LOCALAPPDATA%\Programs\leaf (install-local) and %LOCALAPPDATA%\leaf (Velopack) are per-user installs
+    let programs = local.as_ref().map(|l| l.join("Programs"));
+    kind_for(leaf, &program_dirs, programs.as_deref(), velopack)
+}
+
+/// After a switch between a per-user and an all-users install the Windows registrations (default file manager, the browsers'
+/// hand-over host) still name the old place. An installed leaf takes them over when they name the OTHER kind of install; a
+/// build folder or a portable copy never does, and registrations that name some other place are left alone.
+pub fn follow_install() {
+    let mine = install_kind();
+    if mine == InstallKind::Other {
+        return;
+    }
+    let Ok(me) = std::env::current_exe() else { return };
+    let classes = leaf_sys::default_fm::CLASSES;
+    if let Some(old) = leaf_sys::default_fm::registered_leaf(classes)
+        && !old.as_os_str().eq_ignore_ascii_case(me.as_os_str())
+        && kind_of_registered(&old) != InstallKind::Other
+        && kind_of_registered(&old) != mine
+    {
+        match leaf_sys::default_fm::enable(&me.display().to_string(), classes) {
+            Ok(()) => log::warn!("default file manager moved from {} to this install ({}): the other kind of install", old.display(), me.display()),
+            Err(e) => log::warn!("default file manager still names {}: {e:#}", old.display()),
+        }
+    }
+}
+
 /// Whether a process started with this first argument may apply a waiting update as it starts. Velopack does that before any code
 /// of ours runs, and it ends every running leaf process to do it.
 ///
@@ -38,7 +111,9 @@ pub fn applies_update_at_start(first_arg: Option<&str>) -> bool {
 /// First thing in `main`: Velopack's install / update / uninstall hooks run here and exit.
 pub fn startup() {
     let first = std::env::args().nth(1);
-    let app = VelopackApp::build().set_auto_apply_on_startup(applies_update_at_start(first.as_deref()));
+    // (an all-users install never applies an update by itself: it is replaced by running the installer again)
+    let apply = applies_update_at_start(first.as_deref()) && install_kind() != InstallKind::AllUsers;
+    let app = VelopackApp::build().set_auto_apply_on_startup(apply);
     // the install / update / uninstall hooks exist in Velopack's Windows build only
     #[cfg(windows)]
     let app = app
@@ -84,6 +159,8 @@ fn before_uninstall() {
 pub enum State {
     /// Not installed by Velopack: no updates.
     NotInstalled,
+    /// Installed for all users (Program Files): no self-update, the installer is run again.
+    AllUsers,
     Idle,
     Checking,
     /// Version and percent downloaded.
@@ -103,6 +180,9 @@ pub fn is_important(version: &str) -> bool {
 }
 
 pub fn state() -> State {
+    if install_kind() == InstallKind::AllUsers && std::env::var_os("LEAF_FAKE_UPDATE").is_none() {
+        return State::AllUsers;
+    }
     STATE.lock().unwrap().clone().unwrap_or(State::Idle)
 }
 
@@ -182,6 +262,10 @@ pub fn check(enabled: bool, feed: &str) {
         return fake_check();
     }
     LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    // no self-update into Program Files, whatever the settings say (nothing below runs: no socket, no request)
+    if install_kind() == InstallKind::AllUsers {
+        return set(State::AllUsers);
+    }
     if !enabled || !feed_is_valid(feed) {
         return set(State::Idle);
     }
@@ -249,6 +333,25 @@ pub fn restart_to_update() {
         log::warn!("apply update: {e}");
         *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = e.to_string();
         *PENDING.lock().unwrap_or_else(|p| p.into_inner()) = Some((um, asset));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod kind_tests {
+    use super::{InstallKind::*, kind_for};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn program_files_is_all_users_and_the_users_own_folders_are_per_user() {
+        let pf = [PathBuf::from(r"C:\Program Files"), PathBuf::from(r"C:\Program Files (x86)")];
+        let local = Path::new(r"C:\Users\user\AppData\Local\Programs");
+        assert_eq!(kind_for(Path::new(r"C:\Program Files\leaf\leaf.exe"), &pf, Some(local), false), AllUsers);
+        assert_eq!(kind_for(Path::new(r"c:\program files\leaf\current\leaf.exe"), &pf, Some(local), true), AllUsers);
+        assert_eq!(kind_for(Path::new(r"C:\Program Files (x86)\leaf\leaf.exe"), &pf, Some(local), false), AllUsers);
+        assert_eq!(kind_for(Path::new(r"C:\Program Files Extra\leaf.exe"), &pf, Some(local), false), Other, "a sibling name is not inside");
+        assert_eq!(kind_for(Path::new(r"C:\Users\user\AppData\Local\Programs\leaf\leaf.exe"), &pf, Some(local), false), PerUser);
+        assert_eq!(kind_for(Path::new(r"C:\Users\user\AppData\Local\leaf\current\leaf.exe"), &pf, Some(local), true), PerUser);
+        assert_eq!(kind_for(Path::new(r"C:\dev\leaf\target\release\leaf.exe"), &pf, Some(local), false), Other);
     }
 }
 
