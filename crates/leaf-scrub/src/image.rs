@@ -47,7 +47,8 @@ pub(crate) fn inspect_unwritable(path: &Path, kind: &'static str) -> Inspection 
             "camera RAW" => crate::tiff::RAW_TEXT.to_string(),
             "Matroska / WebM" => "Matroska / WebM files cannot be rewritten without re-encoding or a risk of damaging them: they are refused and left untouched; their tags, title and writing program stay inside".to_string(),
             "AVI" => "AVI files cannot be rewritten without re-encoding or a risk of damaging them: they are refused and left untouched; their tags and writing program stay inside".to_string(),
-            _ => format!("leaf cannot clean {kind} files without a risk of damaging them; the metadata above is listed only"),
+            "old Office" => "old Office files (.doc, .xls, .ppt) and password-protected Office files carry author names leaf cannot rewrite: they are refused and left untouched; save them as .docx, .xlsx or .pptx without a password first".to_string(),
+            _ => format!("not supported: {kind} files carry metadata leaf has no remover for, so the file is refused and left untouched"),
         }),
     }
 }

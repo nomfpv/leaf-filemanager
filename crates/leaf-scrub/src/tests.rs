@@ -382,13 +382,38 @@ fn scrub_zone_identifier_stream_listed_and_not_in_the_copy() {
     let before = inspect(&src, &opts()).unwrap();
     assert!(before.findings.iter().any(|f| f.label.contains("Zone.Identifier") && f.value.contains("example.com")));
     let dst = clean_copy_name(&src);
-    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let out = clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert!(!out.contents_read && out.notes.iter().any(|n| n == PLAIN_NOTE), "a kind leaf does not read is not called cleaned");
     assert!(fs::read_to_string(format!("{}:Zone.Identifier", dst.display())).is_err(), "the copy must not carry the stream");
     assert_eq!(fs::read_to_string(&dst).unwrap(), "hello");
     // removing in place (the replace mode's last step)
     let gone = remove_streams(&src);
     assert!(gone.iter().any(|n| n.contains("Zone.Identifier")));
     assert!(fs::read_to_string(&stream).is_err());
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Kinds that carry metadata but have no remover (old Office / protected Office, Photoshop, RTF, EPS, AIFF) are refused and nothing
+/// is written; they are never passed through as "cleaned".
+#[test]
+fn scrub_known_formats_without_a_remover_are_refused() {
+    let d = tmp_dir("nowriter");
+    let samples: [(&str, Vec<u8>); 5] = [
+        ("a.doc", [&[0xD0u8, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1][..], &[0u8; 504], b"Planted Author"].concat()),
+        ("a.psd", [&b"8BPS\0\x01"[..], &[0u8; 20], b"Planted Author"].concat()),
+        ("a.rtf", br"{\rtf1{\info{\author Planted Author}}hello}".to_vec()),
+        ("a.eps", b"%!PS-Adobe-3.0 EPSF-3.0\n%%Creator: Planted Author\n".to_vec()),
+        ("a.aiff", [&b"FORM\0\0\0\x20AIFF"[..], b"AUTH\0\0\0\x0ePlanted Author"].concat()),
+    ];
+    for (name, bytes) in samples {
+        let src = d.join(name);
+        fs::write(&src, &bytes).unwrap();
+        let i = inspect(&src, &opts()).unwrap();
+        assert!(!i.can_clean, "{name} must be refused");
+        let dst = clean_copy_name(&src);
+        assert!(matches!(clean_to(&src, &dst, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))), "{name}");
+        assert!(!dst.exists());
+    }
     let _ = fs::remove_dir_all(&d);
 }
 

@@ -224,6 +224,37 @@ pub(crate) fn family_of(path: &Path) -> io::Result<(Family, &'static str)> {
         }
         return Ok((Family::Tiff, "TIFF"));
     }
+    // kinds that carry metadata but that leaf has no remover for: refused, never copied and called clean
+    let no_writer: Option<(&'static str, &'static str)> = if h.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        Some(("old Office", "Office file (old format or password protected)"))
+    } else if h.starts_with(b"8BPS") {
+        Some(("Photoshop", "Photoshop document"))
+    } else if h.starts_with(b"{\\rtf") {
+        Some(("RTF", "RTF document"))
+    } else if h.starts_with(&[0xFF, 0x0A]) || h.starts_with(&[0, 0, 0, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A]) {
+        Some(("JPEG XL", "JPEG XL picture"))
+    } else if h.starts_with(&[0, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A]) || h.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
+        Some(("JPEG 2000", "JPEG 2000 picture"))
+    } else if h.len() >= 12 && &h[0..4] == b"FORM" && (&h[8..12] == b"AIFF" || &h[8..12] == b"AIFC") {
+        Some(("AIFF", "AIFF audio"))
+    } else if h.starts_with(b"%!PS") || h.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
+        Some(("PostScript / EPS", "PostScript / EPS file"))
+    } else if h.starts_with(&[0x06, 0x06, 0xED, 0xF5, 0xD8, 0x1D, 0x46, 0xE5, 0xBD, 0x31, 0xEF, 0xE7, 0xFE, 0x74, 0xB7, 0x1D]) {
+        Some(("InDesign", "InDesign document"))
+    } else if h.starts_with(&[0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11]) {
+        Some(("Windows Media", "Windows Media file"))
+    } else if h.starts_with(b"AT&TFORM") {
+        Some(("DjVu", "DjVu document"))
+    } else if h.starts_with(b"gimp xcf") {
+        Some(("GIMP", "GIMP picture"))
+    } else if h.starts_with(b"AC10") && ext == "dwg" {
+        Some(("AutoCAD", "AutoCAD drawing"))
+    } else {
+        None
+    };
+    if let Some((kind, name)) = no_writer {
+        return Ok((Family::NoWriter(kind), name));
+    }
     if h.starts_with(b"GIF8") {
         return Ok((Family::Gif, "GIF"));
     }
@@ -340,7 +371,7 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
         Family::Plain => Inspection {
             format: name.to_string(),
             can_clean: true,
-            notes: vec!["The contents of this kind of file were not examined: leaf cannot read metadata from it.".into()],
+            notes: vec![PLAIN_NOTE.into()],
             ..Default::default()
         },
     };
@@ -356,6 +387,9 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
     }
     Ok(out)
 }
+
+/// What the sheet says about a kind of file whose contents leaf does not read.
+pub const PLAIN_NOTE: &str = "Only the download marker and other alternate streams were removed; the file's contents were not looked at.";
 
 /// "Formats leaf cannot clean are refused and left untouched": the second fixed line of the result sheet.
 pub const REFUSED_LINE: &str = "Formats leaf cannot clean are refused and left untouched: check the list above.";

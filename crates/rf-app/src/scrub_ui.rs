@@ -65,6 +65,9 @@ struct FileResult {
     dry: bool,
     /// The file name itself looks like it carries a date or a device name (the content cleaning cannot change it).
     name_note: Option<String>,
+    /// The contents were read and cleaned (false: a kind of file leaf does not read, only its alternate streams went). Only
+    /// these count as "cleaned".
+    contents_read: bool,
 }
 
 /// The sheet's note about a file NAME, unless the neutral-name option is ticked already.
@@ -104,9 +107,9 @@ fn dry_result(p: &Path, o: &RunOpts) -> FileResult {
         Ok(i) => {
             let refusal = (!i.can_clean).then(|| (t!("This kind of file cannot be cleaned").to_string(), i.refusal.clone().unwrap_or_default()));
             let (removed, kept): (Vec<_>, Vec<_>) = i.findings.iter().cloned().partition(|f| f.remove);
-            FileResult { name, format: i.format, output: None, removed: pairs(&removed), kept: pairs(&kept), notes: i.notes, error: refusal, dry: true, name_note: name_note(p, o) }
+            FileResult { name, format: i.format, output: None, removed: pairs(&removed), kept: pairs(&kept), notes: i.notes, error: refusal, dry: true, name_note: name_note(p, o), contents_read: false }
         }
-        Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: true, name_note: name_note(p, o) },
+        Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: true, name_note: name_note(p, o), contents_read: false },
     }
 }
 
@@ -304,13 +307,13 @@ fn work(files: &[PathBuf], o: &RunOpts, t: &Arc<leaf_sys::fileops::Tracker>, out
                         undo.push((oc.output.clone(), b, leaf_dev::review::Stamp::of_file(&oc.output)));
                     }
                 }
-                FileResult { name, format: oc.format, output: Some(oc.output), removed: pairs(&oc.removed), kept: pairs(&oc.kept), notes: oc.notes, error: None, dry: false, name_note: name_note(src, o) }
+                FileResult { name, format: oc.format, output: Some(oc.output), removed: pairs(&oc.removed), kept: pairs(&oc.kept), notes: oc.notes, error: None, dry: false, name_note: name_note(src, o), contents_read: oc.contents_read }
             }
             Err(leaf_scrub::ScrubError::Cancelled) => {
                 stopped = true;
-                FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((t!("Cancelled, left untouched").to_string(), String::new())), dry: false, name_note: None }
+                FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((t!("Cancelled, left untouched").to_string(), String::new())), dry: false, name_note: None, contents_read: false }
             }
-            Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: false, name_note: None },
+            Err(e) => FileResult { name, format: String::new(), output: None, removed: vec![], kept: vec![], notes: vec![], error: Some((e.to_string(), e.details())), dry: false, name_note: None, contents_read: false },
         };
         out.lock().unwrap().push(r);
         if stopped {
@@ -436,6 +439,7 @@ fn file_card(p: &Palette, r: &FileResult, ran: bool) -> AnyElement {
     let (icon, color) = match (&r.error, r.dry) {
         (Some(_), _) => (L::CircleAlert, p.danger),
         (None, true) => (L::Info, p.text_secondary),
+        (None, false) if !r.contents_read => (L::Info, p.text_secondary),
         (None, false) => (L::CircleCheck, p.accent),
     };
     rows.push(
@@ -531,8 +535,15 @@ impl Render for ScrubView {
             Phase::Done => {
                 let bad = self.results.iter().filter(|r| r.error.is_some()).count();
                 if self.ran {
-                    let ok = self.results.len() - bad;
-                    body.push(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(format!("{ok} {} · {bad} {}", t!("cleaned"), t!("not cleaned"))).into_any_element());
+                    // "cleaned" counts only files whose contents were read and passed the check; a kind leaf does not read
+                    // had only its streams removed and is counted apart
+                    let ok = self.results.iter().filter(|r| r.error.is_none() && r.contents_read).count();
+                    let streams_only = self.results.iter().filter(|r| r.error.is_none() && !r.contents_read).count();
+                    let mut line = format!("{ok} {} · {bad} {}", t!("cleaned"), t!("not cleaned"));
+                    if streams_only > 0 {
+                        line.push_str(&format!(" · {streams_only} {}", t!("only the download marker removed")));
+                    }
+                    body.push(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(line).into_any_element());
                 }
                 for r in &self.results {
                     body.push(file_card(&p, r, self.ran));
