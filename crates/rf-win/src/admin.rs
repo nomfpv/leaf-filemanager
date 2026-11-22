@@ -188,6 +188,13 @@ fn connect(name: &str, access: u32, process: HANDLE, pid: u32) -> Option<HANDLE>
 pub fn blocked() -> Option<StartError> {
     let Some(helper) = helper_exe() else { return Some(StartError::Missing) };
     let leaf = std::env::current_exe().ok()?;
+    blocked_for(&leaf, &helper)
+}
+
+/// [`blocked`] for a given leaf and helper program (the check itself): `Unsafe` when this user can change either, or the folder of
+/// the helper, without elevation. A Program Files install passes it (users there have read and execute only); a folder of the
+/// user's own does not.
+pub(crate) fn blocked_for(leaf: &std::path::Path, helper: &std::path::Path) -> Option<StartError> {
     let dir = helper.parent()?.to_path_buf();
     // GENERIC_WRITE, DELETE, WRITE_DAC, WRITE_OWNER on the programs; for the folder also adding and deleting entries in it
     const FILE_RIGHTS: [u32; 4] = [GENERIC_WRITE, 0x0001_0000, 0x0004_0000, 0x0008_0000];
@@ -208,7 +215,7 @@ pub fn blocked() -> Option<StartError> {
             }
         })
     };
-    if writable(&helper, &FILE_RIGHTS, false) || writable(&leaf, &FILE_RIGHTS, false) || writable(&dir, &DIR_RIGHTS, true) {
+    if writable(helper, &FILE_RIGHTS, false) || writable(leaf, &FILE_RIGHTS, false) || writable(&dir, &DIR_RIGHTS, true) {
         return Some(StartError::Unsafe);
     }
     None
@@ -225,4 +232,23 @@ pub fn is_denied(e: &anyhow::Error) -> bool {
 
 pub fn is_denied_io(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(5)
+}
+
+#[cfg(test)]
+mod blocked_tests {
+    use super::*;
+
+    /// A folder the user can write to (a per-user install) is refused: the helper there could be swapped by any program of the user.
+    /// (The other half, that Program Files passes, needs a session that is not an administrator's; it was read, not run.)
+    #[test]
+    fn a_folder_the_user_can_write_to_is_refused() {
+        let dir = std::env::temp_dir().join(format!("leaf-blocked-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (leaf, helper) = (dir.join("leaf.exe"), dir.join("leaf-helper.exe"));
+        std::fs::write(&leaf, b"x").unwrap();
+        std::fs::write(&helper, b"x").unwrap();
+        let r = blocked_for(&leaf, &helper);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(r, Some(StartError::Unsafe)));
+    }
 }

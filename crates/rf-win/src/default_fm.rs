@@ -289,6 +289,13 @@ pub fn registered_exe(classes_root: &str) -> Option<std::path::PathBuf> {
     is_our_exe(exe).then(|| exe.into())
 }
 
+/// The leaf.exe the registration ends in: the program the launcher's path file names when the launcher is registered, else the
+/// registered exe itself (None when not enabled).
+pub fn registered_leaf(classes_root: &str) -> Option<std::path::PathBuf> {
+    let reg = registered_exe(classes_root)?;
+    if is_launcher_path(&reg) { launcher_target(&reg) } else { Some(reg) }
+}
+
 /// While we are the default, a registered exe that no longer exists (moved, rebuilt elsewhere,
 /// its folder cleaned) would leave Windows unable to open any folder: point it at `current`. With the launcher registered, the
 /// same for the leaf its path file names (the launcher opens Explorer meanwhile).

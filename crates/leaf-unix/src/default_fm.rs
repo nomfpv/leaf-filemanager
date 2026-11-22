@@ -184,6 +184,11 @@ pub fn is_enabled(_classes_root: &str) -> bool {
     mimeapps_ids(SECTION, MIME).first().is_some_and(|i| i == ID)
 }
 
+/// The program the registration ends in (here the same as [`registered_exe`]: there is no launcher on Linux).
+pub fn registered_leaf(classes_root: &str) -> Option<PathBuf> {
+    registered_exe(classes_root)
+}
+
 /// The program the generated entry starts (None when there is none of ours).
 pub fn registered_exe(_classes_root: &str) -> Option<PathBuf> {
     let text = std::fs::read_to_string(own_entry_path()).ok().filter(|t| t.contains(MARK))?;
