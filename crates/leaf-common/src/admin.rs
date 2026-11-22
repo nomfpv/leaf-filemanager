@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The version of this conversation; the helper refuses another.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 /// The helper's program (its file name without the extension), beside `leaf`.
 pub const HELPER_EXE_STEM: &str = "leaf-helper";
 /// The longest request frame the helper reads.
@@ -34,6 +34,9 @@ pub const MAX_FILE: u64 = 256 << 20;
 pub const IDLE_LIMIT: Duration = Duration::from_secs(5 * 60);
 /// One frame of raw bytes carries at most this much.
 pub const DATA_CHUNK: usize = 1 << 20;
+/// The most items one listing returns (it comes in pages of [`PAGE_ITEMS`]).
+pub const MAX_ITEMS: usize = 500_000;
+pub const PAGE_ITEMS: usize = 4096;
 
 pub const FRAME_MESSAGE: u8 = 1;
 pub const FRAME_DATA: u8 = 2;
@@ -240,6 +243,8 @@ pub enum Refusal {
     Unexpected,
     /// The item is not the kind the request needs (a folder where a file is written, a file where a folder is listed).
     WrongKind,
+    /// The Recycle Bin is not used as administrator (a permanent delete can be asked instead).
+    NoRecycle,
 }
 
 /// The helper's messages to leaf.
@@ -252,6 +257,9 @@ pub enum Reply {
     Progress { total: u32, done: u32, current: Option<String>, bytes_done: u64, bytes_total: u64 },
     /// Names that already exist at the destination; the operation waits for a [`Request::Answer`].
     Ask { clashes: Vec<Clash> },
+    /// One page of a listing; more pages or the last one ([`Reply::Listing`]) follow.
+    Page { items: Vec<Item> },
+    /// The last page of a listing ([`Client::call`] returns all pages together in it).
     Listing { items: Vec<Item> },
     Stat { item: Option<Item> },
     Created { path: PathBuf },
@@ -259,7 +267,8 @@ pub enum Reply {
     Reading { len: u64 },
     /// The operation ended: `ok` false = cancelled or not all done (as leaf's own engines answer `Ok(false)`). `pairs` = (source,
     /// result) of what was done, for leaf's undo list.
-    Done { ok: bool, pairs: Vec<(PathBuf, PathBuf)> },
+    /// `missing`: named items that were already gone (a delete counts them as done, a copy or move skipped them).
+    Done { ok: bool, pairs: Vec<(PathBuf, PathBuf)>, missing: u32 },
     /// Refused before anything was done.
     Refused { why: Refusal },
     /// Tried and failed. `denied`: the system said "access denied" even to the administrator. `detail` is the system's text,
@@ -530,12 +539,14 @@ pub struct Client {
     reader: Mutex<Box<dyn Read + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     broken: AtomicBool,
+    /// One call at a time: a second caller waits for the first call's final reply (replies never cross).
+    calls: Mutex<()>,
 }
 
 impl Client {
     /// Greets the helper with `token` and waits for its welcome. Returns the helper's process id.
     pub fn greet(reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>, token: &str) -> Result<(Self, u32), HelperError> {
-        let c = Self { reader: Mutex::new(reader), writer: Mutex::new(writer), broken: AtomicBool::new(false) };
+        let c = Self { reader: Mutex::new(reader), writer: Mutex::new(writer), broken: AtomicBool::new(false), calls: Mutex::new(()) };
         c.write(&Request::Hello { token: token.to_string(), protocol: PROTOCOL })?;
         match c.read()? {
             Reply::Welcome { pid } => Ok((c, pid)),
@@ -574,6 +585,7 @@ impl Client {
     /// Sends `req` and returns its final reply ([`Reply::Done`], [`Reply::Listing`], …); progress and questions on the way go to
     /// `calls`. A set `calls.cancel` is passed on to the helper. A [`Request::ReadFile`] returns its bytes in `data`.
     pub fn call(&self, req: &Request, calls: &Calls, data: &mut Vec<u8>) -> Result<Reply, HelperError> {
+        let _one = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         self.write(req)?;
         let finished = AtomicBool::new(false);
         std::thread::scope(|s| {
@@ -594,8 +606,20 @@ impl Client {
     }
 
     fn answers(&self, calls: &Calls, data: &mut Vec<u8>) -> Result<Reply, HelperError> {
+        let mut pages: Vec<Item> = Vec::new();
         loop {
             match self.read()? {
+                Reply::Page { items } => {
+                    pages.extend(items);
+                    if pages.len() > MAX_ITEMS {
+                        self.broken.store(true, Ordering::Relaxed);
+                        return Err(HelperError::Confused);
+                    }
+                }
+                Reply::Listing { items } => {
+                    pages.extend(items);
+                    return Ok(Reply::Listing { items: pages });
+                }
                 Reply::Progress { total, done, current, bytes_done, bytes_total } => (calls.progress)(total, done, current, bytes_done, bytes_total),
                 Reply::Ask { clashes } => {
                     let choices = (calls.ask)(&clashes);

@@ -28,10 +28,6 @@ use leaf_common::admin::{Item, MAX_FILE, Refusal};
 
 use crate::Fail;
 
-/// The Trash of a process running as root is root's, not the user's: the helper does not put items there (leaf offers a
-/// permanent delete instead).
-pub const HAS_RECYCLE: bool = false;
-
 fn last_err() -> std::io::Error {
     std::io::Error::last_os_error()
 }
@@ -80,7 +76,7 @@ pub struct Held(Vec<OwnedFd>);
 
 impl Held {
     /// The innermost folder held.
-    fn last(&self) -> RawFd {
+    pub(crate) fn last(&self) -> RawFd {
         self.0.last().map_or(libc::AT_FDCWD, |f| f.as_raw_fd())
     }
 }
@@ -108,19 +104,6 @@ pub fn hold_folder(p: &Path) -> Result<Held, Fail> {
     walk(p, true)
 }
 
-pub struct ItemFacts {
-    pub dir: bool,
-    pub link: bool,
-}
-
-/// The named item, looked at through its held parent without following it.
-pub fn check_item(p: &Path) -> Result<ItemFacts, Fail> {
-    let held = hold_parents(p)?;
-    let name = p.file_name().ok_or(Refusal::WrongKind)?;
-    let st = lstat_at(held.last(), name)?;
-    Ok(ItemFacts { dir: is(&st, libc::S_IFDIR), link: is(&st, libc::S_IFLNK) })
-}
-
 /// The path that reaches an open descriptor itself (the kernel's link for it), so a listing goes into exactly that folder.
 fn fd_path(fd: RawFd) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{fd}"))
@@ -130,8 +113,16 @@ pub fn list(dir: &Path) -> Result<Vec<Item>, Fail> {
     let held = hold_folder(dir)?;
     let at = fd_path(held.last());
     let mut items = Vec::new();
-    let r = leaf_sys::list_dir(&at, 4096, &|| false, &mut |batch| items.extend(batch.iter().map(Item::from)));
+    let mut too_many = false;
+    let r = leaf_sys::list_dir(&at, 4096, &|| false, &mut |batch| {
+        if items.len() + batch.len() > leaf_common::admin::MAX_ITEMS {
+            too_many = true;
+            return;
+        }
+        items.extend(batch.iter().map(Item::from))
+    });
     match r {
+        _ if too_many => Err(Fail::Failed { denied: false, detail: "too many items".into() }),
         Ok(_) => Ok(items),
         Err(e) => Err(Fail::Failed { denied: matches!(e, leaf_sys::ListError::AccessDenied), detail: e.to_string() }),
     }
@@ -147,13 +138,24 @@ pub fn stat(path: &Path) -> Result<Option<Item>, Fail> {
 }
 
 fn read_at(dir: RawFd, name: &OsStr, extra: impl FnOnce(&libc::stat) -> Result<(), Fail>) -> Result<Vec<u8>, Fail> {
-    let fd = open_at(dir, name, libc::O_RDONLY | libc::O_NONBLOCK)?;
-    let st = fstat(fd.as_raw_fd())?;
+    // first only as a path (nothing is opened for reading: no device, pipe or FIFO is touched), then exactly that regular file
+    let path_fd = open_at(dir, name, libc::O_PATH)?;
+    let st = fstat(path_fd.as_raw_fd())?;
     if is(&st, libc::S_IFLNK) {
         return Err(Refusal::Link.into());
     }
     if !is(&st, libc::S_IFREG) {
         return Err(Refusal::WrongKind.into());
+    }
+    let c = CString::new(format!("/proc/self/fd/{}", path_fd.as_raw_fd())).map_err(|_| Refusal::WrongKind)?;
+    let raw = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK) };
+    if raw < 0 {
+        return Err(last_err().into());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let again = fstat(fd.as_raw_fd())?;
+    if (again.st_dev, again.st_ino) != (st.st_dev, st.st_ino) {
+        return Err(Refusal::Link.into());
     }
     if st.st_size as u64 > MAX_FILE {
         return Err(Refusal::TooBig.into());
@@ -248,14 +250,6 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
         }
     }
     r.map_err(Into::into)
-}
-
-pub fn delete_for_good(paths: &[PathBuf], t: Arc<leaf_sys::fileops::Tracker>) -> anyhow::Result<bool> {
-    leaf_sys::fastdelete::delete_permanent(paths, t, leaf_sys::fastdelete::threads_for(paths))
-}
-
-pub fn is_denied(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied))
 }
 
 pub fn thread_start() {}

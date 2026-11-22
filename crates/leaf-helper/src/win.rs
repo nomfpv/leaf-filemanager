@@ -37,9 +37,6 @@ use windows::core::{PCWSTR, PWSTR};
 
 use crate::Fail;
 
-/// Windows has a Recycle Bin the helper can put items in (the shell's, for the same user).
-pub const HAS_RECYCLE: bool = true;
-
 /// GENERIC_READ / GENERIC_WRITE / SYNCHRONIZE.
 const GENERIC_READ: u32 = 0x8000_0000;
 const SYNCHRONIZE: u32 = 0x0010_0000;
@@ -48,7 +45,7 @@ const READ_CONTROL: u32 = 0x0002_0000;
 const NAME_SURROGATE: u32 = 0x2000_0000;
 
 /// A handle closed when dropped.
-pub struct Owned(HANDLE);
+pub struct Owned(pub(crate) HANDLE);
 
 impl Drop for Owned {
     fn drop(&mut self) {
@@ -85,25 +82,25 @@ fn open_nofollow(p: &Path, access: u32, share: FILE_SHARE_MODE) -> std::io::Resu
 /// What the handle says about the item.
 #[derive(Clone, Copy, Debug)]
 pub struct Facts {
-    attrs: u32,
+    pub(crate) attrs: u32,
     tag: u32,
-    links: u32,
-    size: u64,
+    pub(crate) links: u32,
+    pub(crate) size: u64,
     volume: u32,
     index: u64,
 }
 
 impl Facts {
-    fn dir(&self) -> bool {
+    pub(crate) fn dir(&self) -> bool {
         self.attrs & FILE_ATTRIBUTE_DIRECTORY.0 != 0
     }
     /// A symbolic link or a junction.
-    fn surrogate(&self) -> bool {
+    pub(crate) fn surrogate(&self) -> bool {
         self.attrs & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 && self.tag & NAME_SURROGATE != 0
     }
 }
 
-fn facts(h: &Owned) -> std::io::Result<Facts> {
+pub(crate) fn facts(h: &Owned) -> std::io::Result<Facts> {
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     unsafe { GetFileInformationByHandle(h.0, &mut info) }.map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))?;
     let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
@@ -150,7 +147,14 @@ fn same_place(h: &Owned, p: &Path) -> bool {
 
 /// Folders held open for an operation: while held, none of them can be renamed, deleted or replaced by a junction (they were
 /// opened without `FILE_SHARE_DELETE`), so a path through them keeps leading where it was checked to lead.
-pub struct Held(#[allow(dead_code)] Vec<Owned>);
+pub struct Held(Vec<Owned>);
+
+impl Held {
+    /// The innermost folder held (the parent of the item, or the folder itself for [`hold_folder`]).
+    pub(crate) fn last(&self) -> Option<&Owned> {
+        self.0.last()
+    }
+}
 
 /// Opens and holds one folder on the way: a real folder (no link or junction), where its name says.
 fn hold_one(p: &Path) -> Result<Owned, Fail> {
@@ -183,28 +187,11 @@ pub fn hold_folder(p: &Path) -> Result<Held, Fail> {
     Ok(h)
 }
 
-/// What [`check_item`] found.
-pub struct ItemFacts {
-    pub dir: bool,
-    /// The item is itself a link or junction (its own path, not followed).
-    pub link: bool,
-}
-
-/// Opens the named item itself without following it and checks it is where its name says. Call with its parents held.
-pub fn check_item(p: &Path) -> Result<ItemFacts, Fail> {
-    let h = open_nofollow(p, FILE_READ_ATTRIBUTES.0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)?;
-    let f = facts(&h)?;
-    if !same_place(&h, p) {
-        return Err(Refusal::Link.into());
-    }
-    Ok(ItemFacts { dir: f.dir(), link: f.surrogate() })
-}
-
 pub fn list(dir: &Path) -> Result<Vec<Item>, Fail> {
     let mut items = Vec::new();
     let mut too_many = false;
     let r = leaf_sys::list_dir(dir, 4096, &|| false, &mut |batch| {
-        if items.len() + batch.len() > 500_000 {
+        if items.len() + batch.len() > leaf_common::admin::MAX_ITEMS {
             too_many = true;
             return;
         }
@@ -281,9 +268,10 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
             _ => Err(Refusal::Link.into()),
         })?
     };
-    let _held = hold_parents(target)?;
-    {
-        let h = open_nofollow(target, FILE_READ_ATTRIBUTES.0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)?;
+    let held = hold_parents(target)?;
+    // the target's own permissions and attributes, read from its handle, go onto the new file before it takes the name
+    let old = {
+        let h = open_nofollow(target, FILE_READ_ATTRIBUTES.0 | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)?;
         let f = facts(&h)?;
         if f.surrogate() || !same_place(&h, target) || f.links != 1 {
             return Err(Refusal::Link.into());
@@ -291,13 +279,21 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
         if f.dir() {
             return Err(Refusal::WrongKind.into());
         }
-    }
+        // a read-only file is not written over (leaf's editor says so before it asks; this is the same answer)
+        if f.attrs & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY.0 != 0 {
+            return Err(Fail::Failed { denied: false, detail: "the file is read-only".into() });
+        }
+        (Dacl::of(&h), f.attrs)
+    };
     let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else { return Err(Refusal::WrongKind.into()) };
     let name = name.to_string_lossy();
+    clean_stale_temps(&held, &name);
     let mut n = 0;
     let (tmp, mut file) = loop {
         let tmp = dir.join(format!(".{name}.leaf-helper-{}-{n}.tmp", std::process::id()));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        use std::os::windows::fs::OpenOptionsExt;
+        // (GENERIC_WRITE and WRITE_DAC: the old file's permissions are put on it)
+        match std::fs::OpenOptions::new().write(true).access_mode(0x4000_0000 | 0x0004_0000 | 0x100).create_new(true).open(&tmp) {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 50 => n += 1,
             Err(e) => return Err(e.into()),
@@ -305,6 +301,14 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
     };
     let r = (|| -> std::io::Result<()> {
         file.write_all(&bytes)?;
+        {
+            use std::os::windows::io::AsRawHandle;
+            let h = HANDLE(file.as_raw_handle() as _);
+            if let Some(d) = &old.0 {
+                d.apply(h)?;
+            }
+            set_attributes(h, old.1)?;
+        }
         file.sync_all()?;
         drop(file);
         // CHECK-THEN-ACT: the target's NAME between the check above and this rename. Whatever is at the name then is replaced (a link
@@ -317,6 +321,82 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
         let _ = std::fs::remove_file(&tmp);
     }
     r.map_err(Into::into)
+}
+
+/// A file's DACL and whether it is protected from inheritance, read from its handle (the alternate data streams of the old file are
+/// not carried over).
+struct Dacl {
+    sd: PSECURITY_DESCRIPTOR,
+    dacl: *mut windows::Win32::Security::ACL,
+    protected: bool,
+}
+
+impl Dacl {
+    fn of(h: &Owned) -> Option<Self> {
+        use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+        use windows::Win32::Security::{DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl};
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        let mut dacl: *mut windows::Win32::Security::ACL = std::ptr::null_mut();
+        unsafe {
+            if GetSecurityInfo(h.0, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None, Some(&mut dacl), None, Some(&mut sd)).0 != 0 {
+                return None;
+            }
+            let (mut control, mut rev) = (0u16, 0u32);
+            let _ = GetSecurityDescriptorControl(sd, &mut control, &mut rev);
+            Some(Self { sd, dacl, protected: control & 0x1000 != 0 })
+        }
+    }
+
+    fn apply(&self, h: HANDLE) -> std::io::Result<()> {
+        use windows::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
+        use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, UNPROTECTED_DACL_SECURITY_INFORMATION};
+        let info = DACL_SECURITY_INFORMATION | if self.protected { PROTECTED_DACL_SECURITY_INFORMATION } else { UNPROTECTED_DACL_SECURITY_INFORMATION };
+        let r = unsafe { SetSecurityInfo(h, SE_FILE_OBJECT, info, None, None, Some(self.dacl as *const _), None) };
+        if r.0 != 0 { Err(std::io::Error::from_raw_os_error(r.0 as i32)) } else { Ok(()) }
+    }
+}
+
+impl Drop for Dacl {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(self.sd.0)));
+        }
+    }
+}
+
+/// The old file's attributes (hidden, system, archive, …) on the new one, through its handle.
+fn set_attributes(h: HANDLE, attrs: u32) -> std::io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{FILE_BASIC_INFO, FileBasicInfo, SetFileInformationByHandle};
+    // (zero times leave the times as they are; NORMAL alone cannot be combined, so it becomes 0 = "no change")
+    let keep = attrs & !(FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0 | 0x80);
+    if keep == 0 {
+        return Ok(());
+    }
+    let b = FILE_BASIC_INFO { FileAttributes: keep, ..Default::default() };
+    unsafe { SetFileInformationByHandle(h, FileBasicInfo, (&b as *const FILE_BASIC_INFO).cast(), size_of::<FILE_BASIC_INFO>() as u32) }
+        .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
+}
+
+/// Temp files of an earlier helper's save of `name` in this folder (a helper ended half way: `.<name>.leaf-helper-<pid>-<n>.tmp`
+/// with another process id), removed through the held folder's handle; only plain files of exactly that pattern.
+fn clean_stale_temps(held: &Held, name: &str) {
+    let Ok(dir) = crate::node::held_node(held, false) else { return };
+    let Ok(names) = crate::node::children(&dir) else { return };
+    let prefix = format!(".{name}.leaf-helper-");
+    let me = format!("{}-", std::process::id());
+    for n in names {
+        let s = n.to_string_lossy();
+        let Some(rest) = s.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".tmp")) else { continue };
+        let ours = rest.split_once('-').is_some_and(|(pid, k)| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) && k.bytes().all(|b| b.is_ascii_digit()));
+        if !ours || rest.starts_with(&me) {
+            continue;
+        }
+        if let Ok(f) = crate::node::open_child(&dir, &n, crate::node::Want::ReadDelete) {
+            if matches!(crate::node::kind(&f), Ok(crate::node::Kind::File(_))) {
+                let _ = crate::node::remove(&dir, &n, f, false);
+            }
+        }
+    }
 }
 
 /// The open file's owner is the user the helper serves.
@@ -340,23 +420,8 @@ fn owned_by_user(h: &Owned) -> bool {
     }
 }
 
-/// A permanent delete with leaf's parallel delete and no hand-over to the system's engine (which could show its own dialogs).
-pub fn delete_for_good(paths: &[PathBuf], t: Arc<leaf_sys::fileops::Tracker>) -> anyhow::Result<bool> {
-    leaf_sys::fastdelete::delete_without_shell(paths, t, leaf_sys::fastdelete::threads_for(paths))
-}
-
-/// "Access denied" in an engine's error.
-pub fn is_denied(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| {
-        c.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
-            || c.downcast_ref::<windows::core::Error>().is_some_and(|w| w.code().0 as u32 == 0x8007_0005)
-    })
-}
-
-/// Every operation's thread: the shell's engine (the Recycle Bin, leftovers of a copy) wants COM.
-pub fn thread_start() {
-    leaf_sys::shell::ensure_com();
-}
+/// Every operation's thread (nothing to set up: the helper does not use the shell's engine).
+pub fn thread_start() {}
 
 // ---------------------------------------------------------------------------------------------------------------- the client
 

@@ -103,8 +103,9 @@ pub fn serve(mut reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>, to
             Request::Bye | Request::Hello { .. } => break,
             op => {
                 if running.is_some() {
-                    // one at a time: leaf never sends a second request while one runs, so this is not leaf
-                    break;
+                    // one at a time (leaf's client waits for a call's end before the next): said, and the running one goes on
+                    reply(&Reply::Refused { why: Refusal::Busy });
+                    continue;
                 }
                 let cancel = Arc::new(AtomicBool::new(false));
                 let (tx, rx) = std::sync::mpsc::channel();

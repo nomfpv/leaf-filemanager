@@ -1,33 +1,30 @@
 //! Runs one request: the syntax checks of `leaf_common::admin::check_request`, then the per-system opening checks of [`crate::os`],
-//! then the operation with leaf's own engines (the same `leaf_sys::fastcopy`, `fastdelete` and `fileops` code leaf runs without
-//! the helper, so there is no second copy or delete implementation to drift apart).
+//! then the operation.
 //!
-//! What every operation does with its paths before acting:
-//! - every folder on the way to a named item is opened and HELD for the whole operation ([`crate::os::hold_parents`]): it is not a
-//!   link or a junction, it is where its name says, and (Windows) it cannot be renamed, deleted or replaced while it is held, so a
-//!   junction cannot be put in its place half way;
-//! - the named item itself is opened without following a link ([`crate::os::check_item`]) and must be where its name says.
+//! What every operation does with its paths before acting: every folder on the way to a named item is opened and HELD for the
+//! whole operation ([`crate::os::hold_parents`]): it is not a link or a junction, it is where its name says, and (Windows) it cannot
+//! be renamed, deleted or replaced while it is held. From the held parent on, everything that changes files works RELATIVE to open
+//! handles, never by a path again: delete, copy and move through the helper's own walk ([`crate::tree`]), a new folder and a rename
+//! through [`crate::node`]. leaf's own engines (`leaf_sys::fastcopy`, `fastdelete`, the shell's engine) are NOT used here: they
+//! work by path and would follow a junction swapped into a tree.
 //!
-//! CHECK-THEN-ACT, for the whole module: the engines take paths, not handles. What is held cannot change; what is not held can:
-//! - the named item itself between [`crate::os::check_item`] and the engine's own open (it can only be swapped by someone who may
-//!   write to its folder, so not in a protected folder, which is what the helper is for);
-//! - anything INSIDE a folder that is copied, moved or deleted: the engines walk it by path. They do not follow links inside (a
-//!   link is copied or removed as a link), but the walk and the act on each entry are separate steps;
-//! - on Linux, the folders on the way too: a descriptor held open does not keep a folder from being renamed, so for a new folder,
-//!   a rename and everything that goes through the engines, the path is looked up again after the walk that checked it (the listing,
-//!   stat, read and the editor's write work through the descriptors and have no such gap).
+//! What still goes by path: the listing and the stat (read only, inside a held folder: `leaf_sys::list_dir`, `stat_entry`). On
+//! Linux, where a descriptor does not keep a folder from being renamed, removals are by name in the held folder's descriptor
+//! (`unlinkat`, see `node_unix.rs`).
+//!
+//! The Recycle Bin is not used as administrator ([`Refusal::NoRecycle`]): the shell's engine that does it works by path, and as
+//! another administrator account (over-the-shoulder) it would be that account's bin. leaf offers a permanent delete instead.
 
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use leaf_common::admin::{Choice, Clash, MAX_FILE, Refusal, Reply, Request, check_request};
+use leaf_common::admin::{Choice, Clash, MAX_FILE, PAGE_ITEMS, Refusal, Reply, Request, check_request};
 use leaf_sys::fileops::{Tracker, Transfer};
 
 use crate::Fail;
-use crate::os;
+use crate::{node, os, tree};
 
 /// How a running operation talks back: replies (progress, questions) and raw bytes, and the answers to its questions.
 pub struct Job {
@@ -54,49 +51,42 @@ fn act(req: &Request, job: &Job) -> Result<Reply, Fail> {
     match req {
         Request::List { dir } => {
             let _held = os::hold_folder(dir)?;
-            Ok(Reply::Listing { items: os::list(dir)? })
+            let mut items = os::list(dir)?;
+            // (in pages: one reply stays far below the reply limit)
+            while items.len() > PAGE_ITEMS {
+                let rest = items.split_off(PAGE_ITEMS);
+                if !(job.send)(&Reply::Page { items }) {
+                    return Err(gone());
+                }
+                items = rest;
+            }
+            Ok(Reply::Listing { items })
         }
         Request::Stat { path } => {
             let _held = os::hold_parents(path)?;
             Ok(Reply::Stat { item: os::stat(path)? })
         }
         Request::CreateFolder { parent, name } => {
-            let _held = os::hold_folder(parent)?;
-            // (the one path the helper joins: a held folder and a name `check_name` accepted, one plain part)
-            let p = parent.join(name);
-            std::fs::create_dir(&p)?;
-            Ok(Reply::Created { path: p })
+            let held = os::hold_folder(parent)?;
+            let dir = node::held_node(&held, true)?;
+            node::make_dir(&dir, std::ffi::OsStr::new(name))?;
+            Ok(Reply::Created { path: parent.join(name) })
         }
         Request::Rename { path, new_name } => {
-            let _held = os::hold_parents(path)?;
-            os::check_item(path)?;
-            let to = path.with_file_name(new_name);
-            // CHECK-THEN-ACT: `path` itself between `check_item` and the rename. A rename moves the name it finds (a link stays a link,
-            // nothing is followed), and the folder it is in is held.
-            leaf_sys::fileops::rename_no_replace(path, &to)?;
-            Ok(Reply::Done { ok: true, pairs: vec![(path.clone(), to)] })
+            let held = os::hold_parents(path)?;
+            let dir = node::held_node(&held, false)?;
+            let name = path.file_name().ok_or(Refusal::WrongKind)?;
+            node::rename_in(&dir, name, std::ffi::OsStr::new(new_name))?;
+            Ok(Reply::Done { ok: true, pairs: vec![(path.clone(), path.with_file_name(new_name))], missing: 0 })
         }
-        Request::Copy { sources, dest } => transfer(Transfer::Copy, sources, dest, job),
-        Request::Move { sources, dest } => transfer(Transfer::Move, sources, dest, job),
-        Request::Recycle { paths } => {
-            if !os::HAS_RECYCLE {
-                return Err(Refusal::WrongKind.into());
-            }
-            let _held = hold_items(paths, true)?;
-            let t = tracker(job);
-            let r = leaf_sys::fileops::delete_tracked(paths, false, t.clone());
-            engine_done(r, &t)
-        }
-        Request::DeleteForGood { paths, .. } => {
-            // (`check_request` refused it already when leaf did not say it asked the user)
-            let _held = hold_items(paths, true)?;
-            let t = tracker(job);
-            let r = os::delete_for_good(paths, t.clone());
-            engine_done(r, &t)
-        }
+        Request::Copy { sources, dest } => done(tree::transfer(Transfer::Copy, sources, dest, &tracker(job))?),
+        Request::Move { sources, dest } => done(tree::transfer(Transfer::Move, sources, dest, &tracker(job))?),
+        Request::Recycle { .. } => Err(Refusal::NoRecycle.into()),
+        // (`check_request` refused it already when leaf did not say it asked the user)
+        Request::DeleteForGood { paths, .. } => done(tree::delete(paths, &tracker(job))?),
         Request::WriteFromPart { part, target } => {
             os::write_from_part(part, target)?;
-            Ok(Reply::Done { ok: true, pairs: Vec::new() })
+            Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0 })
         }
         Request::ReadFile { path } => {
             let bytes = os::read_file(path)?;
@@ -104,50 +94,25 @@ fn act(req: &Request, job: &Job) -> Result<Reply, Fail> {
                 return Err(Refusal::TooBig.into());
             }
             if !(job.send)(&Reply::Reading { len: bytes.len() as u64 }) {
-                return Err(Fail::Failed { denied: false, detail: "leaf went away".into() });
+                return Err(gone());
             }
             for chunk in bytes.chunks(leaf_common::admin::DATA_CHUNK) {
                 if !(job.send_data)(chunk) {
-                    return Err(Fail::Failed { denied: false, detail: "leaf went away".into() });
+                    return Err(gone());
                 }
             }
-            Ok(Reply::Done { ok: true, pairs: Vec::new() })
+            Ok(Reply::Done { ok: true, pairs: Vec::new(), missing: 0 })
         }
         Request::Hello { .. } | Request::Answer { .. } | Request::Cancel | Request::Bye => Err(Refusal::Unexpected.into()),
     }
 }
 
-/// Holds the folders on the way to each item and checks each item; `links_ok`: the item may itself be a link (it is then removed
-/// or moved as the link, which the engines do).
-fn hold_items(paths: &[PathBuf], links_ok: bool) -> Result<Vec<os::Held>, Fail> {
-    let mut held = Vec::with_capacity(paths.len());
-    for p in paths {
-        held.push(os::hold_parents(p)?);
-        let facts = os::check_item(p)?;
-        if facts.link && !links_ok {
-            return Err(Refusal::Link.into());
-        }
-    }
-    Ok(held)
+fn gone() -> Fail {
+    Fail::Failed { denied: false, detail: "leaf went away".into() }
 }
 
-fn transfer(kind: Transfer, sources: &[PathBuf], dest: &Path, job: &Job) -> Result<Reply, Fail> {
-    // a source that is a link is refused: copying it as administrator would read wherever it points
-    let _held_sources = hold_items(sources, false)?;
-    let _held_dest = os::hold_folder(dest)?;
-    let t = tracker(job);
-    // the same engine as leaf's own copy (with the system's engine for what it leaves); no job journal is written: the helper
-    // never writes into leaf's settings folder
-    let r = leaf_sys::fastcopy::transfer(kind, sources, dest, t.clone());
-    engine_done(r, &t)
-}
-
-fn engine_done(r: anyhow::Result<bool>, t: &Tracker) -> Result<Reply, Fail> {
-    let pairs = t.results.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    match r {
-        Ok(ok) => Ok(Reply::Done { ok, pairs }),
-        Err(e) => Err(Fail::Failed { denied: os::is_denied(&e), detail: format!("{e:#}") }),
-    }
+fn done(o: tree::Outcome) -> Result<Reply, Fail> {
+    Ok(Reply::Done { ok: o.ok, pairs: o.pairs, missing: o.missing })
 }
 
 /// A tracker like the Status Center's: progress goes back to leaf at most 20 times a second, a question about names that exist
@@ -192,6 +157,7 @@ fn tracker(job: &Job) -> Arc<Tracker> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
 
     fn job() -> (Job, std::sync::mpsc::Sender<Option<Vec<Choice>>>) {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -274,6 +240,66 @@ mod tests {
         let r = run(&Request::DeleteForGood { paths: vec![src.join("one.txt.bak")], asked_user: false }, &job);
         assert!(matches!(r, Reply::Refused { why: Refusal::NotAsked }));
         assert!(src.join("one.txt.bak").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn admin_delete_does_not_follow_a_junction_swapped_in_after_the_check() {
+        let d = temp("swap");
+        let x = d.join("x");
+        std::fs::create_dir_all(x.join("sub")).unwrap();
+        std::fs::write(x.join("sub").join("own.txt"), b"o").unwrap();
+        // (removed first: the walk takes the names from the end, and "z.txt" comes after "sub")
+        std::fs::write(x.join("z.txt"), b"z").unwrap();
+        let protected = d.join("protected");
+        std::fs::create_dir_all(&protected).unwrap();
+        std::fs::write(protected.join("system.dll"), b"keep").unwrap();
+        // the swap happens at the first progress report, after the request was checked and the tree surveyed: `sub` becomes a
+        // junction to the protected folder
+        let swapped = Arc::new(AtomicBool::new(false));
+        let (sw, xx, pp) = (swapped.clone(), x.clone(), protected.clone());
+        let (tx, rx) = std::sync::mpsc::channel::<Option<Vec<Choice>>>();
+        let job = Job {
+            cancel: Arc::new(AtomicBool::new(false)),
+            send: Arc::new(move |r| {
+                if matches!(r, Reply::Progress { .. }) && !sw.swap(true, Ordering::Relaxed) {
+                    std::fs::rename(xx.join("sub"), xx.with_file_name("sub-moved-away")).unwrap();
+                    os::make_dir_link(&xx.join("sub"), &pp).unwrap();
+                }
+                true
+            }),
+            send_data: Arc::new(|_| true),
+            answers: Arc::new(Mutex::new(rx)),
+        };
+        let r = run(&Request::DeleteForGood { paths: vec![x.clone()], asked_user: true }, &job);
+        drop(tx);
+        assert!(swapped.load(Ordering::Relaxed), "the swap happened during the delete");
+        assert!(matches!(r, Reply::Done { .. }), "{r:?}");
+        assert_eq!(std::fs::read(protected.join("system.dll")).unwrap(), b"keep", "nothing behind the junction was deleted");
+        assert!(!x.exists(), "the junction itself and the folder went");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn admin_copy_of_a_tree_with_a_junction_is_refused_and_writes_nothing() {
+        let (job, _tx) = job();
+        let d = temp("copylink");
+        let src = d.join("src");
+        std::fs::create_dir_all(src.join("inner")).unwrap();
+        std::fs::write(src.join("inner").join("a.txt"), b"a").unwrap();
+        let elsewhere = d.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("secret.txt"), b"s").unwrap();
+        os::make_dir_link(&src.join("inner").join("j"), &elsewhere).unwrap();
+        let dst = d.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        for req in [Request::Copy { sources: vec![src.clone()], dest: dst.clone() }, Request::Move { sources: vec![src.clone()], dest: dst.clone() }] {
+            let r = run(&req, &job);
+            assert!(matches!(r, Reply::Refused { why: Refusal::Link }), "{r:?}");
+            assert_eq!(std::fs::read_dir(&dst).unwrap().count(), 0, "nothing was written");
+        }
+        assert!(src.join("inner").join("a.txt").exists() && elsewhere.join("secret.txt").exists());
+        let _ = std::fs::remove_dir(src.join("inner").join("j"));
         let _ = std::fs::remove_dir_all(&d);
     }
 }
