@@ -716,6 +716,8 @@ impl Render for DiskUsageView {
                 .when(active, |d| d.child(Icon::new(arrow).size(px(12.)).flex_shrink_0().text_color(p.text_tertiary)))
                 .on_click(cx.listener(move |v, _, _, cx| v.set_sort(col, cx)))
         };
+        // ("1.1 M tok" needs a wider unit column than "MB")
+        let unit_w = if metric == Measure::Tokens { 44. } else { SIZE_UNIT_W };
         // same padding and gaps as a row, so the headings sit over their columns (the Files heading says what the column counts)
         let list_head = h_flex()
             .h(px(24.))
@@ -728,7 +730,7 @@ impl Render for DiskUsageView {
             .border_color(p.divider)
             .child(div().w(px(16.)).flex_shrink_0())
             .child(head_col("lh-name", t!("Name"), SortCol::Name, false, cx).flex_1().min_w_0())
-            .child(head_col("lh-size", t!("Size"), SortCol::Size, true, cx).w(px(SIZE_NUM_W + SIZE_UNIT_W + 4.)).flex_shrink_0())
+            .child(head_col("lh-size", t!("Size"), SortCol::Size, true, cx).w(px(SIZE_NUM_W + unit_w + 4.)).flex_shrink_0())
             .child(head_col("lh-share", t!("Share"), SortCol::Share, false, cx).w(px(BAR_W + PCT_W + 4.)).flex_shrink_0())
             .child(head_col("lh-files", t!("Files"), SortCol::Files, true, cx).w(px(FILES_W)).flex_shrink_0());
         let mut list = v_flex().id("du-list").flex_1().min_h_0().overflow_y_scroll().p_1();
@@ -771,12 +773,12 @@ impl Render for DiskUsageView {
                     // number and unit in their own columns, so the decimal points and the units form straight lines
                     .child(
                         h_flex()
-                            .w(px(SIZE_NUM_W + SIZE_UNIT_W + 4.))
+                            .w(px(SIZE_NUM_W + unit_w + 4.))
                             .flex_shrink_0()
                             .gap_1()
                             .text_color(p.text_secondary)
                             .child(div().w(px(SIZE_NUM_W)).text_right().font_features(tnum.clone()).child(num))
-                            .child(div().w(px(SIZE_UNIT_W)).child(unit)),
+                            .child(div().w(px(unit_w)).whitespace_nowrap().child(unit)),
                     )
                     .child(
                         h_flex()
