@@ -274,9 +274,16 @@ mod tests {
         let r = run(&Request::DeleteForGood { paths: vec![x.clone()], asked_user: true }, &job);
         drop(tx);
         assert!(swapped.load(Ordering::Relaxed), "the swap happened during the delete");
-        assert!(matches!(r, Reply::Done { .. }), "{r:?}");
-        assert_eq!(std::fs::read(protected.join("system.dll")).unwrap(), b"keep", "nothing behind the junction was deleted");
-        assert!(!x.exists(), "the junction itself and the folder went");
+        assert_eq!(std::fs::read(protected.join("system.dll")).unwrap(), b"keep", "nothing behind the link was deleted");
+        // Windows removes the junction as itself and finishes. Linux removes by name, sees that the name no longer holds the folder
+        // it opened, keeps it and says so: nothing behind the link is touched either way.
+        #[cfg(windows)]
+        {
+            assert!(matches!(r, Reply::Done { .. }), "{r:?}");
+            assert!(!x.exists(), "the junction itself and the folder went");
+        }
+        #[cfg(not(windows))]
+        assert!(matches!(r, Reply::Done { .. } | Reply::Failed { denied: false, .. }), "{r:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

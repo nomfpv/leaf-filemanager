@@ -52,7 +52,7 @@ fn parse_devices(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|l| {
             let (id, name) = l.trim().split_once(' ')?;
-            (!id.is_empty() && !name.trim().is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).then(|| (id.to_string(), name.trim().to_string()))
+            (!id.is_empty() && !id.starts_with('-') && !name.trim().is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).then(|| (id.to_string(), name.trim().to_string()))
         })
         .collect()
 }
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn kdeconnect_devices_are_read() {
-        assert_eq!(parse_devices("abc_123 My Phone\nbad line with-no id?\n\n"), vec![("abc_123".to_string(), "My Phone".to_string())]);
+        assert_eq!(parse_devices("abc_123 My Phone\nno?id line that is not a device\n-x Dash\n\n"), vec![("abc_123".to_string(), "My Phone".to_string())]);
     }
 
     #[test]
