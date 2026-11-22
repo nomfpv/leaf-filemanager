@@ -1,13 +1,15 @@
-//! Linux backend of rf_win::network. Status: STUB
+//! Linux backend of rf_win::network. Status: PARTIAL (gio mounts, smbclient shares, avahi/smbtree discovery, lan_link: never run on a desktop; the drive-letter dialogs do not apply)
 
-use leaf_common::{stub, stub_err};
+use leaf_common::stub;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// A UNC name (`\\server`) is a Windows way of writing a place: on Linux a server is reached as `smb://server` (an address leaf opens
+/// as a remote place, see [`mount_path`]) and is never a folder path, so no path is a server root here.
 pub fn server_root(_path: &Path) -> Option<String> {
-    stub!("network::server_root")
+    None
 }
 
 // TYPE-COPY(rf-win src/network.rs:27)
@@ -17,8 +19,127 @@ pub struct Share {
     pub remark: String,
 }
 
-pub fn shares(_server: &str) -> std::io::Result<Vec<Share>> {
-    stub_err!("network::shares")
+/// Disk shares of `server` through `smbclient -L` (anonymous: no password is ever put on a command line). Without `smbclient`:
+/// `Unsupported`; a server that wants a login: `PermissionDenied` (the share is then entered through [`mount_path_login`]).
+pub fn shares(server: &str) -> std::io::Result<Vec<Share>> {
+    if server.is_empty() || server.starts_with('-') || server.contains(['/', '\\', ' ']) {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    let target = format!("//{server}");
+    let o = tool("smbclient", &["-g", "-N", "-L", &target], Duration::from_secs(20))?;
+    if !o.ok {
+        let low = o.text.to_ascii_uppercase();
+        let kind = if low.contains("ACCESS_DENIED") || low.contains("LOGON_FAILURE") { std::io::ErrorKind::PermissionDenied } else { std::io::ErrorKind::Other };
+        return Err(std::io::Error::new(kind, o.text.trim().to_string()));
+    }
+    Ok(parse_smb_shares(&o.text))
+}
+
+/// The disk shares in the text of `smbclient -g -L`: `Disk|name|remark` lines; printers, IPC and hidden (`$`) shares are left out.
+fn parse_smb_shares(text: &str) -> Vec<Share> {
+    let mut v: Vec<Share> = text
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.splitn(3, '|');
+            let (kind, name, remark) = (f.next()?, f.next()?, f.next().unwrap_or(""));
+            (kind == "Disk" && !name.is_empty() && !name.ends_with('$')).then(|| Share { name: name.to_string(), remark: remark.trim().to_string() })
+        })
+        .collect();
+    v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    v
+}
+
+/// A machine of the local network that offers files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Server {
+    /// What to show (the service's name, else the host).
+    pub name: String,
+    /// The address to open: `smb://host`, `nfs://host`, `sftp://host`, `ftp://host`, `webdav://host`.
+    pub uri: String,
+}
+
+/// Servers on the local network, the way a KDE desktop's Network place lists them: DNS-SD (`avahi-browse -ptr`, for `_smb._tcp`,
+/// `_nfs._tcp`, `_sftp-ssh._tcp`, `_ftp._tcp`, `_webdav._tcp`) and, for Windows-style neighbours that do not announce themselves, `smbtree -N -S`
+/// when installed. Each source only when its program exists; none: an empty list. Blocks (a few seconds): worker threads only.
+pub fn servers() -> Vec<Server> {
+    let mut v: Vec<Server> = Vec::new();
+    if let Ok(o) = tool("avahi-browse", &["-p", "-t", "-r", "-k", "-a"], Duration::from_secs(8)).map(|o| o.text) {
+        v.extend(parse_avahi(&o));
+    }
+    if let Ok(o) = tool("smbtree", &["-N", "-S"], Duration::from_secs(12)) {
+        for s in parse_smbtree(&o.text) {
+            if !v.iter().any(|x| x.uri.eq_ignore_ascii_case(&s.uri)) {
+                v.push(s);
+            }
+        }
+    }
+    v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.uri.cmp(&b.uri)));
+    v.dedup_by(|a, b| a.uri == b.uri);
+    v
+}
+
+/// The resolved services in the text of `avahi-browse -ptr`: `=;eth0;IPv4;Name;_smb._tcp;local;host.local;192.168.1.5;445;"txt"`.
+/// Only IPv4 lines are used (one machine is listed once; the address is `host.local`).
+fn parse_avahi(text: &str) -> Vec<Server> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(';').collect();
+            if f.len() < 9 || f[0] != "=" || f[2] != "IPv4" {
+                return None;
+            }
+            let scheme = match f[4] {
+                "_smb._tcp" => "smb",
+                "_nfs._tcp" => "nfs",
+                "_sftp-ssh._tcp" => "sftp",
+                "_ftp._tcp" => "ftp",
+                "_webdav._tcp" => "webdav",
+                _ => return None,
+            };
+            let host = f[6].trim();
+            if host.is_empty() || host.contains(['/', ' ']) {
+                return None;
+            }
+            // (avahi writes a non-ASCII name as decimal escapes, `\032` for a space)
+            let name = unescape_avahi(f[3]);
+            Some(Server { name: if name.is_empty() { host.to_string() } else { name }, uri: format!("{scheme}://{host}") })
+        })
+        .collect()
+}
+
+/// `\032` (a decimal byte) and `\\` in avahi's parseable output.
+fn unescape_avahi(s: &str) -> String {
+    let b = s.as_bytes();
+    let (mut out, mut i) = (Vec::with_capacity(b.len()), 0);
+    while i < b.len() {
+        if b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(u8::is_ascii_digit) {
+            let n: u32 = s[i + 1..i + 4].parse().unwrap_or(63);
+            out.push(n.min(255) as u8);
+            i += 4;
+        } else if b[i] == b'\\' && i + 1 < b.len() && b[i + 1] == b'\\' {
+            out.push(b'\\');
+            i += 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The servers in the text of `smbtree -N -S`: workgroup lines are at the margin, `\\SERVER   comment` lines under them are indented one
+/// step, share lines (`\\SERVER\share`) deeper; only the server lines count.
+fn parse_smbtree(text: &str) -> Vec<Server> {
+    text.lines()
+        .filter_map(|l| {
+            let t = l.trim_start();
+            if l.len() == t.len() {
+                return None;
+            }
+            let rest = t.strip_prefix("\\\\")?;
+            let name = rest.split_whitespace().next()?;
+            (!name.contains('\\')).then(|| Server { name: name.to_string(), uri: format!("smb://{name}") })
+        })
+        .collect()
 }
 
 /// The mounted `smb://` and `nfs://` places (gvfs, through `gio mount -l`): (name, address). Empty without `gio`.
@@ -52,9 +173,14 @@ struct GioOut {
 /// Runs `gio` with an argument list (no shell, no input: the desktop's own prompt asks for a password, leaf never sees it) and
 /// waits at most `limit`. `Unsupported` when `gio` is not installed.
 fn gio(args: &[&str], limit: Duration) -> std::io::Result<GioOut> {
+    tool("gio", args, limit)
+}
+
+/// [`gio`] for any program on `PATH` (argument list, `LC_ALL=C`, a time limit).
+fn tool(name: &str, args: &[&str], limit: Duration) -> std::io::Result<GioOut> {
     use std::io::Read;
     let exe = std::env::var_os("PATH")
-        .and_then(|p| std::env::split_paths(&p).map(|d| d.join("gio")).find(|f| f.is_file()))
+        .and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::Unsupported))?;
     let mut child = Command::new(exe).args(args).env("LC_ALL", "C").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let (mut so, mut se) = (child.stdout.take(), child.stderr.take());
@@ -305,8 +431,49 @@ pub enum LinkType {
     Other,
 }
 
+/// The link this machine reaches the network over: its kind and rate in Mbit/s (Wi-Fi's current transmit rate from `iw` when installed,
+/// Ethernet's link speed from sysfs). The interface is the default route's (`/proc/net/route`, lowest metric). None without a route
+/// or without a rate.
 pub fn lan_link() -> Option<(LinkType, u32)> {
-    stub!("network::lan_link")
+    let iface = default_route_interface(&std::fs::read_to_string("/proc/net/route").ok()?)?;
+    if iface.contains(['/', '\0']) || iface.starts_with('.') {
+        return None;
+    }
+    let sys = PathBuf::from("/sys/class/net").join(&iface);
+    if sys.join("wireless").exists() || sys.join("phy80211").exists() {
+        let o = tool("iw", &["dev", &iface, "link"], Duration::from_secs(3)).ok().filter(|o| o.ok)?;
+        let mbps = parse_iw_rate(&o.text)?;
+        return Some((LinkType::Wifi, mbps));
+    }
+    // (a virtual interface -- a VPN, a bridge, a container -- has no `device`)
+    let kind = if sys.join("device").exists() { LinkType::Ethernet } else { LinkType::Other };
+    let speed: i64 = std::fs::read_to_string(sys.join("speed")).ok()?.trim().parse().ok()?;
+    // (-1: the driver does not know)
+    (speed > 0).then_some((kind, speed as u32))
+}
+
+/// The interface of the default route in `/proc/net/route` (`Iface Destination Gateway Flags RefCnt Use Metric ...`, hex, tab separated):
+/// destination 0, flag UP (1) and GATEWAY (2); the lowest metric wins.
+fn default_route_interface(text: &str) -> Option<String> {
+    text.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f.len() < 7 || f[1] != "00000000" {
+                return None;
+            }
+            let flags = u32::from_str_radix(f[3], 16).ok()?;
+            (flags & 3 == 3).then(|| (f[6].parse::<u32>().unwrap_or(u32::MAX), f[0].to_string()))
+        })
+        .min()
+        .map(|(_, i)| i)
+}
+
+/// `tx bitrate: 866.7 MBit/s ...` in the text of `iw dev X link`.
+fn parse_iw_rate(text: &str) -> Option<u32> {
+    let rest = text.lines().find_map(|l| l.trim().strip_prefix("tx bitrate:"))?;
+    let n: f64 = rest.split_whitespace().next()?.parse().ok()?;
+    (n >= 1.0).then_some(n as u32)
 }
 
 #[cfg(test)]
@@ -331,5 +498,34 @@ mod tests {
         assert_eq!(a("Username: "), None);
         assert_eq!(a("User [a]b]: "), None);
         assert_eq!(a("Login anonymously? [y/N]"), None);
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn avahi_lines_become_servers() {
+        let t = "+;eth0;IPv4;NAS;_smb._tcp;local\n=;eth0;IPv4;My\\032NAS;_smb._tcp;local;nas.local;192.168.1.5;445;\"\"\n=;eth0;IPv6;NAS;_smb._tcp;local;nas.local;fe80::1;445;\"\"\n=;eth0;IPv4;Pi;_sftp-ssh._tcp;local;pi.local;192.168.1.9;22;\"\"\n=;eth0;IPv4;Printer;_ipp._tcp;local;p.local;192.168.1.7;631;\"\"\n";
+        assert_eq!(
+            parse_avahi(t),
+            vec![Server { name: "My NAS".into(), uri: "smb://nas.local".into() }, Server { name: "Pi".into(), uri: "sftp://pi.local".into() }]
+        );
+    }
+
+    #[test]
+    fn smbclient_and_smbtree_text() {
+        let t = "Disk|Music|Family music\nDisk|C$|Default share\nIPC|IPC$|IPC Service\nPrinter|hp|\nDisk|Docs|\n";
+        assert_eq!(parse_smb_shares(t), vec![Share { name: "Docs".into(), remark: String::new() }, Share { name: "Music".into(), remark: "Family music".into() }]);
+        let tree = "WORKGROUP\n\t\\\\NAS             \tNAS server\n\t\t\\\\NAS\\Music         \t\n";
+        assert_eq!(parse_smbtree(tree), vec![Server { name: "NAS".into(), uri: "smb://NAS".into() }]);
+    }
+
+    #[test]
+    fn default_route_and_wifi_rate() {
+        let t = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\nwlan0\t00000000\t0100A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\neth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\neth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
+        assert_eq!(default_route_interface(t).as_deref(), Some("eth0"));
+        assert_eq!(parse_iw_rate("Connected to aa\n\ttx bitrate: 866.7 MBit/s VHT-MCS 9\n"), Some(866));
     }
 }
