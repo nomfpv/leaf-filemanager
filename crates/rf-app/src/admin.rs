@@ -362,6 +362,17 @@ pub fn list(dir: &Path) -> Option<Result<Vec<rf_core::Entry>, String>> {
     Some(r.map_err(|e| format!("{e:#}")))
 }
 
+/// The health numbers of one disk (`Some(number)`) or of all disks the administrator's reading gives (reliability counters: temperature,
+/// wear, power-on hours). READ ONLY. `may_start` is true only from the user's click on "Read health as administrator" (the permission
+/// prompt comes then); the sampling of the drive tiles asks with `false`, so it uses a helper that already runs and never starts one.
+/// Blocking.
+pub fn drive_health(disk: Option<u32>, may_start: bool) -> anyhow::Result<Vec<leaf_sys::drives::DriveHealth>> {
+    match call(Request::DriveHealth { disk }, &quiet(), may_start, &mut Vec::new())? {
+        Reply::Health { disks } => Ok(disks),
+        _ => Err(words(HelperError::Confused)),
+    }
+}
+
 /// The editor's save as administrator: the bytes go to a part file in leaf's own temp folder, which the helper puts in place of
 /// `path`. Blocking.
 pub fn write_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {

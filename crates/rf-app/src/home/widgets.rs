@@ -50,6 +50,161 @@ pub fn pinned(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
 /// Spinning or not, per drive root, asked once off the UI thread (`None` = not asked yet or the system does not say).
 static MEDIA: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Option<bool>>>> = std::sync::Mutex::new(None);
 
+/// What the drive tiles know about each fixed drive's health: the last unelevated reading (`None` inside = the drive is not a plain
+/// disk and has no health line), and when it was taken. Read off the UI thread, and only while a tile asks for it (so only while the
+/// tiles are on screen), at most once a minute.
+struct HealthSlot {
+    /// `None`: never read.
+    at: Option<std::time::Instant>,
+    reading: Option<leaf_sys::drives::DriveHealth>,
+    busy: bool,
+}
+static HEALTH: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, HealthSlot>>> = std::sync::Mutex::new(None);
+
+/// What the administrator helper read, per disk number, and when. Used on the tiles for [`ADMIN_FRESH`] after it was read: a
+/// temperature from long ago is not shown as the current one.
+static ADMIN_READ: std::sync::Mutex<Vec<(std::time::Instant, leaf_sys::drives::DriveHealth)>> = std::sync::Mutex::new(Vec::new());
+const HEALTH_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+const ADMIN_FRESH: std::time::Duration = std::time::Duration::from_secs(150);
+
+/// The health of the drive at `root` to show (with when it was read), asking for a new reading when the last is a minute old.
+/// `None`: nothing to show (not asked yet, or not a plain disk).
+fn health_of(root: &std::path::Path, cx: &mut Context<FolderView>) -> Option<(leaf_sys::drives::DriveHealth, std::time::Instant)> {
+    let (shown, ask) = {
+        let mut g = HEALTH.lock().ok()?;
+        let m = g.get_or_insert_with(Default::default);
+        let slot = m.entry(root.to_path_buf()).or_insert(HealthSlot { at: None, reading: None, busy: false });
+        let ask = !slot.busy && slot.at.is_none_or(|t| t.elapsed() >= HEALTH_EVERY);
+        if ask {
+            slot.busy = true;
+        }
+        (slot.reading.clone().zip(slot.at), ask)
+    };
+    if ask {
+        let root = root.to_path_buf();
+        cx.spawn(async move |this, cx| {
+            let r2 = root.clone();
+            let reading = cx
+                .background_executor()
+                .spawn(async move {
+                    let h = leaf_sys::drives::disk_health(&r2)?;
+                    // a helper that already runs gives more (wear, power-on hours); none is started for this
+                    if let (Some(disk), true) = (h.disk, crate::admin::active()) {
+                        if let Ok(list) = crate::admin::drive_health(Some(disk), false) {
+                            remember_admin(list);
+                        }
+                    }
+                    Some(h)
+                })
+                .await;
+            if let Ok(mut g) = HEALTH.lock() {
+                g.get_or_insert_with(Default::default).insert(root, HealthSlot { at: Some(std::time::Instant::now()), reading, busy: false });
+            }
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+    let (mut h, at) = shown?;
+    if let Some(disk) = h.disk {
+        if let Ok(g) = ADMIN_READ.lock() {
+            if let Some((_, a)) = g.iter().find(|(t, a)| a.disk == Some(disk) && t.elapsed() < ADMIN_FRESH) {
+                h.fill_from(a);
+            }
+        }
+    }
+    Some((h, at))
+}
+
+fn remember_admin(list: Vec<leaf_sys::drives::DriveHealth>) {
+    if let Ok(mut g) = ADMIN_READ.lock() {
+        let now = std::time::Instant::now();
+        for a in list {
+            g.retain(|(_, o)| o.disk != a.disk);
+            g.push((now, a));
+        }
+    }
+}
+
+fn health_word(h: leaf_sys::drives::Health) -> &'static str {
+    use leaf_sys::drives::Health;
+    match h {
+        Health::Good => t!("Good"),
+        Health::Warning => t!("Warning"),
+        Health::Failing => t!("Failing"),
+        Health::Unknown => t!("Unknown"),
+    }
+}
+
+fn health_color(h: leaf_sys::drives::Health, p: &Palette) -> Hsla {
+    use leaf_sys::drives::Health;
+    match h {
+        Health::Good => p.success,
+        Health::Warning => p.warning,
+        Health::Failing => p.danger,
+        // (not known is not good: the colour of "nothing said")
+        Health::Unknown => p.text_tertiary,
+    }
+}
+
+fn ago(at: std::time::Instant) -> String {
+    let s = at.elapsed().as_secs();
+    if s < 5 {
+        t!("just now").to_string()
+    } else if s < 90 {
+        format!("{s} {}", t!("seconds ago"))
+    } else {
+        format!("{} {}", s / 60, t!("minutes ago"))
+    }
+}
+
+fn source_word(s: leaf_sys::drives::HealthSource) -> &'static str {
+    use leaf_sys::drives::HealthSource as S;
+    match s {
+        S::StorageManagement => t!("Windows storage health status"),
+        S::DeviceQuery => t!("the drive's own sensor"),
+        S::Hwmon => t!("the kernel's hardware monitor"),
+        S::Udisks => t!("SMART data from udisks2"),
+        S::Administrator => t!("administrator helper"),
+    }
+}
+
+/// The detail of a drive's health: what was read, when and from where; and, where wear and hours need administrator rights, the
+/// button that reads them (the permission prompt comes from that click only).
+fn show_health(h: leaf_sys::drives::DriveHealth, at: std::time::Instant, p: &Palette, window: &mut Window, cx: &mut Context<FolderView>) {
+    use crate::fluent_menu::{Item, Menu, MenuIcon};
+    let row = |label: &'static str, value: String| Item::action(label, MenuIcon::None, |_, _| {}).hint(value);
+    let unknown = || t!("Not known").to_string();
+    let mut items = vec![
+        Item::action(t!("Health"), MenuIcon::Dot(health_color(h.health, p)), |_, _| {}).hint(health_word(h.health)),
+        row(t!("Temperature"), h.temperature_c.map(|c| format!("{c} °C")).unwrap_or_else(unknown)),
+        row(t!("Wear"), h.wear_percent.map(|w| format!("{w} % {}", t!("used"))).unwrap_or_else(unknown)),
+        row(t!("Powered on"), h.power_on_hours.map(|n| format!("{n} {}", t!("hours"))).unwrap_or_else(unknown)),
+        row(t!("Read"), ago(at)),
+        row(t!("From"), if h.sources.is_empty() { unknown() } else { h.sources.iter().map(|s| source_word(*s)).collect::<Vec<_>>().join(", ") }),
+    ];
+    if leaf_sys::drives::HEALTH_NEEDS_ADMIN && h.wear_percent.is_none() && h.power_on_hours.is_none() {
+        let this = cx.entity();
+        items.push(Item::Separator);
+        items.push(
+            Item::action(t!("Read health as administrator"), MenuIcon::Lucide(L::ShieldCheck), move |_, cx| {
+                let this = this.clone();
+                cx.spawn(async move |cx| {
+                    // (the one place that may start the helper: the click)
+                    let got = cx.background_executor().spawn(async move { crate::admin::drive_health(None, true) }).await;
+                    match got {
+                        Ok(list) => remember_admin(list),
+                        Err(e) => log::info!("drive health as administrator: {e:#}"),
+                    }
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            })
+            .enabled(crate::admin::available() && crate::admin::blocked().is_none()),
+        );
+    }
+    crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+}
+
 fn media_of(root: &std::path::Path, local: bool, cx: &mut Context<FolderView>) -> Option<&'static str> {
     if !local {
         return None;
@@ -159,6 +314,8 @@ pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
         let frac = d.used_fraction();
         let bar_color = if frac > 0.9 { p.danger } else { p.accent };
         let local = matches!(d.kind, leaf_sys::DriveKind::Fixed | leaf_sys::DriveKind::Removable);
+        // (fixed drives only: removable and network drives have no health line)
+        let health = if d.kind == leaf_sys::DriveKind::Fixed { health_of(&d.root, cx) } else { None };
         let kind_line = [Some(d.fs.clone()).filter(|f| !f.is_empty()), media_of(&d.root, local, cx).map(str::to_string)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         grid = grid.child(
             card(("drive", i).into(), p)
@@ -186,7 +343,37 @@ pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
                                 } else {
                                     String::new()
                                 }))
-                                .when(!kind_line.is_empty(), |c| c.child(div().text_xs().text_color(p.text_tertiary).child(kind_line)))
+                                .when(!kind_line.is_empty() || health.is_some(), |c| {
+                                    c.child(
+                                        h_flex()
+                                            .gap_1()
+                                            .items_center()
+                                            .text_xs()
+                                            .text_color(p.text_tertiary)
+                                            .child(div().child(kind_line))
+                                            .children(health.map(|(h, at)| {
+                                                let detail = h.clone();
+                                                let pal = p.clone();
+                                                div()
+                                                    .id(("drive-health", i))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .px_1()
+                                                    .rounded(theme::RADIUS_SM)
+                                                    .hover(|s| s.bg(p.hover))
+                                                    .tooltip(move |w, cx| {
+                                                        gpui_kit::component::tooltip::Tooltip::new(format!("{}: {}", t!("Health"), health_word(h.health))).build(w, cx)
+                                                    })
+                                                    .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(health_color(detail.health, p)))
+                                                    .children(detail.temperature_c.map(|c| format!("{c} °C")))
+                                                    .on_click(cx.listener(move |_, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        show_health(detail.clone(), at, &pal, window, cx);
+                                                    }))
+                                            })),
+                                    )
+                                })
                                 .children(io_with(|io| io.rate.get(&d.root).copied()).flatten().map(|(rd, wr)| {
                                     div().text_xs().text_color(p.text_tertiary).child(format!("{} {}/s · {} {}/s", t!("Read"), format::size(rd), t!("Write"), format::size(wr)))
                                 })),
