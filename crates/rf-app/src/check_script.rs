@@ -195,6 +195,30 @@ impl Workspace {
                 crate::setup::begin(cx);
                 window.dispatch_action(Box::new(crate::actions::GoSettings), cx);
             }
+            // made-up data (`check_demo.rs`): `demo home|usenet|video|bluray|agents`, and `demo project goto|usage|changes|brain` goes to
+            // the made-up project folder `demo agents` made
+            "demo" => {
+                let mut it = arg.split_whitespace();
+                match it.next().unwrap_or("") {
+                    "home" => super::check_demo::home(cx),
+                    "usenet" => crate::usenet::demo(cx),
+                    "video" => cx.defer(crate::videodl::demo_dialog),
+                    "bluray" => crate::bluray_ui::demo(window, cx),
+                    "agents" => super::check_demo::agents(cx),
+                    "project" => {
+                        let Some(p) = super::check_demo::project_dir() else { return false };
+                        let loc = match it.next().unwrap_or("goto") {
+                            "usage" => rf_core::Location::DiskUsage(p),
+                            "changes" => rf_core::Location::Changes(p),
+                            "brain" => rf_core::Location::Brain(p),
+                            "parent" => rf_core::Location::Path(p.parent().map(std::path::Path::to_path_buf).unwrap_or(p)),
+                            _ => rf_core::Location::Path(p),
+                        };
+                        self.navigate(loc, window, cx);
+                    }
+                    _ => return false,
+                }
+            }
             "usage" => self.navigate(rf_core::Location::DiskUsage(std::path::PathBuf::from(arg)), window, cx),
             // the change feed page: `changes-pick <part of a path>` selects that row (its diff shows in the preview pane)
             "changes-pick" => {

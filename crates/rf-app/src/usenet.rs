@@ -1192,3 +1192,23 @@ pub fn servers_card(p: &Palette, s: &Settings) -> AnyElement {
         ))
         .into_any_element()
 }
+
+/// Check scripts (`demo usenet`): a made-up server entry (`news.example.com`, kept in memory only) and a made-up NZB as a job that
+/// starts paused, so it never connects to anything.
+pub fn demo(cx: &mut App) {
+    let Some(dir) = settings::app_dir().map(|d| d.join("demo")) else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let nzb = dir.join("Example.Release.2026.nzb");
+    let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n <file poster=\"user@example.com\" date=\"1700000000\" subject=\"Example.Release.2026.part1.rar (1/2)\">\n  <groups><group>alt.binaries.example</group></groups>\n  <segments><segment bytes=\"768000\" number=\"1\">a1@example.com</segment><segment bytes=\"768000\" number=\"2\">a2@example.com</segment></segments>\n </file>\n</nzb>\n";
+    let _ = std::fs::write(&nzb, xml);
+    cx.update_global::<Settings, _>(|s, _| {
+        if s.usenet_servers.is_empty() {
+            s.usenet_servers.push(UsenetServer { host: "news.example.com".into(), user: "user".into(), connections: 8, retention_days: 3000, ..UsenetServer::default() });
+        }
+    });
+    let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
+    let dest = dir.join("downloads");
+    let job = SavedJob { key, nzb, folder: None, transient: false, title: "Example.Release.2026".into(), dest, sort: false, priority: JobPriority::Normal, paused: true };
+    store().active.push(job.clone());
+    run_job(job, cx);
+}

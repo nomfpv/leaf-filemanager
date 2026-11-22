@@ -249,7 +249,10 @@ pub fn numbers(_: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -
         (handled.to_string(), t!("Files handled")),
         (format::size(usage.total(C::BytesCopied)), t!("Data copied or moved")),
         (usage.total(C::Searches).to_string(), t!("Searches")),
-        (usage.days_used.max(usage.days.len() as u32).to_string(), t!("days used")),
+        {
+            let days = usage.days_used.max(usage.days.len() as u32);
+            (days.to_string(), if days == 1 { t!("day used") } else { t!("days used") })
+        },
     ];
     let mut grid = div().id("home-numbers").grid().grid_cols(if w.width >= 320. { 4 } else { 2 }).gap_2().cursor_pointer();
     for (n, label) in figures {

@@ -315,6 +315,21 @@ impl LookWindow {
             cx.background_executor().timer(Duration::from_millis(200)).await;
             let _ = this.update(cx, |_, cx| cx.notify());
         }));
+        // Checks (tools/TESTING.md): `LEAF_CHECK_KEYS=e` (or `r`, `s`) presses that key once, 1.5 s after the first file opened.
+        if let Some(keys) = std::env::var("LEAF_CHECK_KEYS").ok().filter(|k| !k.is_empty() && self.load_gen == 1) {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(1500)).await;
+                for k in keys.split(',') {
+                    let _ = this.update_in(cx, |v, window, cx| {
+                        if v.viewer.on_key(k.trim(), &Modifiers::default(), window, cx) {
+                            cx.notify();
+                        }
+                    });
+                    cx.background_executor().timer(Duration::from_millis(500)).await;
+                }
+            })
+            .detach();
+        }
         cx.notify();
     }
 

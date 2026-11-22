@@ -723,3 +723,20 @@ fn probe_limited(tr: &Tracker, exe: &Path, url: &str, cookies_from: Option<&str>
     RUNNING.fetch_sub(1, Ordering::SeqCst);
     Some(r)
 }
+
+/// Check scripts (`demo video`): the "Download video or audio" question for a made-up page, as if yt-dlp had answered. Nothing is
+/// asked of the network and nothing is started unless the Download button is pressed.
+pub fn demo_dialog(cx: &mut App) {
+    let dest = crate::downloads::default_folder(cx.global::<Settings>());
+    let req = Request::new("https://example.com/watch?v=x".into(), dest);
+    let media = yt::Media {
+        title: "A walk in the woods".into(),
+        uploader: "Example Channel".into(),
+        seconds: Some(754),
+        site: "Example".into(),
+        heights: vec![1080, 720, 480],
+        has_subs: true,
+        ..yt::Media::default()
+    };
+    show_dialog(cx, req, yt::Probe { video: Some(media), playlist: None }, None, None);
+}

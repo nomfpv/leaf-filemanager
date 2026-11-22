@@ -517,3 +517,14 @@ pub fn mount_discs(window: &mut Window, cx: &mut App) {
         })
         .detach();
 }
+
+/// Check scripts (`demo bluray`): an empty disc folder (`BDMV` with its three folders and no streams) in the config folder, opened
+/// the way "Convert to video file" opens a selected disc.
+pub fn demo(window: &mut Window, cx: &mut App) {
+    let Some(dir) = crate::settings::app_dir().map(|d| d.join("demo").join("EXAMPLE_DISC")) else { return };
+    for sub in ["BDMV/PLAYLIST", "BDMV/STREAM", "BDMV/CLIPINF"] {
+        let _ = std::fs::create_dir_all(dir.join(sub));
+    }
+    let _ = std::fs::write(dir.join("BDMV/index.bdmv"), b"INDX0200");
+    convert(vec![dir], window, cx);
+}

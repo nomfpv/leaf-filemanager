@@ -599,3 +599,21 @@ fn device_icon(kind: HostKind, size: f32, p: &Palette) -> AnyElement {
     crate::host_icons::element(kind, size, p.text_secondary, p.accent)
         .unwrap_or_else(|| Icon::new(L::Server).size(px(size)).text_color(p.text_secondary).into_any_element())
 }
+
+/// Check scripts (`demo home`): two made-up hosts in the list (in memory only, never saved) with their tiles' answers already in, so
+/// nothing is dialled.
+pub fn demo_hosts(cx: &mut App) {
+    let _ = all(cx);
+    let mut nas = Host::new("Home NAS", "nas.example.com");
+    nas.kind = HostKind::Nas;
+    nas.user = Some("user".into());
+    let mut box_ = Host::new("Test box", "192.0.2.10");
+    box_.user = Some("user".into());
+    let hosts = vec![nas, box_];
+    let now = Some(std::time::Instant::now());
+    let mut probes = Probes::default();
+    probes.0.insert("Home NAS".into(), Probe { online: Some(true), ping_ms: Some(4), free: Some(1_800_000_000_000), at: now, ..Probe::default() });
+    probes.0.insert("Test box".into(), Probe { online: Some(false), at: now, ..Probe::default() });
+    cx.set_global(probes);
+    cx.global_mut::<Store>().0.hosts = hosts;
+}

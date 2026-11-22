@@ -42,6 +42,15 @@ pub fn init(cx: &mut App) {
     apply(cx);
 }
 
+/// Check scripts: looks at the agents' folders again at once (after `demo agents` wrote its sessions).
+pub fn restart(cx: &mut App) {
+    if cx.try_global::<AgentsState>().is_none() {
+        return;
+    }
+    cx.update_global::<AgentsState, _>(|s, _| s.running = false);
+    apply(cx);
+}
+
 fn on(cx: &App) -> bool {
     cx.try_global::<Settings>().is_some_and(|s| s.ai_layer)
 }
@@ -51,7 +60,8 @@ pub fn apply(cx: &mut App) {
     if cx.try_global::<AgentsState>().is_none() {
         return;
     }
-    let want = on(cx) && std::env::var_os("LEAF_MULTI_INSTANCE").is_none();
+    // (a test copy does not read the agents' folders, unless a check asks for it: `LEAF_CHECK_AGENTS`, with a throwaway `CLAUDE_CONFIG_DIR`)
+    let want = on(cx) && (std::env::var_os("LEAF_MULTI_INSTANCE").is_none() || std::env::var_os("LEAF_CHECK_AGENTS").is_some());
     let running = cx.global::<AgentsState>().running;
     if want == running {
         return;

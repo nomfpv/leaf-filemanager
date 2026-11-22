@@ -30,6 +30,8 @@ mod address_cmd;
 // the scripted test driver (`LEAF_CHECK_SCRIPT`, tools/TESTING.md)
 #[path = "check_script.rs"]
 mod check_script;
+#[path = "check_demo.rs"]
+mod check_demo;
 
 /// Payload while a pinned sidebar entry is dragged (reordering).
 #[derive(Clone)]

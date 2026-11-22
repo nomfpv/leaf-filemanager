@@ -24,9 +24,9 @@ fn label(c: Counter) -> &'static str {
         Counter::BulkRenames => t!("Bulk renames"),
         Counter::ArchivesMade => t!("Archives made"),
         Counter::ArchivesExtracted => t!("Archives extracted"),
-        Counter::Launches => t!("Times Leaf was started"),
+        Counter::Launches => t!("Times leaf was started"),
         Counter::TabsOpened => t!("Tabs opened"),
-        Counter::FocusSecs => t!("Time with Leaf in front"),
+        Counter::FocusSecs => t!("Time with leaf in front"),
     }
 }
 
@@ -57,7 +57,7 @@ pub fn page(p: &Palette, s: &Settings, _cx: &mut App) -> Vec<AnyElement> {
             p,
             L::Activity,
             t!("Count my usage"),
-            Some(t!("Counts what you do with Leaf (files copied, folders opened, searches, ...) for this page. Off: nothing is counted.")),
+            Some(t!("Counts what you do with leaf (files copied, folders opened, searches, ...) for this page. Off: nothing is counted.")),
             sw("count-usage", p, s.count_usage, |s, v| s.count_usage = v),
         ),
     ];
@@ -93,7 +93,8 @@ pub fn page(p: &Palette, s: &Settings, _cx: &mut App) -> Vec<AnyElement> {
     );
     v.push(section(p, t!("Totals")));
     let since = (usage.since > 0).then(|| chrono::NaiveDate::from_num_days_from_ce_opt(usage.since)).flatten().map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
-    v.push(div().pb_1().text_sm().text_color(p.text_secondary).child(format!("{} {since}  \u{b7}  {} {}", t!("Counting since"), usage.days_used.max(usage.days.len() as u32), t!("days used"))).into_any_element());
+    let days_used = usage.days_used.max(usage.days.len() as u32);
+    v.push(div().pb_1().text_sm().text_color(p.text_secondary).child(format!("{} {since}  \u{b7}  {} {}", t!("Counting since"), days_used, if days_used == 1 { t!("day used") } else { t!("days used") })).into_any_element());
     let mut card_ = shell(p);
     for (i, c) in Counter::ALL.into_iter().enumerate() {
         if i > 0 {

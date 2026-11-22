@@ -102,7 +102,10 @@ fn show(m: Measure, w: u64) -> String {
             let (n, u) = show_parts(m, w);
             format!("~{n}{u}")
         }
-        Measure::Activity => w.to_string(),
+        Measure::Activity => {
+            let (n, u) = show_parts(m, w);
+            format!("{n}{u}")
+        }
     }
 }
 
@@ -185,7 +188,7 @@ enum SortCol {
 const SIZE_NUM_W: f32 = 44.;
 const SIZE_UNIT_W: f32 = 22.;
 const BAR_W: f32 = 110.;
-const PCT_W: f32 = 32.;
+const PCT_W: f32 = 40.;
 const FILES_W: f32 = 48.;
 
 /// One drawn rectangle of the treemap.
@@ -716,8 +719,12 @@ impl Render for DiskUsageView {
                 .when(active, |d| d.child(Icon::new(arrow).size(px(12.)).flex_shrink_0().text_color(p.text_tertiary)))
                 .on_click(cx.listener(move |v, _, _, cx| v.set_sort(col, cx)))
         };
-        // ("1.1 M tok" needs a wider unit column than "MB")
-        let unit_w = if metric == Measure::Tokens { 44. } else { SIZE_UNIT_W };
+        // ("1.1 M tok" and "2 sessions" need a wider unit column than "MB")
+        let unit_w = match metric {
+            Measure::Tokens => 44.,
+            Measure::Activity => 62.,
+            _ => SIZE_UNIT_W,
+        };
         // same padding and gaps as a row, so the headings sit over their columns (the Files heading says what the column counts)
         let list_head = h_flex()
             .h(px(24.))
@@ -787,7 +794,7 @@ impl Render for DiskUsageView {
                             .items_center()
                             .gap_1()
                             .child(div().h(px(6.)).w(px(BAR_W)).flex_shrink_0().rounded_full().bg(p.pressed).child(div().h_full().rounded_full().bg(bar).w(relative(frac.clamp(0.0, 1.0)))))
-                            .child(div().w(px(PCT_W)).text_right().text_color(p.text_secondary).font_features(tnum.clone()).child(crate::i18n::pct(frac * 100.))),
+                            .child(div().w(px(PCT_W)).flex_shrink_0().whitespace_nowrap().text_right().text_color(p.text_secondary).font_features(tnum.clone()).child(crate::i18n::pct(frac * 100.))),
                     )
                     .child(div().w(px(FILES_W)).flex_shrink_0().text_right().text_color(p.text_secondary).font_features(tnum.clone()).when(is_dir, |d| d.child(count(t.files(id) as u64)))),
             );
