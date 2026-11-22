@@ -1,8 +1,10 @@
 //! Office (docx, xlsx, pptx) and OpenDocument (odt, ods, odp) files: zips of XML parts.
-//! The document property parts are blanked (the files stay valid), the thumbnail is removed with the relationship that points
-//! at it, and every entry is rewritten with neutral zip times. Comments and tracked changes are REPORTED, not rewritten.
+//! The document property parts are blanked (the files stay valid), the thumbnail, printer settings and template path are removed with
+//! the relationships that point at them, comment and tracked-change authors become "Author" and their dates go, editing session
+//! numbers (rsid), document variables and custom XML parts go, pictures in the media folders lose their own metadata, and every
+//! entry is rewritten with neutral zip times. The text of comments and changes is never touched.
 
-use crate::{Finding, Inspection, Result, ScrubError};
+use crate::{Family, Finding, Inspection, Options, Result, ScrubError, MAX_IN_MEMORY};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -136,139 +138,6 @@ fn friendly(n: &str) -> &str {
     }
 }
 
-fn count_attr_authors(xml: &str, elem: &[&str], attr: &str) -> (usize, std::collections::BTreeSet<String>) {
-    let mut n = 0;
-    let mut who = std::collections::BTreeSet::new();
-    if let Ok(doc) = roxmltree::Document::parse(xml) {
-        for e in doc.descendants().filter(|e| e.is_element() && elem.contains(&e.tag_name().name())) {
-            n += 1;
-            if let Some(a) = e.attributes().find(|a| a.name() == attr) {
-                if !a.value().is_empty() {
-                    who.insert(a.value().to_string());
-                }
-            }
-        }
-    }
-    (n, who)
-}
-
-pub(crate) fn inspect(path: &Path) -> Result<Inspection> {
-    let mut z = open(path)?;
-    let odf = is_odf(&mut z);
-    let mut findings = Vec::new();
-    let mut notes = Vec::new();
-    // every entry must be readable: a damaged zip is refused here
-    for i in 0..z.len() {
-        let mut e = z.by_index(i).map_err(|e| ScrubError::Malformed(format!("the zip structure could not be read: {e}")))?;
-        if e.encrypted() {
-            return Err(ScrubError::Unsupported("the document is password protected".into()));
-        }
-        let name = ename(&e);
-        if name.contains("..") && !e.is_dir() {
-            return Err(ScrubError::Malformed("the zip has an entry with a path that leaves the folder".into()));
-        }
-        io::copy(&mut e, &mut io::sink()).map_err(|e| ScrubError::Malformed(format!("an entry is damaged: {e}")))?;
-    }
-    let names: Vec<String> = (0..z.len()).filter_map(|i| z.by_index(i).ok().map(|e| ename(&e))).collect();
-    let format = match sniff(path) {
-        Some(Kind::Ooxml(n)) | Some(Kind::Odf(n)) => n,
-        None => "Office document",
-    };
-    if odf {
-        let meta = read_entry(&mut z, "meta.xml").ok_or_else(|| ScrubError::Malformed("no meta.xml".into()))?;
-        roxmltree::Document::parse(&meta).map_err(|e| ScrubError::Malformed(format!("meta.xml is damaged: {e}")))?;
-        for (l, v) in props(&meta, true) {
-            findings.push(Finding::new(l, v, true));
-        }
-        if names.iter().any(|n| n.starts_with("Thumbnails/") && !n.ends_with('/')) {
-            findings.push(Finding::new("Thumbnail picture", "", true));
-        }
-        if let Some(c) = read_entry(&mut z, "content.xml") {
-            let (n, who) = count_attr_authors(&c, &["annotation"], "creator");
-            let (ann, ann_who) = {
-                // dc:creator is a child element of office:annotation, not an attribute
-                let mut k = 0;
-                let mut w = std::collections::BTreeSet::new();
-                if let Ok(d) = roxmltree::Document::parse(&c) {
-                    for a in d.descendants().filter(|e| e.is_element() && e.tag_name().name() == "annotation") {
-                        k += 1;
-                        for cr in a.children().filter(|e| e.is_element() && e.tag_name().name() == "creator") {
-                            if let Some(t) = cr.text() {
-                                w.insert(t.trim().to_string());
-                            }
-                        }
-                    }
-                }
-                (k, w)
-            };
-            let _ = (n, who);
-            if ann > 0 {
-                notes.push(format!("Still inside: {ann} comments by {} named authors. They are not rewritten.", ann_who.len()));
-            }
-            if c.contains("tracked-changes") && c.contains("changed-region") {
-                notes.push("Still inside: tracked changes (with author names and dates) are not rewritten.".into());
-            }
-        }
-    } else {
-        for (part, tag) in [("docProps/core.xml", false), ("docProps/app.xml", false), ("docProps/custom.xml", false)] {
-            if let Some(x) = read_entry(&mut z, part) {
-                roxmltree::Document::parse(&x).map_err(|e| ScrubError::Malformed(format!("{part} is damaged: {e}")))?;
-                let _ = tag;
-                for (l, v) in props(&x, false) {
-                    findings.push(Finding::new(l, v, true));
-                }
-            }
-        }
-        if names.iter().any(|n| n.starts_with("docProps/thumbnail")) {
-            findings.push(Finding::new("Thumbnail picture", "", true));
-        }
-        // comments and tracked changes
-        let mut comments = 0;
-        let mut who = std::collections::BTreeSet::new();
-        for n in &names {
-            let is_c = n == "word/comments.xml" || (n.starts_with("xl/comments") && n.ends_with(".xml")) || (n.starts_with("ppt/comments/") && n.ends_with(".xml"));
-            if is_c {
-                if let Some(x) = read_entry(&mut z, n) {
-                    let (k, w) = count_attr_authors(&x, &["comment", "cm"], "author");
-                    comments += k;
-                    who.extend(w);
-                    // xlsx lists authors as elements
-                    if let Ok(d) = roxmltree::Document::parse(&x) {
-                        for a in d.descendants().filter(|e| e.is_element() && e.tag_name().name() == "author") {
-                            if let Some(t) = a.text() {
-                                who.insert(t.trim().to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            if n == "ppt/commentAuthors.xml" {
-                if let Some(x) = read_entry(&mut z, n) {
-                    let (_, w) = count_attr_authors(&x, &["cmAuthor"], "name");
-                    who.extend(w);
-                }
-            }
-        }
-        if comments > 0 || !who.is_empty() {
-            notes.push(format!("Still inside: {comments} comments by {} named authors. They are not rewritten.", who.len()));
-        }
-        if let Some(x) = read_entry(&mut z, "word/document.xml") {
-            let (ins, _) = count_attr_authors(&x, &["ins", "del", "moveFrom", "moveTo"], "author");
-            if ins > 0 {
-                notes.push(format!("Still inside: {ins} tracked changes (with author names and dates). They are not rewritten."));
-            }
-            if x.contains("w:rsid") {
-                notes.push("Still inside: Word's editing session numbers (rsid) are not removed.".into());
-            }
-        }
-    }
-    let media = names.iter().filter(|n| n.contains("/media/") || n.starts_with("Pictures/")).count();
-    if media > 0 {
-        notes.push(format!("Still inside: {media} pictures or other files embedded in the document keep their own metadata."));
-    }
-    Ok(Inspection { format: format.into(), findings, notes, can_clean: true, refusal: None })
-}
-
 const CORE_BLANK: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"/>";
 const APP_BLANK: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"/>";
 const CUSTOM_BLANK: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/custom-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"/>";
@@ -300,20 +169,418 @@ fn odf_meta_blank(old: &str) -> String {
     format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-meta xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" office:version=\"{version}\"><office:meta/></office:document-meta>")
 }
 
-pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
-    // refuses a damaged or encrypted zip before anything is written
-    let before = inspect(src)?;
-    let _ = before;
-    let mut z = open(src)?;
+
+const NEUTRAL_DATE: &str = "1970-01-01T00:00:00";
+const WORD_NS: &str = "wordprocessingml/2006/main";
+
+const CAT_AUTHOR: &str = "Author names (comments, tracked changes)";
+const CAT_DATE: &str = "Dates (comments, tracked changes)";
+const CAT_RSID: &str = "Editing session numbers (rsid)";
+const CAT_VARS: &str = "Document variables";
+const CAT_TEMPLATE: &str = "Attached template path";
+const CAT_PRINTER: &str = "Printer settings";
+
+enum Act {
+    Set(&'static str),
+    Remove,
+}
+
+fn attr_rule(part: &str, local: &str, ns: Option<&str>, value: &str) -> Option<(Act, &'static str)> {
+    let word = part.starts_with("word/") && part.ends_with(".xml");
+    let rule = if word {
+        let main = ns.is_some_and(|n| n.contains(WORD_NS));
+        match local {
+            "author" => Some((Act::Set("Author"), CAT_AUTHOR)),
+            "initials" => Some((Act::Set("A"), CAT_AUTHOR)),
+            "userId" => Some((Act::Set("Author"), CAT_AUTHOR)),
+            "providerId" => Some((Act::Set("None"), CAT_AUTHOR)),
+            "date" if main => Some((Act::Remove, CAT_DATE)),
+            l if main && l.starts_with("rsid") => Some((Act::Remove, CAT_RSID)),
+            _ => None,
+        }
+    } else if part.starts_with("xl/persons/") || part.starts_with("xl/threadedComments/") {
+        match local {
+            "displayName" | "userId" => Some((Act::Set("Author"), CAT_AUTHOR)),
+            "providerId" => Some((Act::Set("None"), CAT_AUTHOR)),
+            "dT" => Some((Act::Set("1970-01-01T00:00:00.00"), CAT_DATE)),
+            _ => None,
+        }
+    } else if part == "ppt/commentAuthors.xml" {
+        match local {
+            "name" => Some((Act::Set("Author"), CAT_AUTHOR)),
+            "initials" => Some((Act::Set("A"), CAT_AUTHOR)),
+            _ => None,
+        }
+    } else if part == "ppt/authors.xml" {
+        match local {
+            "name" | "userId" => Some((Act::Set("Author"), CAT_AUTHOR)),
+            "providerId" => Some((Act::Set("None"), CAT_AUTHOR)),
+            _ => None,
+        }
+    } else if part.starts_with("ppt/comments/") && part.ends_with(".xml") {
+        match local {
+            "dt" => Some((Act::Remove, CAT_DATE)),
+            "created" => Some((Act::Set("1970-01-01T00:00:00.000"), CAT_DATE)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    match rule {
+        Some((Act::Set(v), _)) if value == v => None,
+        r => r,
+    }
+}
+
+/// `Some(text)`: the text content of this element is replaced; `None` with `remove`: the element goes.
+enum ElemAct {
+    Text(&'static str),
+    Remove,
+}
+
+fn elem_rule(part: &str, odf: bool, local: &str, parent: &str, config_name: Option<&str>) -> Option<(ElemAct, &'static str)> {
+    if odf {
+        let in_content = part == "content.xml" || part == "styles.xml";
+        if in_content && matches!(parent, "annotation" | "change-info" | "annotation-end") {
+            return match local {
+                "creator" => Some((ElemAct::Text("Author"), CAT_AUTHOR)),
+                "creator-initials" => Some((ElemAct::Text("A"), CAT_AUTHOR)),
+                "date" => Some((ElemAct::Text(NEUTRAL_DATE), CAT_DATE)),
+                "date-string" => Some((ElemAct::Text(""), CAT_DATE)),
+                _ => None,
+            };
+        }
+        if part == "settings.xml" && local == "config-item" && matches!(config_name, Some("PrinterName") | Some("PrinterSetup")) {
+            return Some((ElemAct::Text(""), CAT_PRINTER));
+        }
+        return None;
+    }
+    if part.starts_with("word/") && part.ends_with(".xml") {
+        return match local {
+            "rsids" | "rsidRoot" | "rsid" => Some((ElemAct::Remove, CAT_RSID)),
+            "docVars" => Some((ElemAct::Remove, CAT_VARS)),
+            "attachedTemplate" => Some((ElemAct::Remove, CAT_TEMPLATE)),
+            _ => None,
+        };
+    }
+    if part.starts_with("xl/comments") && part.ends_with(".xml") && local == "author" && parent == "authors" {
+        return Some((ElemAct::Text("Author"), CAT_AUTHOR));
+    }
+    None
+}
+
+#[derive(Default)]
+struct Counts {
+    /// category -> (places, distinct original values)
+    by: std::collections::BTreeMap<&'static str, (usize, std::collections::BTreeSet<String>)>,
+}
+
+impl Counts {
+    fn add(&mut self, cat: &'static str, value: &str) {
+        let e = self.by.entry(cat).or_default();
+        e.0 += 1;
+        if !value.is_empty() && e.1.len() < 4 && cat == CAT_AUTHOR {
+            e.1.insert(value.trim().to_string());
+        }
+    }
+    fn findings(self) -> Vec<Finding> {
+        self.by
+            .into_iter()
+            .map(|(cat, (n, who))| {
+                let names = if who.is_empty() { String::new() } else { format!(": {}", who.into_iter().collect::<Vec<_>>().join(", ")) };
+                Finding::new(cat, format!("{n} places{names}"), true)
+            })
+            .collect()
+    }
+}
+
+fn apply_edits(xml: &str, mut edits: Vec<(std::ops::Range<usize>, String)>) -> String {
+    edits.sort_by_key(|(r, _)| (r.start, std::cmp::Reverse(r.end)));
+    let mut out = String::with_capacity(xml.len());
+    let mut at = 0;
+    for (r, with) in edits {
+        if r.start < at {
+            continue;
+        }
+        out.push_str(&xml[at..r.start]);
+        out.push_str(&with);
+        at = r.end;
+    }
+    out.push_str(&xml[at..]);
+    out
+}
+
+/// The rewritten text of an XML part when the rules change anything in it, with what was found. `None`: nothing to do.
+fn rewrite_part(part: &str, odf: bool, xml: &str, counts: &mut Counts) -> Result<Option<String>> {
+    let relevant = if odf {
+        matches!(part, "content.xml" | "styles.xml" | "settings.xml")
+    } else {
+        part.ends_with(".xml")
+            && (part.starts_with("word/") || part.starts_with("xl/comments") || part.starts_with("xl/persons/") || part.starts_with("xl/threadedComments/") || part.starts_with("ppt/comments/") || part == "ppt/commentAuthors.xml" || part == "ppt/authors.xml")
+    };
+    if !relevant {
+        return Ok(None);
+    }
+    let doc = roxmltree::Document::parse_with_options(xml, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+        .map_err(|e| ScrubError::Malformed(format!("{part} is damaged: {e}")))?;
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        let local = n.tag_name().name();
+        let parent = n.parent_element().map(|p| p.tag_name().name()).unwrap_or("");
+        let cfg = n.attributes().find(|a| a.name() == "name").map(|a| a.value());
+        if let Some((act, cat)) = elem_rule(part, odf, local, parent, cfg) {
+            match act {
+                ElemAct::Remove => {
+                    counts.add(cat, "");
+                    edits.push((n.range(), String::new()));
+                    continue;
+                }
+                ElemAct::Text(t) => {
+                    if let Some(tn) = n.children().find(|c| c.is_text()) {
+                        if tn.text().unwrap_or("") != t {
+                            counts.add(cat, tn.text().unwrap_or(""));
+                            edits.push((tn.range(), t.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        for a in n.attributes() {
+            if let Some((act, cat)) = attr_rule(part, a.name(), a.namespace(), a.value()) {
+                counts.add(cat, a.value());
+                let r = a.range();
+                match act {
+                    Act::Remove => {
+                        let mut s = r.start;
+                        while s > 0 && xml.as_bytes()[s - 1].is_ascii_whitespace() {
+                            s -= 1;
+                        }
+                        edits.push((s..r.end, String::new()));
+                    }
+                    Act::Set(v) => {
+                        let rv = a.range_value();
+                        edits.push((r.start..r.end, format!("{}{}{}", &xml[r.start..rv.start], v, &xml[rv.end..r.end])));
+                    }
+                }
+            }
+        }
+    }
+    if edits.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(apply_edits(xml, edits)))
+}
+
+enum Fate {
+    Keep,
+    Drop,
+    Replace(Vec<u8>),
+}
+
+struct Plan {
+    fates: Vec<Fate>,
+    findings: Vec<Finding>,
+    notes: Vec<String>,
+}
+
+fn read_bytes(e: &mut zip::read::ZipFile<'_, fs::File>) -> Result<Vec<u8>> {
+    let mut v = Vec::with_capacity(e.size().min(1 << 20) as usize);
+    e.read_to_end(&mut v).map_err(|e| ScrubError::Malformed(format!("an entry is damaged: {e}")))?;
+    Ok(v)
+}
+
+fn is_rel_dropped(t: &str) -> bool {
+    t.ends_with("/thumbnail") || t.ends_with("/printerSettings") || t.ends_with("/attachedTemplate")
+}
+
+fn plan(path: &Path, opts: &Options) -> Result<Plan> {
+    let mut z = open(path)?;
     let odf = is_odf(&mut z);
+    let mut p = Plan { fates: Vec::new(), findings: Vec::new(), notes: Vec::new() };
+    let mut counts = Counts::default();
+    let (mut thumbs, mut printers, mut customs, mut unreadable, mut macros, mut embedded) = (0, 0, 0, 0, false, false);
+    let mut pics: Vec<Finding> = Vec::new();
+    for i in 0..z.len() {
+        let mut e = z.by_index(i).map_err(|e| ScrubError::Malformed(format!("the zip structure could not be read: {e}")))?;
+        if e.encrypted() {
+            return Err(ScrubError::Unsupported("the document is password protected".into()));
+        }
+        let name = ename(&e);
+        if name.contains("..") && !e.is_dir() {
+            return Err(ScrubError::Malformed("the zip has an entry with a path that leaves the folder".into()));
+        }
+        if e.is_dir() {
+            p.fates.push(Fate::Keep);
+            continue;
+        }
+        let is_thumb = if odf { name.starts_with("Thumbnails/") } else { name.starts_with("docProps/thumbnail") };
+        let is_printer = !odf && name.contains("/printerSettings/");
+        if is_thumb || is_printer {
+            // the whole entry is read once: a damaged one is refused here, not half-cleaned
+            io::copy(&mut e, &mut io::sink()).map_err(|e| ScrubError::Malformed(format!("an entry is damaged: {e}")))?;
+            if is_thumb {
+                thumbs += 1;
+            } else {
+                printers += 1;
+            }
+            p.fates.push(Fate::Drop);
+            continue;
+        }
+        if name.ends_with("vbaProject.bin") {
+            macros = true;
+        }
+        if name.contains("/embeddings/") || name.starts_with("Object ") {
+            embedded = true;
+        }
+        let low = name.to_ascii_lowercase();
+        let is_media = (name.contains("/media/") || name.starts_with("Pictures/")) && !name.ends_with('/');
+        let xml_like = low.ends_with(".xml") || low.ends_with(".rels");
+        if e.size() > MAX_XML.max(if is_media { MAX_IN_MEMORY } else { 0 }) && (xml_like || is_media) {
+            if is_media {
+                unreadable += 1;
+            } else {
+                return Err(ScrubError::Unsupported(format!("{name} is bigger than 64 MB")));
+            }
+            io::copy(&mut e, &mut io::sink()).map_err(|e| ScrubError::Malformed(format!("an entry is damaged: {e}")))?;
+            p.fates.push(Fate::Keep);
+            continue;
+        }
+        if is_media {
+            let data = read_bytes(&mut e)?;
+            let fam = if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                Some(Family::Jpeg)
+            } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+                Some(Family::Png)
+            } else if data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+                Some(Family::Webp)
+            } else {
+                None
+            };
+            let mut fate = Fate::Keep;
+            if let Some(fam) = fam {
+                match crate::image::process(&data, fam, opts) {
+                    Ok((out, found)) => {
+                        let what: Vec<String> = found.iter().filter(|f| f.remove).take(3).map(|f| f.label.clone()).collect();
+                        if !what.is_empty() && out != data {
+                            pics.push(Finding::new(format!("Picture metadata ({})", name.rsplit('/').next().unwrap_or(&name)), what.join(", "), true));
+                            fate = Fate::Replace(out);
+                        }
+                    }
+                    Err(_) => unreadable += 1,
+                }
+            }
+            p.fates.push(fate);
+            continue;
+        }
+        if !xml_like && !name.starts_with("customXml/") {
+            io::copy(&mut e, &mut io::sink()).map_err(|e| ScrubError::Malformed(format!("an entry is damaged: {e}")))?;
+            p.fates.push(Fate::Keep);
+            continue;
+        }
+        let bytes = read_bytes(&mut e)?;
+        let xml = match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                // a UTF-16 or damaged XML part: not rewritten, never silently kept
+                if xml_like {
+                    return Err(ScrubError::Unsupported(format!("{name} is not UTF-8 text, leaf cannot rewrite it")));
+                }
+                p.fates.push(Fate::Keep);
+                continue;
+            }
+        };
+        let blank: Option<&str> = match (odf, name.as_str()) {
+            (false, "docProps/core.xml") => Some(CORE_BLANK),
+            (false, "docProps/app.xml") => Some(APP_BLANK),
+            (false, "docProps/custom.xml") => Some(CUSTOM_BLANK),
+            _ => None,
+        };
+        let fate = if let Some(b) = blank {
+            roxmltree::Document::parse(&xml).map_err(|e| ScrubError::Malformed(format!("{name} is damaged: {e}")))?;
+            for (l, v) in props(&xml, false) {
+                p.findings.push(Finding::new(l, v, true));
+            }
+            if xml != b { Fate::Replace(b.as_bytes().to_vec()) } else { Fate::Keep }
+        } else if odf && name == "meta.xml" {
+            roxmltree::Document::parse(&xml).map_err(|e| ScrubError::Malformed(format!("meta.xml is damaged: {e}")))?;
+            for (l, v) in props(&xml, true) {
+                p.findings.push(Finding::new(l, v, true));
+            }
+            let b = odf_meta_blank(&xml);
+            if xml != b { Fate::Replace(b.into_bytes()) } else { Fate::Keep }
+        } else if name.starts_with("customXml/") && low.ends_with(".xml") && !name.contains("itemProps") {
+            if xml.trim() != CUSTOM_XML_BLANK {
+                customs += 1;
+                Fate::Replace(CUSTOM_XML_BLANK.as_bytes().to_vec())
+            } else {
+                Fate::Keep
+            }
+        } else if low.ends_with(".rels") {
+            let changed = drop_elements(&xml, "Relationship", "Type", is_rel_dropped).ok_or_else(|| ScrubError::Malformed(format!("{name} is damaged")))?;
+            if changed != xml { Fate::Replace(changed.into_bytes()) } else { Fate::Keep }
+        } else if odf && name == "META-INF/manifest.xml" {
+            let changed = drop_elements(&xml, "file-entry", "full-path", |p| p.starts_with("Thumbnails/")).ok_or_else(|| ScrubError::Malformed("manifest.xml is damaged".into()))?;
+            if changed != xml { Fate::Replace(changed.into_bytes()) } else { Fate::Keep }
+        } else {
+            match rewrite_part(&name, odf, &xml, &mut counts)? {
+                Some(new) => Fate::Replace(new.into_bytes()),
+                None => Fate::Keep,
+            }
+        };
+        p.fates.push(fate);
+    }
+    if thumbs > 0 {
+        p.findings.push(Finding::new("Thumbnail picture", "", true));
+    }
+    if printers > 0 {
+        p.findings.push(Finding::new(CAT_PRINTER, format!("{printers} files"), true));
+    }
+    if customs > 0 {
+        p.findings.push(Finding::new("Custom XML data", format!("{customs} parts"), true));
+    }
+    p.findings.extend(counts.findings());
+    p.findings.extend(pics);
+    p.notes.push("The text of comments and tracked changes and everything you can see in the document stays: only who wrote them, when, and the program's own numbers are removed.".into());
+    if unreadable > 0 {
+        p.notes.push(format!("Still inside: {unreadable} embedded picture(s) leaf could not read, their own metadata stays."));
+    }
+    if macros {
+        p.notes.push("Still inside: macros (vbaProject.bin) are not touched and can carry names.".into());
+    }
+    if embedded {
+        p.notes.push("Still inside: embedded objects keep their own metadata.".into());
+    }
+    Ok(p)
+}
+
+const CUSTOM_XML_BLANK: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<root/>";
+
+pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
+    let mut z = open(path)?;
+    let odf = is_odf(&mut z);
+    if odf {
+        let meta = read_entry(&mut z, "meta.xml").ok_or_else(|| ScrubError::Malformed("no meta.xml".into()))?;
+        roxmltree::Document::parse(&meta).map_err(|e| ScrubError::Malformed(format!("meta.xml is damaged: {e}")))?;
+    }
+    let format = match sniff(path) {
+        Some(Kind::Ooxml(n)) | Some(Kind::Odf(n)) => n,
+        None => "Office document",
+    };
+    let p = plan(path, opts)?;
+    Ok(Inspection { format: format.into(), findings: p.findings, notes: p.notes, can_clean: true, refusal: None })
+}
+
+pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
+    // refuses a damaged or encrypted zip before anything is written
+    let p = plan(src, opts)?;
+    let mut z = open(src)?;
     let out = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
     let mut w = ZipWriter::new(io::BufWriter::new(out));
     let zerr = |e: zip::result::ZipError| ScrubError::Io(io::Error::other(e.to_string()));
-    for i in 0..z.len() {
+    for (i, fate) in p.fates.iter().enumerate() {
         let mut e = z.by_index(i).map_err(zerr)?;
         let name = ename(&e);
-        let is_thumb = if odf { name.starts_with("Thumbnails/") } else { name.starts_with("docProps/thumbnail") };
-        if is_thumb {
+        if matches!(fate, Fate::Drop) {
             continue;
         }
         let method = if name == "mimetype" || e.compression() == CompressionMethod::Stored { CompressionMethod::Stored } else { CompressionMethod::Deflated };
@@ -325,31 +592,10 @@ pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
             w.add_directory(name, opts).map_err(zerr)?;
             continue;
         }
-        let blank: Option<String> = match (odf, name.as_str()) {
-            (false, "docProps/core.xml") => Some(CORE_BLANK.into()),
-            (false, "docProps/app.xml") => Some(APP_BLANK.into()),
-            (false, "docProps/custom.xml") => Some(CUSTOM_BLANK.into()),
-            (true, "meta.xml") => {
-                let mut s = String::new();
-                e.read_to_string(&mut s)?;
-                Some(odf_meta_blank(&s))
-            }
-            (false, "_rels/.rels") => {
-                let mut s = String::new();
-                e.read_to_string(&mut s)?;
-                Some(drop_elements(&s, "Relationship", "Type", |t| t.ends_with("/thumbnail")).ok_or_else(|| ScrubError::Malformed("_rels/.rels is damaged".into()))?)
-            }
-            (true, "META-INF/manifest.xml") => {
-                let mut s = String::new();
-                e.read_to_string(&mut s)?;
-                Some(drop_elements(&s, "file-entry", "full-path", |p| p.starts_with("Thumbnails/")).ok_or_else(|| ScrubError::Malformed("manifest.xml is damaged".into()))?)
-            }
-            _ => None,
-        };
         w.start_file(name, opts).map_err(zerr)?;
-        match blank {
-            Some(s) => w.write_all(s.as_bytes())?,
-            None => {
+        match fate {
+            Fate::Replace(bytes) => w.write_all(bytes)?,
+            _ => {
                 io::copy(&mut e, &mut w)?;
             }
         }

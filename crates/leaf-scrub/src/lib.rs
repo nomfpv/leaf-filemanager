@@ -323,7 +323,7 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
             ..Default::default()
         },
         Family::Pdf => pdf::inspect(path)?,
-        Family::Ooxml | Family::Odf => office::inspect(path)?,
+        Family::Ooxml | Family::Odf => office::inspect(path, opts)?,
         Family::Mp4 => mp4::inspect(path)?,
         Family::Tagged => tags::inspect(path, opts)?,
         Family::Plain => Inspection {
@@ -381,7 +381,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
             Family::Bare(_) => copy_without_attrs(src, &tmp)?,
             Family::Archive(k) => return Err(ScrubError::Unsupported(format!("a {k} keeps the metadata of the files inside it"))),
             Family::Pdf => pdf::produce(src, &tmp)?,
-            Family::Ooxml | Family::Odf => office::produce(src, &tmp)?,
+            Family::Ooxml | Family::Odf => office::produce(src, &tmp, opts)?,
             Family::Mp4 => extra.extend(mp4::produce(src, &tmp, opts)?),
             Family::Tagged => tags::produce(src, &tmp, opts)?,
             Family::Plain => {

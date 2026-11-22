@@ -79,13 +79,16 @@ fn test_image() -> ::image::RgbImage {
 }
 
 fn make_jpeg(path: &Path) {
+    fs::write(path, jpeg_bytes(&exif_tiff(), b"made by user")).unwrap();
+}
+
+fn jpeg_bytes(tiff: &[u8], com: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::new();
     test_image().write_to(&mut std::io::Cursor::new(&mut bytes), ::image::ImageFormat::Jpeg).unwrap();
     // insert Exif, XMP and a comment right after the start marker
-    let tiff = exif_tiff();
     let mut extra = Vec::new();
     let mut exif = b"Exif\0\0".to_vec();
-    exif.extend_from_slice(&tiff);
+    exif.extend_from_slice(tiff);
     extra.extend_from_slice(&[0xFF, 0xE1]);
     extra.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
     extra.extend_from_slice(&exif);
@@ -93,12 +96,11 @@ fn make_jpeg(path: &Path) {
     extra.extend_from_slice(&[0xFF, 0xE1]);
     extra.extend_from_slice(&((xmp.len() + 2) as u16).to_be_bytes());
     extra.extend_from_slice(xmp);
-    let com = b"made by user";
     extra.extend_from_slice(&[0xFF, 0xFE]);
     extra.extend_from_slice(&((com.len() + 2) as u16).to_be_bytes());
     extra.extend_from_slice(com);
     bytes.splice(2..2, extra);
-    fs::write(path, bytes).unwrap();
+    bytes
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -886,5 +888,172 @@ fn scrub_pdf_leaves_no_marker_anywhere_not_in_old_revisions_or_unreferenced_obje
     assert_eq!(again.get_pages().len(), 1);
     let out = fs::read(&dst).unwrap();
     assert!(contains(&out, b"Contents") && contains(&out, b"(note)"), "the comment's text stays");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Raw scan of the zip AND of every entry after it is unpacked (the entries are compressed, so the raw scan alone proves little).
+fn assert_no_markers_in_zip(file: &Path, what: &str) {
+    assert_no_markers(file, what);
+    let mut z = zip::ZipArchive::new(fs::File::open(file).unwrap()).unwrap();
+    for i in 0..z.len() {
+        let mut e = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        std::io::Read::read_to_end(&mut e, &mut b).unwrap();
+        for (name, m) in [("serial", SERIAL.to_vec()), ("author", AUTHOR.to_vec()), ("coordinate", coord_bytes())] {
+            assert!(!contains(&b, &m), "{what}: the planted {name} is still inside the entry {}", e.name().unwrap());
+        }
+    }
+}
+
+fn zip_has_markers(file: &Path) -> bool {
+    let mut z = zip::ZipArchive::new(fs::File::open(file).unwrap()).unwrap();
+    (0..z.len()).any(|i| {
+        let mut b = Vec::new();
+        std::io::Read::read_to_end(&mut z.by_index(i).unwrap(), &mut b).unwrap();
+        contains(&b, SERIAL) && contains(&b, AUTHOR) || contains(&b, AUTHOR)
+    })
+}
+
+fn make_zip_bytes(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+    for (n, c) in entries {
+        z.start_file(*n, zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(c).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+fn zip_text(file: &Path, name: &str) -> String {
+    let mut z = zip::ZipArchive::new(fs::File::open(file).unwrap()).unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut s).unwrap();
+    s
+}
+
+const W: &str = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+
+#[test]
+fn scrub_docx_xlsx_pptx_leave_no_marker_anywhere_in_any_entry() {
+    let d = tmp_dir("office-raw");
+    let planted_jpeg = jpeg_bytes(&exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()), b"Planted Author");
+    let ct = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>";
+    let rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"r1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/><Relationship Id=\"r2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail\" Target=\"docProps/thumbnail.jpeg\"/></Relationships>";
+    let doc_rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"p1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings\" Target=\"printerSettings/printerSettings1.bin\"/><Relationship Id=\"i1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image1.jpeg\"/></Relationships>";
+    let settings_rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate\" Target=\"file:///C:/Users/LEAFTESTSERIAL123/t.dotm\" TargetMode=\"External\"/></Relationships>";
+    let document = format!("<w:document {W}><w:body><w:p w:rsidR=\"00A1B2C3\" w:rsidRDefault=\"00A1B2C3\"><w:ins w:id=\"1\" w:author=\"Planted Author\" w:date=\"2026-11-22T14:22:00Z\"><w:r><w:t>hi</w:t></w:r></w:ins><w:del w:id=\"2\" w:author=\"Planted Author\" w:date=\"2026-11-22T14:23:00Z\"><w:r><w:delText>old</w:delText></w:r></w:del></w:p></w:body></w:document>");
+    let comments = format!("<w:comments {W}><w:comment w:id=\"0\" w:author=\"Planted Author\" w:date=\"2026-11-22T14:22:00Z\" w:initials=\"PA\"><w:p><w:r><w:t>remember this</w:t></w:r></w:p></w:comment></w:comments>");
+    let settings = format!("<w:settings {W} xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:rsids><w:rsidRoot w:val=\"00112233\"/><w:rsid w:val=\"00445566\"/></w:rsids><w:docVars><w:docVar w:name=\"who\" w:val=\"Planted Author\"/></w:docVars><w:attachedTemplate r:id=\"rId1\"/></w:settings>");
+    let core = "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:creator>Planted Author</dc:creator><cp:lastModifiedBy>Planted Author</cp:lastModifiedBy></cp:coreProperties>";
+    let app = "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Company>LEAFTESTSERIAL123</Company><HyperlinkBase>C:\\Users\\Planted Author\\</HyperlinkBase></Properties>";
+    let docx = d.join("a.docx");
+    make_zip_bytes(
+        &docx,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("_rels/.rels", rels.as_bytes()),
+            ("word/document.xml", document.as_bytes()),
+            ("word/comments.xml", comments.as_bytes()),
+            ("word/settings.xml", settings.as_bytes()),
+            ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
+            ("word/_rels/settings.xml.rels", settings_rels.as_bytes()),
+            ("word/printerSettings/printerSettings1.bin", b"printer of Planted Author LEAFTESTSERIAL123"),
+            ("word/media/image1.jpeg", &planted_jpeg),
+            ("customXml/item1.xml", b"<root><who>LEAFTESTSERIAL123 Planted Author</who></root>"),
+            ("docProps/core.xml", core.as_bytes()),
+            ("docProps/app.xml", app.as_bytes()),
+            ("docProps/thumbnail.jpeg", &planted_jpeg),
+        ],
+    );
+    assert!(zip_has_markers(&docx));
+    let before = inspect(&docx, &opts()).unwrap();
+    for want in [CAT_AUTHOR_LABEL, "Dates (comments, tracked changes)", "Editing session numbers (rsid)", "Document variables", "Attached template path", "Printer settings", "Custom XML data"] {
+        assert!(before.findings.iter().any(|f| f.label == want), "{want} missing from {:?}", before.findings);
+    }
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Picture metadata")));
+    let dst = clean_copy_name(&docx);
+    clean_to(&docx, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "docx");
+    assert_clean_listing(&dst);
+    assert!(zip_text(&dst, "word/document.xml").contains("<w:t>hi</w:t>") && zip_text(&dst, "word/comments.xml").contains("remember this"));
+    assert!(zip_text(&dst, "word/document.xml").contains("w:author=\"Author\""));
+    assert!(!zip_text(&dst, "word/_rels/document.xml.rels").contains("printerSettings"));
+    assert!(!zip_text(&dst, "word/_rels/settings.xml.rels").contains("attachedTemplate"));
+    roxmltree::Document::parse(&zip_text(&dst, "word/settings.xml")).unwrap();
+    // the picture is still a JPEG that decodes, to the same pixels
+    let mut z = zip::ZipArchive::new(fs::File::open(&dst).unwrap()).unwrap();
+    let mut pic = Vec::new();
+    std::io::Read::read_to_end(&mut z.by_name("word/media/image1.jpeg").unwrap(), &mut pic).unwrap();
+    assert_eq!(::image::load_from_memory(&pic).unwrap().to_rgb8().into_raw(), ::image::load_from_memory(&planted_jpeg).unwrap().to_rgb8().into_raw());
+
+    // spreadsheet: comment authors, persons
+    let xlsx = d.join("b.xlsx");
+    make_zip_bytes(
+        &xlsx,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("xl/workbook.xml", b"<workbook/>"),
+            ("xl/comments1.xml", b"<comments><authors><author>Planted Author</author></authors><commentList><comment ref=\"A1\" authorId=\"0\"><text><r><t>note</t></r></text></comment></commentList></comments>"),
+            ("xl/persons/person.xml", b"<personList><person displayName=\"Planted Author\" id=\"{1}\" userId=\"LEAFTESTSERIAL123\" providerId=\"AD\"/></personList>"),
+            ("xl/threadedComments/threadedComment1.xml", b"<ThreadedComments><threadedComment ref=\"A1\" dT=\"2026-11-22T14:22:33.00\" personId=\"{1}\" id=\"{2}\"><text>hello</text></threadedComment></ThreadedComments>"),
+        ],
+    );
+    let dst = clean_copy_name(&xlsx);
+    clean_to(&xlsx, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "xlsx");
+    assert!(zip_text(&dst, "xl/comments1.xml").contains("<t>note</t>"));
+    assert_clean_listing(&dst);
+
+    // presentation: comment authors
+    let pptx = d.join("c.pptx");
+    make_zip_bytes(
+        &pptx,
+        &[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("ppt/presentation.xml", b"<p:presentation xmlns:p=\"urn:p\"/>"),
+            ("ppt/commentAuthors.xml", b"<p:cmAuthorLst xmlns:p=\"urn:p\"><p:cmAuthor id=\"0\" name=\"Planted Author\" initials=\"PA\" lastIdx=\"1\" clrIdx=\"0\"/></p:cmAuthorLst>"),
+            ("ppt/comments/comment1.xml", b"<p:cmLst xmlns:p=\"urn:p\"><p:cm authorId=\"0\" dt=\"2026-11-22T14:22:33.000\" idx=\"1\"><p:text>look</p:text></p:cm></p:cmLst>"),
+        ],
+    );
+    let dst = clean_copy_name(&pptx);
+    clean_to(&pptx, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "pptx");
+    assert!(zip_text(&dst, "ppt/comments/comment1.xml").contains("<p:text>look</p:text>"));
+    assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}
+
+const CAT_AUTHOR_LABEL: &str = "Author names (comments, tracked changes)";
+
+#[test]
+fn scrub_odt_leaves_no_marker_anywhere_in_any_entry() {
+    let d = tmp_dir("odt-raw");
+    let planted_jpeg = jpeg_bytes(&exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()), b"Planted Author");
+    let ns = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\"";
+    let content = format!("<office:document-content {ns}><office:body><office:text><text:tracked-changes><text:changed-region><text:insertion><office:change-info><dc:creator>Planted Author</dc:creator><dc:date>2026-11-22T14:22:33</dc:date></office:change-info></text:insertion></text:changed-region></text:tracked-changes><text:p>hello<office:annotation><dc:creator>Planted Author</dc:creator><dc:date>2026-11-22T14:22:33</dc:date><meta:creator-initials>PA</meta:creator-initials><text:p>a note</text:p></office:annotation></text:p></office:text></office:body></office:document-content>");
+    let settings = format!("<office:document-settings {ns}><office:settings><config:config-item-set config:name=\"x\"><config:config-item config:name=\"PrinterName\" config:type=\"string\">LEAFTESTSERIAL123 printer</config:config-item><config:config-item config:name=\"PrinterSetup\" config:type=\"base64Binary\">UGxhbnRlZCBBdXRob3I=</config:config-item></config:config-item-set></office:settings></office:document-settings>");
+    let meta = format!("<office:document-meta {ns} office:version=\"1.3\"><office:meta><meta:initial-creator>Planted Author</meta:initial-creator><dc:creator>Planted Author</dc:creator></office:meta></office:document-meta>");
+    let manifest = "<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\"><manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/><manifest:file-entry manifest:full-path=\"Thumbnails/thumbnail.png\" manifest:media-type=\"image/png\"/></manifest:manifest>";
+    let src = d.join("a.odt");
+    make_zip_bytes(
+        &src,
+        &[
+            ("mimetype", b"application/vnd.oasis.opendocument.text"),
+            ("content.xml", content.as_bytes()),
+            ("settings.xml", settings.as_bytes()),
+            ("meta.xml", meta.as_bytes()),
+            ("Pictures/a.jpg", &planted_jpeg),
+            ("Thumbnails/thumbnail.png", b"Planted Author thumbnail"),
+            ("META-INF/manifest.xml", manifest.as_bytes()),
+        ],
+    );
+    assert!(zip_has_markers(&src));
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers_in_zip(&dst, "odt");
+    assert_clean_listing(&dst);
+    let c = zip_text(&dst, "content.xml");
+    assert!(c.contains("a note") && c.contains("hello"), "the text of the note stays");
+    roxmltree::Document::parse(&c).unwrap();
+    roxmltree::Document::parse(&zip_text(&dst, "settings.xml")).unwrap();
     let _ = fs::remove_dir_all(&d);
 }
