@@ -22,7 +22,12 @@ pub use server::{Password, Priority, Server};
 
 /// Reads and parses an NZB file (its name gives the title and a `{{password}}`).
 pub fn read(path: &std::path::Path) -> Result<Nzb, ParseError> {
-    let bytes = std::fs::read(path).map_err(|e| ParseError::NotNzb(e.to_string()))?;
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(nzb::MAX_NZB_BYTES + 1).read_to_end(&mut bytes)).map_err(|e| ParseError::NotNzb(e.to_string()))?;
+    if bytes.len() as u64 > nzb::MAX_NZB_BYTES {
+        return Err(ParseError::TooLarge);
+    }
     let text = String::from_utf8_lossy(&bytes);
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     parse(&text, &name)

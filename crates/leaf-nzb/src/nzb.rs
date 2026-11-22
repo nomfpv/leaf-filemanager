@@ -21,10 +21,15 @@ pub struct NzbFile {
     /// Unix seconds of the post (0: unknown): against a server's retention.
     pub date: u64,
     pub groups: Vec<String>,
-    /// Sorted by number, duplicates dropped.
+    /// Sorted by number, duplicates dropped. A segment whose message id cannot be asked for safely has an empty one: it
+    /// counts as missing.
     pub segments: Vec<Segment>,
     /// The name the subject gives (the quoted part, else the word that looks like a file name); may be obfuscated.
     pub name: String,
+    /// Segments without a number, with one number twice, or numbers with gaps: the parts may not cover the file, so it is
+    /// never taken as good without a full par2 verify.
+    #[serde(default)]
+    pub irregular: bool,
 }
 
 impl NzbFile {
@@ -53,7 +58,7 @@ pub fn par2_blocks(name: &str) -> Option<u32> {
     count.parse().ok()
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Nzb {
     /// `<meta type="title">`, else the NZB's file name without `{{password}}` and `.nzb`.
     pub title: String,
@@ -67,9 +72,41 @@ pub struct Nzb {
 
 impl Nzb {
     pub fn bytes(&self) -> u64 {
-        self.files.iter().map(NzbFile::bytes).sum()
+        self.files.iter().map(NzbFile::bytes).fold(0, u64::saturating_add)
+    }
+
+    /// What tells this NZB from another one with the same title (its files' names and message ids; FNV-1a, stable across
+    /// versions of leaf). Never 0.
+    pub fn fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |b: &[u8]| {
+            for x in b.iter().chain([0xffu8].iter()) {
+                h ^= u64::from(*x);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for f in &self.files {
+            eat(f.name.as_bytes());
+            for s in &f.segments {
+                eat(&s.number.to_le_bytes());
+                eat(s.message_id.as_bytes());
+            }
+        }
+        h.max(1)
     }
 }
+
+// (the password is never in a Debug text)
+impl std::fmt::Debug for Nzb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Nzb").field("title", &self.title).field("password", &self.password.as_ref().map(|_| "***")).field("category", &self.category).field("files", &self.files).finish()
+    }
+}
+
+/// The largest NZB file read (a real one of a very large post is a few MB).
+pub const MAX_NZB_BYTES: u64 = 128 << 20;
+/// The most segments one NZB may list over all its files.
+pub const MAX_SEGMENTS: usize = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -77,6 +114,8 @@ pub enum ParseError {
     NotNzb(String),
     /// An NZB without a single segment.
     Empty,
+    /// More than [`MAX_NZB_BYTES`] or [`MAX_SEGMENTS`].
+    TooLarge,
 }
 
 impl std::fmt::Display for ParseError {
@@ -84,6 +123,7 @@ impl std::fmt::Display for ParseError {
         match self {
             ParseError::NotNzb(d) => write!(f, "not an NZB file: {d}"),
             ParseError::Empty => f.write_str("the NZB lists no articles"),
+            ParseError::TooLarge => f.write_str("the NZB lists too many articles"),
         }
     }
 }
@@ -102,8 +142,16 @@ pub fn split_password(file_name: &str) -> (String, Option<String>) {
 
 /// Parses an NZB. `file_name` is the NZB's own name (for the title and a `{{password}}` in it).
 pub fn parse(xml: &str, file_name: &str) -> Result<Nzb, ParseError> {
-    // (a DOCTYPE line is usual in NZB files: roxmltree refuses DTDs unless allowed)
-    let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
+    if xml.len() as u64 > MAX_NZB_BYTES {
+        return Err(ParseError::TooLarge);
+    }
+    // (a DOCTYPE line is usual in NZB files: roxmltree refuses DTDs unless allowed. An NZB never defines entities of its
+    // own; one that does is refused, so a nested-entity "billion laughs" file cannot blow up in memory: roxmltree limits the
+    // nesting, not the number of top-level references)
+    if xml.contains("<!ENTITY") {
+        return Err(ParseError::NotNzb("the file defines XML entities".into()));
+    }
+    let opts = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: (MAX_SEGMENTS * 4) as u32 };
     let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| ParseError::NotNzb(e.to_string()))?;
     let root = doc.root_element();
     if !root.tag_name().name().eq_ignore_ascii_case("nzb") {
@@ -112,6 +160,7 @@ pub fn parse(xml: &str, file_name: &str) -> Result<Nzb, ParseError> {
     let (stem, name_pw) = split_password(file_name);
     let stem = stem.strip_suffix(".nzb").or_else(|| stem.strip_suffix(".NZB")).unwrap_or(&stem).trim().to_string();
     let mut nzb = Nzb { title: stem, password: name_pw, ..Default::default() };
+    let mut segments_total = 0usize;
     for el in root.children().filter(|n| n.is_element()) {
         match el.tag_name().name() {
             "head" => {
@@ -137,16 +186,23 @@ pub fn parse(xml: &str, file_name: &str) -> Result<Nzb, ParseError> {
                     date: el.attribute("date").and_then(|d| d.parse().ok()).unwrap_or(0),
                     groups: Vec::new(),
                     segments: Vec::new(),
+                    irregular: false,
                 };
                 for part in el.children().filter(|n| n.is_element()) {
                     match part.tag_name().name() {
                         "groups" => f.groups.extend(part.children().filter(|n| n.has_tag_name("group")).filter_map(|g| g.text()).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())),
                         "segments" => {
                             for s in part.children().filter(|n| n.has_tag_name("segment")) {
-                                let id = s.text().unwrap_or_default().trim().trim_start_matches('<').trim_end_matches('>').to_string();
-                                if id.is_empty() {
-                                    continue;
+                                segments_total += 1;
+                                if segments_total > MAX_SEGMENTS {
+                                    return Err(ParseError::TooLarge);
                                 }
+                                let raw = s.text().unwrap_or_default().trim();
+                                let raw = raw.strip_prefix('<').unwrap_or(raw);
+                                let raw = raw.strip_suffix('>').unwrap_or(raw);
+                                // (an id with a line break, a space, a bracket or a control character could carry further NNTP
+                                // commands: never asked for, the segment counts as missing)
+                                let id = if crate::nntp::valid_id(raw) { raw.to_string() } else { String::new() };
                                 let number = s.attribute("number").and_then(|n| n.parse().ok()).unwrap_or(0);
                                 let bytes = s.attribute("bytes").and_then(|n| n.parse().ok()).unwrap_or(0);
                                 f.segments.push(Segment { number, bytes, message_id: id });
@@ -156,7 +212,12 @@ pub fn parse(xml: &str, file_name: &str) -> Result<Nzb, ParseError> {
                     }
                 }
                 f.segments.sort_by_key(|s| s.number);
-                f.segments.dedup_by_key(|s| s.number);
+                let listed = f.segments.len();
+                // (unnumbered segments are all kept: each may be a different part, the yEnc header places it)
+                f.segments.dedup_by(|b, a| a.number != 0 && a.number == b.number);
+                let numbered = f.segments.iter().filter(|s| s.number != 0).count();
+                let max = f.segments.last().map_or(0, |s| s.number as usize);
+                f.irregular = f.segments.len() != listed || numbered != f.segments.len() || max != numbered;
                 if !f.segments.is_empty() {
                     nzb.files.push(f);
                 }
@@ -216,7 +277,24 @@ pub fn safe_name(raw: &str) -> String {
     let last = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     let cleaned: String = last.chars().map(|c| if matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || c.is_control() { '_' } else { c }).collect();
     let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
-    if cleaned.is_empty() || cleaned == "." || cleaned == ".." { String::new() } else { cleaned }
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        return String::new();
+    }
+    if is_reserved(&cleaned) { format!("_{cleaned}") } else { cleaned }
+}
+
+/// A name Windows keeps for a device (`CON`, `NUL`, `COM1`, `LPT¹`, also with an extension: `nul.txt`).
+fn is_reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+        s => {
+            let mut c = s.chars();
+            let head: String = c.by_ref().take(3).collect();
+            let rest: String = c.collect();
+            (head == "COM" || head == "LPT") && matches!(rest.as_str(), "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+        }
+    }
 }
 
 /// A name that says nothing of its file: no extension, or a long run of hex / random letters before it.

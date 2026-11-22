@@ -54,10 +54,53 @@ pub fn is_leftover(p: &Path) -> bool {
     false
 }
 
-/// A sample clip the poster added (`sample` as a word of the name, or a folder of that name).
+const VIDEO: &[&str] = &["mkv", "mp4", "m4v", "avi", "mov", "wmv", "ts", "m2ts", "mpg", "mpeg", "webm", "vob"];
+/// A sample clip is a short piece of the film: larger than this is never taken for one.
+const SAMPLE_MAX: u64 = 300 << 20;
+
+fn video_len(p: &Path) -> Option<u64> {
+    let n = lower_name(p);
+    let ext = n.rsplit_once('.')?.1;
+    if !VIDEO.contains(&ext) {
+        return None;
+    }
+    fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len())
+}
+
+/// A sample clip the poster added: a small video with `sample` as a word of its name, or a folder named `sample` /
+/// `samples` holding nothing but small videos and small extras. The caller still checks that it is not the only video.
 pub fn is_sample(p: &Path) -> bool {
     let n = lower_name(p);
-    n == "sample" || n == "samples" || n.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "sample")
+    if p.is_dir() {
+        return (n == "sample" || n == "samples")
+            && fs::read_dir(p).is_ok_and(|rd| {
+                rd.flatten().all(|e| {
+                    let q = e.path();
+                    match video_len(&q) {
+                        Some(len) => len <= SAMPLE_MAX,
+                        None => fs::metadata(&q).is_ok_and(|m| m.is_file() && m.len() <= 1 << 20),
+                    }
+                })
+            });
+    }
+    let named = n.rsplit_once('.').map_or(n.as_str(), |(stem, _)| stem).split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "sample");
+    named && video_len(p).is_some_and(|len| len <= SAMPLE_MAX)
+}
+
+/// The largest video in `dirs` (not inside folders), leaving out `but`.
+fn largest_video(dirs: &[&Path], but: &Path) -> u64 {
+    dirs.iter()
+        .filter_map(|d| fs::read_dir(d).ok())
+        .flat_map(|rd| rd.flatten().map(|e| e.path()))
+        .filter(|p| p != but)
+        .filter_map(|p| video_len(&p))
+        .max()
+        .unwrap_or(0)
+}
+
+/// The largest video in a folder (a sample folder: its clip).
+fn largest_inside(dir: &Path) -> u64 {
+    fs::read_dir(dir).map(|rd| rd.flatten().filter_map(|e| video_len(&e.path())).max().unwrap_or(0)).unwrap_or(0)
 }
 
 #[derive(Debug)]
@@ -127,6 +170,16 @@ pub fn join_split(dir: &Path) -> io::Result<Vec<PathBuf>> {
 
 /// Removes par2 files, archive volumes (only after they were unpacked: `unpacked`) and samples from the job folder.
 pub fn cleanup(dir: &Path, unpacked: bool) {
+    let unpack = dir.join(UNPACK_DIR);
+    let both = [dir, unpack.as_path()];
+    // a sample goes only when a larger video stays (never the only video of the job)
+    let removable_sample = |p: &Path| {
+        if !is_sample(p) {
+            return false;
+        }
+        let own = if p.is_dir() { largest_inside(p) } else { video_len(p).unwrap_or(0) };
+        largest_video(&both, p) > own
+    };
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
@@ -137,7 +190,7 @@ pub fn cleanup(dir: &Path, unpacked: bool) {
         let par = n.ends_with(".par2") || n.ends_with(".sfv");
         if par || (unpacked && is_leftover(&p)) {
             let _ = fs::remove_file(&p);
-        } else if is_sample(&p) {
+        } else if removable_sample(&p) {
             if p.is_dir() {
                 let _ = fs::remove_dir_all(&p);
             } else {
@@ -145,9 +198,8 @@ pub fn cleanup(dir: &Path, unpacked: bool) {
             }
         }
     }
-    let unpack = dir.join(UNPACK_DIR);
     if let Ok(rd) = fs::read_dir(&unpack) {
-        for e in rd.flatten().filter(|e| is_sample(&e.path())) {
+        for e in rd.flatten().filter(|e| removable_sample(&e.path())) {
             let p = e.path();
             let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
         }

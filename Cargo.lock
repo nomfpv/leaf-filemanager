@@ -5214,7 +5214,7 @@ dependencies = [
  "roxmltree 0.20.0",
  "rust-par2",
  "rustls",
- "rustls-platform-verifier",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "zip 9.3.0",

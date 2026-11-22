@@ -20,8 +20,12 @@ pub enum Error {
     /// The secure channel could not be set up or the certificate was refused.
     Tls(String),
     Io(io::Error),
-    /// An answer that is not NNTP.
+    /// An answer that is not NNTP (or not the answer to what was asked).
     Protocol(String),
+    /// A line or an article far larger than asked for: the connection is closed.
+    TooLarge,
+    /// A message id that could carry further commands: never sent.
+    BadId,
 }
 
 impl std::fmt::Display for Error {
@@ -33,6 +37,8 @@ impl std::fmt::Display for Error {
             Error::Tls(d) => write!(f, "secure connection: {d}"),
             Error::Io(e) => write!(f, "{e}"),
             Error::Protocol(d) => write!(f, "unexpected answer: {d}"),
+            Error::TooLarge => f.write_str("the server's answer is far larger than the article"),
+            Error::BadId => f.write_str("an article's message id is not valid"),
         }
     }
 }
@@ -72,17 +78,28 @@ impl Write for Stream {
     }
 }
 
+/// The TLS setup for NNTPS: the certificate chain is checked against the system's root certificates, read once from the
+/// local store (no download), by webpki: the chain to a root, the dates, the key usage and the host name. Nothing is
+/// fetched during the handshake (no OCSP, CRL or AIA lookups, which on Windows the system verifier would make over the
+/// normal network and DNS, outside the VPN); so revocation is not checked.
 fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
     static CONFIG: OnceLock<Result<Arc<rustls::ClientConfig>, String>> = OnceLock::new();
     CONFIG
         .get_or_init(|| {
             let provider = Arc::new(rustls::crypto::ring::default_provider());
-            let verifier = rustls_platform_verifier::Verifier::new(provider.clone()).map_err(|e| format!("the system's certificates cannot be read ({e})"))?;
+            let found = rustls_native_certs::load_native_certs();
+            let mut roots = rustls::RootCertStore::empty();
+            let (added, _ignored) = roots.add_parsable_certificates(found.certs);
+            if added == 0 {
+                let why = found.errors.first().map(|e| e.to_string()).unwrap_or_else(|| "none found".into());
+                return Err(format!("the system's certificates cannot be read ({why})"));
+            }
+            let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone()).build().map_err(|e| e.to_string())?;
             let config = rustls::ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()
                 .map_err(|e| e.to_string())?
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(verifier))
+                .with_custom_certificate_verifier(verifier)
                 .with_no_client_auth();
             Ok(Arc::new(config))
         })
@@ -96,6 +113,32 @@ pub enum Body {
     Found(Vec<u8>, u64),
     /// 430 / 423: this server does not have it.
     Missing,
+    /// Another 4xx / 5xx answer for this article: taken as missing here, counted by the caller.
+    Refused(u16),
+}
+
+/// The longest line a server may send (an NNTP line is at most 512 bytes, a yEnc line a few hundred).
+pub const MAX_LINE: usize = 64 << 10;
+/// The largest article read whatever the NZB says.
+pub const MAX_BODY: u64 = 32 << 20;
+
+/// A message id leaf asks for: printable ASCII without space, `<` or `>` (RFC 3977 3.6), so it can never end the command
+/// line or start another one.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 250 && id.bytes().all(|b| (0x21..0x7f).contains(&b) && b != b'<' && b != b'>')
+}
+
+/// `BODY <id>\r\n`, refused for an id that is not [`valid_id`] (the second guard after the NZB parser).
+pub fn body_command(id: &str) -> Result<Vec<u8>, Error> {
+    if !valid_id(id) {
+        return Err(Error::BadId);
+    }
+    Ok(format!("BODY <{id}>\r\n").into_bytes())
+}
+
+/// The most an article of `bytes` (as the NZB says) may weigh on the wire.
+fn body_limit(bytes: u64) -> u64 {
+    if bytes == 0 { MAX_BODY } else { bytes.saturating_mul(2).clamp(64 << 10, MAX_BODY) }
 }
 
 pub struct Client {
@@ -174,11 +217,15 @@ impl Client {
 
     fn line(&mut self, buf: &mut Vec<u8>) -> Result<(), Error> {
         buf.clear();
-        let n = self.io.read_until(b'\n', buf)?;
+        let n = (&mut self.io).take(MAX_LINE as u64).read_until(b'\n', buf)?;
         if n == 0 {
             return Err(Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "the server closed the connection")));
         }
         self.read += n as u64;
+        if !buf.ends_with(b"\n") {
+            // (cut at the cap, or the connection ended inside a line)
+            return Err(if n >= MAX_LINE { Error::TooLarge } else { Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "the server closed the connection")) });
+        }
         Ok(())
     }
 
@@ -195,20 +242,30 @@ impl Client {
         std::mem::take(&mut self.read)
     }
 
-    /// Asks for the bodies of `ids` all at once and gives the answers in the same order (`each` is called as each arrives).
-    pub fn bodies(&mut self, ids: &[&str], mut each: impl FnMut(usize, Body, &mut Self)) -> Result<(), Error> {
+    /// Asks for the bodies of `reqs` (message id, the article's size as the NZB says) all at once and gives the answers in
+    /// the same order (`each` is called as each arrives). Nothing is sent when one id is not valid.
+    pub fn bodies(&mut self, reqs: &[(&str, u64)], mut each: impl FnMut(usize, Body, &mut Self)) -> Result<(), Error> {
         let mut out = Vec::new();
-        for id in ids {
-            out.extend_from_slice(format!("BODY <{id}>\r\n").as_bytes());
+        for (id, _) in reqs {
+            out.extend_from_slice(&body_command(id)?);
         }
         self.send(&out)?;
-        for i in 0..ids.len() {
+        for (i, (id, bytes)) in reqs.iter().enumerate() {
             let start = self.read;
             let (code, text) = self.status()?;
             let body = match code {
-                222 => Body::Found(self.multiline()?, 0),
+                222 => {
+                    // `222 0 <id>`: the answer must be for the article asked (else the pipeline is out of step)
+                    if let Some(got) = text.split_whitespace().nth(1)
+                        && got.strip_prefix('<').and_then(|g| g.strip_suffix('>')) != Some(id)
+                    {
+                        return Err(Error::Protocol("the answer is for another article".into()));
+                    }
+                    Body::Found(self.multiline(body_limit(*bytes))?, 0)
+                }
                 430 | 423 => Body::Missing,
-                _ => return Err(Error::Protocol(format!("{code} {text}"))),
+                400..=599 => Body::Refused(code),
+                _ => return Err(Error::Protocol(format!("{code} {}", text.chars().take(80).collect::<String>()))),
             };
             let body = match body {
                 Body::Found(b, _) => Body::Found(b, self.read - start),
@@ -219,11 +276,15 @@ impl Client {
         Ok(())
     }
 
-    fn multiline(&mut self) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::with_capacity(800 << 10);
+    fn multiline(&mut self, limit: u64) -> Result<Vec<u8>, Error> {
+        let mut out = Vec::with_capacity(limit.min(1 << 20) as usize);
         let mut buf = Vec::with_capacity(512);
+        let start = self.read;
         loop {
             self.line(&mut buf)?;
+            if self.read - start > limit {
+                return Err(Error::TooLarge);
+            }
             let l = buf.strip_suffix(b"\n").unwrap_or(&buf);
             let l = l.strip_suffix(b"\r").unwrap_or(l);
             if l == b"." {

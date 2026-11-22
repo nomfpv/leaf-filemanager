@@ -86,6 +86,20 @@ fn file_jobs(nzb: &Nzb, pick: impl Fn(usize) -> bool) -> Vec<FileJob> {
     nzb.files.iter().enumerate().filter(|(i, _)| pick(*i)).map(|(i, f)| FileJob { index: i, name: f.name.clone(), date: f.date, segments: f.segments.clone() }).collect()
 }
 
+/// The folder for a job of `nzb` named `name` in `incomplete`: `name`, else `name (2)`, `name (3)`, ...: the first that is
+/// not there or holds this NZB's own state (a restart carries on there). Two NZBs with one title never share a folder, so
+/// one never adopts or cleans up the other's files.
+pub fn job_dir(incomplete: &Path, name: &str, nzb: &Nzb) -> PathBuf {
+    let fp = nzb.fingerprint();
+    for n in 1..10_000 {
+        let p = if n == 1 { incomplete.join(name) } else { incomplete.join(format!("{name} ({n})")) };
+        if !p.exists() || State::load(&p).nzb == fp {
+            return p;
+        }
+    }
+    incomplete.join(format!("{name} ({fp:016x})"))
+}
+
 pub fn run(spec: &Spec, servers: &[Server], dialer: &dyn Dialer, ctl: &Control, host: &dyn Host) -> Result<Done, Error> {
     let nzb = &spec.nzb;
     let dir = &spec.job_dir;
@@ -96,7 +110,16 @@ pub fn run(spec: &Spec, servers: &[Server], dialer: &dyn Dialer, ctl: &Control, 
     let has_index = nzb.files.iter().any(|f| f.is_par2() && f.par2_blocks().is_none());
     let index_volume = (!has_index).then(|| volumes.iter().min_by_key(|v| v.1).map(|v| v.0)).flatten();
     let later: std::collections::HashSet<usize> = volumes.iter().map(|v| v.0).filter(|i| Some(*i) != index_volume).collect();
+    // (the state of another NZB in this folder is never adopted: its files are not this job's)
+    let fp = nzb.fingerprint();
     let mut state = State::load(dir);
+    if state.nzb != fp && (state.nzb != 0 || !state.files.is_empty()) {
+        return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the job folder belongs to another download")));
+    }
+    if state.nzb == 0 {
+        state.nzb = fp;
+        state.save(dir);
+    }
     host.step(Step::Download);
     let now = file_jobs(nzb, |i| !later.contains(&i));
     let fetched = engine::download(dir, &now, servers, dialer, ctl, host, &mut state).map_err(|e| match e {
@@ -105,11 +128,19 @@ pub fn run(spec: &Spec, servers: &[Server], dialer: &dyn Dialer, ctl: &Control, 
     })?;
     let articles_total: usize = nzb.files.iter().map(|f| f.segments.len()).sum();
     let mut failed: usize = fetched.iter().map(|f| f.failed).sum();
-    let clean = failed == 0 && fetched.iter().all(|f| f.bad_crc == 0 && f.path.is_some());
+    // (good without a full verify only when every segment of every file was written and the NZB numbered them all)
+    let clean = failed == 0 && fetched.iter().all(|f| f.bad_crc == 0 && f.path.is_some() && f.complete && !nzb.files.get(f.index).is_some_and(|n| n.irregular));
     let mut repaired_blocks = 0;
 
     // par2
-    let set = par::index_file(dir).and_then(|i| par::parse(&i));
+    // (a set whose names leave the job folder is refused whole: the job goes on as one without par2)
+    let set = par::index_file(dir).and_then(|i| par::parse(&i)).filter(|s| match par::check_names(s, dir) {
+        Ok(()) => true,
+        Err(why) => {
+            log::warn!("usenet: par2 set refused: {why}");
+            false
+        }
+    });
     if let Some(set) = &set {
         par::fix_names(set, dir);
         host.step(Step::QuickCheck);

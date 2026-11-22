@@ -15,7 +15,8 @@ crc32fast.workspace = true
 roxmltree = "0.20"
 # NNTPS: rustls with ring and the system's certificates, as leaf-remote and leaf-vpn have them (no second TLS stack)
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
-rustls-platform-verifier = "0.7"
+# the system's root certificates, read from the local store (no verifier that fetches revocation data outside the VPN)
+rustls-native-certs = "0.8"
 # PAR2 verify and Reed-Solomon repair (MIT OR Apache-2.0, pure Rust)
 rust-par2 = "0.2"
 # leaf's archive engine for the unpack step (RAR incl. volumes and passwords, 7z, zip); it never writes outside the folder

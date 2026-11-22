@@ -20,6 +20,32 @@ pub fn index_file(dir: &Path) -> Option<PathBuf> {
     v.into_iter().next().map(|(_, _, p)| p)
 }
 
+/// Whether every file the set names is one plain file right in `dir`: a name that is not exactly its own [`safe_name`]
+/// (a path, `..`, a drive, `:`, a reserved device name) or a target that resolves outside `dir` (a link) refuses the whole
+/// set. `rust_par2` joins the names onto the folder and creates what is "missing", so a hostile set could otherwise write
+/// anywhere. The reason when refused.
+///
+/// [`safe_name`]: crate::nzb::safe_name
+pub fn check_names(set: &Par2FileSet, dir: &Path) -> Result<(), String> {
+    let root = std::fs::canonicalize(dir).map_err(|e| format!("the job folder cannot be read: {e}"))?;
+    for f in set.files.values() {
+        if f.filename.is_empty() || crate::nzb::safe_name(&f.filename) != f.filename {
+            return Err("the par2 set names a file outside the job folder".into());
+        }
+        let target = dir.join(&f.filename);
+        // (a name that is there already must be a file in the folder itself, not a link to elsewhere)
+        let inside = match std::fs::symlink_metadata(&target) {
+            Ok(m) if m.file_type().is_symlink() => false,
+            Ok(_) => std::fs::canonicalize(&target).is_ok_and(|t| t.parent() == Some(root.as_path())),
+            Err(_) => target.parent().and_then(|p| std::fs::canonicalize(p).ok()).as_deref() == Some(root.as_path()),
+        };
+        if !inside {
+            return Err("the par2 set names a file outside the job folder".into());
+        }
+    }
+    Ok(())
+}
+
 pub fn parse(index: &Path) -> Option<Par2FileSet> {
     match rust_par2::parse(index) {
         Ok(s) => Some(s),
@@ -108,6 +134,10 @@ pub enum Repaired {
 }
 
 pub fn repair(set: &Par2FileSet, dir: &Path, verified: &VerifyResult) -> Repaired {
+    // (checked again right before anything is written)
+    if let Err(why) = check_names(set, dir) {
+        return Repaired::Failed(why);
+    }
     match rust_par2::repair_from_verify(set, dir, verified) {
         Ok(r) if r.success => Repaired::Ok(r.blocks_repaired),
         Ok(r) => Repaired::Failed(r.message),

@@ -36,6 +36,11 @@ pub trait Dialer: Send + Sync + 'static {
     fn generation(&self) -> u64 {
         0
     }
+    /// Set while the route this dialer must use is not there (the tunnel, when the rule says the VPN): a connection that
+    /// fails now waits for it, it does not count as the server's failure. The words for the wait.
+    fn wait_reason(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A plain TCP connection made here.
@@ -110,22 +115,39 @@ pub struct Route {
     pub through_vpn: bool,
 }
 
-pub struct RouteDialer<N: Net> {
-    pub net: N,
-    pub route: Route,
+/// Where the route settings come from: read again at every dial, so a change applies to the next connection.
+pub trait RouteSource: Send + Sync + 'static {
+    fn route(&self) -> Route;
+    /// Goes up whenever the route settings change (the job's connections are then closed and dialled again).
+    fn generation(&self) -> u64 {
+        0
+    }
 }
 
-impl<N: Net> Dialer for RouteDialer<N> {
+/// Fixed settings (the tests, the Test button).
+impl RouteSource for Route {
+    fn route(&self) -> Route {
+        *self
+    }
+}
+
+pub struct RouteDialer<N: Net, R: RouteSource = Route> {
+    pub net: N,
+    pub route: R,
+}
+
+impl<N: Net, R: RouteSource> Dialer for RouteDialer<N, R> {
     fn dial(&self, host: &str, port: u16, timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
         let tunnel = self.net.tunnel();
-        if self.route.vpn_only {
+        let route = self.route.route();
+        if route.vpn_only {
             // the owner's rule: the tunnel or nothing; a failure inside an up tunnel is a network error like any other
             return match tunnel {
                 Tunnel::Up => self.net.dial_tunnel(host, port, timeout).map_err(DialError::Io),
                 Tunnel::Connecting | Tunnel::Down => Err(DialError::Wait(self.net.waiting_text())),
             };
         }
-        if !self.route.through_vpn {
+        if !route.through_vpn {
             return self.net.dial_direct(host, port, timeout).map_err(DialError::Io);
         }
         match tunnel {
@@ -137,6 +159,14 @@ impl<N: Net> Dialer for RouteDialer<N> {
     }
 
     fn generation(&self) -> u64 {
-        self.net.generation()
+        // (two counters that only go up: their sum changes whenever either does)
+        self.net.generation().wrapping_add(self.route.generation())
+    }
+
+    fn wait_reason(&self) -> Option<String> {
+        let route = self.route.route();
+        let tunnel = self.net.tunnel();
+        let needs_tunnel = route.vpn_only || (route.through_vpn && (tunnel != Tunnel::Down || self.net.kill_switch()));
+        (needs_tunnel && tunnel != Tunnel::Up).then(|| self.net.waiting_text())
     }
 }

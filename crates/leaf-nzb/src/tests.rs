@@ -416,3 +416,84 @@ fn usenet_only_through_vpn_never_dials_directly() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// ------------------------------------------------------------------------------------------------ hostile input
+
+#[test]
+fn par2_set_naming_files_outside_the_job_folder_is_refused() {
+    let root = temp_dir("par2escape");
+    let a = data(150, 1);
+    let outside = root.join("abs.bin");
+    let absolute = outside.to_string_lossy().into_owned();
+    for (tag, name) in [("dots", r"..\x.bin"), ("slash", "../x.bin"), ("abs", absolute.as_str())] {
+        let job = root.join(tag);
+        std::fs::create_dir_all(&job).unwrap();
+        make_par2(&job, &[(name, &a)], 64);
+        let set = crate::par::parse(&crate::par::index_file(&job).unwrap()).unwrap();
+        assert!(crate::par::check_names(&set, &job).is_err(), "{tag}: the set was taken");
+        // the repair itself refuses too, before anything is written
+        let v = crate::par::verify(&set, &job);
+        assert!(matches!(crate::par::repair(&set, &job, &v), crate::par::Repaired::Failed(_)), "{tag}: repaired");
+    }
+    assert!(!root.join("x.bin").exists() && !outside.exists(), "a file was written outside the job folder");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn message_id_that_could_carry_commands_is_never_sent() {
+    let xml = r#"<nzb><file subject="&quot;a.bin&quot; yEnc (1/3)"><segments>
+   <segment bytes="10" number="1">good@example.invalid</segment>
+   <segment bytes="10" number="2">evil@example.invalid&#13;&#10;POST</segment>
+   <segment bytes="10" number="3">sp ace@example.invalid</segment>
+  </segments></file></nzb>"#;
+    let n = crate::parse(xml, "x.nzb").unwrap();
+    let ids: Vec<&str> = n.files[0].segments.iter().map(|s| s.message_id.as_str()).collect();
+    // (kept as segments, so they count as missing; their ids are dropped)
+    assert_eq!(ids, vec!["good@example.invalid", "", ""]);
+    assert_eq!(crate::nntp::body_command("good@example.invalid").unwrap(), b"BODY <good@example.invalid>\r\n");
+    for bad in ["evil@x\r\nPOST", "a\nb", "a>\r\nQUIT\r\n<b", "", "a b", "a\0b", "a\tb"] {
+        assert!(matches!(crate::nntp::body_command(bad), Err(crate::nntp::Error::BadId)), "{bad:?} would be sent");
+    }
+}
+
+struct JobHost;
+impl engine::Host for JobHost {
+    fn progress(&self, _: &engine::Progress) {}
+}
+impl crate::job::Host for JobHost {
+    fn step(&self, _: crate::job::Step) {}
+    fn ask_password(&self, _: &str, _: bool) -> Option<String> {
+        None
+    }
+    fn taken(&self, _: &Path) -> crate::post::Taken {
+        crate::post::Taken::Skip
+    }
+}
+
+#[test]
+fn second_job_with_the_same_title_gets_its_own_folder() {
+    let inc = temp_dir("sametitle");
+    let nzb = |id: &str| crate::parse(&format!(r#"<nzb><head><meta type="title">Holiday</meta></head><file subject="&quot;film.mkv&quot; yEnc (1/1)"><segments><segment bytes="10" number="1">{id}</segment></segments></file></nzb>"#), "Holiday.nzb").unwrap();
+    let (first, second) = (nzb("one@example.invalid"), nzb("two@example.invalid"));
+    assert_eq!(first.title, second.title);
+
+    // the first job's folder, with its state and a file it keeps
+    let a = crate::job::job_dir(&inc, "Holiday", &first);
+    std::fs::create_dir_all(&a).unwrap();
+    State { nzb: first.fingerprint(), ..Default::default() }.save(&a);
+    std::fs::write(a.join("film.mkv"), b"first job's film").unwrap();
+
+    let b = crate::job::job_dir(&inc, "Holiday", &second);
+    assert_ne!(a, b, "the second job shares the first one's folder");
+    assert_eq!(crate::job::job_dir(&inc, "Holiday", &first), a, "the first job finds its own folder again");
+
+    // run on the first one's folder by mistake: refused, nothing of it adopted or removed
+    let spec = |nzb: crate::Nzb, dir: PathBuf| crate::Spec { nzb, job_dir: dir, dest_dir: inc.join("done"), name: "Holiday".into(), unpack: false, cleanup: true };
+    assert!(crate::run(&spec(second.clone(), a.clone()), &[], &Direct, &Control::default(), &JobHost).is_err());
+    // the second job in its own folder ends (no server) without touching the first's
+    let _ = crate::run(&spec(second, b.clone()), &[], &Direct, &Control::default(), &JobHost);
+    crate::post::cleanup(&b, true);
+    assert_eq!(std::fs::read(a.join("film.mkv")).unwrap(), b"first job's film");
+    assert_eq!(State::load(&a).nzb, first.fingerprint());
+    let _ = std::fs::remove_dir_all(&inc);
+}
