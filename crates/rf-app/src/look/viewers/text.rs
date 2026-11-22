@@ -51,6 +51,139 @@ impl TextViewer {
     fn editor(&self, cx: &App) -> Option<Entity<EditView>> {
         self.view.as_ref().and_then(|v| v.read(cx).edit.clone())
     }
+
+    /// Goes straight into the editor (E); when the file can't be edited, why.
+    fn begin_edit(&mut self, window: &mut Window, cx: &mut App) -> Result<(), SharedString> {
+        if let Some(v) = &self.view {
+            v.update(cx, |v, cx| v.start_edit(window, cx));
+        }
+        match &*self.offer.borrow() {
+            Offer::No(why) if !self.editing.get() => Err(why.clone()),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Edit mode for the viewers that draw a file their own way (Markdown, CSV): E opens the text viewer's editor on the same file,
+/// with its refusals, its keys and its save and leave guards; when editing ends the viewer reads the file again and draws it.
+#[derive(Clone, Default)]
+pub(crate) struct EditSwitch(Rc<RefCell<SwitchState>>);
+
+#[derive(Default)]
+struct SwitchState {
+    path: PathBuf,
+    text: Option<TextViewer>,
+    /// Why the file can't be edited, until the next key.
+    note: Option<SharedString>,
+}
+
+impl EditSwitch {
+    /// A file was opened: no editing yet.
+    pub(crate) fn reset(&self, path: &Path) {
+        *self.0.borrow_mut() = SwitchState { path: path.to_path_buf(), text: None, note: None };
+    }
+
+    pub(crate) fn cleanup(&self) {
+        let mut s = self.0.borrow_mut();
+        if let Some(t) = s.text.as_mut() {
+            t.cleanup();
+        }
+        s.text = None;
+        s.note = None;
+    }
+
+    fn start(&self, window: &mut Window, cx: &mut App) {
+        let path = {
+            let s = self.0.borrow();
+            if s.text.is_some() {
+                return;
+            }
+            s.path.clone()
+        };
+        let mut text = TextViewer::default();
+        text.prepare(&Probe { ext: Probe::ext_of(&path), path, head: Vec::new(), is_dir: false, exists: true }, cx);
+        let started = text.begin_edit(window, cx);
+        let mut s = self.0.borrow_mut();
+        match started {
+            Ok(()) => {
+                s.note = None;
+                s.text = Some(text);
+            }
+            Err(why) => s.note = Some(why),
+        }
+    }
+
+    /// The "More" menu: the editor's own items while editing, else "Edit (E)".
+    pub(crate) fn more_menu(&self) -> Vec<MoreItem> {
+        if let Some(t) = &self.0.borrow().text {
+            return t.more_menu();
+        }
+        let this = self.clone();
+        vec![MoreItem { label: t!("Edit (E)").into(), action: Rc::new(move |window, cx| this.start(window, cx)) }]
+    }
+
+    pub(crate) fn on_key(&self, key: &str, mods: &Modifiers, window: &mut Window, cx: &mut App) -> bool {
+        self.0.borrow_mut().note = None;
+        if let Some(t) = self.0.borrow_mut().text.as_mut() {
+            return t.on_key(key, mods, window, cx);
+        }
+        if key == "e" && !mods.control && !mods.alt && !mods.shift && !mods.platform {
+            self.start(window, cx);
+            return true;
+        }
+        false
+    }
+
+    fn editor(&self, cx: &App) -> Option<Entity<EditView>> {
+        self.0.borrow().text.as_ref().and_then(|t| t.editor(cx))
+    }
+
+    pub(crate) fn editing(&self, cx: &App) -> bool {
+        self.editor(cx).is_some()
+    }
+
+    pub(crate) fn has_unsaved(&self, cx: &App) -> bool {
+        self.editor(cx).is_some_and(|e| e.read(cx).is_dirty())
+    }
+
+    pub(crate) fn ask_to_leave(&self, go: Box<dyn FnOnce(&mut Window, &mut App)>, window: &mut Window, cx: &mut App) {
+        match self.editor(cx) {
+            Some(e) => e.update(cx, |e, cx| e.ask_to_leave(go, window, cx)),
+            None => go(window, cx),
+        }
+    }
+
+    pub(crate) fn take_focus(&self, window: &mut Window, cx: &mut App) -> bool {
+        let Some(e) = self.editor(cx) else { return false };
+        e.update(cx, |e, cx| e.focus(window, cx));
+        true
+    }
+
+    /// Editing has just ended (saved, or given up): true once, and the viewer reads the file again.
+    pub(crate) fn take_ended(&self) -> bool {
+        let mut s = self.0.borrow_mut();
+        if s.text.as_ref().is_some_and(|t| !t.editing.get()) {
+            s.text = None;
+            return true;
+        }
+        false
+    }
+
+    /// What goes on the screen: the editor while editing, else `plain` (with the reason a refused E left).
+    pub(crate) fn wrap(&self, plain: AnyElement, window: &mut Window, cx: &mut App) -> AnyElement {
+        let mut s = self.0.borrow_mut();
+        if let Some(t) = s.text.as_mut() {
+            return t.render(window, cx);
+        }
+        let Some(note) = s.note.clone() else { return plain };
+        let p = crate::theme::Palette::for_window(window);
+        div()
+            .size_full()
+            .relative()
+            .child(plain)
+            .child(div().absolute().bottom(px(10.)).left(px(12.)).max_w(px(560.)).px_3().py_1().rounded(crate::theme::RADIUS_SM).border_1().border_color(p.border).bg(p.card_bg).text_color(p.text).text_size(px(12.)).child(note))
+            .into_any_element()
+    }
 }
 
 impl Viewer for TextViewer {

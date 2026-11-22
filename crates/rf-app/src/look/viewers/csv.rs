@@ -5,7 +5,8 @@
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::look::viewer::{Prepared, Probe, Viewer};
+use super::text::EditSwitch;
+use crate::look::viewer::{MoreItem, Prepared, Probe, Viewer};
 
 const EXTENSIONS: &[&str] = &["csv", "tsv"];
 const ROWS_MAX: usize = 2000;
@@ -15,6 +16,9 @@ const READ_MAX: u64 = 16 << 20;
 pub struct CsvViewer {
     table: Option<std::rc::Rc<Table>>,
     error: Option<String>,
+    path: std::path::PathBuf,
+    /// E: the text viewer's editor on this file; when it ends the file is read again.
+    edit: EditSwitch,
 }
 
 struct Table {
@@ -116,6 +120,19 @@ fn load(path: &std::path::Path) -> std::io::Result<Table> {
     Ok(Table { rows, widths, more })
 }
 
+impl CsvViewer {
+    fn show(&mut self) {
+        self.error = None;
+        match load(&self.path) {
+            Ok(t) => self.table = Some(std::rc::Rc::new(t)),
+            Err(e) => {
+                self.table = None;
+                self.error = Some(e.to_string());
+            }
+        }
+    }
+}
+
 impl Viewer for CsvViewer {
     fn name(&self) -> &'static str {
         "csv"
@@ -127,13 +144,45 @@ impl Viewer for CsvViewer {
         f.is_file() && EXTENSIONS.contains(&f.ext.as_str())
     }
     fn prepare(&mut self, f: &Probe, _cx: &mut App) -> Prepared {
-        match load(&f.path) {
-            Ok(t) => self.table = Some(std::rc::Rc::new(t)),
-            Err(e) => self.error = Some(e.to_string()),
-        }
+        self.path = f.path.clone();
+        self.edit.reset(&f.path);
+        self.show();
         Prepared::new((1000.0, 700.0), super::file_name(&f.path))
     }
-    fn render(&mut self, window: &mut Window, _cx: &mut App) -> AnyElement {
+    fn render(&mut self, window: &mut Window, cx: &mut App) -> AnyElement {
+        if self.edit.take_ended() {
+            self.show();
+        }
+        let plain = self.plain(window);
+        self.edit.wrap(plain, window, cx)
+    }
+    fn more_menu(&self) -> Vec<MoreItem> {
+        self.edit.more_menu()
+    }
+    fn on_key(&mut self, key: &str, mods: &Modifiers, window: &mut Window, cx: &mut App) -> bool {
+        self.edit.on_key(key, mods, window, cx)
+    }
+    fn editing(&self, cx: &App) -> bool {
+        self.edit.editing(cx)
+    }
+    fn has_unsaved(&self, cx: &App) -> bool {
+        self.edit.has_unsaved(cx)
+    }
+    fn ask_to_leave(&mut self, go: Box<dyn FnOnce(&mut Window, &mut App)>, window: &mut Window, cx: &mut App) {
+        self.edit.ask_to_leave(go, window, cx)
+    }
+    fn take_focus(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        self.edit.take_focus(window, cx)
+    }
+    fn cleanup(&mut self) {
+        self.table = None;
+        self.error = None;
+        self.edit.cleanup();
+    }
+}
+
+impl CsvViewer {
+    fn plain(&self, window: &mut Window) -> AnyElement {
         let p = crate::theme::Palette::for_window(window);
         let Some(t) = &self.table else {
             return div().size_full().p_4().text_color(p.danger).child(self.error.clone().unwrap_or_default()).into_any_element();
@@ -202,10 +251,6 @@ impl Viewer for CsvViewer {
             .font_family(crate::platform::fonts::mono())
             .child(div().flex().flex_col().w(px(total)).h_full().children(header).child(list))
             .into_any_element()
-    }
-    fn cleanup(&mut self) {
-        self.table = None;
-        self.error = None;
     }
 }
 
