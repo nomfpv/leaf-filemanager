@@ -6626,6 +6626,8 @@ impl Render for Workspace {
                 if ev.keystroke.key == "escape" && crate::ext::scene_active() && crate::prompt::current(window, cx).is_none() {
                     crate::ext::end_scene(cx);
                     cx.stop_propagation();
+                } else if crate::ext::scene_active() && crate::prompt::current(window, cx).is_none() && crate::ext::scene_key(ev, cx) {
+                    cx.stop_propagation();
                 }
             }))
             .on_action(cx.listener(|this, a: &crate::ext::RunExtCommand, _, cx| {

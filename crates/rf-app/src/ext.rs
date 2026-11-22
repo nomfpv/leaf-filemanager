@@ -301,6 +301,36 @@ pub struct FolderOpening {
     pub content: Option<Bounds<Pixels>>,
 }
 
+/// What the pointer did in a region of a layer or in a scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PointerKind {
+    Move,
+    Down(MouseButton),
+    Up(MouseButton),
+}
+
+/// A pointer event for [`Registrar::on_pointer`].
+#[derive(Clone, Copy, Debug)]
+pub struct PointerEvent {
+    pub kind: PointerKind,
+    /// Window coordinates.
+    pub position: Point<Pixels>,
+    /// The index of the declared region (see [`Registrar::overlay_regions`]); `None` in a scene, which takes the whole window.
+    pub region: Option<usize>,
+}
+
+/// A key press while the extension's scene is up (see [`Registrar::on_key`]).
+#[derive(Clone, Debug)]
+pub struct KeyPress {
+    /// The key as the toolkit names it ("a", "enter", "left", "space").
+    pub key: String,
+    /// The text the key types, when it types one.
+    pub text: Option<String>,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
 /// The longest the list keeps leaving rows painted (see [`Registrar::on_rows_leave`]).
 pub const KEEP_ROWS_MAX_MS: u64 = 1500;
 
@@ -385,6 +415,9 @@ pub struct Registrar {
     row_hook: Option<Rc<dyn Fn(&RowInfo) -> Option<AnyElement>>>,
     icon_hook: Option<Rc<dyn Fn(&Path) -> Option<Arc<RenderImage>>>>,
     about: Option<Rc<dyn Fn(&mut App) -> AnyElement>>,
+    regions: Option<Rc<dyn Fn(&mut App) -> Vec<Bounds<Pixels>>>>,
+    pointer_hook: Option<Rc<dyn Fn(&PointerEvent, &mut App)>>,
+    key_hook: Option<Rc<dyn Fn(&KeyPress, &mut App)>>,
     leave_hook: Option<Rc<dyn Fn(&RowsLeaving, &mut App) -> Option<u64>>>,
     open_hook: Option<Rc<dyn Fn(&FolderOpening, &mut App)>>,
 }
@@ -401,6 +434,19 @@ impl Registrar {
     /// [`request_frame`].
     pub fn overlay(&mut self, f: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
         self.overlay = Some(Rc::new(f));
+    }
+    /// Regions (window coordinates, asked on every draw) of the overlay that take the mouse: moves and clicks inside one go to
+    /// [`Registrar::on_pointer`] and do not reach leaf. Everything outside the regions stays pointer-transparent.
+    pub fn overlay_regions(&mut self, f: impl Fn(&mut App) -> Vec<Bounds<Pixels>> + 'static) {
+        self.regions = Some(Rc::new(f));
+    }
+    /// Pointer moves and button presses inside the declared overlay regions, and anywhere in this extension's scene while it is up.
+    pub fn on_pointer(&mut self, f: impl Fn(&PointerEvent, &mut App) + 'static) {
+        self.pointer_hook = Some(Rc::new(f));
+    }
+    /// Key presses while this extension's scene is up; they do not reach leaf. Esc is not delivered: it always ends the scene.
+    pub fn on_key(&mut self, f: impl Fn(&KeyPress, &mut App) + 'static) {
+        self.key_hook = Some(Rc::new(f));
     }
     /// The same, behind the panes (above the window background).
     pub fn underlay(&mut self, f: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
@@ -936,7 +982,54 @@ fn layer_of(pick: impl Fn(&Registrar) -> Option<Layer>, window: &mut Window, cx:
 }
 
 pub(crate) fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
-    layer_of(|r| r.overlay.clone(), window, cx)
+    let mut out = layer_of(|r| r.overlay.clone(), window, cx);
+    // the regions that take the mouse (one flag check while no extension declared any)
+    let Some(reg) = registry() else { return out };
+    for (ix, e) in reg.on() {
+        let (Some(regions), Some(_)) = (&e.r.regions, &e.r.pointer_hook) else { continue };
+        let Some(list) = guard(&e.id, || regions(cx)) else { continue };
+        for (ri, b) in list.into_iter().enumerate() {
+            let region = Some(ri);
+            out.push(
+                div()
+                    .id(SharedString::from(format!("ext-region-{}-{ri}", e.id)))
+                    .absolute()
+                    .left(b.origin.x)
+                    .top(b.origin.y)
+                    .w(b.size.width)
+                    .h(b.size.height)
+                    .occlude()
+                    .on_mouse_move(move |ev: &MouseMoveEvent, _, cx| call_pointer(ix, PointerKind::Move, ev.position, region, cx))
+                    .on_mouse_down(MouseButton::Left, move |ev: &MouseDownEvent, _, cx| call_pointer(ix, PointerKind::Down(ev.button), ev.position, region, cx))
+                    .on_mouse_down(MouseButton::Right, move |ev: &MouseDownEvent, _, cx| call_pointer(ix, PointerKind::Down(ev.button), ev.position, region, cx))
+                    .on_mouse_up(MouseButton::Left, move |ev: &MouseUpEvent, _, cx| call_pointer(ix, PointerKind::Up(ev.button), ev.position, region, cx))
+                    .on_mouse_up(MouseButton::Right, move |ev: &MouseUpEvent, _, cx| call_pointer(ix, PointerKind::Up(ev.button), ev.position, region, cx))
+                    .into_any_element(),
+            );
+        }
+    }
+    out
+}
+
+fn call_pointer(ix: usize, kind: PointerKind, position: Point<Pixels>, region: Option<usize>, cx: &mut App) {
+    let Some(reg) = registry() else { return };
+    let Some(e) = reg.list.get(ix).filter(|e| !e.off.get()) else { return };
+    if let Some(f) = e.r.pointer_hook.clone() {
+        let ev = PointerEvent { kind, position, region };
+        guard(&e.id, || f(&ev, cx));
+    }
+}
+
+/// A key press while a scene is up: handed to the scene's extension. True when it was taken (it then goes no further).
+pub(crate) fn scene_key(ev: &KeyDownEvent, cx: &mut App) -> bool {
+    let Some(reg) = registry() else { return false };
+    let Some(ix) = reg.scene.borrow().as_ref().map(|s| s.ext) else { return false };
+    let Some(e) = reg.list.get(ix).filter(|e| !e.off.get()) else { return false };
+    let Some(f) = e.r.key_hook.clone() else { return false };
+    let k = &ev.keystroke;
+    let press = KeyPress { key: k.key.to_string(), text: k.key_char.clone(), ctrl: k.modifiers.control, alt: k.modifiers.alt, shift: k.modifiers.shift };
+    guard(&e.id, || f(&press, cx));
+    true
 }
 
 pub(crate) fn underlays(window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
@@ -1089,7 +1182,16 @@ pub(crate) fn scene_element(window: &mut Window, cx: &mut App) -> Option<AnyElem
     let e = reg.list.get(ix).filter(|e| !e.off.get())?;
     let el = guard(&e.id, || render(window, cx))?;
     // (it takes the mouse: nothing of the workspace under it is clicked by accident)
-    Some(div().id("ext-scene").absolute().inset_0().occlude().child(el).into_any_element())
+    let mut scene = div().id("ext-scene").absolute().inset_0().occlude().child(el);
+    if e.r.pointer_hook.is_some() {
+        scene = scene
+            .on_mouse_move(move |ev: &MouseMoveEvent, _, cx| call_pointer(ix, PointerKind::Move, ev.position, None, cx))
+            .on_mouse_down(MouseButton::Left, move |ev: &MouseDownEvent, _, cx| call_pointer(ix, PointerKind::Down(ev.button), ev.position, None, cx))
+            .on_mouse_down(MouseButton::Right, move |ev: &MouseDownEvent, _, cx| call_pointer(ix, PointerKind::Down(ev.button), ev.position, None, cx))
+            .on_mouse_up(MouseButton::Left, move |ev: &MouseUpEvent, _, cx| call_pointer(ix, PointerKind::Up(ev.button), ev.position, None, cx))
+            .on_mouse_up(MouseButton::Right, move |ev: &MouseUpEvent, _, cx| call_pointer(ix, PointerKind::Up(ev.button), ev.position, None, cx));
+    }
+    Some(scene.into_any_element())
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- commands
