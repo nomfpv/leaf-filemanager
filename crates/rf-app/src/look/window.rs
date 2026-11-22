@@ -521,7 +521,7 @@ impl LookWindow {
             })))
             .child(self.button("look-share", L::Share, t!("Share").into(), false, p).on_click(cx.listener(|v, _, window, cx| v.share(window, cx))))
             .child(
-                self.button("look-openwith", L::SquareArrowOutUpRight, t!("Open with").into(), false, p)
+                self.button("look-openwith", L::AppWindow, t!("Open with").into(), false, p)
                     .on_click(cx.listener(|v, _, _, _| v.open_with())),
             )
             .child(self.button("look-open", L::ExternalLink, run_tip, false, p).on_click(cx.listener(|v, _, window, cx| {

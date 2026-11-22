@@ -204,7 +204,7 @@ pub static MODULES: &[Spec] = &[
         id: "usenet",
         name: "Usenet",
         desc: "Download NZB files from your Usenet server.",
-        icon: L::Download,
+        icon: L::Newspaper,
         default_on: true,
         hides: "Download with leaf (NZB), Pause or resume all Usenet downloads, the Usenet servers card. Nothing is fetched while it is off.",
         needs: Some(Module::Downloads),
