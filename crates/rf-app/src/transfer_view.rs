@@ -254,6 +254,21 @@ fn bar(p: &Palette, frac: Option<f32>, color: Hsla, w: Option<f32>) -> Div {
 
 /// The progress bar of job `v`; an extension that asks for where it is drawn gets it (see `ext::progress_rect`).
 fn job_bar(p: &Palette, v: &OpView, color: Hsla, w: Option<f32>) -> Div {
+    // an extension's picture instead of the bar (the normal bar when none is registered or it returns nothing)
+    if crate::ext::active() {
+        let width = w.unwrap_or(CARD_W - 24. - 2. - 36. - 8.);
+        if let Some(el) = crate::ext::progress_visual(v.id, v.kind, v.frac, v.pace.speed.map(|s| s as u64), width) {
+            return div()
+                .relative()
+                .h(px(crate::ext::PROGRESS_SLOT_H))
+                .when_some(w, |d, w| d.w(px(w)))
+                .when(w.is_none(), |d| d.w_full())
+                .flex_shrink_0()
+                .overflow_hidden()
+                .child(el)
+                .child(crate::ext::probe(crate::ext::Spot::Bar(v.id)));
+        }
+    }
     bar(p, v.frac, color, w).relative().when(crate::ext::active(), |d| d.child(crate::ext::probe(crate::ext::Spot::Bar(v.id))))
 }
 

@@ -338,6 +338,23 @@ pub struct KeyPress {
 /// The longest the list keeps leaving rows painted (see [`Registrar::on_rows_leave`]).
 pub const KEEP_ROWS_MAX_MS: u64 = 1500;
 
+/// What a progress bar visual hook is told about the bar it may replace.
+#[derive(Clone, Copy, Debug)]
+pub struct ProgressInfo {
+    /// The job's id (the one of the operation events).
+    pub id: u64,
+    pub kind: OpKind,
+    /// 0 to 1, `None` while the total is not known.
+    pub fraction: Option<f32>,
+    pub bytes_per_sec: Option<u64>,
+    /// The room the element gets, in pixels: it is clipped to it.
+    pub width: f32,
+    pub height: f32,
+}
+
+/// The height of the slot an extension's progress bar visual gets (the normal bar is 4 pixels).
+pub const PROGRESS_SLOT_H: f32 = 20.;
+
 /// What a row decoration or icon hook is told about a file row.
 #[derive(Clone, Debug)]
 pub struct RowInfo {
@@ -460,6 +477,7 @@ pub struct Registrar {
     row_hook: Option<Rc<dyn Fn(&RowInfo) -> Option<AnyElement>>>,
     icon_hook: Option<Rc<dyn Fn(&Path) -> Option<Arc<RenderImage>>>>,
     about: Option<Rc<dyn Fn(&mut App) -> AnyElement>>,
+    progress_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<AnyElement>>>,
     regions: Option<Rc<dyn Fn(&mut App) -> Vec<Bounds<Pixels>>>>,
     pointer_hook: Option<Rc<dyn Fn(&PointerEvent, &mut App)>>,
     key_hook: Option<Rc<dyn Fn(&KeyPress, &mut App)>>,
@@ -537,6 +555,11 @@ impl Registrar {
         body: impl Fn(&mut App, WidgetSize, f32) -> Option<AnyElement> + 'static,
     ) {
         self.widgets.push(HomeWidgetReg { id: id.to_string(), title: title.to_string(), icon, sizes: sizes.to_vec(), rows: rows.clamp(1, 6), body: Rc::new(body) });
+    }
+    /// Display only: the element drawn in place of a transfer's progress bar (in the Status Center cards), given the fraction, speed,
+    /// kind and the room (`width` x [`PROGRESS_SLOT_H`], clipped). `None` keeps the normal bar. The job never sees it.
+    pub fn progress_bar(&mut self, f: impl Fn(&ProgressInfo) -> Option<AnyElement> + 'static) {
+        self.progress_hook = Some(Rc::new(f));
     }
     /// A section with its own entry in the list of Settings (not only a part of About).
     pub fn settings_section(&mut self, title: &str, icon: IconName, body: impl Fn(&mut App) -> Vec<AnyElement> + 'static) {
@@ -1559,6 +1582,13 @@ pub(crate) fn page_element(ext: &str, page: &str, window: &mut Window, cx: &mut 
     let Some(pg) = e.r.pages.iter().find(|p| p.id == page) else { return missing() };
     let render = pg.render.clone();
     guard(&e.id, || render(window, cx)).unwrap_or_else(missing)
+}
+
+/// The extension's picture for a progress bar, when one is registered and gives one.
+pub(crate) fn progress_visual(id: u64, kind: OpKind, fraction: Option<f32>, bytes_per_sec: Option<u64>, width: f32) -> Option<AnyElement> {
+    let reg = registry()?;
+    let info = ProgressInfo { id, kind, fraction, bytes_per_sec, width, height: PROGRESS_SLOT_H };
+    reg.on().find_map(|(_, e)| e.r.progress_hook.as_ref().and_then(|f| guard(&e.id, || f(&info)).flatten()))
 }
 
 /// The icon of an extension page's tab.

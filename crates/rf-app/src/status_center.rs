@@ -452,6 +452,7 @@ impl Ops {
                 action: None,
                 brief: xfer::Brief { running: true, noticed: true, asking: false, failed: false, dismissed: false },
                 download: false,
+                kind: crate::ext::OpKind::Copy,
             });
         }
         v
@@ -602,6 +603,8 @@ pub(crate) struct OpView {
     pub brief: xfer::Brief,
     /// A job of the download manager: its title opens the Downloads page on it.
     pub download: bool,
+    /// What the job is, for an extension's progress bar visual.
+    pub kind: crate::ext::OpKind,
 }
 
 impl OpState {
@@ -640,6 +643,7 @@ impl OpState {
             action: self.action.clone(),
             brief: xfer::Brief { running, noticed: ran_ms >= xfer::CARD_APPEAR_MS, asking: question.is_some(), failed: matches!(self.phase, OpPhase::Failed(_)), dismissed: self.dismissed },
             download: self.dl.is_some(),
+            kind: self.kind,
         }
     }
 }
