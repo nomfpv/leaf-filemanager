@@ -362,3 +362,27 @@ fn a_scheduled_plan_without_state_that_removes_something_is_refused() {
     fs.put_file(&v("mem://t/right/extra2.txt"), b"x".to_vec(), T0);
     assert!(crate::plan_scheduled(&job, &fs, &fs, &state, &no).is_ok());
 }
+
+#[test]
+fn an_emptied_side_is_refused_unless_run_anyway_and_that_plan_names_what_goes() {
+    let state = temp("empty-refused");
+    let fs = MemFs::new();
+    fs.put_file(&v("mem://t/left/a.txt"), b"a".to_vec(), T0);
+    fs.put_file(&v("mem://t/left/b.txt"), b"b".to_vec(), T0);
+    fs.put_file(&v("mem://t/right/a.txt"), b"a".to_vec(), T0);
+    fs.put_file(&v("mem://t/right/b.txt"), b"b".to_vec(), T0);
+    let job = Job::new("m", "mem://t/left", "mem://t/right");
+    let no = || false;
+    go(&plan(&job, &fs, &fs, &state, &no).unwrap(), &fs, &fs, &state, &no_trash);
+    fs.remove(&v("mem://t/left/a.txt"), false).unwrap();
+    fs.remove(&v("mem://t/left/b.txt"), false).unwrap();
+    // without the explicit "run anyway" the normal plan refuses and nothing was removed on the right
+    let e = plan(&job, &fs, &fs, &state, &no).err().expect("refused");
+    assert!(e.side_gone, "{e}");
+    assert_eq!(read(&fs, "mem://t/right/a.txt").as_deref(), Some(&b"a"[..]));
+    assert!(plan(&job, &fs, &fs, &state, &no).is_err());
+    // the "anyway" plan carries the removal and says which folder is empty and how many files go from the other
+    let p = crate::plan_anyway(&job, &fs, &fs, &state, &no).unwrap();
+    let (empty, other, n) = p.anyway_removal().expect("named");
+    assert!(empty.ends_with("/left") && other.ends_with("/right") && n == 2, "{empty} {other} {n}");
+}

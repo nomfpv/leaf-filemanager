@@ -152,6 +152,23 @@ impl Plan {
         c.delete_left + c.delete_right > 0 && self.delete_share() > crate::ASK_SHARE
     }
 
+    /// For a plan made by [`plan_anyway`] that removes files from the twin of an empty or missing side: that empty side's folder, the
+    /// folder the files go from, and how many. The app asks this by name before such a run starts. `None` for a normal plan.
+    pub fn anyway_removal(&self) -> Option<(String, String, u64)> {
+        if !self.anyway {
+            return None;
+        }
+        let c = self.counts();
+        let (left_gone, right_gone) = (self.left_missing || self.left_files == 0, self.right_missing || self.right_files == 0);
+        if left_gone && c.delete_right > 0 {
+            Some((self.left_root.to_string(), self.right_root.to_string(), c.delete_right))
+        } else if right_gone && c.delete_left > 0 {
+            Some((self.right_root.to_string(), self.left_root.to_string(), c.delete_left))
+        } else {
+            None
+        }
+    }
+
     /// Nothing to do.
     pub fn is_empty(&self) -> bool {
         self.rows.iter().all(|r| matches!(r.action, Action::Skip))

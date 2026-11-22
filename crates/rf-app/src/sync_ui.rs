@@ -179,7 +179,7 @@ fn confirm_and_run(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut
         .spawn(cx, async move |cx| {
             let got = work.await;
             let _ = cx.update(|window, cx| match got {
-                Err(e) if e.side_gone => confirm_checked(plan, from_preview, window, cx),
+                Err(e) if e.side_gone => confirm_removal_from_empty_side(plan, from_preview, window, cx),
                 _ => crate::prompt::notice(
                     t!("The sync job did not run"),
                     t!("The side that was missing or empty has changed since the preview. Preview the job again.").to_string(),
@@ -189,6 +189,35 @@ fn confirm_and_run(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut
             });
         })
         .detach();
+}
+
+/// "Run anyway" on a side that is empty on purpose would send the other side's files to the Trash: asked once more, by name, with
+/// Cancel as the button Enter presses. Only the "Remove" button goes on.
+fn confirm_removal_from_empty_side(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut App) {
+    use crate::prompt::{Button, Kind};
+    let Some((empty, other, n)) = plan.anyway_removal() else {
+        return confirm_checked(plan, from_preview, window, cx);
+    };
+    let message = format!(
+        "{empty}
+{}
+
+{n} {} {other}.
+{}",
+        t!("is empty or missing."),
+        t!("files would be removed from"),
+        t!("Removed files go to the Trash (on a server into .leaf-sync-trash).")
+    );
+    let plan = Rc::new(std::cell::RefCell::new(Some(plan)));
+    let go = Button::new(format!("{} {n}", t!("Remove files:")), Kind::Danger, move |_, _, cx| {
+        if let Some(p) = plan.borrow_mut().take() {
+            start_run(p, cx);
+        }
+        Ok(())
+    });
+    // (Cancel is the first Primary button: Enter and the keyboard's first stop land on it, never on the removal)
+    let cancel = Button::new(t!("Cancel"), Kind::Primary, |_, _, _| Ok(()));
+    crate::prompt::show(t!("Remove files because one side is empty?"), Some(message), None, vec![cancel, go], window, cx);
 }
 
 fn confirm_checked(plan: Plan, from_preview: bool, window: &mut Window, cx: &mut App) {
