@@ -17,6 +17,40 @@ use crate::openwith::{config_dirs, data_dirs, mimeapps_ids};
 /// The registry root on Windows; unused here (kept so the app's calls stay the same).
 pub const CLASSES: &str = "";
 
+/// rf-win's Win+E / "Show in folder" hook (an Explorer thing): nothing to take over here, so it is never on and the setting is hidden.
+/// Same signatures as rf-win's `explorer_hook.rs`.
+pub mod explorer_hook {
+    use std::path::{Path, PathBuf};
+
+    pub fn journal_path() -> PathBuf {
+        std::env::temp_dir().join("leaf-explorer").join("journal.json")
+    }
+
+    pub fn supported() -> bool {
+        false
+    }
+
+    pub fn enable(_exe: &str, _classes_root: &str, _journal: &Path) -> anyhow::Result<()> {
+        anyhow::bail!("there is no Explorer to take over on this system")
+    }
+
+    pub fn disable(_classes_root: &str, _journal: &Path) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    pub fn is_enabled(_classes_root: &str, _journal: &Path) -> bool {
+        false
+    }
+
+    pub fn check(_current: &str, _classes_root: &str, _journal: &Path) -> Option<&'static str> {
+        None
+    }
+
+    pub fn open_in_explorer(_target: &str) -> bool {
+        false
+    }
+}
+
 pub const APP_NAME: &str = "leaf";
 
 const ID: &str = "leaf.desktop";

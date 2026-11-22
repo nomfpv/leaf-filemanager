@@ -198,6 +198,8 @@ pub(crate) fn install_panic_log() {
 
 /// Whether leaf is registered as the default file manager (HKCU).
 pub static DEFAULT_FM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether Win+E and "Show in folder" from other programs open leaf (`default_fm::explorer_hook`, HKCU, with its journal).
+pub static EXPLORER_HOOK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Opens a leaf window. `start = None` restores the session (first window) or opens Home.
 pub fn open_main_window(
     start: Option<Location>,
@@ -479,21 +481,50 @@ pub fn main() {
         other => other,
     };
     let mut start: Option<Location> = None;
-    // Explorer's `/select,<file>`: its folder, with the file selected
-    // (callers also write `/select, <file>`: the path then comes as the next argument)
+    // Explorer's command line, read as Explorer reads it (rf_core::explorer_args): `/select,<file>` (also what `leaf reveal` becomes)
+    // opens its folder with the file selected; on Windows also `/e,`, `/n,`, `/root,<folder>` from programs that start Explorer, and
+    // what leaf does not read goes to Explorer as it came. (Callers also write `/select, <file>`: the path then comes as the next
+    // argument, which the joined line gives back.)
     let all_args = cli.args.iter().cloned().skip(1).collect::<Vec<_>>().join(" ");
-    let mut select = {
-        let lower = all_args.to_ascii_lowercase();
-        (lower.starts_with("/select,") || lower.starts_with("-select,"))
-            .then(|| all_args[8..].trim().trim_matches('"').to_string())
+    let explorer_launch = {
+        use rf_core::explorer_args as ea;
+        let lower = all_args.trim_start().trim_start_matches('"').to_ascii_lowercase();
+        // on Linux `/e` or `/root` are folders: only the select line (`leaf reveal`) is Explorer's there
+        (ea::starts_with_switch(&all_args) && (cfg!(windows) || lower.starts_with("/select,") || lower.starts_with("-select,"))).then(|| ea::parse(&all_args))
+    };
+    // a relative path is the caller's: made absolute here, since the window that takes it may run in another folder
+    let absolute = |p: &str| if rf_core::explorer_args::is_namespace(p) { p.to_string() } else { std::path::absolute(p).map_or_else(|_| p.to_string(), |a| a.to_string_lossy().into_owned()) };
+    if explorer_launch == Some(rf_core::explorer_args::Launch::FallThrough) {
+        leaf_sys::handover::trace("main: an Explorer command line leaf does not read: to Explorer as it came, this process ends");
+        if !leaf_sys::default_fm::forwarded_recently(&all_args) {
+            leaf_sys::default_fm::note_forward(&all_args);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("explorer.exe").raw_arg(&all_args).spawn();
+            }
+        }
+        return;
+    }
+    let mut select = match &explorer_launch {
+        Some(rf_core::explorer_args::Launch::Select { file, .. }) => Some(absolute(file))
             // bounded like the folder check below: an offline share must not hold the window
             .filter(|file| {
                 PathBuf::from(file)
                     .parent()
                     .is_some_and(|d| is_dir_bounded(d.to_path_buf(), std::time::Duration::from_secs(2)) != Some(false))
-            })
+            }),
+        _ => None,
     };
-    let arg = if select.is_some() { None } else { arg };
+    let arg = match &explorer_launch {
+        None => arg,
+        Some(_) if select.is_some() => None,
+        // a folder that is not there (or a file Explorer would open): the checks below hand it to Explorer
+        Some(rf_core::explorer_args::Launch::Select { folder, .. }) => Some(absolute(folder)),
+        Some(rf_core::explorer_args::Launch::Open(t) | rf_core::explorer_args::Launch::Namespace(t)) => Some(absolute(t)),
+        // Win+E, `/e,` alone: leaf's usual start
+        Some(_) => None,
+    };
     // `leaf download <address> [folder]`: the window opens in that folder (when it is there), the download is started once it is up
     let download = cli.download.clone();
     if let Some((_, Some(folder))) = &download
@@ -536,7 +567,12 @@ pub fn main() {
                 if !leaf_sys::default_fm::forwarded_recently(&arg) {
                     leaf_sys::default_fm::note_forward(&arg);
                     leaf_sys::handover::trace("main: handed to Explorer, this process ends");
-                    let _ = std::process::Command::new("explorer.exe").arg(&arg).spawn();
+                    // a namespace or a folder goes through Explorer's own handler (HKLM), which our HKCU verb cannot send back; a file
+                    // to explorer.exe, which opens it with its program
+                    let own = !std::path::Path::new(&arg).is_file() && leaf_sys::default_fm::explorer_hook::open_in_explorer(&arg);
+                    if !own {
+                        let _ = std::process::Command::new("explorer.exe").arg(&arg).spawn();
+                    }
                     return;
                 }
                 if shell_namespace {
@@ -565,6 +601,19 @@ pub fn main() {
         // re-point it here, or Windows can't open any folder. Not from test instances.
         if registers {
             if let Ok(me) = std::env::current_exe() {
+                // the Win+E / "Show in folder" hook first: a moved leaf is re-pointed, a journal whose keys are another program's now
+                // is dropped. While it is on, the default file manager's own repairs stay out: they would add the archive
+                // registration, which turning the hook off would not take back.
+                let journal = leaf_sys::default_fm::explorer_hook::journal_path();
+                if let Some(what) = leaf_sys::default_fm::explorer_hook::check(&me.display().to_string(), leaf_sys::default_fm::CLASSES, &journal) {
+                    log::warn!("explorer hook: {what}");
+                }
+            }
+        }
+        let hook_on = leaf_sys::default_fm::explorer_hook::is_enabled(leaf_sys::default_fm::CLASSES, &leaf_sys::default_fm::explorer_hook::journal_path());
+        EXPLORER_HOOK.store(hook_on, std::sync::atomic::Ordering::Relaxed);
+        if registers && !hook_on {
+            if let Ok(me) = std::env::current_exe() {
                 if leaf_sys::default_fm::heal(&me.display().to_string(), leaf_sys::default_fm::CLASSES) {
                     log::warn!("default file manager re-registered to {}", me.display());
                 }
@@ -586,7 +635,7 @@ pub fn main() {
     // more folders on the command line (`leaf.exe "C:\My Pictures" "D:\My Videos"`): each one a tab of the same window, after the
     // first (issue 125). Only plain folders that are there (one that is gone is passed over without a word), after a first argument that
     // was one too.
-    let more_folders: Vec<String> = if matches!(start, Some(Location::Path(_))) && select.is_none() {
+    let more_folders: Vec<String> = if matches!(start, Some(Location::Path(_))) && select.is_none() && explorer_launch.is_none() {
         cli.args
             .iter()
             .cloned()

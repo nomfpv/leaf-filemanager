@@ -3097,6 +3097,30 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             }),
         )
     });
+    // Win+E and "Show in folder" from other programs, with an exact way back (see default_fm::explorer_hook)
+    let hook_on = crate::EXPLORER_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    let explorer_hook = leaf_sys::default_fm::explorer_hook::supported().then(|| {
+        card(
+            p,
+            L::Keyboard,
+            t!("Open leaf for Win+E and for 'Show in folder' from other programs"),
+            Some(t!("Win+E, folders, and 'Show in folder' / 'Open file location' in browsers, editors and Task Manager open in leaf. Changes three entries for this user only (no admin). Turning it off puts back exactly what was there before. This PC, Control Panel and other places leaf does not show still open in Explorer.")),
+            switch("explorer-hook", p, hook_on, move |window, _| {
+                let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
+                std::thread::spawn(move || {
+                    let classes = leaf_sys::default_fm::CLASSES;
+                    let journal = leaf_sys::default_fm::explorer_hook::journal_path();
+                    let r = if hook_on { leaf_sys::default_fm::explorer_hook::disable(classes, &journal) } else { leaf_sys::default_fm::explorer_hook::enable(&exe, classes, &journal) };
+                    if let Err(e) = r {
+                        log::warn!("explorer hook: {e:#}");
+                    }
+                    crate::EXPLORER_HOOK.store(leaf_sys::default_fm::explorer_hook::is_enabled(classes, &journal), std::sync::atomic::Ordering::Relaxed);
+                    crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
+                });
+                window.refresh();
+            }),
+        )
+    });
     let mut out = vec![
         link_row(p, "export", L::Upload, t!("Export settings"), None, |window, cx| pick_into(window, cx, t!("Export settings"), PickTarget::Export)),
         link_row(p, "import", L::Download, t!("Import settings"), None, |window, cx| pick_into(window, cx, t!("Import settings"), PickTarget::Import)),
@@ -3351,6 +3375,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             }),
         ),
     ];
+    out.extend(explorer_hook);
     out.extend(archives);
     out.extend([
         card(

@@ -8,6 +8,10 @@
 
 use windows_registry::{CURRENT_USER, Key};
 
+/// Win+E and "Show in folder" from other programs, with a journal that turns it off exactly (Settings > Advanced).
+#[path = "explorer_hook.rs"]
+pub mod explorer_hook;
+
 pub const CLASSES: &str = r"Software\Classes";
 const WIN_E_CLSID: &str = r"CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
 /// zip (CompressedFolder) and 7z, rar, tar, gz… (ArchiveFolder): their `open` verbs. Earlier

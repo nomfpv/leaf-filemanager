@@ -6,6 +6,7 @@ pub mod compare;
 pub mod copy_path;
 pub mod dupes;
 pub mod entry;
+pub mod explorer_args;
 pub mod format;
 pub mod history;
 pub mod hotkey;
