@@ -27,7 +27,7 @@ if ((Inside $root $dest) -or (Inside $PSScriptRoot $dest) -or (Inside (Get-Locat
 
 # stop only a leaf that runs FROM the install folder (never the dev copy in target\)
 function Stop-Installed {
-    foreach ($name in 'leaf', 'leaf-look', 'leaf-open', 'leaf-nmhost', 'leaf-mcp') {
+    foreach ($name in 'leaf', 'leaf-look', 'leaf-open', 'leaf-nmhost', 'leaf-mcp', 'leaf-helper') {
         Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
             $p = $null
             try { $p = $_.MainModule.FileName } catch { }

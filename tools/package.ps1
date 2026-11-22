@@ -23,17 +23,17 @@ if (-not $Version) {
 }
 if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "version '$Version' is not semver (1.2.3)" }
 
-# (a) build: leaf.exe, leaf-look.exe, leaf-open.exe (rf-app's bins) and the two helper programs
+# (a) build: leaf.exe, leaf-look.exe, leaf-open.exe (rf-app's bins), the two helper programs and the administrator helper
 if (-not $NoBuild) {
     Push-Location $root
     try {
-        cargo build --release -p rf-app -p leaf-mcp -p leaf-nmhost
+        cargo build --release -p rf-app -p leaf-mcp -p leaf-nmhost -p leaf-helper
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
     } finally { Pop-Location }
 }
 
 # (b) stage: a clean folder with exactly what an install holds
-$files = @('leaf.exe', 'leaf-look.exe', 'leaf-open.exe', 'leaf-mcp.exe', 'leaf-nmhost.exe')
+$files = @('leaf.exe', 'leaf-look.exe', 'leaf-open.exe', 'leaf-mcp.exe', 'leaf-nmhost.exe', 'leaf-helper.exe')
 foreach ($f in $files) {
     if (-not (Test-Path (Join-Path $rel $f))) { throw "$f is missing in $rel (build first, or drop -NoBuild)" }
 }
