@@ -1232,7 +1232,8 @@ fn scrub_docx_xlsx_pptx_leave_no_marker_anywhere_in_any_entry() {
             ("word/_rels/settings.xml.rels", settings_rels.as_bytes()),
             ("word/printerSettings/printerSettings1.bin", b"printer of Planted Author LEAFTESTSERIAL123"),
             ("word/media/image1.jpeg", &planted_jpeg),
-            ("customXml/item1.xml", b"<root><who>LEAFTESTSERIAL123 Planted Author</who></root>"),
+            ("customXml/item1.xml", b"<p:properties xmlns:p=\"http://schemas.microsoft.com/office/2006/metadata/properties\"><who>LEAFTESTSERIAL123 Planted Author</who></p:properties>"),
+            ("customXml/item2.xml", b"<data xmlns=\"urn:bound\"><field>bound value</field></data>"),
             ("docProps/core.xml", core.as_bytes()),
             ("docProps/app.xml", app.as_bytes()),
             ("docProps/thumbnail.jpeg", &planted_jpeg),
@@ -1250,6 +1251,9 @@ fn scrub_docx_xlsx_pptx_leave_no_marker_anywhere_in_any_entry() {
     assert_clean_listing(&dst);
     assert!(zip_text(&dst, "word/document.xml").contains("<w:t>hi</w:t>") && zip_text(&dst, "word/comments.xml").contains("remember this"));
     assert!(zip_text(&dst, "word/document.xml").contains("w:author=\"Author\""));
+    // a data part content controls can be bound to stays, and the sheet says so
+    assert!(zip_text(&dst, "customXml/item2.xml").contains("bound value"));
+    assert!(before.notes.iter().any(|n| n.contains("custom XML data part")));
     assert!(!zip_text(&dst, "word/_rels/document.xml.rels").contains("printerSettings"));
     assert!(!zip_text(&dst, "word/_rels/settings.xml.rels").contains("attachedTemplate"));
     roxmltree::Document::parse(&zip_text(&dst, "word/settings.xml")).unwrap();

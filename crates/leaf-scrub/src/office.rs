@@ -720,6 +720,8 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
     let (mut thumbs, mut printers, mut customs, mut unreadable, mut macros, mut embedded) = (0, 0, 0, 0, false, false);
     let mut pics: Vec<Finding> = Vec::new();
     let mut not_cleaned: Vec<String> = Vec::new();
+    // custom XML parts kept: (bibliography sources, data parts)
+    let mut custom_kept = (0usize, 0usize);
     // 1. the names, and the parts that go whole
     let mut names: Vec<String> = Vec::with_capacity(z.len());
     let mut total = 0u64;
@@ -869,7 +871,16 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
             continue;
         }
         let bytes = read_capped(&mut e, MAX_XML)?;
-        let xml = match String::from_utf8(bytes) {
+        // custom XML parts are often UTF-16: read as text to tell what they are (a blanked one is written back as UTF-8)
+        let utf16 = name.starts_with("customXml/") && (bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]));
+        let decoded = if utf16 {
+            let le = bytes[0] == 0xFF;
+            let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
+            String::from_utf16(&units).map_err(|_| ())
+        } else {
+            String::from_utf8(bytes).map_err(|_| ())
+        };
+        let xml = match decoded {
             Ok(s) => s,
             Err(_) => {
                 // a UTF-16 or damaged XML part: not rewritten, never silently kept
@@ -900,11 +911,25 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
             let b = odf_meta_blank(&xml);
             (xml != b).then_some(b)
         } else if name.starts_with("customXml/") && low.ends_with(".xml") && !name.contains("itemProps") {
-            if xml.trim() != CUSTOM_XML_BLANK {
-                customs += 1;
-                Some(CUSTOM_XML_BLANK.to_string())
-            } else {
-                None
+            // only the parts known to hold document properties are blanked (SharePoint properties and content types, cover
+            // page properties); bibliography sources and data bound to the document's content controls stay, and are named
+            match custom_xml_kind(&xml) {
+                CustomXml::Properties => {
+                    if xml.trim() != CUSTOM_XML_BLANK {
+                        customs += 1;
+                        Some(CUSTOM_XML_BLANK.to_string())
+                    } else {
+                        None
+                    }
+                }
+                CustomXml::Bibliography => {
+                    custom_kept.0 += 1;
+                    None
+                }
+                CustomXml::Data => {
+                    custom_kept.1 += 1;
+                    None
+                }
             }
         } else if low.ends_with(".rels") {
             let ids = rels_source(&name).and_then(|s| drop_ids.get(&s)).cloned().unwrap_or_default();
@@ -948,6 +973,12 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
     if p.signed && opts.remove_signatures {
         p.notes.push("The digital signatures are removed completely (signer, time, certificate): the cleaned document is no longer signed.".into());
     }
+    if custom_kept.0 > 0 {
+        p.notes.push("Kept: the bibliography sources (custom XML) are part of the document's citations and stay.".into());
+    }
+    if custom_kept.1 > 0 {
+        p.notes.push(format!("Still inside: {} custom XML data part(s) kept, because content in the document can be bound to them; they may hold names.", custom_kept.1));
+    }
     if !not_cleaned.is_empty() {
         let n = not_cleaned.len();
         let shown: Vec<&str> = not_cleaned.iter().take(8).map(String::as_str).collect();
@@ -967,6 +998,26 @@ fn plan(path: &Path, opts: &Options) -> Result<Plan> {
 
 /// The refusal of a signed document when the signatures are not to be removed.
 pub(crate) const SIGNED_TEXT: &str = "this document is signed: removing metadata breaks the signature. Tick “Remove digital signatures too” to clean it without them";
+
+enum CustomXml {
+    Properties,
+    Bibliography,
+    Data,
+}
+
+fn custom_xml_kind(xml: &str) -> CustomXml {
+    let ns = roxmltree::Document::parse_with_options(xml, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+        .ok()
+        .and_then(|d| d.root_element().tag_name().namespace().map(str::to_string))
+        .unwrap_or_default();
+    if ns.contains("officeDocument/2006/bibliography") {
+        CustomXml::Bibliography
+    } else if ns.contains("schemas.microsoft.com/office/2006/metadata/") || ns.contains("coverPageProps") || ns.contains("sharepoint/v3/contenttype") || ns.contains("schemas.microsoft.com/office/infopath/2007/PartnerControls") {
+        CustomXml::Properties
+    } else {
+        CustomXml::Data
+    }
+}
 
 const CUSTOM_XML_BLANK: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<root/>";
 
