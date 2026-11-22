@@ -12,6 +12,8 @@ leaf-decode.workspace = true
 rf-core.workspace = true
 # every stub of a function that returns Result answers `anyhow::Result` (rf-win's windows::core::Result becomes anyhow's)
 anyhow.workspace = true
+# admin.rs: the reasons the administrator helper did not start
+thiserror.workspace = true
 log.workspace = true
 dirs.workspace = true
 libc = "0.2"

@@ -12,6 +12,7 @@ pub use leaf_common::{APP_EXE_STEM, LOOK_EXE_STEM, exe_name};
 pub type Owner = windows::Win32::Foundation::HWND;
 
 pub mod accent;
+pub mod admin;
 pub mod activate;
 pub mod apppkg;
 pub mod apps;

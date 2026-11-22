@@ -6,6 +6,7 @@
 #![cfg(unix)]
 
 pub mod accent;
+pub mod admin;
 pub mod activate;
 pub mod apppkg;
 pub mod apps;
