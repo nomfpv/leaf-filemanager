@@ -25,14 +25,9 @@ pub fn media_props(path: &Path) -> Vec<(&'static str, String)> {
 
 /// The JSON `ffprobe` prints for `path`; `None` when it is not installed, fails, or takes more than 8 seconds (it is then killed).
 fn ffprobe_json(path: &Path) -> Option<String> {
-    let mut child = Command::new("ffprobe")
-        .args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "--"])
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut cmd = Command::new("ffprobe");
+    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "--"]).arg(path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut cmd).ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -46,7 +41,7 @@ fn ffprobe_json(path: &Path) -> Option<String> {
             (ok && !s.is_empty()).then_some(s)
         }
         Err(_) => {
-            let _ = child.kill();
+            leaf_proc::kill_tree(&mut child, &tree);
             let _ = child.wait();
             None
         }

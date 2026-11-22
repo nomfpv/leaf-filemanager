@@ -21,6 +21,7 @@ path = "src/bin/leaf-open.rs"
 [dependencies]
 rf-core.workspace = true
 leaf-sys.workspace = true
+leaf-proc.workspace = true
 leaf-decode.workspace = true
 leaf-dev.workspace = true
 leaf-vfs.workspace = true

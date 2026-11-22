@@ -41,13 +41,13 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     use std::collections::HashSet;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use std::sync::OnceLock;
 
     const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 
     fn run(cmd: &str, args: &[&str]) -> Option<String> {
-        let out = Command::new(cmd).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+        let out = leaf_proc::output_helper(Command::new(cmd).args(args), Some(std::time::Duration::from_secs(10))).ok()?;
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
     }
 

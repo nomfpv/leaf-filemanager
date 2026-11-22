@@ -129,12 +129,13 @@ pub fn chmod_tree(dir: &Path, mode: Mode, cancel: &dyn Fn() -> bool) -> Result<u
 
 /// The output of `getfacl` for `path` when that tool is installed (a few lines of text); `None` when it is not, or has nothing to say.
 pub fn acl_text(path: &Path) -> Option<String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new("getfacl").arg("-p").arg("--").arg(path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
-    let mut out = String::new();
-    child.stdout.take()?.take(64 * 1024).read_to_string(&mut out).ok()?;
-    let ok = child.wait().ok()?.success();
+    use std::process::Command;
+    let mut cmd = Command::new("getfacl");
+    cmd.arg("-p").arg("--").arg(path);
+    // (a time limit, and what getfacl prints is read whole: a few lines)
+    let o = leaf_proc::output_helper(&mut cmd, Some(std::time::Duration::from_secs(10))).ok()?;
+    let out = String::from_utf8_lossy(&o.stdout[..o.stdout.len().min(64 * 1024)]).into_owned();
+    let ok = o.status.success();
     let t: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).collect();
     (ok && !t.is_empty()).then(|| t.join("\n"))
 }

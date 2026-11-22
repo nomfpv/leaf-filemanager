@@ -30,5 +30,6 @@ pub fn run(action: Action) -> Result<(), String> {
             c
         }
     };
-    c.creation_flags(CREATE_NO_WINDOW).spawn().map(|_| ()).map_err(|e| e.to_string())
+    // (a helper: the request is made within a moment; a minute at most, and it ends with leaf)
+    leaf_proc::output_helper(c.creation_flags(CREATE_NO_WINDOW), Some(std::time::Duration::from_secs(60))).map(|_| ()).map_err(|e| e.to_string())
 }

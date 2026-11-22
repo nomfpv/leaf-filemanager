@@ -185,7 +185,9 @@ fn tool(name: &str, args: &[&str], limit: Duration) -> std::io::Result<GioOut> {
     let exe = std::env::var_os("PATH")
         .and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::Unsupported))?;
-    let mut child = Command::new(exe).args(args).env("LC_ALL", "C").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut cmd = Command::new(exe);
+    cmd.args(args).env("LC_ALL", "C").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut cmd)?;
     let (mut so, mut se) = (child.stdout.take(), child.stderr.take());
     let reader = std::thread::spawn(move || {
         let (mut a, mut b) = (String::new(), String::new());
@@ -203,7 +205,7 @@ fn tool(name: &str, args: &[&str], limit: Duration) -> std::io::Result<GioOut> {
             break st;
         }
         if start.elapsed() > limit {
-            let _ = child.kill();
+            leaf_proc::kill_tree(&mut child, &tree);
             let _ = child.wait();
             return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "gio took too long"));
         }
@@ -461,7 +463,9 @@ fn gio_answering(args: &[&str], limit: Duration, user: &str, domain: &str, passw
     let exe = std::env::var_os("PATH")
         .and_then(|p| std::env::split_paths(&p).map(|d| d.join("gio")).find(|f| f.is_file()))
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::Unsupported))?;
-    let mut child = Command::new(exe).args(args).env("LC_ALL", "C").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut cmd = Command::new(exe);
+    cmd.args(args).env("LC_ALL", "C").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut cmd)?;
     let mut stdin = child.stdin.take();
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     // (gio prints its questions without a newline: the bytes are passed on as they come)
@@ -513,7 +517,7 @@ fn gio_answering(args: &[&str], limit: Duration, user: &str, domain: &str, passw
             break st;
         }
         if start.elapsed() > limit {
-            let _ = child.kill();
+            leaf_proc::kill_tree(&mut child, &tree);
             let _ = child.wait();
             return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "gio took too long"));
         }

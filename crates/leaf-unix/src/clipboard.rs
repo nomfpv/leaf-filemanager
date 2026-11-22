@@ -154,7 +154,7 @@ fn read_external() -> Option<External> {
 fn run(args: &[&str], input: Option<&[u8]>, limit: Duration) -> anyhow::Result<(bool, Vec<u8>)> {
     let mut c = Command::new(args[0]);
     c.args(&args[1..]).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut child = c.spawn()?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut c)?;
     if let (Some(data), Some(mut sin)) = (input, child.stdin.take()) {
         sin.write_all(data)?;
     }
@@ -173,7 +173,7 @@ fn run(args: &[&str], input: Option<&[u8]>, limit: Duration) -> anyhow::Result<(
             break s;
         }
         if t0.elapsed() > limit {
-            let _ = child.kill();
+            leaf_proc::kill_tree(&mut child, &tree);
             let _ = child.wait();
             anyhow::bail!("{} took too long", args[0]);
         }

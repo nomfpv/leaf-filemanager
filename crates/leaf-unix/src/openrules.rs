@@ -82,7 +82,7 @@ pub fn open_in(program: &str, file: &Path) -> anyhow::Result<()> {
     if let Some(dir) = file.parent().filter(|d| d.is_dir()) {
         c.current_dir(dir);
     }
-    let mut child = c.spawn()?;
+    let mut child = leaf_proc::spawn_user(&mut c)?;
     std::thread::Builder::new().name("reaper".into()).spawn(move || {
         let _ = child.wait();
     })?;

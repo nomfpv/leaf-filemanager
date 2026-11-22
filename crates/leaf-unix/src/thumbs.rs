@@ -46,7 +46,7 @@ fn has_ext(path: &Path, list: &[&str]) -> bool {
 fn capture(prog: &str, args: &[&std::ffi::OsStr], secs: u64, limit: u64) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::process::{Command, Stdio};
-    let mut child = Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())).ok()?;
     let mut out = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -60,7 +60,7 @@ fn capture(prog: &str, args: &[&std::ffi::OsStr], secs: u64, limit: u64) -> Opti
             (ok && !v.is_empty()).then_some(v)
         }
         Err(_) => {
-            let _ = child.kill();
+            leaf_proc::kill_tree(&mut child, &tree);
             let _ = child.wait();
             None
         }

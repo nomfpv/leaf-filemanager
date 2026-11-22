@@ -7900,6 +7900,7 @@ dependencies = [
  "leaf-download",
  "leaf-nzb",
  "leaf-open",
+ "leaf-proc",
  "leaf-remote",
  "leaf-share",
  "leaf-sync",

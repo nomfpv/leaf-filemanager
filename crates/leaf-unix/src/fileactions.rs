@@ -3,7 +3,7 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 fn ext(p: &Path) -> String {
     p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
@@ -24,7 +24,9 @@ pub fn is_runnable(_p: &Path) -> bool {
 
 /// `Ok(true)` ran and succeeded, `Ok(false)` ran and failed, `Err` the program is not installed. Argument list, no shell.
 fn run(prog: &str, args: &[&std::ffi::OsStr]) -> std::io::Result<bool> {
-    Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success())
+    let mut c = Command::new(prog);
+    c.args(args);
+    leaf_proc::output_helper(&mut c, Some(std::time::Duration::from_secs(60))).map(|o| o.status.success())
 }
 
 /// `file://` and the path with everything outside the safe set percent-encoded.

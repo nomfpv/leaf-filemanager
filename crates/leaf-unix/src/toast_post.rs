@@ -121,13 +121,8 @@ fn notify_send(t: &Toast) -> bool {
     let Some(exe) = std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("notify-send")).find(|p| p.is_file())) else {
         return false;
     };
-    std::process::Command::new(exe)
-        .args(["--app-name", crate::APP_EXE_STEM, "--", t.title, &body_of(t)])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    leaf_proc::output_helper(std::process::Command::new(exe).args(["--app-name", crate::APP_EXE_STEM, "--", t.title, &body_of(t)]), Some(std::time::Duration::from_secs(10)))
+        .is_ok_and(|o| o.status.success())
 }
 
 /// Takes a toast away (answered elsewhere, or no longer asked).

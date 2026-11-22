@@ -43,6 +43,9 @@ pub(crate) fn config_dirs() -> Vec<PathBuf> {
     v
 }
 
+/// How long a one-shot query program (xdg-mime) may take.
+const HELPER_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A program on `PATH`.
 fn which(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
@@ -51,7 +54,7 @@ fn which(name: &str) -> Option<PathBuf> {
 /// The media type of a file: `xdg-mime` when installed (it looks at the content too), else the extension guess.
 pub fn mime_of(path: &Path) -> Option<String> {
     if let Some(x) = which("xdg-mime")
-        && let Ok(out) = Command::new(x).args(["query", "filetype"]).arg(path).stdin(Stdio::null()).stderr(Stdio::null()).output()
+        && let Ok(out) = leaf_proc::output_helper(Command::new(x).args(["query", "filetype"]).arg(path), Some(HELPER_LIMIT))
     {
         let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if out.status.success() && t.contains('/') {
@@ -141,7 +144,7 @@ pub fn default_app(mime: &str) -> Option<DesktopApp> {
     let mut ids = mimeapps_ids("Default Applications", mime);
     if ids.is_empty()
         && let Some(x) = which("xdg-mime")
-        && let Ok(out) = Command::new(x).args(["query", "default", mime]).stdin(Stdio::null()).stderr(Stdio::null()).output()
+        && let Ok(out) = leaf_proc::output_helper(Command::new(x).args(["query", "default", mime]), Some(HELPER_LIMIT))
     {
         let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if t.ends_with(".desktop") {
@@ -266,7 +269,7 @@ pub fn launch(app: &DesktopApp, path: &Path) -> anyhow::Result<()> {
         c.current_dir(dir);
     }
     c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = c.spawn().map_err(|e| anyhow::anyhow!("{}: {e}", app.name))?;
+    let mut child = leaf_proc::spawn_user(&mut c).map_err(|e| anyhow::anyhow!("{}: {e}", app.name))?;
     std::thread::Builder::new().name("reaper".into()).spawn(move || {
         let _ = child.wait();
     })?;
@@ -289,7 +292,8 @@ pub(crate) fn choose_index(title: &str, text: &str, labels: &[String]) -> anyhow
         for (i, a) in labels.iter().enumerate() {
             c.arg(i.to_string()).arg(a);
         }
-        let out = c.stdin(Stdio::null()).stderr(Stdio::null()).output()?;
+        // (a dialog the user is looking at: a helper without a time limit)
+        let out = leaf_proc::output_helper(&mut c, None)?;
         return Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok()).flatten());
     }
     if let Some(z) = which("zenity") {
@@ -298,7 +302,7 @@ pub(crate) fn choose_index(title: &str, text: &str, labels: &[String]) -> anyhow
         for (i, a) in labels.iter().enumerate() {
             c.arg(i.to_string()).arg(a);
         }
-        let out = c.stdin(Stdio::null()).stderr(Stdio::null()).output()?;
+        let out = leaf_proc::output_helper(&mut c, None)?;
         return Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok()).flatten());
     }
     anyhow::bail!("neither kdialog nor zenity is installed to choose from a list")
@@ -314,7 +318,9 @@ pub fn open_with(path: &Path, make_default: bool) -> anyhow::Result<bool> {
     let app = apps.get(i).ok_or_else(|| anyhow::anyhow!("no such choice"))?;
     if make_default {
         let x = which("xdg-mime").ok_or_else(|| anyhow::anyhow!("xdg-mime is not installed"))?;
-        let st = Command::new(x).args(["default", &app.id, &mime]).stdin(Stdio::null()).status()?;
+        let mut c = Command::new(x);
+        c.args(["default", &app.id, &mime]);
+        let st = leaf_proc::output_helper(&mut c, Some(HELPER_LIMIT))?.status;
         anyhow::ensure!(st.success(), "xdg-mime could not set the default");
     } else {
         launch(app, path)?;

@@ -33,7 +33,8 @@ pub fn pick(_owner: Owner, title: &str, kind: Pick<'_>) -> Option<PathBuf> {
         log::info!("dialogs::pick: no FileChooser portal, kdialog or zenity: nothing chosen");
         return None;
     };
-    let out = std::process::Command::new(exe).args(args).env("LC_ALL", "C").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    // (the dialog is on screen and the user takes their time: a helper without a time limit)
+    let out = leaf_proc::output_helper(std::process::Command::new(exe).args(args).env("LC_ALL", "C"), None).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -214,7 +215,7 @@ pub fn pick_many(_owner: Owner, title: &str) -> Vec<PathBuf> {
         log::info!("dialogs::pick_many: neither kdialog nor zenity is installed, nothing chosen");
         return Vec::new();
     };
-    let out = match std::process::Command::new(exe).args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() {
+    let out = match leaf_proc::output_helper(std::process::Command::new(exe).args(args), None) {
         Ok(o) => o,
         Err(e) => {
             log::info!("dialogs::pick_many: the dialog did not start: {e}");

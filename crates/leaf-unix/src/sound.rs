@@ -10,10 +10,19 @@ use std::process::{Command, Stdio};
 
 pub fn notify() {
     let quiet = |mut c: Command| -> bool {
-        match c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
-            Ok(mut child) => {
+        // (a helper: a player stuck for more than half a minute is ended by the reaper, and it ends with leaf)
+        match leaf_proc::spawn_helper_tree(c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())) {
+            Ok((mut child, tree)) => {
                 let _ = std::thread::Builder::new().name("reaper".into()).spawn(move || {
-                    let _ = child.wait();
+                    let t0 = std::time::Instant::now();
+                    while child.try_wait().is_ok_and(|s| s.is_none()) {
+                        if t0.elapsed() > std::time::Duration::from_secs(30) {
+                            leaf_proc::kill_tree(&mut child, &tree);
+                            let _ = child.wait();
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
                 });
                 true
             }
@@ -45,7 +54,7 @@ pub fn notify() {
 /// `gsettings get org.gnome.desktop.sound event-sounds` (GNOME and others that use its schema); true when it cannot be asked.
 fn event_sounds_on() -> bool {
     let Some(g) = crate::shell::which("gsettings") else { return true };
-    let Ok(o) = Command::new(g).args(["get", "org.gnome.desktop.sound", "event-sounds"]).env("LC_ALL", "C").stdin(Stdio::null()).stderr(Stdio::null()).output() else { return true };
+    let Ok(o) = leaf_proc::output_helper(Command::new(g).args(["get", "org.gnome.desktop.sound", "event-sounds"]).env("LC_ALL", "C"), Some(std::time::Duration::from_secs(5))) else { return true };
     !(o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "false")
 }
 

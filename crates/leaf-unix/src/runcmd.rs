@@ -204,7 +204,7 @@ pub enum Started {
 pub fn start(found: &Found, work_dir: &Path) -> Started {
     let mut c = Command::new(&found.exe);
     c.args(split_args(&found.args)).current_dir(work_dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
-    match c.spawn() {
+    match leaf_proc::spawn_user(&mut c) {
         Ok(mut child) => {
             let _ = std::thread::Builder::new().name("rf-runcmd".into()).spawn(move || {
                 let _ = child.wait();

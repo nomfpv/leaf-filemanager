@@ -15,7 +15,7 @@ pub struct Pdf {
 fn run(prog: &str, args: &[&OsStr], secs: u64, limit: u64) -> Option<(bool, Vec<u8>, Vec<u8>)> {
     use std::io::Read;
     use std::process::{Command, Stdio};
-    let mut child = Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
     let mut out = child.stdout.take()?;
     let mut err = child.stderr.take()?;
     let t_out = std::thread::spawn(move || {
@@ -34,7 +34,7 @@ fn run(prog: &str, args: &[&OsStr], secs: u64, limit: u64) -> Option<(bool, Vec<
             Ok(Some(st)) => break st.success(),
             Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(15)),
             _ => {
-                let _ = child.kill();
+                leaf_proc::kill_tree(&mut child, &tree);
                 let _ = child.wait();
                 return None;
             }

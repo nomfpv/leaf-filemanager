@@ -84,11 +84,10 @@ pub fn start() -> Result<Session, StartError> {
     let channel = random32().map(|b| format!("leaf-helper-{}-{}", std::process::id(), &token_text(&b)[..16])).ok_or_else(|| StartError::Failed("no random bytes".into()))?;
     let uid = unsafe { libc::getuid() };
     let socket = PathBuf::from(format!("/run/user/{uid}/{channel}.sock"));
-    let mut child = Command::new(pkexec)
-        .arg(&exe)
-        .args(["--channel", &channel, "--token", &token, "--user", &uid.to_string(), "--pid", &std::process::id().to_string()])
-        .spawn()
-        .map_err(|e| StartError::Failed(e.to_string()))?;
+    let mut cmd = Command::new(pkexec);
+    cmd.arg(&exe).args(["--channel", &channel, "--token", &token, "--user", &uid.to_string(), "--pid", &std::process::id().to_string()]);
+    // (a helper without a time limit: polkit's dialog is on screen and the user answers it in their own time; it ends with leaf)
+    let mut child = leaf_proc::spawn_helper(&mut cmd).map_err(|e| StartError::Failed(e.to_string()))?;
     let pid = child.id();
     // (the password dialog may take a while: up to two minutes)
     let until = Instant::now() + Duration::from_secs(120);

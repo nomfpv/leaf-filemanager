@@ -41,7 +41,7 @@ pub fn targets() -> Vec<Target> {
 /// program is missing, the daemon is not running or nothing is reachable.
 pub(crate) fn kdeconnect_devices() -> Vec<(String, String)> {
     let Some(k) = crate::shell::which("kdeconnect-cli") else { return Vec::new() };
-    let Ok(o) = Command::new(k).args(["-a", "--id-name-only"]).env("LC_ALL", "C").stdin(Stdio::null()).stderr(Stdio::null()).output() else { return Vec::new() };
+    let Ok(o) = leaf_proc::output_helper(Command::new(k).args(["-a", "--id-name-only"]).env("LC_ALL", "C"), Some(std::time::Duration::from_secs(15))) else { return Vec::new() };
     if !o.status.success() {
         return Vec::new();
     }
@@ -62,14 +62,15 @@ pub(crate) fn kdeconnect_share(items: &[PathBuf], id: &str) -> anyhow::Result<()
     let k = crate::shell::which("kdeconnect-cli").ok_or_else(|| anyhow::anyhow!("kdeconnect-cli is not installed"))?;
     anyhow::ensure!(!id.is_empty() && !id.starts_with('-'), "no such device");
     for it in items {
-        let st = Command::new(&k).arg("--device").arg(id).arg("--share").arg(it).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status()?;
+        let st = leaf_proc::output_helper(Command::new(&k).arg("--device").arg(id).arg("--share").arg(it), Some(std::time::Duration::from_secs(120)))?.status;
         anyhow::ensure!(st.success(), "KDE Connect could not send {}", it.display());
     }
     Ok(())
 }
 
 fn spawn_detached(mut c: Command) -> anyhow::Result<()> {
-    let mut child = c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    // (a mail window or the Bluetooth send dialog the user works in: a program of theirs)
+    let mut child = leaf_proc::spawn_user(c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()))?;
     std::thread::Builder::new().name("reaper".into()).spawn(move || {
         let _ = child.wait();
     })?;

@@ -19,7 +19,8 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 fn run(mut c: Command) -> Result<String, String> {
-    let out = c.output().map_err(|e| e.to_string())?;
+    // (udisks and gio answer in seconds; a prompt that never comes is stopped after two minutes)
+    let out = leaf_proc::output_helper(&mut c, Some(std::time::Duration::from_secs(120))).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if out.status.success() {
         return Ok(text);

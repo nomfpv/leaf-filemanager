@@ -193,7 +193,7 @@ fn spawn_all(exec: &str, name: &str, icon: &str, file: Option<&Path>, items: &[P
             c.current_dir(dir);
         }
         c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        let mut child = c.spawn().map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
+        let mut child = leaf_proc::spawn_user(&mut c).map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
         std::thread::Builder::new().name("reaper".into()).spawn(move || {
             let _ = child.wait();
         })?;

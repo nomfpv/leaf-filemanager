@@ -15,7 +15,8 @@ pub fn ensure_com() {
 /// Start a program detached from our streams; a thread waits for it so it never stays a zombie.
 fn spawn_reaped(mut cmd: Command) -> anyhow::Result<()> {
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = cmd.spawn()?;
+    // (xdg-open, a terminal: programs the user asked for, they stay when leaf ends)
+    let mut child = leaf_proc::spawn_user(&mut cmd)?;
     std::thread::Builder::new().name("reaper".into()).spawn(move || {
         let _ = child.wait();
     })?;
@@ -76,7 +77,7 @@ pub fn properties(path: &Path) -> anyhow::Result<()> {
     } else {
         anyhow::bail!("neither gdbus nor dbus-send is installed");
     };
-    let out = Command::new(exe).args(args).stdin(Stdio::null()).output()?;
+    let out = leaf_proc::output_helper(Command::new(exe).args(args), Some(std::time::Duration::from_secs(15)))?;
     anyhow::ensure!(out.status.success(), "no file manager answers the properties request");
     Ok(())
 }

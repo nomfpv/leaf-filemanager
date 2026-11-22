@@ -60,7 +60,7 @@ pub fn launch(app: &App) -> anyhow::Result<()> {
     let (prog, args) = words.split_first().ok_or_else(|| anyhow::anyhow!("{} has no command", app.name))?;
     let mut c = std::process::Command::new(prog);
     c.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    let mut child = c.spawn().map_err(|e| anyhow::anyhow!("{}: {e}", app.name))?;
+    let mut child = leaf_proc::spawn_user(&mut c).map_err(|e| anyhow::anyhow!("{}: {e}", app.name))?;
     std::thread::Builder::new().name("reaper".into()).spawn(move || {
         let _ = child.wait();
     })?;

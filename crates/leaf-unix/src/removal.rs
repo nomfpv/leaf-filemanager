@@ -40,7 +40,8 @@ fn removable_parent(dev: &str) -> Option<String> {
 }
 
 fn run(mut c: Command) -> Result<(), String> {
-    let out = c.output().map_err(|e| e.to_string())?;
+    // (a flush of written data can take a while: five minutes at most)
+    let out = leaf_proc::output_helper(&mut c, Some(std::time::Duration::from_secs(300))).map_err(|e| e.to_string())?;
     if out.status.success() {
         return Ok(());
     }

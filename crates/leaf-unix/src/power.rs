@@ -1,7 +1,7 @@
 //! Sleep and shut down this PC, for "when the downloads are done": systemd's `systemctl suspend` / `poweroff` (the logged-in user
 //! may do both). Where there is no `systemctl` the call is not available.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
@@ -24,5 +24,12 @@ pub fn run(action: Action) -> Result<(), String> {
         Action::Sleep => "suspend",
         Action::Shutdown => "poweroff",
     };
-    Command::new(exe).arg(verb).stdin(Stdio::null()).spawn().map(|_| ()).map_err(|e| e.to_string())
+    // (the request reaches systemd at once; systemctl is a helper, so it also ends with leaf and is stopped after a minute)
+    let mut c = Command::new(exe);
+    c.arg(verb);
+    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| e.to_string())?;
+    std::thread::Builder::new().name("reaper".into()).spawn(move || {
+        let _ = child.wait();
+    }).map_err(|e| e.to_string())?;
+    Ok(())
 }

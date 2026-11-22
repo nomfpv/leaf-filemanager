@@ -260,7 +260,7 @@ fn current_theme_name() -> String {
             return t;
         }
     }
-    if let Ok(o) = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.interface", "icon-theme"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() {
+    if let Ok(o) = leaf_proc::output_helper(std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.interface", "icon-theme"]), Some(std::time::Duration::from_secs(5))) {
         let s = String::from_utf8_lossy(&o.stdout).trim().trim_matches('\'').to_string();
         if o.status.success() && !s.is_empty() {
             return s;
