@@ -5098,6 +5098,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-bluray"
+version = "0.9.4"
+dependencies = [
+ "log",
+ "rustdecoder",
+]
+
+[[package]]
 name = "leaf-common"
 version = "0.9.4"
 dependencies = [
