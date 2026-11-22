@@ -266,6 +266,12 @@ fn module_page(page: Page, p: &Palette, s: &Settings, cx: &mut App, build: impl 
     v
 }
 
+/// A card that only means something while the agent layer is on (its switch is the card above them): when it is off the card is an empty
+/// strip that cancels the page's gap.
+fn agents_only(s: &Settings, card: AnyElement) -> AnyElement {
+    if crate::modules::enabled_in(s, crate::modules::Module::Agents) { card } else { div().h_0().mt(px(-8.)).into_any_element() }
+}
+
 /// A card of a module: itself when the module is on, else its one line with the "Turn on" button.
 fn gated(p: &Palette, s: &Settings, m: crate::modules::Module, card: AnyElement) -> AnyElement {
     if crate::modules::enabled_in(s, m) { card } else { crate::setup::off_card(p, m) }
@@ -2756,7 +2762,7 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             Some(t!("Shows what coding agents (Claude Code) are doing: the Agents page, a small dot on the folder and the tab of a running session, and a line in the status bar. Reads the agent's own session files on this PC, never changes them. Off: nothing is read and nothing is shown.")),
             sw("ai-layer", p, s.ai_layer, |s, v| s.ai_layer = v),
         ),
-        card(
+        agents_only(s, card(
             p,
             L::Brain,
             t!("Agent budget ring"),
@@ -2768,10 +2774,10 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 [0u32, 500, 1000, 2000, 5000, 10000, 20000, 50000].into_iter().map(|k| (k, if k == 0 { t!("No ring").to_string() } else { crate::agent_usage::short(u64::from(k) * 1000) })).collect(),
                 |s, v| s.agent_budget_k = v,
             ),
-        ),
+        )),
         {
             let current = s.lane_folder.clone();
-            card(
+            agents_only(s, card(
                 p,
                 L::GitBranchPlus,
                 t!("Lane folders"),
@@ -2796,7 +2802,7 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                         cx,
                     );
                 }),
-            )
+            ))
         },
         card(
             p,
