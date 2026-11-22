@@ -270,7 +270,7 @@ fn store_git(root: &Path, git_dir: &Path, empty_tree: &str, own_index: bool) -> 
 fn run(mut c: Command, ok: &[i32], timeout: Duration) -> Result<Vec<u8>, Error> {
     c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let _turn = leaf_proc::GIT.enter();
-    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
     let mut out = child.stdout.take().ok_or_else(|| Error::new("git could not be started", ""))?;
     let mut err = child.stderr.take().ok_or_else(|| Error::new("git could not be started", ""))?;
     let t_out = std::thread::spawn(move || {
@@ -296,7 +296,7 @@ fn run(mut c: Command, ok: &[i32], timeout: Duration) -> Result<Vec<u8>, Error> 
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) if start.elapsed() > timeout => {
-                let _ = child.kill();
+                leaf_proc::kill_tree(&mut child, &tree);
                 let _ = child.wait();
                 return Err(Error::new("git took too long", ""));
             }
@@ -319,6 +319,7 @@ fn text(b: Vec<u8>) -> String {
 /// Reads blobs one after another through one `git cat-file --batch`.
 struct Blobs {
     child: Child,
+    tree: leaf_proc::Tree,
     stdin: Option<ChildStdin>,
     out: BufReader<ChildStdout>,
 }
@@ -327,10 +328,10 @@ impl Blobs {
     fn open(root: &Path, git_dir: &Path, empty_tree: &str) -> Result<Self, Error> {
         let mut c = store_git(root, git_dir, empty_tree, false);
         c.args(["cat-file", "--batch"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
+        let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
         let stdin = child.stdin.take();
         let out = BufReader::new(child.stdout.take().ok_or_else(|| Error::new("git could not be started", ""))?);
-        Ok(Self { child, stdin, out })
+        Ok(Self { child, tree, stdin, out })
     }
 
     fn get(&mut self, oid: &str) -> Result<Vec<u8>, String> {
@@ -354,6 +355,8 @@ impl Blobs {
 impl Drop for Blobs {
     fn drop(&mut self) {
         self.stdin.take();
+        // (nothing is read after this: end git and anything it started rather than wait on it)
+        leaf_proc::kill_tree(&mut self.child, &self.tree);
         let _ = self.child.wait();
     }
 }

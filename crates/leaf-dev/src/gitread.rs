@@ -148,7 +148,7 @@ pub fn revert_file(root: &Path, rel: &str, put_away: &dyn Fn(&Path) -> Result<()
 /// takes longer than `timeout`.
 pub(crate) fn run(dir: &Path, args: &[&str], timeout: Duration, cap: usize) -> Option<(Vec<u8>, bool)> {
     let _turn = leaf_proc::GIT.enter();
-    let mut child = leaf_proc::spawn_helper(git(dir).args(args)).ok()?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(git(dir).args(args)).ok()?;
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -179,14 +179,14 @@ pub(crate) fn run(dir: &Path, args: &[&str], timeout: Duration, cap: usize) -> O
         std::thread::sleep(Duration::from_millis(4));
     }
     let (buf, cut) = if timed_out {
-        let _ = child.kill();
+        leaf_proc::kill_tree(&mut child, &tree);
         let _ = child.wait();
         return None;
     } else {
         reader.join().ok()?
     };
     if cut {
-        let _ = child.kill();
+        leaf_proc::kill_tree(&mut child, &tree);
     }
     let status = child.wait().ok()?;
     (status.success() || cut).then_some((buf, cut))
@@ -575,7 +575,7 @@ pub fn add_worktree(root: &Path, branch: &str, new_branch: bool, folder: &Path) 
         c.creation_flags(0x0800_0000);
     }
     let _turn = leaf_proc::GIT.enter();
-    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| format!("git could not be started: {e}"))?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut c).map_err(|e| format!("git could not be started: {e}"))?;
     let mut err = child.stderr.take();
     let mut out = child.stdout.take();
     let reader = std::thread::spawn(move || {
@@ -594,7 +594,7 @@ pub fn add_worktree(root: &Path, branch: &str, new_branch: bool, folder: &Path) 
     let start = Instant::now();
     while !reader.is_finished() {
         if start.elapsed() > Duration::from_secs(120) {
-            let _ = child.kill();
+            leaf_proc::kill_tree(&mut child, &tree);
             let _ = child.wait();
             return Err("git took too long".into());
         }

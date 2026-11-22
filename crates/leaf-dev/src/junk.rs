@@ -139,11 +139,11 @@ pub fn git_tracks(dir: &Path) -> Option<bool> {
         c.creation_flags(0x0800_0000);
     }
     let _turn = leaf_proc::GIT.enter();
-    let mut child = leaf_proc::spawn_helper(&mut c).ok()?;
+    let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut c).ok()?;
     let mut line = String::new();
     let got = BufReader::new(child.stdout.take()?).read_line(&mut line).ok()?;
     // the answer is in: stop git rather than let it list a committed node_modules
-    let _ = child.kill();
+    leaf_proc::kill_tree(&mut child, &tree);
     let status = child.wait().ok()?;
     if got > 0 {
         return Some(true);

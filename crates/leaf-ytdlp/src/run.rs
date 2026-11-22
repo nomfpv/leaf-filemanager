@@ -92,18 +92,8 @@ pub struct RunEnd {
 }
 
 /// Stops the process and everything it started (ffmpeg).
-pub(crate) fn kill_tree(child: &mut Child) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    }
-    #[cfg(unix)]
-    {
-        // (the process leads its own group: see `command`)
-        let _ = std::process::Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    }
-    let _ = child.kill();
+pub(crate) fn kill_tree(child: &mut Child, tree: &leaf_proc::Tree) {
+    leaf_proc::kill_tree(child, tree);
     let _ = child.wait();
 }
 
@@ -139,7 +129,7 @@ pub fn run(exe: &Path, args: &[OsString], ctl: &RunCtl, on: &mut dyn FnMut(Event
         }
         let mut c = command(exe);
         c.args(args).envs(ctl.env.iter().map(|(k, v)| (k, v))).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::Start(e.to_string()))?;
+        let (mut child, tree) = leaf_proc::spawn_helper_tree(&mut c).map_err(|e| Error::Start(e.to_string()))?;
         let (tx, rx) = channel();
         if let Some(o) = child.stdout.take() {
             pump(o, false, tx.clone());
@@ -189,12 +179,12 @@ pub fn run(exe: &Path, args: &[OsString], ctl: &RunCtl, on: &mut dyn FnMut(Event
                 }
             }
             if ctl.cancel.load(Ordering::Relaxed) {
-                kill_tree(&mut child);
+                kill_tree(&mut child, &tree);
                 end.cancelled = true;
                 return Ok(end);
             }
             if ctl.paused.load(Ordering::Relaxed) {
-                kill_tree(&mut child);
+                kill_tree(&mut child, &tree);
                 on(Event::Paused);
                 if !wait_while_paused(ctl) {
                     end.cancelled = true;

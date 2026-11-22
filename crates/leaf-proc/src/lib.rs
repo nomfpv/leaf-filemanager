@@ -34,6 +34,20 @@ pub fn spawn_helper_flags(cmd: &mut Command, extra_flags: u32) -> io::Result<Chi
     sys::spawn_helper(cmd, extra_flags, None).map(|(c, _)| c)
 }
 
+/// What it takes to end one helper together with everything it started (see [`spawn_helper_tree`]).
+pub struct Tree(Option<sys::Job>);
+
+/// [`spawn_helper`] for a helper that leaf may have to end early itself (a time limit, a cancel): it gets a job of its own on Windows.
+/// End it with [`kill_tree`]; the job closes when the [`Tree`] drops, so keep it as long as the helper runs.
+pub fn spawn_helper_tree(cmd: &mut Command) -> io::Result<(Child, Tree)> {
+    sys::spawn_helper(cmd, 0, Some(())).map(|(c, j)| (c, Tree(j)))
+}
+
+/// Ends a helper started with [`spawn_helper_tree`] and everything it started. Does not wait; call `child.wait()` after.
+pub fn kill_tree(child: &mut Child, tree: &Tree) {
+    sys::kill_tree(child, tree.0.as_ref());
+}
+
 /// `Command::output` for a helper: stdin closed, stdout and stderr read in full, and, with a `limit`, the whole tree the helper started is
 /// killed when the limit passes (the call then fails with `TimedOut`).
 pub fn output_helper(cmd: &mut Command, limit: Option<Duration>) -> io::Result<Output> {
