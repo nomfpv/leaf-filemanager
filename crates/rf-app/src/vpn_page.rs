@@ -20,7 +20,7 @@ pub fn page(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
     let acc = crate::vpn::account_view();
     let busy = crate::vpn::busy();
     let state = leaf_vpn::state();
-    let mut v = vec![section(p, t!("Mullvad account"))];
+    let mut v = vec![crate::guide_page::section_with_help(p, t!("Mullvad account"), "vpn-help", "vpn")];
 
     let (acc_desc, acc_button): (String, AnyElement) = if acc.signed_in {
         let mut d = t!("Signed in with the account {hint}. This PC is the device \"{device}\".").replace("{hint}", &acc.hint).replace("{device}", &acc.device);

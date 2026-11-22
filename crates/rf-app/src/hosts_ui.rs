@@ -227,7 +227,7 @@ fn import(window: &mut Window, cx: &mut App) {
 pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let hosts = all(cx);
     let mut v = vec![
-        card(p, L::Plus, t!("Add a host"), Some(t!("A server you reach over SFTP, FTPS, FTP or WebDAV: its address, user, port, start folder, key file and jump host. No passwords are kept here.")), button("hosts-add", p, t!("Add"), |w, cx| edit_dialog(None, w, cx))),
+        card(p, L::Plus, t!("Add a host"), Some(t!("A server you reach over SFTP, FTPS, FTP or WebDAV: its address, user, port, start folder, key file and jump host. No passwords are kept here.")), h_flex().gap_2().items_center().child(crate::guide_page::help_button(p, "hosts-help", "server")).child(button("hosts-add", p, t!("Add"), |w, cx| edit_dialog(None, w, cx))).into_any_element()),
         card(
             p,
             L::Download,

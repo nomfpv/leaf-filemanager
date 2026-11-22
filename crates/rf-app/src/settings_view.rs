@@ -3376,7 +3376,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
                 |s, v| s.copy_speed_limit = v,
             ),
         ),
-        section(p, t!("Downloads")),
+        crate::guide_page::section_with_help(p, t!("Downloads"), "downloads-help", "downloadmgr"),
         card(
             p,
             L::Network,

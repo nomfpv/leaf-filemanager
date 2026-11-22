@@ -958,6 +958,7 @@ impl SyncView {
             .border_color(p.divider)
             .child(Icon::new(L::FolderSync).size(px(16.)).text_color(p.accent))
             .child(div().flex_1().min_w_0().text_sm().text_color(p.text).child(t!("Sync jobs")))
+            .child(crate::guide_page::help_button(p, "sync-help", "sync"))
             .child(small_button("sync-new", t!("New job"), p).on_click(cx.listener(|_, _, window, cx| edit(None, String::new(), String::new(), None, window, cx))));
         let mut rows = v_flex().id("sync-jobs").flex_1().min_h_0().overflow_y_scroll().p_1();
         if list.is_empty() {

@@ -694,6 +694,7 @@ impl Render for DiskUsageView {
                     .child(vseg("v-sun", t!("Sunburst"), Mode::Sunburst))
                     .child(vseg("v-sky", t!("Skyline"), Mode::Skyline)),
             )
+            .child(crate::guide_page::help_button(&p, "disk-help", "diskusage"))
             .child(
                 h_flex()
                     .gap_0p5()

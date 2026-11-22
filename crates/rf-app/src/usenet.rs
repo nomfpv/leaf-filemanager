@@ -1094,7 +1094,7 @@ pub fn servers_card(p: &Palette, s: &Settings) -> AnyElement {
         L::Server,
         t!("Usenet servers").into(),
         Some(t!("For NZB files: open one (double click, a drop or the browser) and leaf downloads what it lists, checks and repairs it with par2, unpacks it and puts it in the download folder. Every article goes to the primary servers first, then to the backup and fill servers.").into()),
-        Some(button("usenet-add", p, t!("Add"), |window, cx| edit_server(None, window, cx))),
+        Some(h_flex().gap_2().items_center().child(crate::guide_page::help_button(p, "usenet-help", "usenet")).child(button("usenet-add", p, t!("Add"), |window, cx| edit_server(None, window, cx))).into_any_element()),
     ));
     let tests = TESTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     for (i, srv) in s.usenet_servers.iter().enumerate() {

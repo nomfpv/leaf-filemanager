@@ -228,6 +228,7 @@ impl Render for AgentsView {
             .border_color(p.divider)
             .child(Icon::new(L::Brain).size(px(16.)).text_color(p.accent))
             .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().text_color(p.text).child(if self.who.is_some() { summary } else { format!("{}: {summary}", t!("Agents")) }))
+            .child(crate::guide_page::help_button(&p, "agents-help", "agents"))
             .when(self.who.is_some(), |d| {
                 d.child(icon_button(("agents-who-close", 0), L::X, t!("Show all sessions"), &p).on_click(cx.listener(|v, _, _, cx| {
                     if let Some(w) = v.who.take() {
