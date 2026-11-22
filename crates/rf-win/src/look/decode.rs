@@ -296,6 +296,18 @@ pub fn decode_full(path: &Path, max_side: u32) -> anyhow::Result<Decoded> {
     Ok(Decoded { frames: vec![(t, 0)], orientation: 1, exif: Vec::new(), width, height })
 }
 
+/// A camera RAW file developed from its sensor data when the picture `decode_full` gave (the JPEG the camera embedded) is
+/// small: `Ok(None)` when that picture is big enough, or the file is no RAW file. Reads headers first; for a worker thread.
+pub fn decode_raw_developed(path: &Path, max_side: u32) -> anyhow::Result<Option<Decoded>> {
+    if !leaf_decode::raw_wants_develop(path) {
+        return Ok(None);
+    }
+    let mut img = leaf_decode::decode_developed(path, max_side).map_err(|e| anyhow!("RAW: {e}"))?;
+    let (width, height) = img.full;
+    let (orientation, exif) = (img.orientation, std::mem::take(&mut img.exif));
+    Ok(Some(Decoded { frames: vec![(crate::picture_fallback::bgra(img), 0)], orientation, exif, width, height }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

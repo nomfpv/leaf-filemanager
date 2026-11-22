@@ -321,10 +321,24 @@ impl ImageView {
                 });
             }
         }));
+        let raw = path.extension().and_then(|e| e.to_str()).is_some_and(leaf_decode::is_raw_ext);
+        let dev_path = path.clone();
         let full = cx.background_spawn(async move { leaf_sys::look::decode::decode_full(&path, MAX_SIDE).map(ready) });
         v._tasks.push(cx.spawn(async move |this, cx| {
             let r = full.await;
             let _ = this.update(cx, |v, cx| v.loaded(r, cx));
+            // a camera RAW file whose embedded picture is small: developed from the sensor data in the background and swapped in
+            // (a failure leaves the embedded picture as it is)
+            if raw {
+                let dev = cx.background_spawn(async move { leaf_sys::look::decode::decode_raw_developed(&dev_path, MAX_SIDE).map(|d| d.map(ready)) });
+                if let Ok(Some(d)) = dev.await {
+                    let _ = this.update(cx, |v, cx| {
+                        if !matches!(v.state, State::Failed(_)) {
+                            v.loaded(Ok(d), cx)
+                        }
+                    });
+                }
+            }
         }));
         v
     }
