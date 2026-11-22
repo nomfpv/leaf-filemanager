@@ -12,13 +12,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::channel::oneshot;
 use gpui_kit::*;
-use rf_core::agent_ops::{self as ops, Op, Plan, Root, Rules};
+use rf_core::agent_ops::{self as ops, Op, Plan, Root, RootLimits, Rules};
 use serde_json::{Value, json};
 
 use leaf_sys::fileops::{Tracker, Transfer};
@@ -31,6 +31,12 @@ const CONSENT_WAIT: Duration = Duration::from_secs(60);
 const CONTENT_WAIT: Duration = Duration::from_secs(10);
 /// Sessions kept at once (each is a running leaf-mcp); more are refused until leaf restarts.
 const MAX_SESSIONS: usize = 64;
+/// A session not heard from for this long is forgotten (its consent with it).
+const SESSION_IDLE: Duration = Duration::from_secs(4 * 3600);
+/// Searches and listings one session may have running at once.
+const MAX_READS: u8 = 2;
+/// Content searches (Windows Search) running at once in all; one that hangs in the system's search keeps its place until it ends.
+static CONTENT_RUNNING: AtomicUsize = AtomicUsize::new(0);
 
 const OFF: &str = "File operations through leaf are turned off. The user can turn them on in leaf: Settings > Developer > \"Let agents move and delete files through leaf\".";
 const REFUSED: &str = "The user did not allow this in leaf (refused, closed, or no answer within 60 seconds). Nothing was changed.";
@@ -63,6 +69,45 @@ struct Session {
     given_root: String,
     root: Option<Arc<Root>>,
     consent: Consent,
+    /// When its last request came.
+    last: Instant,
+    /// Searches and listings of it running now.
+    reading: u8,
+}
+
+/// Forgets every session's "Allow for this session" (the switch went off; a dialog that is open still refuses then).
+pub fn forget_consent() {
+    SESSIONS.with(|s| {
+        for x in s.borrow_mut().values_mut() {
+            if matches!(x.consent, Consent::Session) {
+                x.consent = Consent::Unasked;
+            }
+        }
+    });
+}
+
+/// Room for one more session: the ones idle too long go, then (when still full) the idle ones without consent, oldest first.
+/// A session whose dialog is open is never dropped.
+fn make_room(s: &mut HashMap<String, Session>) -> bool {
+    s.retain(|_, x| matches!(x.consent, Consent::Asking(_)) || x.reading > 0 || x.last.elapsed() < SESSION_IDLE);
+    while s.len() >= MAX_SESSIONS {
+        let oldest = s.iter().filter(|(_, x)| matches!(x.consent, Consent::Unasked) && x.reading == 0).min_by_key(|(_, x)| x.last).map(|(k, _)| k.clone());
+        match oldest {
+            Some(k) => {
+                s.remove(&k);
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+fn end_read(session: &str) {
+    SESSIONS.with(|s| {
+        if let Some(x) = s.borrow_mut().get_mut(session) {
+            x.reading = x.reading.saturating_sub(1);
+        }
+    });
 }
 
 thread_local! {
@@ -85,21 +130,37 @@ pub fn handle(json: String, ack: leaf_sys::handover::Ack, cx: &mut App) {
         }
         let known = SESSIONS.with(|s| {
             let mut s = s.borrow_mut();
-            match s.get(&req.session) {
-                Some(x) if x.given_root != req.root || x.agent != req.agent => Err("This session already belongs to another project folder or agent name; a session keeps the folder it started with.".to_string()),
-                Some(x) => Ok(x.root.clone()),
-                None if s.len() >= MAX_SESSIONS => Err("leaf has too many agent sessions open; restart leaf to start afresh.".to_string()),
-                None => {
-                    s.insert(req.session.clone(), Session { agent: req.agent.clone(), given_root: req.root.clone(), root: None, consent: Consent::Unasked });
-                    Ok(None)
+            if !s.contains_key(&req.session) {
+                if !make_room(&mut s) {
+                    return Err("leaf has too many agent sessions waiting for an answer; try again later.".to_string());
                 }
+                s.insert(req.session.clone(), Session { agent: req.agent.clone(), given_root: req.root.clone(), root: None, consent: Consent::Unasked, last: Instant::now(), reading: 0 });
             }
+            let x = s.get_mut(&req.session).expect("just made");
+            if x.given_root != req.root || x.agent != req.agent {
+                return Err("This session already belongs to another project folder or agent name; a session keeps the folder it started with.".to_string());
+            }
+            x.last = Instant::now();
+            if !req.op.mutating() {
+                if x.reading >= MAX_READS {
+                    return Err("This session has two searches or listings running already; wait for them.".to_string());
+                }
+                x.reading += 1;
+            }
+            Ok(x.root.clone())
         })?;
         Ok((req, known))
     })();
     cx.spawn(async move |cx| {
         let r = match first {
-            Ok((req, known)) => run(req, known, cx).await,
+            Ok((req, known)) => {
+                let reading = (!req.op.mutating()).then(|| req.session.clone());
+                let r = run(req, known, cx).await;
+                if let Some(session) = reading {
+                    end_read(&session);
+                }
+                r
+            }
             Err(e) => Err(e),
         };
         answer(ack, r, cx).await;
@@ -128,13 +189,64 @@ async fn answer(ack: leaf_sys::handover::Ack, r: Result<Value, String>, cx: &mut
     }
 }
 
-/// The places no agent works in, the organizer's list (Windows, Program Files, AppData, leaf's own, the user folder itself).
-fn protected() -> rf_core::organize::ProtectedPaths {
+/// What a project folder may not be: the organizer's list (Windows, Program Files, AppData, leaf's own, the user folder itself),
+/// the user's own folders themselves, the agent's settings folder and `.ssh`, and anything not on a local fixed drive.
+fn limits() -> RootLimits {
     let mut p = crate::organizer::protected();
     if p.user_profile.is_none() {
         p.user_profile = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     }
-    p
+    let mut not_itself: Vec<PathBuf> = [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir(), dirs::picture_dir(), dirs::audio_dir(), dirs::video_dir(), dirs::home_dir()]
+        .into_iter()
+        .flatten()
+        .collect();
+    for v in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+        if let Some(d) = std::env::var_os(v).filter(|d| !d.is_empty()) {
+            not_itself.push(PathBuf::from(d));
+        }
+    }
+    let mut not_within: Vec<PathBuf> = dirs::home_dir().map(|h| vec![h.join(".claude"), h.join(".ssh")]).unwrap_or_default();
+    if let Some(d) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).filter(|p| p.is_absolute()) {
+        not_within.push(d);
+    }
+    RootLimits { protected: p, not_itself, not_within, local_fixed: Box::new(local_fixed) }
+}
+
+/// On a drive the system calls fixed (the drive whose root is the longest one `p` is under).
+fn local_fixed(p: &std::path::Path) -> bool {
+    use rf_core::organize::safety::{is_inside, norm};
+    let k = norm(p);
+    leaf_sys::drives::list_drives()
+        .into_iter()
+        .filter(|d| is_inside(&k, &norm(&d.root)))
+        .max_by_key(|d| norm(&d.root).len())
+        .is_some_and(|d| d.kind == leaf_sys::drives::DriveKind::Fixed)
+}
+
+/// Whether the Recycle Bin of the root's drive takes `bytes` without Windows asking to delete for good: the drive has a bin that
+/// keeps files, and a custom bin size (when set) is larger. On Linux the Trash of a drive without one fails the job instead.
+fn bin_takes(root: &std::path::Path, bytes: u64) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use rf_core::recycle_bin::BinSettingsStore;
+        let s = root.to_string_lossy();
+        let label = s.get(..2).unwrap_or("").to_ascii_uppercase();
+        let settings = leaf_sys::recycle_settings::SystemBinSettings.read().map_err(|_| "the Recycle Bin of this drive cannot be looked at, so nothing is moved there".to_string())?;
+        let Some(v) = settings.volumes.iter().find(|v| v.label.eq_ignore_ascii_case(&label)) else {
+            return Err("this drive has no Recycle Bin; nothing is moved there".into());
+        };
+        if v.remove_immediately {
+            return Err("the Recycle Bin of this drive is set to remove files at once; leaf does not delete for good for an agent".into());
+        }
+        if let Some(mb) = v.max_mb
+            && bytes > u64::from(mb) << 20
+        {
+            return Err("these items are larger than this drive's Recycle Bin; nothing is moved there".into());
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (root, bytes);
+    Ok(())
 }
 
 /// The deny rules of the project's agent settings (the project's and the local file, of the root and of its Git root when that is
@@ -158,6 +270,9 @@ fn load_rules(root: &Root) -> Rules {
         files.push((root.path().to_path_buf(), d.join("settings.json")));
     }
     for (base, f) in files {
+        // the file and its folder are never an agent's to change, whether they hold rules or not (or a missing file could be
+        // put in place, and an existing one moved away, to change what is protected)
+        rules.guard(&f);
         match std::fs::read_to_string(&f) {
             Ok(text) if text.trim().is_empty() => {}
             Ok(text) => match crate::agent_rules::rules_in(&text, crate::agent_rules::Kind::Deny) {
@@ -173,14 +288,16 @@ fn load_rules(root: &Root) -> Rules {
 
 /// Opens the root (once per session) and checks `op`, off the UI thread.
 async fn checked(given_root: String, known: Option<Arc<Root>>, op: Op, cx: &mut AsyncApp) -> Result<(Arc<Root>, Rules, Plan), String> {
-    let protected = protected();
     cx.background_spawn(async move {
         let root = match known {
             Some(r) => r,
-            None => Arc::new(Root::open(&given_root, &protected)?),
+            None => Arc::new(Root::open(&given_root, &limits())?),
         };
         let rules = load_rules(&root);
         let plan = ops::check(&root, &rules, &op)?;
+        if let Plan::Trash { bytes, .. } = &plan {
+            bin_takes(root.path(), *bytes)?;
+        }
         Ok((root, rules, plan))
     })
     .await
@@ -188,16 +305,18 @@ async fn checked(given_root: String, known: Option<Arc<Root>>, op: Op, cx: &mut 
 
 async fn run(req: ops::Request, known: Option<Arc<Root>>, cx: &mut AsyncApp) -> Result<Value, String> {
     let (root, rules, plan) = checked(req.root.clone(), known.clone(), req.op.clone(), cx).await?;
-    // the folder is resolved once: the first answer is kept for the session
-    if known.is_none() {
-        SESSIONS.with(|s| {
-            if let Some(x) = s.borrow_mut().get_mut(&req.session)
-                && x.root.is_none()
-            {
-                x.root = Some(root.clone());
-            }
-        });
-    }
+    // the folder is resolved once: the first answer is kept for the session, and every later step uses the kept one (two first
+    // requests at once each resolved it: the one that was kept first wins, the other is checked again against it)
+    let kept = SESSIONS.with(|s| {
+        let mut s = s.borrow_mut();
+        let x = s.get_mut(&req.session)?;
+        if x.root.is_none() {
+            x.root = Some(root.clone());
+        }
+        x.root.clone()
+    });
+    let Some(kept) = kept else { return Err("This session was forgotten meanwhile; try again.".into()) };
+    let (root, rules, plan) = if Arc::ptr_eq(&kept, &root) { (root, rules, plan) } else { checked(req.root.clone(), Some(kept), req.op.clone(), cx).await? };
     if !req.op.mutating() {
         let r = root.clone();
         return cx.background_spawn(async move { read_only(&r, &rules, plan) }).await;
@@ -331,7 +450,7 @@ fn ask_user(agent: &str, root: &str, verb: &str, cx: &mut App) -> Result<(onesho
         })
     };
     let buttons = vec![
-        button(t!("Allow for this session"), crate::prompt::Kind::Normal, Choice::Session),
+        button(t!("Allow changes in this folder for this session: copy, move, rename, new folders, Recycle Bin"), crate::prompt::Kind::Normal, Choice::Session),
         button(t!("Allow once"), crate::prompt::Kind::Normal, Choice::Once),
         button(t!("Refuse"), crate::prompt::Kind::Primary, Choice::Refuse),
     ];
@@ -340,8 +459,8 @@ fn ask_user(agent: &str, root: &str, verb: &str, cx: &mut App) -> Result<(onesho
         "{}\n    {agent}\n\n{}\n    {root}\n\n{}\n    {verb}\n\n{}",
         t!("Agent (the name it gives itself):"),
         t!("Project folder (nothing outside it can be touched):"),
-        t!("Wants to:"),
-        t!("Every change shows in the Status Center and can be undone; nothing is overwritten and nothing is deleted for good. \"Allow for this session\" lasts until leaf closes. Closing this dialog refuses, and so does no answer within 60 seconds."),
+        t!("Wants to, now:"),
+        t!("Every change shows in the Status Center and can be undone; nothing is overwritten and nothing is deleted for good. Allowing for this session covers every kind of change above in this folder until leaf closes or the switch goes off. Closing this dialog refuses, and so does no answer within 60 seconds."),
     );
     window
         .update(cx, |_, window, cx| {
@@ -393,24 +512,48 @@ fn name_search(root: &Root, rules: &Rules, query: &str, max: usize) -> (Vec<Path
 
 /// Windows Search where it indexes the root (names and contents); it can hang where it is broken, so it is waited for only so long.
 fn content_search(root: &Root, query: &str, max: usize) -> Result<Vec<PathBuf>, String> {
+    if CONTENT_RUNNING.fetch_add(1, Ordering::SeqCst) >= 2 {
+        CONTENT_RUNNING.fetch_sub(1, Ordering::SeqCst);
+        return Err("two content searches are running already; try again in a moment or search by name".into());
+    }
     let (tx, rx) = std::sync::mpsc::channel::<Option<Vec<PathBuf>>>();
     let stop = Arc::new(AtomicBool::new(false));
     let (r, q, s) = (root.path().to_path_buf(), query.to_string(), stop.clone());
-    std::thread::Builder::new()
-        .name("rf-agent-search".into())
-        .spawn(move || {
-            if !leaf_sys::wsearch::is_indexed(&r) {
-                let _ = tx.send(None);
-                return;
+    let started = std::thread::Builder::new().name("rf-agent-search".into()).spawn(move || {
+        // (its place is given back when the thread ends, also when the system's search held it long after the answer went)
+        struct Leave;
+        impl Drop for Leave {
+            fn drop(&mut self) {
+                CONTENT_RUNNING.fetch_sub(1, Ordering::SeqCst);
             }
-            let mut out = Vec::new();
-            let stopped = || s.load(Ordering::Relaxed);
-            let _ = leaf_sys::wsearch::search(&r, &q, max * 4 + 50, &stopped, &mut |hits| out.extend(hits.into_iter().map(|h| h.path)));
-            let _ = tx.send(Some(out));
-        })
-        .map_err(|_| "the search could not be started".to_string())?;
+        }
+        let _leave = Leave;
+        if s.load(Ordering::Relaxed) || !leaf_sys::wsearch::is_indexed(&r) {
+            let _ = tx.send(None);
+            return;
+        }
+        let mut out = Vec::new();
+        let limit = max * 4 + 50;
+        // stopped between every batch of rows: by the time limit, and as soon as enough were found
+        let full = AtomicBool::new(false);
+        let stopped = || s.load(Ordering::Relaxed) || full.load(Ordering::Relaxed);
+        let _ = leaf_sys::wsearch::search(&r, &q, limit, &stopped, &mut |hits| {
+            if !s.load(Ordering::Relaxed) {
+                out.extend(hits.into_iter().map(|h| h.path));
+            }
+            if out.len() >= limit {
+                full.store(true, Ordering::Relaxed);
+            }
+        });
+        let _ = tx.send((!s.load(Ordering::Relaxed)).then_some(out));
+    });
+    if started.is_err() {
+        CONTENT_RUNNING.fetch_sub(1, Ordering::SeqCst);
+        return Err("the search could not be started".into());
+    }
     match rx.recv_timeout(CONTENT_WAIT) {
         Ok(Some(found)) => Ok(found),
+        Ok(None) if stop.load(Ordering::Relaxed) => Err("the content search was stopped".into()),
         Ok(None) => Err("content search needs a system search index that covers this folder (Windows Search); it does not here. Search by name instead.".into()),
         Err(_) => {
             stop.store(true, Ordering::Relaxed);
@@ -432,14 +575,15 @@ type Reply = oneshot::Sender<Result<Value, String>>;
 /// Starts the checked change as a Status Center job titled with the agent's name; `reply` gets the answer when it ends.
 fn start_job(agent: &str, root: Arc<Root>, plan: Plan, reply: Reply, cx: &mut App) {
     let tag = t!("Agent {name}:").replace("{name}", agent);
+    let who = agent.to_string();
     match plan {
-        Plan::Transfer { moving, sources, dest, targets } => transfer(&tag, root, moving, sources, dest, targets, reply, cx),
+        Plan::Transfer { moving, sources, dest, targets } => transfer(&tag, who, root, moving, sources, dest, targets, reply, cx),
         Plan::Rename { from, to } => {
             let title = format!("{tag} {} {} → {}", t!("Renaming"), short(&from), short(&to));
             let (f, d) = (from.clone(), to.clone());
             simple_job(title, root, vec![from.clone()], move |_| {
                 leaf_sys::fileops::rename_no_replace(&f, &d)?;
-                crate::undo::push(crate::undo::UndoOp::Renamed { from: f.clone(), to: d.clone() });
+                crate::undo::push_by_agent(&who, crate::undo::UndoOp::Renamed { from: f.clone(), to: d.clone() });
                 Ok(vec![d.clone()])
             }, move |ok, cx| {
                 if ok {
@@ -454,11 +598,11 @@ fn start_job(agent: &str, root: Arc<Root>, plan: Plan, reply: Reply, cx: &mut Ap
             simple_job(title, root, Vec::new(), move |_| {
                 // (one level, and never over anything: an item that appeared since the check is an error here)
                 std::fs::create_dir(&p)?;
-                crate::undo::push(crate::undo::UndoOp::Created { path: p.clone() });
+                crate::undo::push_by_agent(&who, crate::undo::UndoOp::Created { path: p.clone() });
                 Ok(vec![p.clone()])
             }, |_, _| {}, reply, cx)
         }
-        Plan::Trash { paths } => {
+        Plan::Trash { paths, .. } => {
             let title = format!("{tag} {} {}", t!("Moving to Trash:"), crate::i18n::items(paths.len()));
             let (ps, gone) = (paths.clone(), paths.clone());
             simple_job(title, root, paths, move |t| {
@@ -466,7 +610,7 @@ fn start_job(agent: &str, root: Arc<Root>, plan: Plan, reply: Reply, cx: &mut Ap
                 let r = leaf_sys::fileops::delete_tracked(&ps, false, t.clone());
                 let pairs = t.results.lock().unwrap().clone();
                 if !pairs.is_empty() {
-                    crate::undo::push(crate::undo::UndoOp::Recycled { pairs: pairs.clone() });
+                    crate::undo::push_by_agent(&who, crate::undo::UndoOp::Recycled { pairs: pairs.clone() });
                 }
                 if !r? {
                     anyhow::bail!("{}", t!("Cancelled"));
@@ -523,11 +667,12 @@ fn simple_job(
     }
 }
 
-/// Copy or move with leaf's own engine. Never the shell's (it would ask about conflicts in its own dialog): any conflict found
-/// when the engine plans the work (an item that appeared since the check) stops the job before anything is copied, and the engine
-/// itself creates every new file and folder without replacing (a file that appears after the plan is a failure of that item).
+/// Copy or move with leaf's own engine only (`Tracker::own_engine_only`): what it would hand to the system's engine (a folder
+/// with a link inside, a file it could not copy, a network path, a copy into the items' own folder) is left and the job fails,
+/// so no shell can follow a link or ask about replacing. Any conflict found when the engine plans the work (an item that appeared
+/// since the check) stops the job before anything is copied, and the engine creates every new file and folder without replacing.
 #[allow(clippy::too_many_arguments)]
-fn transfer(tag: &str, root: Arc<Root>, moving: bool, sources: Vec<PathBuf>, dest: PathBuf, targets: Vec<PathBuf>, reply: Reply, cx: &mut App) {
+fn transfer(tag: &str, who: String, root: Arc<Root>, moving: bool, sources: Vec<PathBuf>, dest: PathBuf, targets: Vec<PathBuf>, reply: Reply, cx: &mut App) {
     let kind = if moving { Transfer::Move } else { Transfer::Copy };
     let verb = if moving { t!("Moving") } else { t!("Copying") };
     let title = format!("{tag} {verb}: {} → {}", crate::i18n::items(sources.len()), short(&dest));
@@ -557,6 +702,8 @@ fn transfer(tag: &str, root: Arc<Root>, moving: bool, sources: Vec<PathBuf>, des
             inner.bytes = t.bytes.clone();
             inner.set_verify(verify);
             inner.limit.store(limit, Ordering::Relaxed);
+            // never the system's engine: a link inside, a file ours could not copy, a network path is left, not handed to the shell
+            inner.own_engine_only = true;
             inner.ask = Some(Box::new(move |_| {
                 hit.store(true, Ordering::Relaxed);
                 None
@@ -567,7 +714,7 @@ fn transfer(tag: &str, root: Arc<Root>, moving: bool, sources: Vec<PathBuf>, des
             *t.results.lock().unwrap() = pairs.clone();
             if !pairs.is_empty() {
                 *marker.lock().unwrap() = pairs.first().map(|(_, made)| made.clone());
-                crate::undo::push(crate::undo::UndoOp::Transferred { kind, pairs: pairs.clone() });
+                crate::undo::push_by_agent(&who, crate::undo::UndoOp::Transferred { kind, pairs: pairs.clone() });
             }
             if kind == Transfer::Move {
                 *moved_out.lock().unwrap() = crate::tags::settled(pairs);

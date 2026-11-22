@@ -2767,7 +2767,13 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             L::Lock,
             t!("Let agents move and delete files through leaf"),
             Some(t!("Coding agents connected through leaf-mcp may copy, move, rename, create folders and move items to the Recycle Bin / Trash, only inside the project folder of their session. The first change of a session asks you here. Every change shows in the Status Center and can be undone; nothing is overwritten and nothing is deleted for good. Off: these tools are not offered at all.")),
-            sw("agent-file-ops", p, s.agent_file_ops, |s, v| s.agent_file_ops = v),
+            sw("agent-file-ops", p, s.agent_file_ops, |s, v| {
+                s.agent_file_ops = v;
+                // off: every "Allow for this session" is forgotten (on again asks again)
+                if !v {
+                    crate::agent_files::forget_consent();
+                }
+            }),
         ),
         agents_only(s, card(
             p,
