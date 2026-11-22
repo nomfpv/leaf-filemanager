@@ -348,13 +348,6 @@ fn one_line(s: &str) -> String {
 // The status bar's strip
 // ---------------------------------------------------------------------------------------------
 
-/// What the strip would show now (the window shows its status bar for it even on Home).
-pub(crate) fn strip_due(ops: &Entity<Ops>, cx: &App) -> bool {
-    let views = ops.read(cx).views();
-    let briefs: Vec<xfer::Brief> = views.iter().map(|v| v.brief).collect();
-    xfer::strip_pick(&briefs) != Strip::Nothing
-}
-
 /// The strip for the newest running operation (or a question, or an unseen failure), `avail`
 /// pixels wide: the middle of the status bar.
 pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, wide: bool, cx: &App) -> Option<AnyElement> {
