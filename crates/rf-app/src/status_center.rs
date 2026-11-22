@@ -1021,7 +1021,8 @@ fn transfer_run(
 
 /// A failed operation's card gets "Retry as administrator" (the click starts the helper, or uses the one that runs).
 fn offer_admin(cx: &mut App, id: u64, retry: impl Fn(&mut App) + 'static) {
-    if id == 0 {
+    // (an install that cannot do it, per user: no button; the dialogs of rename, new folder and save say why)
+    if id == 0 || crate::admin::blocked().is_some() {
         return;
     }
     set_result(cx, id, None, Some((t!("Retry as administrator").to_string(), std::rc::Rc::new(retry))));
@@ -1541,8 +1542,8 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let own_id = std::rc::Rc::new(std::cell::Cell::new(0u64));
     let own_id_done = own_id.clone();
     let retry_paths = paths.clone();
-    // (on Linux the helper has no Trash of the user's: only a permanent delete is offered again)
-    let offer_retry = permanent || cfg!(windows);
+    // (as administrator nothing goes to the Recycle Bin: a bin delete is offered again as a permanent one, asked first)
+    let offer_retry = true;
     let on_done: Option<OnDone> = Some(Box::new(move |_, cx: &mut App| {
         if offer_retry && denied_seen.load(Ordering::Relaxed) {
             offer_admin(cx, own_id_done.get(), move |cx| crate::admin::retry_delete(cx, retry_paths.clone(), permanent, record));

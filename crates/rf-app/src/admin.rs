@@ -20,12 +20,33 @@ use crate::t;
 
 static SESSION: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 
-/// Folders the user chose to list as administrator (cleared when the helper is gone).
-static LISTED: Mutex<Vec<(PathBuf, bool)>> = Mutex::new(Vec::new());
+/// A helper is being started (the permission prompt is up); the lock above is never held while it is.
+static STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Folders the user chose to list as administrator: (folder, the next listing may start the helper, the helper's process id
+/// that listed it). A listing belongs to the helper the click started: another helper later does not take it over.
+static LISTED: Mutex<Vec<(PathBuf, bool, Option<u32>)>> = Mutex::new(Vec::new());
 
 /// The helper is running (the Status Center shows it with "End now").
 pub fn active() -> bool {
-    SESSION.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|s| s.alive())
+    current().is_some()
+}
+
+fn current() -> Option<Arc<Session>> {
+    SESSION.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|s| s.alive()).cloned()
+}
+
+/// Why this install cannot do things as administrator (a per-user install, the helper missing), in leaf's words; `None`: it can.
+/// Looked at once.
+pub fn blocked() -> Option<String> {
+    static WHY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    WHY.get_or_init(|| {
+        leaf_sys::admin::blocked().map(|e| match e {
+            StartError::Unsafe => t!("leaf is installed for this user only, in a folder this user can change. A program started from there as administrator could be swapped by any other program, so leaf does not do that. Install leaf for all users to use this.").to_string(),
+            _ => t!("The administrator helper is not installed with leaf.").to_string(),
+        })
+    })
+    .clone()
 }
 
 /// The program can ask for administrator rights at all: the helper is shipped beside it, and this is leaf itself (the helper
@@ -46,21 +67,31 @@ pub fn denied_io(e: &std::io::Error) -> bool {
 
 /// The running helper; `may_start`: start one (the permission prompt) when none runs. Blocking: never on the UI thread.
 fn session(may_start: bool) -> anyhow::Result<Arc<Session>> {
-    let mut g = SESSION.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(s) = g.as_ref().filter(|s| s.alive()) {
-        return Ok(s.clone());
+    if let Some(s) = current() {
+        return Ok(s);
     }
-    *g = None;
     if !may_start {
         anyhow::bail!("{}", t!("The administrator helper is no longer running"));
     }
-    let s = Arc::new(leaf_sys::admin::start().map_err(|e| match e {
-        StartError::Declined => anyhow::anyhow!("{}", t!("Administrator permission was not given. Nothing was changed.")),
-        StartError::Missing => anyhow::anyhow!("{}", t!("The administrator helper is not installed with leaf.")),
-        StartError::Failed(why) => anyhow::anyhow!("{}\n{why}", t!("The administrator helper could not be started.")),
-    })?);
-    *g = Some(s.clone());
-    Ok(s)
+    if STARTING.swap(true, Ordering::AcqRel) {
+        anyhow::bail!("{}", t!("The administrator helper is being started. Try again once it runs."));
+    }
+    // (started without holding the lock: the UI thread asks `active()` while the prompt is up)
+    let started = leaf_sys::admin::start();
+    let r = match started {
+        Ok(s) => {
+            let s = Arc::new(s);
+            *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+            Ok(s)
+        }
+        Err(e) => Err(match e {
+            StartError::Declined => anyhow::anyhow!("{}", t!("Administrator permission was not given. Nothing was changed.")),
+            StartError::Missing | StartError::Unsafe => anyhow::anyhow!("{}", blocked().unwrap_or_default()),
+            StartError::Failed(why) => anyhow::anyhow!("{}\n{why}", t!("The administrator helper could not be started.")),
+        }),
+    };
+    STARTING.store(false, Ordering::Release);
+    r
 }
 
 /// "End now" in the Status Center.
@@ -107,15 +138,19 @@ fn quiet() -> Tracker {
     Tracker::new(Box::new(|_, _, _| {}), Default::default())
 }
 
-fn done(r: Reply) -> anyhow::Result<(bool, Vec<(PathBuf, PathBuf)>)> {
+/// (ok, undo pairs, items that were already gone)
+fn done(r: Reply) -> anyhow::Result<(bool, Vec<(PathBuf, PathBuf)>, u32)> {
     match r {
-        Reply::Done { ok, pairs } => Ok((ok, pairs)),
+        Reply::Done { ok, pairs, missing } => Ok((ok, pairs, missing)),
         _ => Err(words(HelperError::Confused)),
     }
 }
 
 /// The dialog that offers it: `title`, what happened, and the button. Nothing happens elevated until it is clicked.
 pub fn offer(title: String, what: String, retry: impl Fn(&mut App) + 'static, window: &mut Window, cx: &mut App) {
+    if let Some(why) = blocked() {
+        return crate::prompt::notice(title, format!("{what}\n\n{why}"), window, cx);
+    }
     let more = if active() {
         t!("leaf's administrator helper is already running: this is done by it, without a new prompt.")
     } else if cfg!(windows) {
@@ -161,33 +196,56 @@ pub fn retry_transfer(cx: &mut App, kind: Transfer, sources: Vec<PathBuf>, dest:
                 Transfer::Copy => Request::Copy { sources, dest },
                 Transfer::Move => Request::Move { sources, dest },
             };
-            let (ok, pairs) = done(call(req, &t, true, &mut Vec::new())?)?;
+            let (ok, pairs, missing) = done(call(req, &t, true, &mut Vec::new())?)?;
             if record && !pairs.is_empty() {
                 crate::undo::push(crate::undo::UndoOp::Transferred { kind, pairs: pairs.clone() });
             }
             *t.results.lock().unwrap() = pairs;
+            // (an earlier try that got part of the way: what is no longer at its old place is said, the rest was done)
+            if missing > 0 {
+                anyhow::bail!("{} {missing}", t!("Done; items no longer at their old place, skipped:"));
+            }
             Ok(ok)
         },
         Some(Box::new(|_, cx| notify_status(cx))),
     );
 }
 
-/// A delete again as administrator: to the Recycle Bin, or for good (the user answered that question before the first try).
-pub fn retry_delete(cx: &mut App, paths: Vec<PathBuf>, permanent: bool, record: bool) {
-    let title = if permanent {
-        format!("{} {}", t!("Permanently deleting as administrator:"), crate::i18n::items(paths.len()))
-    } else {
-        format!("{} {}", t!("Moving to Trash as administrator:"), crate::i18n::items(paths.len()))
-    };
+/// A delete again as administrator. The administrator does not use the Recycle Bin (the helper refuses it: see `leaf-helper`'s
+/// exec.rs), so a delete that was meant for the bin asks first whether to delete for good; a permanent one was asked already.
+pub fn retry_delete(cx: &mut App, paths: Vec<PathBuf>, permanent: bool, _record: bool) {
+    if !permanent {
+        let Some(w) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return };
+        let msg = format!(
+            "{}\n\n{}",
+            crate::i18n::items(paths.len()),
+            t!("As administrator, items cannot be moved to the Recycle Bin. Delete them for good instead? This cannot be undone.")
+        );
+        let _ = w.update(cx, |_, window, cx| {
+            crate::prompt::show(
+                t!("Delete for good?"),
+                Some(msg),
+                None,
+                vec![
+                    crate::prompt::Button::new(t!("Delete for good as administrator"), crate::prompt::Kind::Danger, move |_, _, cx| {
+                        retry_delete(cx, paths.clone(), true, false);
+                        Ok(())
+                    }),
+                    crate::prompt::Button::cancel(),
+                ],
+                window,
+                cx,
+            )
+        });
+        return;
+    }
+    let title = format!("{} {}", t!("Permanently deleting as administrator:"), crate::i18n::items(paths.len()));
     crate::status_center::start_with(
         cx,
         title,
         move |t| {
-            let req = if permanent { Request::DeleteForGood { paths, asked_user: true } } else { Request::Recycle { paths } };
-            let (ok, pairs) = done(call(req, &t, true, &mut Vec::new())?)?;
-            if record && !permanent && !pairs.is_empty() {
-                crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
-            }
+            // (items already gone, from an earlier try that got part of the way, count as deleted)
+            let (ok, _, _) = done(call(Request::DeleteForGood { paths, asked_user: true }, &t, true, &mut Vec::new())?)?;
             Ok(ok)
         },
         Some(Box::new(|_, cx| notify_status(cx))),
@@ -201,7 +259,7 @@ pub fn retry_rename(cx: &mut App, from: PathBuf, new_name: String) {
         cx,
         title,
         move |t| {
-            let (ok, pairs) = done(call(Request::Rename { path: from.clone(), new_name }, &t, true, &mut Vec::new())?)?;
+            let (ok, pairs, _) = done(call(Request::Rename { path: from.clone(), new_name }, &t, true, &mut Vec::new())?)?;
             if let Some((a, b)) = pairs.into_iter().next() {
                 crate::undo::push(crate::undo::UndoOp::Renamed { from: a, to: b });
             }
@@ -244,8 +302,8 @@ pub fn retry_new_folder(cx: &mut App, dir: PathBuf, name: String, then: impl FnO
 /// The user chose to see `dir` as administrator: its listings go through the helper (the first one may start it).
 pub fn list_here(dir: &Path) {
     let mut l = LISTED.lock().unwrap_or_else(|e| e.into_inner());
-    l.retain(|(p, _)| p != dir);
-    l.push((dir.to_path_buf(), true));
+    l.retain(|(p, _, _)| p != dir);
+    l.push((dir.to_path_buf(), true, None));
 }
 
 /// `dir` is listed as administrator: `None` when it is not (or the helper is gone, which ends that), else the listing. Only the
@@ -253,15 +311,26 @@ pub fn list_here(dir: &Path) {
 pub fn list(dir: &Path) -> Option<Result<Vec<rf_core::Entry>, String>> {
     let may_start = {
         let mut l = LISTED.lock().unwrap_or_else(|e| e.into_inner());
-        let ix = l.iter().position(|(p, _)| p == dir)?;
+        let ix = l.iter().position(|(p, _, _)| p == dir)?;
         let fresh = std::mem::replace(&mut l[ix].1, false);
-        if !fresh && !active() {
+        // a later listing only through the very helper that made the first (another one, started later for something else, does
+        // not take the folder over)
+        let same = l[ix].2.is_some() && l[ix].2 == current().map(|s| s.pid());
+        if !fresh && !same {
             l.remove(ix);
             return None;
         }
         fresh
     };
-    let r = call(Request::List { dir: dir.to_path_buf() }, &quiet(), may_start, &mut Vec::new()).and_then(|r| match r {
+    // (while an operation runs through the helper, this waits for its end: one call at a time)
+    let r = call(Request::List { dir: dir.to_path_buf() }, &quiet(), may_start, &mut Vec::new());
+    if r.is_ok() {
+        let pid = current().map(|s| s.pid());
+        if let Some(e) = LISTED.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|(p, _, _)| p == dir) {
+            e.2 = e.2.or(pid);
+        }
+    }
+    let r = r.and_then(|r| match r {
         Reply::Listing { items } => Ok(items.iter().map(|i| i.to_entry()).collect()),
         _ => Err(words(HelperError::Confused)),
     });
@@ -273,6 +342,11 @@ pub fn list(dir: &Path) -> Option<Result<Vec<rf_core::Entry>, String>> {
 pub fn write_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join("leaf-admin-parts");
     std::fs::create_dir_all(&dir)?;
+    // the long form of the folder (a %TEMP% with an 8.3 short name in it would not be accepted by the helper's checks)
+    let dir = std::fs::canonicalize(&dir).map(|c| {
+        let s = c.to_string_lossy().into_owned();
+        PathBuf::from(s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s))
+    })?;
     let part = dir.join(format!("{}-{}.leaf-part", std::process::id(), crate::admin::seq()));
     std::fs::write(&part, bytes)?;
     let r = call(Request::WriteFromPart { part: part.clone(), target: path.to_path_buf() }, &quiet(), true, &mut Vec::new()).and_then(done);
@@ -289,9 +363,12 @@ fn seq() -> u64 {
 pub fn status_row(p: &crate::theme::Palette) -> Option<AnyElement> {
     use gpui_kit::assets::IconName as L;
     use gpui_kit::component::{Icon, h_flex};
-    if !active() {
+    use gpui_kit::prelude::FluentBuilder as _;
+    let starting = STARTING.load(Ordering::Acquire);
+    if !starting && !active() {
         return None;
     }
+    let label = if starting { t!("Starting the administrator helper…") } else { t!("Administrator helper active") };
     Some(
         h_flex()
             .mx_2()
@@ -304,7 +381,7 @@ pub fn status_row(p: &crate::theme::Palette) -> Option<AnyElement> {
             .border_1()
             .border_color(p.border)
             .child(Icon::new(L::ShieldCheck).size(px(16.)).text_color(p.text_secondary))
-            .child(div().flex_1().text_sm().text_color(p.text).child(t!("Administrator helper active")))
+            .child(div().flex_1().text_sm().text_color(p.text).child(label))
             .child(
                 div()
                     .id("admin-end")
@@ -320,6 +397,7 @@ pub fn status_row(p: &crate::theme::Palette) -> Option<AnyElement> {
                     .on_click(|_, _, cx| end_now(cx))
                     .child(t!("End now")),
             )
+            .when(starting, |d| d.opacity(0.7))
             .into_any_element(),
     )
 }

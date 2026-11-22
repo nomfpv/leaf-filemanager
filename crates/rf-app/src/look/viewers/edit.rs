@@ -119,7 +119,11 @@ pub fn load(path: &Path) -> Result<Loaded, SharedString> {
         return Err(why);
     }
     // (a file this user may not change can still be edited when leaf can save it as administrator: the save asks first)
-    if let Err(e) = std::fs::OpenOptions::new().write(true).open(path).or_else(|e| if crate::admin::denied_io(&e) { Ok(std::fs::File::open(path)?) } else { Err(e) }) {
+    // (not for a read-only attribute, which the save refuses plainly, and not for a file another program holds: only a real "no
+    // permission" may be saved as administrator)
+    let read_only = std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly());
+    let admin_ok = |e: &std::io::Error| !read_only && crate::admin::denied_io(e) && crate::admin::blocked().is_none();
+    if let Err(e) = std::fs::OpenOptions::new().write(true).open(path).or_else(|e| if admin_ok(&e) { Ok(std::fs::File::open(path)?) } else { Err(e) }) {
         return Err(match e.kind() {
             std::io::ErrorKind::PermissionDenied => t!("You don't have permission to change this file").into(),
             _ if e.raw_os_error() == Some(32) => t!("Another program is using the file").into(),
