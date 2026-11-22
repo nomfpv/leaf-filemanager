@@ -1,5 +1,7 @@
-//! Installing through Velopack (its install / update / uninstall hooks). Update checks are off in this fork: nothing here contacts
-//! a release feed, so an update from the upstream project can never be downloaded or applied over this build.
+//! Installing through Velopack (its install / update / uninstall hooks). Update checks are off unless the user turned them on
+//! (Settings: "Check for leaf updates") AND wrote a feed address: with either missing nothing here contacts any server. leaf has no
+//! feed address of its own, so an update from the upstream project can never be downloaded or applied over this build. Velopack
+//! checks every downloaded package against the SHA1 / SHA256 of the feed's entry before it can be applied; nothing here bypasses that.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -152,12 +154,81 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Update checks are off in this fork: nothing is fetched (`LEAF_FAKE_UPDATE` still shows the About page's states).
-pub fn check() {
+/// What a check found and downloaded: applied by [`restart_to_update`].
+static PENDING: Mutex<Option<(velopack::UpdateManager, velopack::VelopackAsset)>> = Mutex::new(None);
+
+/// Why the last check failed (shown under the Updates card); empty when it did not.
+static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+pub fn last_error() -> String {
+    LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Whether `feed` is something a check may use: an https address or a folder on this PC (plain http is refused).
+pub fn feed_is_valid(feed: &str) -> bool {
+    let f = feed.trim();
+    if f.contains("://") {
+        f.len() > 8 && f.get(..8).is_some_and(|h| h.eq_ignore_ascii_case("https://"))
+    } else {
+        !f.is_empty()
+    }
+}
+
+/// The one place an update check starts: `enabled` is the Settings switch (off by default), `feed` the address from Settings
+/// (empty by default). With the switch off or no usable address this returns before anything is created: no socket, no request.
+/// `LEAF_FAKE_UPDATE` (test copies) shows the About page's states without a network.
+pub fn check(enabled: bool, feed: &str) {
     if std::env::var_os("LEAF_FAKE_UPDATE").is_some() {
         return fake_check();
     }
-    set(State::NotInstalled);
+    LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    if !enabled || !feed_is_valid(feed) {
+        return set(State::Idle);
+    }
+    if !is_installed() {
+        return set(State::NotInstalled);
+    }
+    set(State::Checking);
+    match run_check(feed.trim()) {
+        Ok(Some((v, pending))) => {
+            *PENDING.lock().unwrap_or_else(|p| p.into_inner()) = Some(pending);
+            set(State::Ready(v));
+        }
+        Ok(None) => set(State::Idle),
+        Err(e) => {
+            log::warn!("update check: {e}");
+            *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = e;
+            set(State::Idle);
+        }
+    }
+}
+
+/// Velopack's own check and download (its checksum test included); the version and what to apply when one is ready.
+fn run_check(feed: &str) -> Result<Option<(String, (velopack::UpdateManager, velopack::VelopackAsset))>, String> {
+    use velopack::{sources::AutoSource, UpdateCheck, UpdateManager};
+    let um = UpdateManager::new(AutoSource::new(feed), None, None).map_err(|e| e.to_string())?;
+    // a package downloaded earlier and not yet applied
+    if let Some(a) = um.get_update_pending_restart() {
+        let v = a.Version.to_string();
+        return Ok(Some((v, (um, a))));
+    }
+    let info = match um.check_for_updates().map_err(|e| e.to_string())? {
+        UpdateCheck::UpdateAvailable(i) => *i,
+        _ => return Ok(None),
+    };
+    let v = info.TargetFullRelease.Version.to_string();
+    set(State::Downloading(v.clone(), 0));
+    let (tx, rx) = std::sync::mpsc::channel::<i16>();
+    let shown = v.clone();
+    let reader = std::thread::spawn(move || {
+        for pct in rx {
+            set(State::Downloading(shown.clone(), pct.clamp(0, 100) as u8));
+        }
+    });
+    let done = um.download_updates(&info, Some(tx)).map_err(|e| e.to_string());
+    let _ = reader.join();
+    done?;
+    Ok(Some((v, (um, info.TargetFullRelease))))
 }
 
 /// Redraws the windows a few times a second while a check or download runs (progress on About).
@@ -170,8 +241,16 @@ pub async fn redraw_while_busy(cx: &mut gpui_kit::AsyncApp) {
     cx.update(|cx| cx.refresh_windows());
 }
 
-/// Updates are off in this fork: there is never a downloaded update to restart into.
-pub fn restart_to_update() {}
+/// Ends leaf, applies the downloaded update and starts the new version. Does nothing when no update was downloaded by a check
+/// (the fake update included).
+pub fn restart_to_update() {
+    let Some((um, asset)) = PENDING.lock().unwrap_or_else(|p| p.into_inner()).take() else { return };
+    if let Err(e) = um.apply_updates_and_restart(&asset) {
+        log::warn!("apply update: {e}");
+        *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = e.to_string();
+        *PENDING.lock().unwrap_or_else(|p| p.into_inner()) = Some((um, asset));
+    }
+}
 
 #[cfg(test)]
 mod start_apply_tests {

@@ -3415,26 +3415,30 @@ fn open_url(url: &'static str) {
 fn update_card(p: &Palette, s: &Settings) -> AnyElement {
     use crate::installer::State;
     let state = crate::installer::state();
+    let usable = s.update_check && crate::installer::feed_is_valid(&s.update_feed);
+    let err = crate::installer::last_error();
     let text = match &state {
-        State::NotInstalled => t!("This copy wasn't installed with the setup: get updates from GitHub.").to_string(),
-        State::Idle => t!("Updates come from GitHub.").to_string(),
+        State::NotInstalled => t!("This copy wasn't installed with the setup, so it can't update itself.").to_string(),
+        State::Idle if !err.is_empty() => format!("{} {err}", t!("The check failed:")),
+        State::Idle if !s.update_check => t!("Update checks are off: leaf contacts no server.").to_string(),
+        State::Idle if !usable => t!("Write the address of the release feed to check for updates.").to_string(),
+        State::Idle => t!("Updates come from your release feed.").to_string(),
         State::Checking => t!("Checking…").to_string(),
         State::Downloading(v, pct) => format!("{} {v} · %{pct}", t!("Downloading:")),
         State::Ready(v) => format!("{} {v}. {}", t!("Downloaded:"), t!("It is applied when you restart.")),
     };
     let control = match state {
-        // (update checks are off in this fork: no link to the upstream releases)
         State::NotInstalled => div().into_any_element(),
         State::Ready(_) => button("upd-restart", p, t!("Restart and update"), |_, _| {
             std::thread::spawn(crate::installer::restart_to_update);
         }),
         State::Checking | State::Downloading(..) => div().into_any_element(),
+        _ if !usable => div().into_any_element(),
         _ => button("upd-check", p, t!("Check for updates"), |window, cx| {
             check_updates_now(cx);
             window.refresh();
         }),
     };
-    let _ = s;
     let icon = match state {
         State::Downloading(..) => L::Download,
         State::Ready(_) => L::CircleCheck,
@@ -3497,12 +3501,57 @@ fn glow(c: Hsla, alpha: f32) -> Div {
 /// "Check for updates": runs off the UI thread and redraws while it checks and downloads.
 pub(crate) fn check_updates_now(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let run = cx.background_executor().spawn(async { crate::installer::check() });
+        let (on, feed) = cx.update(|cx| {
+            let s = cx.global::<Settings>();
+            (s.update_check, s.update_feed.clone())
+        });
+        let run = cx.background_executor().spawn(async move { crate::installer::check(on, &feed) });
         crate::installer::redraw_while_busy(cx).await;
         run.await;
         cx.update(|cx| cx.refresh_windows());
     })
     .detach();
+}
+
+/// The switch "Check for leaf updates" (off by default) and the feed address it reads (empty by default).
+fn update_options_card(p: &Palette, s: &Settings) -> AnyElement {
+    let feed = if s.update_feed.trim().is_empty() { t!("Not set").to_string() } else { s.update_feed.trim().to_string() };
+    shell(p)
+        .child(card_body(
+            p,
+            L::RefreshCw,
+            t!("Check for leaf updates").into(),
+            Some(t!("Off by default. When on, and a feed address is set, the button above asks that address for a newer leaf. Nothing is contacted otherwise.").into()),
+            Some(sw("update-check", p, s.update_check, |s, v| s.update_check = v)),
+        ))
+        .child(card_body(
+            p,
+            L::Globe,
+            t!("Release feed").into(),
+            Some(feed.into()),
+            Some(button("update-feed", p, t!("Edit"), |window, cx| {
+                let initial = cx.global::<Settings>().update_feed.clone();
+                crate::prompt::show(
+                    t!("Release feed"),
+                    Some(t!("An https address, or a folder on this PC, that holds the files `vpk pack` made. Empty = no updates.").to_string()),
+                    Some((initial, "https://example.com/leaf/releases".to_string())),
+                    vec![
+                        crate::prompt::Button::new(t!("Save"), crate::prompt::Kind::Primary, |value, _, cx| {
+                            let text = value.unwrap_or_default().trim().to_string();
+                            if !text.is_empty() && !crate::installer::feed_is_valid(&text) {
+                                return Err(t!("Write an https:// address or a folder path").to_string());
+                            }
+                            settings::update(cx, move |s| s.update_feed = text);
+                            Ok(())
+                        }),
+                        crate::prompt::Button::cancel(),
+                    ],
+                    window,
+                    cx,
+                );
+            })),
+        ))
+        .into_any_element()
 }
 
 const REPO_URL: &str = "https://github.com/nomfpv/leaf-filemanager";
@@ -3522,6 +3571,7 @@ fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             button("copy-ver", p, t!("Copy"), move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("leaf {ver}")))),
         ),
         update_card(p, &s),
+        update_options_card(p, &s),
         section(p, t!("Project")),
         link_row(p, "gh-repo", L::Code, t!("Source code"), Some("github.com/nomfpv/leaf-filemanager"), |_, _| open_url(REPO_URL)),
         link_row(p, "gh-issue", L::MessageSquare, t!("Report a bug or suggest something"), None, |_, _| open_url(ISSUES_URL)),

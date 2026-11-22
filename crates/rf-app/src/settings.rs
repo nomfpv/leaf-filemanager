@@ -813,6 +813,10 @@ pub struct Settings {
     pub capture_browser: bool,
     /// Below this many MB (when the browser knows the size) the browser keeps the download.
     pub capture_min_mb: u32,
+    /// "Check for leaf updates": off by default. With it off, or with no feed address, leaf never contacts any server for updates.
+    pub update_check: bool,
+    /// The address of leaf's release feed (https, or a folder). Empty by default: leaf has no feed until the user writes one.
+    pub update_feed: String,
     /// Where a running operation's progress is shown (see [`TransferProgress`]).
     pub transfer_progress: TransferProgress,
     /// The thumbnail cache's limit in MB (the cache is in memory); `None` = the default, 64 MB, and no key in the file.
@@ -1101,6 +1105,8 @@ impl Default for Settings {
             vpn_socks_password: leaf_vpn::socks::password_by_default(),
             capture_browser: true,
             capture_min_mb: 1,
+            update_check: false,
+            update_feed: String::new(),
             transfer_progress: TransferProgress::StatusBar,
             thumb_cache_mb: None,
             show_libraries: false,
