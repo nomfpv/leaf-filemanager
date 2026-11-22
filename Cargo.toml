@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-nmhost", "crates/leaf-download", "crates/leaf-sync", "crates/leaf-copy", "crates/leaf-agents", "crates/leaf-vpn", "crates/leaf-share", "crates/leaf-open", "crates/leaf-ytdlp", "crates/leaf-nzb", "crates/leaf-bluray", "crates/leaf-helper"]
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-nmhost", "crates/leaf-download", "crates/leaf-sync", "crates/leaf-copy", "crates/leaf-agents", "crates/leaf-vpn", "crates/leaf-share", "crates/leaf-open", "crates/leaf-ytdlp", "crates/leaf-nzb", "crates/leaf-bluray", "crates/leaf-helper", "crates/leaf-proc"]
 exclude = ["vendor/velopack"]
 
 [workspace.package]
@@ -15,6 +15,7 @@ rf-win = { path = "crates/rf-win" }
 leaf-common = { path = "crates/leaf-common" }
 leaf-unix = { path = "crates/leaf-unix" }
 leaf-sys = { path = "crates/leaf-sys" }
+leaf-proc = { path = "crates/leaf-proc" }
 leaf-decode = { path = "crates/leaf-decode" }
 leaf-dev = { path = "crates/leaf-dev" }
 leaf-vfs = { path = "crates/leaf-vfs" }
@@ -101,6 +102,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
     "Win32_System_Threading",
+    # leaf-proc: the job object helper programs run in
+    "Win32_System_JobObjects",
     "Win32_System_Search",
     "Win32_System_Variant",
     # the storage health of a physical disk (MSFT_PhysicalDisk, drives.rs)

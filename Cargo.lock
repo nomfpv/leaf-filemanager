@@ -5242,6 +5242,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-proc"
+version = "0.9.4"
+dependencies = [
+ "libc",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "leaf-remote"
 version = "0.9.4"
 dependencies = [
@@ -8018,6 +8026,7 @@ dependencies = [
  "leaf-common",
  "leaf-copy",
  "leaf-decode",
+ "leaf-proc",
  "log",
  "md-5 0.10.6",
  "notify",

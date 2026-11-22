@@ -1,0 +1,13 @@
+[package]
+name = "leaf-proc"
+description = "leaf: starting helper programs so they never outlive leaf or pile up (job object on Windows, parent-death signal and process group on Linux)"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
