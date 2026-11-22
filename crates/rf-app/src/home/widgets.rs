@@ -180,8 +180,14 @@ fn show_health(h: leaf_sys::drives::DriveHealth, at: std::time::Instant, p: &Pal
         row(t!("Wear"), h.wear_percent.map(|w| format!("{w} % {}", t!("used"))).unwrap_or_else(unknown)),
         row(t!("Powered on"), h.power_on_hours.map(|n| format!("{n} {}", t!("hours"))).unwrap_or_else(unknown)),
         row(t!("Read"), ago(at)),
-        row(t!("From"), if h.sources.is_empty() { unknown() } else { h.sources.iter().map(|s| source_word(*s)).collect::<Vec<_>>().join(", ") }),
     ];
+    // (where it was read from: one row per source, so a long name keeps its own line and the label stays in view)
+    if h.sources.is_empty() {
+        items.push(row(t!("From"), unknown()));
+    }
+    for (i, s) in h.sources.iter().enumerate() {
+        items.push(row(if i == 0 { t!("From") } else { "" }, source_word(*s).to_string()));
+    }
     if leaf_sys::drives::HEALTH_NEEDS_ADMIN && h.wear_percent.is_none() && h.power_on_hours.is_none() {
         let this = cx.entity();
         items.push(Item::Separator);
