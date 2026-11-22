@@ -927,6 +927,60 @@ fn scrub_pdf_leaves_no_marker_anywhere_not_in_old_revisions_or_unreferenced_obje
     let _ = fs::remove_dir_all(&d);
 }
 
+/// A signed PDF is refused by default; with the tick the signature dictionary (signer, time, place, reason, certificate), the
+/// field's value and drawn appearance, the permissions and the security store go.
+#[test]
+fn scrub_signed_pdf_is_refused_unless_signatures_are_removed() {
+    use lopdf::{Dictionary, Document, Object, Stream, dictionary};
+    let d = tmp_dir("pdf-signed");
+    let src = d.join("s.pdf");
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let content = doc.add_object(Stream::new(Dictionary::new(), b"BT ET".to_vec()));
+    let sig = doc.add_object(dictionary! {
+        "Type" => "Sig", "Filter" => "Adobe.PPKLite", "SubFilter" => "adbe.pkcs7.detached",
+        "Name" => Object::string_literal("Planted Author"), "M" => Object::string_literal("D:20261122142233"),
+        "Location" => Object::string_literal("LEAFTESTSERIAL123"), "Reason" => Object::string_literal("approved"),
+        "ByteRange" => vec![0.into(), 10.into(), 20.into(), 30.into()], "Contents" => Object::String(b"LEAFTESTSERIAL123 cert".to_vec(), lopdf::StringFormat::Hexadecimal),
+    });
+    let ap = doc.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Form" }, b"BT (Signed by Planted Author) Tj ET".to_vec()));
+    let widget = doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Widget", "FT" => "Sig", "T" => Object::string_literal("Signature1"), "V" => sig,
+        "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()], "AP" => dictionary! { "N" => ap },
+    });
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content, "Annots" => vec![widget.into()],
+        "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+    });
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+    let dss_cert = doc.add_object(Stream::new(Dictionary::new(), b"certificate of Planted Author".to_vec()));
+    let catalog = doc.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id,
+        "AcroForm" => dictionary! { "Fields" => vec![widget.into()], "SigFlags" => 3 },
+        "Perms" => dictionary! { "DocMDP" => sig },
+        "DSS" => dictionary! { "Certs" => vec![dss_cert.into()] },
+    });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    fs::write(&src, &bytes).unwrap();
+    let i = inspect(&src, &opts()).unwrap();
+    assert!(!i.can_clean && i.refusal.as_deref().unwrap().contains("signed"));
+    assert!(i.findings.iter().any(|f| f.label.starts_with("Digital signature") && f.value.contains("Planted Author")), "{:?}", i.findings);
+    let dst = clean_copy_name(&src);
+    assert!(matches!(clean_to(&src, &dst, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))));
+    assert!(!dst.exists());
+    let o = Options { remove_signatures: true, ..opts() };
+    clean_to(&src, &dst, &o, &no_cancel).unwrap();
+    assert_no_markers(&dst, "signed pdf");
+    let again = Document::load(&dst).unwrap();
+    assert_eq!(again.get_pages().len(), 1);
+    let c = again.catalog().unwrap();
+    assert!(!c.has(b"Perms") && !c.has(b"DSS"));
+    assert!(inspect(&dst, &opts()).unwrap().can_clean, "no signature left: the cleaned file is not refused as signed");
+    let _ = fs::remove_dir_all(&d);
+}
+
 /// Raw scan of the zip AND of every entry after it is unpacked (the entries are compressed, so the raw scan alone proves little).
 fn assert_no_markers_in_zip(file: &Path, what: &str) {
     assert_no_markers(file, what);

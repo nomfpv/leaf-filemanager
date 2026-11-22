@@ -3,7 +3,7 @@
 //! Comment author names and dates and attached files' dates are removed; the comments' text, form fields, JavaScript, layers
 //! and the attachments themselves are NOT touched, and the notes say so.
 
-use crate::{Finding, Inspection, Result, ScrubError, MAX_IN_MEMORY};
+use crate::{Finding, Inspection, Options, Result, ScrubError, MAX_IN_MEMORY};
 use lopdf::{Dictionary, Document, Object};
 use std::fs;
 use std::path::Path;
@@ -75,6 +75,50 @@ fn decode_text(b: &[u8]) -> String {
         b.iter().map(|c| *c as char).collect()
     }
 }
+
+/// A signature dictionary (or a document time stamp): the one that holds the signer's name, time, place, reason, contact and the
+/// signed certificate data.
+fn is_sig_dict(d: &Dictionary) -> bool {
+    matches!(d.get(b"Type"), Ok(Object::Name(n)) if n == b"Sig" || n == b"DocTimeStamp") || (d.has(b"ByteRange") && d.has(b"Contents") && d.has(b"Filter"))
+}
+
+fn is_sig_field(d: &Dictionary) -> bool {
+    matches!(d.get(b"FT"), Ok(Object::Name(n)) if n == b"Sig")
+}
+
+/// The AcroForm dictionary, wherever it is (direct in the catalog or an object of its own).
+fn acroform_id(doc: &Document) -> Option<lopdf::ObjectId> {
+    match doc.catalog().ok()?.get(b"AcroForm").ok()? {
+        Object::Reference(id) => Some(*id),
+        _ => None,
+    }
+}
+
+/// The signatures of the document: (who, when, where, why) per signature, and whether it carries any signature data at all
+/// (signature dictionaries, permissions of a certified document, the document security store, the "signed" flag of the form).
+fn signatures(doc: &Document) -> (Vec<String>, bool) {
+    let mut who = Vec::new();
+    for d in dicts(doc).filter(|d| is_sig_dict(d)) {
+        let parts: Vec<String> = [b"Name".as_slice(), b"M", b"Location", b"Reason", b"ContactInfo"]
+            .iter()
+            .filter_map(|k| d.get(k).ok().map(|v| text(v, doc)))
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        who.push(parts.join(", "));
+    }
+    let cat = doc.catalog().ok();
+    let flags = |d: &Dictionary| d.has(b"SigFlags");
+    let form_flag = cat.and_then(|c| c.get(b"AcroForm").ok()).is_some_and(|f| match f {
+        Object::Dictionary(d) => flags(d),
+        Object::Reference(id) => doc.get_object(*id).ok().and_then(|o| o.as_dict().ok()).is_some_and(flags),
+        _ => false,
+    });
+    let any = !who.is_empty() || cat.is_some_and(|c| c.has(b"Perms") || c.has(b"DSS")) || form_flag || dicts(doc).any(|d| is_sig_field(d) && d.has(b"V"));
+    (who, any)
+}
+
+/// The refusal of a signed PDF when the signatures are not to be removed.
+const SIGNED_TEXT: &str = "this PDF is signed: removing metadata breaks the signature. Tick “Remove digital signatures too” to clean it without them";
 
 fn info_dict<'a>(doc: &'a Document) -> Option<&'a Dictionary> {
     match doc.trailer.get(b"Info").ok()? {
@@ -181,6 +225,15 @@ fn analyse(doc: &Document, raw: &[u8]) -> (Vec<Finding>, Vec<String>) {
     if attach_dates > 0 {
         f.push(Finding::new("Dates of attached files", format!("{attach_dates} files"), true));
     }
+    let (signers, signed) = signatures(doc);
+    if signed {
+        if signers.is_empty() {
+            f.push(Finding::new("Digital signature data", "", true));
+        }
+        for w in signers {
+            f.push(Finding::new("Digital signature (signer, time, place, reason, certificate)", w, true));
+        }
+    }
     // what stays
     if annots > 0 {
         notes.push(format!("Still inside: the text of {annots} comments or markings in the pages. Their author names and dates are removed, what they say is not."));
@@ -206,14 +259,70 @@ fn analyse(doc: &Document, raw: &[u8]) -> (Vec<Finding>, Vec<String>) {
     (f, notes)
 }
 
-pub(crate) fn inspect(path: &Path) -> Result<Inspection> {
+pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
     let (doc, raw) = load(path)?;
-    let (findings, notes) = analyse(&doc, &raw);
-    Ok(Inspection { format: "PDF".into(), findings, notes, can_clean: true, refusal: None })
+    let (findings, mut notes) = analyse(&doc, &raw);
+    let signed = signatures(&doc).1;
+    if signed && opts.remove_signatures {
+        notes.push("The digital signatures are removed completely (signer, time, place, reason, certificate, the drawn signature): the cleaned PDF is no longer signed.".into());
+    }
+    let refuse = signed && !opts.remove_signatures;
+    Ok(Inspection { format: "PDF".into(), findings, notes, can_clean: !refuse, refusal: refuse.then(|| SIGNED_TEXT.to_string()) })
 }
 
-pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
+/// Removes every signature: the signature dictionaries (with the signed data and the certificates), the value and the drawn
+/// appearance of signature fields, the permissions of a certified document, the document security store and the form's flag.
+fn remove_signatures(doc: &mut Document) {
+    let sig_ids: Vec<lopdf::ObjectId> = doc
+        .objects
+        .iter()
+        .filter(|(_, o)| match o {
+            Object::Dictionary(d) => is_sig_dict(d),
+            Object::Stream(s) => is_sig_dict(&s.dict),
+            _ => false,
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in sig_ids {
+        doc.objects.remove(&id);
+    }
+    for o in doc.objects.values_mut() {
+        let d = match o {
+            Object::Dictionary(d) => d,
+            Object::Stream(s) => &mut s.dict,
+            _ => continue,
+        };
+        if is_sig_field(d) {
+            d.remove(b"V");
+            d.remove(b"AP");
+        }
+        // a direct signature dictionary as a field value
+        if matches!(d.get(b"V"), Ok(Object::Dictionary(v)) if is_sig_dict(v)) {
+            d.remove(b"V");
+        }
+    }
+    if let Ok(c) = doc.catalog_mut() {
+        c.remove(b"Perms");
+        c.remove(b"DSS");
+        if let Ok(Object::Dictionary(f)) = c.get_mut(b"AcroForm") {
+            f.remove(b"SigFlags");
+        }
+    }
+    if let Some(id) = acroform_id(doc) {
+        if let Some(Object::Dictionary(f)) = doc.objects.get_mut(&id) {
+            f.remove(b"SigFlags");
+        }
+    }
+}
+
+pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     let (mut doc, _) = load(src)?;
+    if signatures(&doc).1 {
+        if !opts.remove_signatures {
+            return Err(ScrubError::Unsupported(SIGNED_TEXT.into()));
+        }
+        remove_signatures(&mut doc);
+    }
     let pages_before = doc.get_pages().len();
     // what every page draws, as it is now: the rewrite must give the same back
     let drawn: Vec<Vec<u8>> = doc.get_pages().values().map(|id| doc.get_page_content(*id)).collect();

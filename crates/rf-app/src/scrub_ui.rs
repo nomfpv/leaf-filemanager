@@ -26,18 +26,26 @@ pub fn offers(items: &[PathBuf]) -> bool {
     items.iter().take(200).any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| KINDS.iter().any(|k| k.eq_ignore_ascii_case(e))) && p.is_file())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct RunOpts {
     remove_profile: bool,
     keep_cover: bool,
     reset_times: bool,
     neutral: bool,
     replace: bool,
+    remove_signatures: bool,
+    keep_subtitles: bool,
 }
 
 impl RunOpts {
     fn lib(&self) -> leaf_scrub::Options {
-        leaf_scrub::Options { keep_color_profile: !self.remove_profile, keep_cover_art: self.keep_cover, reset_times: self.reset_times }
+        leaf_scrub::Options {
+            keep_color_profile: !self.remove_profile,
+            keep_cover_art: self.keep_cover,
+            reset_times: self.reset_times,
+            remove_signatures: self.remove_signatures,
+            keep_subtitles: self.keep_subtitles,
+        }
     }
 }
 
@@ -177,11 +185,11 @@ pub fn open(files: Vec<PathBuf>, cx: &mut App) {
         cx.new(|cx| {
             let v = ScrubView {
                 files,
-                opts: RunOpts { remove_profile: false, keep_cover: false, reset_times: false, neutral: false, replace: false },
+                opts: RunOpts::default(),
                 phase: Phase::Setup,
                 results: Vec::new(),
                 ran: false,
-                ran_opts: RunOpts { remove_profile: false, keep_cover: false, reset_times: false, neutral: false, replace: false },
+                ran_opts: RunOpts::default(),
                 verified: None,
                 verifying: false,
                 focus: cx.focus_handle(),
@@ -507,6 +515,8 @@ impl Render for ScrubView {
                     div().pt_1().pb(px(2.)).text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text_secondary).child(t!("Options")).into_any_element(),
                     check(&p, "keep-cover", t!("Keep the cover art of music files"), o.keep_cover, cx.listener_toggle(|v| v.opts.keep_cover = !v.opts.keep_cover)),
                     check(&p, "no-profile", t!("Remove the colour profile of pictures too (they may look different)"), o.remove_profile, cx.listener_toggle(|v| v.opts.remove_profile = !v.opts.remove_profile)),
+                    check(&p, "keep-subs", t!("Keep plain subtitle tracks of videos"), o.keep_subtitles, cx.listener_toggle(|v| v.opts.keep_subtitles = !v.opts.keep_subtitles)),
+                    check(&p, "no-sigs", t!("Remove digital signatures too (signed documents are refused otherwise; the cleaned file is no longer signed)"), o.remove_signatures, cx.listener_toggle(|v| v.opts.remove_signatures = !v.opts.remove_signatures)),
                     check(&p, "reset-times", t!("Set the file times to now"), o.reset_times, cx.listener_toggle(|v| v.opts.reset_times = !v.opts.reset_times)),
                     check(&p, "neutral", t!("Give the files a neutral name (file-1.jpg, file-2.jpg …)"), o.neutral, cx.listener_toggle(|v| v.opts.neutral = !v.opts.neutral)),
                     div().h(px(1.)).my_1().bg(p.divider).into_any_element(),

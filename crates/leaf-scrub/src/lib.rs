@@ -333,7 +333,7 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
             refusal: Some("an archive keeps the metadata of the files inside it: clean the files before packing them".into()),
             ..Default::default()
         },
-        Family::Pdf => pdf::inspect(path)?,
+        Family::Pdf => pdf::inspect(path, opts)?,
         Family::Ooxml | Family::Odf => office::inspect(path, opts)?,
         Family::Mp4 => mp4::inspect(path)?,
         Family::Tagged => tags::inspect(path, opts)?,
@@ -424,7 +424,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
             Family::Svg => svg::produce(src, &tmp, opts)?,
             Family::Bare(_) => copy_without_attrs(src, &tmp)?,
             Family::Archive(k) => return Err(ScrubError::Unsupported(format!("a {k} keeps the metadata of the files inside it"))),
-            Family::Pdf => pdf::produce(src, &tmp)?,
+            Family::Pdf => pdf::produce(src, &tmp, opts)?,
             Family::Ooxml | Family::Odf => office::produce(src, &tmp, opts)?,
             Family::Mp4 => extra.extend(mp4::produce(src, &tmp, opts)?),
             Family::Tagged => tags::produce(src, &tmp, opts)?,
