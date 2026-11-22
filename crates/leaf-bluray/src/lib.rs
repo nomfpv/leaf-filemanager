@@ -3,12 +3,14 @@
 //! starting `ffmpeg`.
 //!
 //! No AACS / BD+ code, no keys, nothing that decrypts: an encrypted stream is recognised ([`ts::looks_encrypted`]) and the
-//! conversion refuses it ([`disc::OpenError::Protected`]).
+//! conversion refuses it ([`disc::OpenError::Protected`], [`remux::Error::Protected`]).
 
 pub mod codec;
 pub mod disc;
 pub mod mkv;
 pub mod mpls;
+pub mod output;
+pub mod remux;
 pub mod ts;
 
 /// What the user is told about an encrypted disc, and nothing else.
