@@ -101,7 +101,7 @@ fn docker_local(args: &[&str]) -> Result<String, FsError> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    let out = c.output().map_err(|e| FsError::Other(format!("docker could not be started: {e}")))?;
+    let out = leaf_proc::output_helper(&mut c, None).map_err(|e| FsError::Other(format!("docker could not be started: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(FsError::Other(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("docker failed").trim().to_string()));

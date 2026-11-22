@@ -97,7 +97,7 @@ pub(crate) fn command(exe: &Path) -> Command {
 pub(crate) fn run_limited(mut c: Command, limit: Duration, cap: usize) -> Result<(Option<i32>, String, String), Error> {
     use std::io::Read;
     c.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = c.spawn().map_err(|e| Error::Start(e.to_string()))?;
+    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::Start(e.to_string()))?;
     let read = |mut r: Box<dyn Read + Send>| {
         std::thread::spawn(move || {
             let mut buf = Vec::new();

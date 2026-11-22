@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+leaf-proc.workspace = true
 # Annex B -> length-prefixed and the H.264 / HEVC parameter set readers (picture size, avcC / hvcC)
 rustdecoder.workspace = true
 log.workspace = true

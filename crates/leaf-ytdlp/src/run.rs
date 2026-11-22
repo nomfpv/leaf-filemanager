@@ -139,7 +139,7 @@ pub fn run(exe: &Path, args: &[OsString], ctl: &RunCtl, on: &mut dyn FnMut(Event
         }
         let mut c = command(exe);
         c.args(args).envs(ctl.env.iter().map(|(k, v)| (k, v))).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = c.spawn().map_err(|e| Error::Start(e.to_string()))?;
+        let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::Start(e.to_string()))?;
         let (tx, rx) = channel();
         if let Some(o) = child.stdout.take() {
             pump(o, false, tx.clone());

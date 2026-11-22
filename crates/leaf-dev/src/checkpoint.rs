@@ -269,7 +269,7 @@ fn store_git(root: &Path, git_dir: &Path, empty_tree: &str, own_index: bool) -> 
 /// Runs `c`: its output when it ends with one of `ok`, else an error with git's own words.
 fn run(mut c: Command, ok: &[i32], timeout: Duration) -> Result<Vec<u8>, Error> {
     c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = c.spawn().map_err(|e| Error::new("git could not be started", e.to_string()))?;
+    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
     let mut out = child.stdout.take().ok_or_else(|| Error::new("git could not be started", ""))?;
     let mut err = child.stderr.take().ok_or_else(|| Error::new("git could not be started", ""))?;
     let t_out = std::thread::spawn(move || {
@@ -326,7 +326,7 @@ impl Blobs {
     fn open(root: &Path, git_dir: &Path, empty_tree: &str) -> Result<Self, Error> {
         let mut c = store_git(root, git_dir, empty_tree, false);
         c.args(["cat-file", "--batch"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = c.spawn().map_err(|e| Error::new("git could not be started", e.to_string()))?;
+        let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| Error::new("git could not be started", e.to_string()))?;
         let stdin = child.stdin.take();
         let out = BufReader::new(child.stdout.take().ok_or_else(|| Error::new("git could not be started", ""))?);
         Ok(Self { child, stdin, out })

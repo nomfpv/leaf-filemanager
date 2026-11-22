@@ -95,7 +95,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let o = git(dir).args(args).output().map_err(|e| LaneError::Git { what: "git could not be started".into(), detail: e.to_string() })?;
+    let o = leaf_proc::output_helper(git(dir).args(args), Some(std::time::Duration::from_secs(120))).map_err(|e| LaneError::Git { what: "git could not be started".into(), detail: e.to_string() })?;
     Ok(Out {
         ok: o.status.success(),
         code: o.status.code(),

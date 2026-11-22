@@ -253,7 +253,7 @@ fn git(root: &Path) -> Command {
 fn run_write(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
     let mut c = git(root);
     c.args(args).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = c.spawn().map_err(|e| format!("git could not be started: {e}"))?;
+    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| format!("git could not be started: {e}"))?;
     if let (Some(data), Some(mut w)) = (input, child.stdin.take()) {
         w.write_all(data).map_err(|e| e.to_string())?;
     }

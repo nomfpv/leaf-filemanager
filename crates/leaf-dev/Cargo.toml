@@ -7,6 +7,7 @@ license = "MIT"
 publish.workspace = true
 
 [dependencies]
+leaf-proc.workspace = true
 ignore = "0.4"
 regex.workspace = true
 reflink-copy = "0.1"

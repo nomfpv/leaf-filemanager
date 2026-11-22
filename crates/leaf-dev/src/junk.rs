@@ -138,7 +138,7 @@ pub fn git_tracks(dir: &Path) -> Option<bool> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    let mut child = c.spawn().ok()?;
+    let mut child = leaf_proc::spawn_helper(&mut c).ok()?;
     let mut line = String::new();
     let got = BufReader::new(child.stdout.take()?).read_line(&mut line).ok()?;
     // the answer is in: stop git rather than let it list a committed node_modules

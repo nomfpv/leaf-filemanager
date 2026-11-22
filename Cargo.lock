@@ -5115,6 +5115,7 @@ dependencies = [
 name = "leaf-bluray"
 version = "0.9.4"
 dependencies = [
+ "leaf-proc",
  "log",
  "rustdecoder",
 ]
@@ -5171,6 +5172,7 @@ name = "leaf-dev"
 version = "0.9.4"
 dependencies = [
  "ignore",
+ "leaf-proc",
  "reflink-copy",
  "regex",
 ]
@@ -5258,6 +5260,7 @@ dependencies = [
  "hmac 0.12.1",
  "keyring-core",
  "leaf-download",
+ "leaf-proc",
  "leaf-sys",
  "leaf-vfs",
  "leaf-vpn",
@@ -5378,6 +5381,7 @@ name = "leaf-ytdlp"
 version = "0.9.4"
 dependencies = [
  "leaf-download",
+ "leaf-proc",
  "serde_json",
 ]
 
@@ -7940,6 +7944,7 @@ dependencies = [
  "hadris-iso",
  "hadris-storage",
  "hadris-udf",
+ "leaf-proc",
  "lzma-rust2 0.25.0",
  "oem_cp",
  "rarchive",

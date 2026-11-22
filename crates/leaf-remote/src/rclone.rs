@@ -41,7 +41,7 @@ fn command(exe: &Path) -> Command {
 /// The remotes rclone has configured (`rclone listremotes`), names without the colon. Blocks: a worker thread.
 pub fn list_remotes() -> Vec<String> {
     let Some(exe) = find_exe() else { return Vec::new() };
-    let Ok(out) = command(&exe).arg("listremotes").stderr(Stdio::null()).output() else { return Vec::new() };
+    let Ok(out) = leaf_proc::output_helper(command(&exe).arg("listremotes"), Some(std::time::Duration::from_secs(30))) else { return Vec::new() };
     if !out.status.success() {
         return Vec::new();
     }
@@ -100,7 +100,7 @@ impl RcloneFs {
     }
 
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, FsError> {
-        let out = command(&self.exe).args(args).stderr(Stdio::piped()).stdout(Stdio::piped()).output().map_err(|e| FsError::Other(format!("rclone could not be started: {e}")))?;
+        let out = leaf_proc::output_helper(command(&self.exe).args(args), None).map_err(|e| FsError::Other(format!("rclone could not be started: {e}")))?;
         if out.status.success() {
             return Ok(out.stdout);
         }
@@ -200,12 +200,10 @@ impl Fs for RcloneFs {
 
     fn open_read(&self, p: &VPath, offset: u64) -> Result<Box<dyn Read + Send>, FsError> {
         let s = spec(p)?;
-        let mut child = command(&self.exe)
-            .args(["cat", "--offset", &offset.to_string(), &s])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| FsError::Other(format!("rclone could not be started: {e}")))?;
+        let mut child = leaf_proc::spawn_helper(
+            command(&self.exe).args(["cat", "--offset", &offset.to_string(), &s]).stdout(Stdio::piped()).stderr(Stdio::null()),
+        )
+        .map_err(|e| FsError::Other(format!("rclone could not be started: {e}")))?;
         let stdout = child.stdout.take().ok_or_else(|| FsError::Other("rclone gave no output".into()))?;
         Ok(Box::new(CatReader { child, stdout }))
     }
@@ -301,7 +299,7 @@ impl WriteSink for TempSink {
         if let Some(mut f) = self.file.take() {
             f.flush()?;
         }
-        let out = command(&self.exe).arg("copyto").arg(&self.tmp).arg(&self.spec).stdout(Stdio::null()).stderr(Stdio::piped()).output().map_err(|e| FsError::Other(format!("rclone could not be started: {e}")))?;
+        let out = leaf_proc::output_helper(command(&self.exe).arg("copyto").arg(&self.tmp).arg(&self.spec), None).map_err(|e| FsError::Other(format!("rclone could not be started: {e}")))?;
         if out.status.success() { Ok(()) } else { Err(failure(out.status.code(), &String::from_utf8_lossy(&out.stderr))) }
     }
 }

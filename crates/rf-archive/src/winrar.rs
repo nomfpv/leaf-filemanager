@@ -198,8 +198,7 @@ fn run_rar(
     cmd.args(rar_args(sources, dest, level, password)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = cmd
-        .spawn()
+    let mut child = leaf_proc::spawn_helper(&mut cmd)
         .context("Couldn't start Rar.exe")?;
     let status = loop {
         if cancelled() {

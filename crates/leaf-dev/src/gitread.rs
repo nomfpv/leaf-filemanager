@@ -139,14 +139,14 @@ pub fn revert_file(root: &Path, rel: &str, put_away: &dyn Fn(&Path) -> Result<()
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    let out = c.output().map_err(|e| format!("git could not be started: {e}"))?;
+    let out = leaf_proc::output_helper(&mut c, Some(std::time::Duration::from_secs(120))).map_err(|e| format!("git could not be started: {e}"))?;
     if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
 }
 
 /// Runs git with `args` in `dir`: the output (at most `cap` bytes) and whether it was cut, or `None` when git is missing, fails or
 /// takes longer than `timeout`.
 pub(crate) fn run(dir: &Path, args: &[&str], timeout: Duration, cap: usize) -> Option<(Vec<u8>, bool)> {
-    let mut child = git(dir).args(args).spawn().ok()?;
+    let mut child = leaf_proc::spawn_helper(git(dir).args(args)).ok()?;
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -572,7 +572,7 @@ pub fn add_worktree(root: &Path, branch: &str, new_branch: bool, folder: &Path) 
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    let mut child = c.spawn().map_err(|e| format!("git could not be started: {e}"))?;
+    let mut child = leaf_proc::spawn_helper(&mut c).map_err(|e| format!("git could not be started: {e}"))?;
     let mut err = child.stderr.take();
     let mut out = child.stdout.take();
     let reader = std::thread::spawn(move || {

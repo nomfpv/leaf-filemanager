@@ -102,7 +102,7 @@ pub fn spawn(ffmpeg: &Path, args: &[OsString], stdin: bool, stdout: bool) -> std
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    let mut child = c.spawn()?;
+    let mut child = leaf_proc::spawn_helper(&mut c)?;
     let errors = Arc::new(Mutex::new(Vec::new()));
     if let Some(mut e) = child.stderr.take() {
         let keep = errors.clone();
