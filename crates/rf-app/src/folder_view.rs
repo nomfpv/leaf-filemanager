@@ -1727,6 +1727,22 @@ impl FolderView {
                     }
                 }
             }));
+            // a share or a phone that gives no first answer: said so (the shell's call cannot be interrupted; it is told to stop at its
+            // next step, and what it gives later is dropped)
+            let stop = self.cancel.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(15)).await;
+                let _ = this.update(cx, |v, cx| {
+                    if v.generation == generation && v.loading && v.entries.is_empty() {
+                        stop.store(true, Ordering::Relaxed);
+                        v.generation += 1;
+                        v.loading = false;
+                        v.error = Some(t!("Not answering. If this is a phone, unlock it and set USB to file transfer; a computer on the network may be off. Then refresh.").to_string());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
             cx.notify();
             return;
         }
