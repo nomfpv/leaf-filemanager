@@ -243,7 +243,7 @@ pub fn read_forward(path: &Path, from: u64, max: u64) -> std::io::Result<Chunk> 
 }
 
 /// Calls `f(offset, line)` for every line of the file, reading one line at a time; stops when `cancel` is set or `f` says so.
-fn each_line(path: &Path, cancel: &AtomicBool, mut f: impl FnMut(u64, &str) -> bool) {
+pub(crate) fn each_line(path: &Path, cancel: &AtomicBool, mut f: impl FnMut(u64, &str) -> bool) {
     let Ok(file) = std::fs::File::open(path) else { return };
     let mut r = BufReader::with_capacity(256 * 1024, file);
     let mut buf = Vec::new();

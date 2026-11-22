@@ -2719,6 +2719,19 @@ fn dev(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
             Some(t!("Shows what coding agents (Claude Code) are doing: the Agents page, a small dot on the folder and the tab of a running session, and a line in the status bar. Reads the agent's own session files on this PC, never changes them. Off: nothing is read and nothing is shown.")),
             sw("ai-layer", p, s.ai_layer, |s, v| s.ai_layer = v),
         ),
+        card(
+            p,
+            L::Brain,
+            t!("Agent budget ring"),
+            Some(t!("A small ring in the status bar: how much of this daily amount of new agent tokens (input, output, cache writes; an estimate from the session files) the last 24 hours used. It never warns and never blocks anything.")),
+            dropdown(
+                "agent-budget-k",
+                p,
+                s.agent_budget_k,
+                [0u32, 500, 1000, 2000, 5000, 10000, 20000, 50000].into_iter().map(|k| (k, if k == 0 { t!("No ring").to_string() } else { crate::agent_usage::short(u64::from(k) * 1000) })).collect(),
+                |s, v| s.agent_budget_k = v,
+            ),
+        ),
         {
             let current = s.lane_folder.clone();
             card(

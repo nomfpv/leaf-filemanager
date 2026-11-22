@@ -5236,6 +5236,7 @@ impl FolderView {
             let cmp = self.compare_look(ei);
             let cmp_color = cmp.and_then(|l| l.color_ix()).map(|i| p.compare[i]);
             let cmp_mark = cmp.and_then(|l| l.glyph()).zip(cmp_color).map(|(g, c)| div().flex_shrink_0().px_1().text_size(px(p.fs_xs)).font_weight(FontWeight::SEMIBOLD).text_color(c).child(g));
+            let marks = crate::agent_marks::row(cx, vi, self.parent_of(ei), &self.entries[ei as usize], git_state, &p);
             let fresh = fresh_on.then(|| fresh_step(now_ms - self.entries[ei as usize].modified_ms)).flatten();
             any_fresh |= fresh.is_some();
             let row = h_flex()
@@ -5289,6 +5290,7 @@ impl FolderView {
                         }
                     }),
                 )
+                .children(marks.stripe)
                 .child(
                     h_flex()
                         .map(|d| match name_w {
@@ -5364,6 +5366,8 @@ impl FolderView {
                         .children(cut_mark)
                         .children(cmp_mark)
                         .children(self.agent_dot(ei, &p, cx))
+                        .children(marks.weight)
+                        .children(marks.tokens)
                         .children(git_badge)
                         .child(div().flex_1())
                         .children(share_badge)

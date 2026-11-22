@@ -13,6 +13,7 @@
 pub mod claude;
 pub mod procs;
 pub mod transcript;
+pub mod usage;
 mod watch;
 
 use std::path::{Path, PathBuf};

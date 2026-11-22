@@ -61,6 +61,7 @@ pub fn apply(cx: &mut App) {
             s.generation += 1;
             *s = AgentsState { generation: s.generation, ..AgentsState::default() };
         });
+        crate::agent_usage::clear(cx);
         cx.refresh_windows();
         return;
     }
@@ -90,6 +91,7 @@ pub fn apply(cx: &mut App) {
                         s.active = active_map(&got);
                         s.sessions = Arc::new(got);
                     });
+                    crate::agent_usage::update(cx);
                     cx.refresh_windows();
                 }
                 Some(any_open)
@@ -207,4 +209,19 @@ pub fn in_project_with_sessions(cx: &App, path: &Path) -> bool {
         let f = folder_key(&x.folder);
         key.strip_prefix(f.as_str()).is_some_and(|rest| rest.starts_with('/'))
     })
+}
+
+/// The last activity (ms) of every session whose folder is `dir` or one above it: the sessions that could have changed a file in `dir`.
+/// Empty while the layer is off or no session works there; a quick check first so a folder without sessions costs nothing per row.
+pub fn sessions_over(cx: &App, dir: &Path) -> Vec<(i64, State)> {
+    let Some(s) = cx.try_global::<AgentsState>().filter(|s| !s.sessions.is_empty()) else { return Vec::new() };
+    let key = folder_key(dir);
+    s.sessions
+        .iter()
+        .filter(|x| {
+            let f = folder_key(&x.folder);
+            key == f || key.strip_prefix(f.as_str()).is_some_and(|rest| rest.starts_with('/'))
+        })
+        .map(|x| (x.last_activity_ms, x.state))
+        .collect()
 }

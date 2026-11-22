@@ -251,7 +251,9 @@ impl Render for AgentsView {
         .flex_1()
         .min_h_0()
         .p_1();
-        v_flex().size_full().child(top).child(body).into_any_element()
+        // (D13, F5) the branch map of the lanes and the usage numbers, above the sessions
+        let (map, usage) = if self.who.is_some() || !enabled { (None, None) } else { (crate::branch_map::view(cx, &p), crate::agent_usage::page(cx, &p)) };
+        v_flex().size_full().child(top).children(map).children(usage).child(body).into_any_element()
     }
 }
 

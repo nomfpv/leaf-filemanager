@@ -2518,6 +2518,8 @@ impl Workspace {
             let tab_agent = tab_dir.as_deref().and_then(|d| crate::agents::tab_state(cx, d)).map(|st| crate::agents::state_color(st, &p));
             // (D6) a tab in a lane wears the lane's colour as a short line along its foot
             let tab_lane = tab_dir.as_deref().and_then(|d| crate::lanes::color_of_dir(cx, d, &p));
+            // (D9) the session ribbon: one segment per agent session of this folder, along the head of the tab
+            let tab_ribbon = tab_dir.as_deref().and_then(|d| crate::agent_usage::ribbon(cx, d, &p));
             let term_dir = tab_terminal.then(|| tab_terminal_dir(v.location())).flatten();
             let tab_w = if fit_names {
                 let name = window.text_system().layout_line(&title, name_px, &[name_style.to_run(title.len())], None).width;
@@ -2553,6 +2555,7 @@ impl Workspace {
                         _ => d.rounded_t(px(p.control_radius + 2.)),
                     })
                     .text_size(px(p.fs))
+                    .when_some(tab_ribbon, |d, r| d.relative().child(div().absolute().top(px(1.)).left(px(10.)).right(px(10.)).child(r)))
                     .when_some(tab_lane, |d, c| d.relative().child(div().absolute().bottom(px(2.)).left(px(10.)).right(px(10.)).h(px(2.)).rounded_full().bg(c)))
                     // Stem: the accent line on top of the tab in front
                     .when(active && p.tab_marker > 0., |d| {
@@ -4879,6 +4882,10 @@ impl Workspace {
                         .child(text)
                         .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowAgents), cx)),
                 );
+            }
+            // (D12) the budget ring, only when a daily budget is set in Settings
+            if let Some(ring) = crate::agent_usage::ring(cx, p) {
+                left = left.child(dot()).child(ring);
             }
             if loading {
                 // a search says which step it is on (issue 67)
