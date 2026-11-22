@@ -65,13 +65,15 @@ pub enum Category {
     View,
     Panes,
     Tools,
+    /// Keys of the Space viewer (leaf-look), not app actions.
+    Viewer,
     App,
     /// The user's own actions (`actions.toml`); only ever run-time rows.
     Custom,
 }
 
 impl Category {
-    pub const ALL: [Category; 10] = [
+    pub const ALL: [Category; 11] = [
         Category::Tabs,
         Category::Navigation,
         Category::Selection,
@@ -80,6 +82,7 @@ impl Category {
         Category::View,
         Category::Panes,
         Category::Tools,
+        Category::Viewer,
         Category::App,
         Category::Custom,
     ];
@@ -94,6 +97,7 @@ impl Category {
             Category::View => "View",
             Category::Panes => "Panes",
             Category::Tools => "Tools",
+            Category::Viewer => "The viewer (Space)",
             Category::App => "leaf itself",
             Category::Custom => "Your actions",
         }
@@ -422,6 +426,16 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(DialogPrev, App, "Previous button", "Shift+Tab in a question dialog moves to the button before.", ArrowLeft, [dl("shift-tab")], places: Places::NONE),
 ];
 
+/// Features that are not app actions (keys of the Space viewer, what the preview pane shows): listed on the page and in `FEATURES.md`
+/// and in What's new, never in the palette, the menus or the key bindings (no action, `hint` is the key shown).
+pub static INFO: &[CommandSpec] = &[
+    CommandSpec { id: "ViewerEdit", title: "Edit in the viewer", description: "In the Space viewer, edits a text, Markdown or CSV file in place and saves it.", keywords: &["edit", "text", "markdown", "csv", "space", "look"], category: Category::Viewer, hint: "E", icon: L::Pencil, places: Places::PAGE, since: "0.9.6", ..BASE },
+    CommandSpec { id: "ViewerRotate", title: "Rotate a picture in the viewer", description: "In the Space viewer, turns the picture a quarter to the right (Shift+R: to the left).", keywords: &["rotate", "turn", "picture", "image", "space", "look"], category: Category::Viewer, hint: "R", icon: L::RotateCw, places: Places::PAGE, since: "0.9.6", ..BASE },
+    CommandSpec { id: "ViewerSlideshow", title: "Slideshow in the viewer", description: "In the Space viewer, steps through the pictures of the folder by itself; press it again to stop.", keywords: &["slideshow", "slides", "pictures", "space", "look"], category: Category::Viewer, hint: "S", icon: L::Play, places: Places::PAGE, since: "0.9.6", ..BASE },
+    CommandSpec { id: "ViewerRawDevelop", title: "Camera RAW files developed", description: "A camera RAW file with a small embedded picture is developed from the sensor data in the background and swapped in when ready.", keywords: &["raw", "camera", "photo", "develop", "dng", "space", "look"], category: Category::Viewer, icon: L::Image, places: Places::PAGE, since: "0.9.6", ..BASE },
+    CommandSpec { id: "PreviewHexHead", title: "First bytes in the preview pane", description: "A file of an unknown kind shows its first 512 bytes as hex rows with the text beside them, as the Space viewer's hex view does.", keywords: &["hex", "bytes", "binary", "preview"], category: Category::Viewer, icon: L::Binary, places: Places::PAGE, since: "0.9.6", ..BASE },
+];
+
 /// The command whose action is `leaf::{id}`.
 #[allow(dead_code)]
 pub fn by_id(id: &str) -> Option<&'static CommandSpec> {
@@ -481,7 +495,7 @@ pub fn custom() -> Vec<&'static CommandSpec> {
 
 /// The built-in rows, then the user's own.
 pub fn all() -> impl Iterator<Item = &'static CommandSpec> {
-    COMMANDS.iter().chain(custom())
+    COMMANDS.iter().chain(INFO).chain(custom())
 }
 
 /// The commands the palette lists, in its order: the built-in ones, then the user's own that asked for the palette.
@@ -523,7 +537,7 @@ pub fn features_markdown() -> String {
          To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.\n",
     );
     for cat in Category::ALL {
-        let rows: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.category == cat && c.places.contains(Places::PAGE)).collect();
+        let rows: Vec<&CommandSpec> = COMMANDS.iter().chain(INFO).filter(|c| c.category == cat && c.places.contains(Places::PAGE)).collect();
         if rows.is_empty() {
             continue;
         }

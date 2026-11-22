@@ -183,6 +183,16 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | End lane | Ends the lane this folder is in, after showing its commits and uncommitted files: review its changes, merge it into its base branch (only when both folders are clean and nothing conflicts), remove its worktree (refused while it has work that is not merged), or discard it to the Trash. |  |
 | Organize folder | Sorts the folder's files into folders by kind. |  |
 
+## The viewer (Space)
+
+| Command | What it does | Shortcut |
+|---|---|---|
+| Edit in the viewer | In the Space viewer, edits a text, Markdown or CSV file in place and saves it. | `E` |
+| Rotate a picture in the viewer | In the Space viewer, turns the picture a quarter to the right (Shift+R: to the left). | `R` |
+| Slideshow in the viewer | In the Space viewer, steps through the pictures of the folder by itself; press it again to stop. | `S` |
+| Camera RAW files developed | A camera RAW file with a small embedded picture is developed from the sensor data in the background and swapped in when ready. |  |
+| First bytes in the preview pane | A file of an unknown kind shows its first 512 bytes as hex rows with the text beside them, as the Space viewer's hex view does. |  |
+
 ## leaf itself
 
 | Command | What it does | Shortcut |
