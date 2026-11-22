@@ -886,6 +886,19 @@ pub struct Settings {
     /// relative pattern is taken from the repository's parent folder.
     pub lane_folder: String,
 
+    // ---- Features and setup (modules.rs)
+    /// Which parts of leaf are switched on or off (Settings > Features); a module not named here has its own default (on).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub modules: std::collections::BTreeMap<String, bool>,
+    /// The first-run setup was finished or skipped. A settings file from before the setup has no such key and counts as done: only a
+    /// start with no settings file at all shows the setup.
+    pub setup_done: bool,
+    /// The modules whose first-use tip strip was dismissed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tips_seen: Vec<String>,
+    /// No first-use tips at all (Settings > Features).
+    pub tips_off: bool,
+
     // ---- Advanced
     pub show_flatten: bool,
 
@@ -1138,6 +1151,10 @@ impl Default for Settings {
             ai_layer: true,
             agent_budget_k: 0,
             lane_folder: "<repo>-wt/<name>".into(),
+            modules: Default::default(),
+            setup_done: false,
+            tips_seen: Vec::new(),
+            tips_off: false,
             show_flatten: false,
             space_quicklook: false,
             look_enabled: true,
@@ -1361,6 +1378,9 @@ impl Settings {
     fn parse_lenient(text: &str) -> Result<Settings, toml::de::Error> {
         let table: toml::Table = toml::from_str(text)?;
         let mut base = toml::Table::try_from(Settings::default()).unwrap_or_default();
+        // a file that has no `setup_done` is older than the setup (or the user never finished it, which comes to the same): its owner
+        // has no need of the first-run guide; only a start with no file at all (the defaults) shows it
+        base.insert("setup_done".into(), toml::Value::Boolean(true));
         for (k, v) in table {
             let mut trial = base.clone();
             trial.insert(k.clone(), v);
@@ -1515,6 +1535,8 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     cx.update_global::<Settings, _>(|s, _| f(s));
     // (the VPN's kill switch, DNS choice and place apply to the running tunnel)
     crate::vpn::settings_changed(&before, cx);
+    // (a module switched on starts its timers)
+    crate::modules::changed(&before, cx);
     let s = cx.global::<Settings>().clone();
     s.apply_side_effects();
     apply_component_theme(cx);

@@ -244,11 +244,22 @@ static TRIED: Mutex<Vec<(String, i64)>> = Mutex::new(Vec::new());
 
 /// Starts the clock of the scheduled jobs: a look at them shortly after leaf starts (runs missed while it was closed, jobs set to
 /// "when leaf starts"), then every minute. Nothing runs while leaf is closed; there is no system task.
+/// Whether the scheduler's timer is running.
+static SCHEDULER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn start_scheduler(cx: &mut App) {
+    // (the sync module off: no timer at all; `modules::changed` starts it when the module is turned on)
+    if !crate::modules::enabled(cx, crate::modules::Module::Sync) || std::env::var_os("LEAF_MULTI_INSTANCE").is_some() || SCHEDULER.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
     cx.spawn(async move |cx| {
         cx.background_executor().timer(std::time::Duration::from_secs(20)).await;
         let mut first = true;
         loop {
+            if !cx.update(|cx| crate::modules::enabled(cx, crate::modules::Module::Sync)) {
+                SCHEDULER.store(false, std::sync::atomic::Ordering::Release);
+                break;
+            }
             let at_start = std::mem::replace(&mut first, false);
             let _ = cx.update(|cx| tick(at_start, cx));
             cx.background_executor().timer(std::time::Duration::from_secs(60)).await;

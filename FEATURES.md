@@ -69,6 +69,8 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | New folder | Makes a new folder here and lets you name it. | `Ctrl+Shift+N` |
 | New text document | Makes a new empty text file here. |  |
 | Download here | Downloads a web address (http or https) into this folder: several connections at once, resumed after a cut line or a restart, shown in the Status Center with pause and cancel. An address on the clipboard is already in the box. From a terminal: leaf download <address> [folder]. |  |
+| Download with leaf (NZB) | Downloads what the selected NZB files list from your Usenet servers (Settings > Downloads > Usenet servers): checked and repaired with par2, unpacked and put in the download folder, shown in the Status Center. |  |
+| Pause or resume all Usenet downloads | Holds every Usenet job (or lets them go on again). |  |
 | Download several | Downloads many web addresses into this folder: paste links (one per line) or a pattern such as file[001-100].zip or photo[a-f].jpg. A list shows how many there are before they are added to the download queue. |  |
 | Send to device | Sends the selected items to a device nearby: a phone or computer running LocalSend, or another leaf. With several devices in reach, the right-click menu (Send with Nearby) lets you pick; this sends to the one used last, or to the only one found. |  |
 | Add to shelf | Puts the selected items on the shelf to drop them somewhere else later. | `Ctrl+Shift+S` |
@@ -112,6 +114,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Command | What it does | Shortcut |
 |---|---|---|
 | Customize Home | Opens Home with buttons to add, remove, resize and reorder its widgets. |  |
+| Transfer history | Lists the copies, moves, downloads and uploads that finished (what, from, to, size, time, speed, result), with Clear history and the switch that turns recording off. Kept on this PC only. |  |
 | Reset Home | Puts the Home page back to its default widgets. |  |
 | Show/hide hidden items | Shows or hides hidden files and folders. | `Ctrl+H` |
 | Hide git-ignored files | Inside a git repository, leaves out the files and folders .gitignore ignores (node_modules, target, logs...). The status line says how many are hidden. |  |
@@ -188,4 +191,5 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Save session | Saves the open tabs as a session to open later. |  |
 | Settings | Opens leaf's settings. | `Ctrl+,` |
 | What leaf can do | Lists every command with what it does and its shortcut. |  |
+| Setup guide | Walks through the look, what you use leaf for and which parts of leaf are on. Nothing changes until you finish it. |  |
 | Command palette | Finds any command by typing a few letters of its name, or a path to go to. | `Ctrl+Shift+P`, `F1` |

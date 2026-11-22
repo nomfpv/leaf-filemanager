@@ -46,6 +46,9 @@ fn default_folder(main: &Path, branch: &str) -> PathBuf {
 impl Workspace {
     /// Asks, off the interface's thread, for the worktrees of the repository the shown folder is in, when that is not known yet.
     fn wt_poll(&mut self, cur: &Location, cx: &mut Context<Self>) {
+        if !crate::modules::enabled(cx, crate::modules::Module::Dev) {
+            return;
+        }
         let Some(dir) = cur.path().map(Path::to_path_buf) else { return };
         let fresh = self.wt.at.is_some_and(|t| t.elapsed() < STALE);
         let known = self.wt.root.as_ref().is_some_and(|r| within(&dir, r));
@@ -98,7 +101,7 @@ impl Workspace {
     /// The "Worktrees" section of the sidebar: only inside a repository that has more than one worktree.
     pub(super) fn wt_sidebar(&mut self, mut col: Stateful<Div>, cur: &Location, rail: bool, p: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
         self.wt_poll(cur, cx);
-        if rail || self.wt.list.len() < 2 {
+        if rail || self.wt.list.len() < 2 || !crate::modules::enabled(cx, crate::modules::Module::Dev) {
             return col;
         }
         let list = self.wt.list.clone();

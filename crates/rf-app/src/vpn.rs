@@ -131,8 +131,16 @@ fn forget_sign_in(v: &Vault) -> Result<(), String> {
 
 /// At start: the runtime for the tunnel, the kill switch from the settings, the account's state (in the background), the
 /// windows redrawn when the VPN's state changes, and the tunnel brought up when "Connect when leaf starts" is on.
+/// Whether the VPN's start-up work (account, proxy, the poll that redraws the windows) is running.
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn init(cx: &mut App) {
-    leaf_vpn::init(leaf_remote::runtime_handle);
+    // (the VPN module off: nothing starts; turning it on later calls this from `settings_changed`)
+    if !crate::modules::enabled(cx, crate::modules::Module::Vpn) || STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    static LIB: std::sync::Once = std::sync::Once::new();
+    LIB.call_once(|| leaf_vpn::init(leaf_remote::runtime_handle));
     let s = cx.global::<Settings>();
     leaf_vpn::set_kill_switch(s.vpn_kill_switch);
     // (the keyring is opened at start only when there is a sign-in in it)
@@ -153,6 +161,11 @@ pub fn init(cx: &mut App) {
         let (mut seen_vpn, mut seen_ui) = (leaf_vpn::changes(), UI_CHANGES.load(Ordering::Acquire));
         loop {
             cx.background_executor().timer(Duration::from_millis(400)).await;
+            // (switched off while running: the poll ends)
+            if !cx.update(|cx| crate::modules::enabled(cx, crate::modules::Module::Vpn)) {
+                STARTED.store(false, Ordering::Release);
+                break;
+            }
             let (v, u) = (leaf_vpn::changes(), UI_CHANGES.load(Ordering::Acquire));
             if (v, u) != (seen_vpn, seen_ui) {
                 (seen_vpn, seen_ui) = (v, u);
@@ -418,6 +431,18 @@ pub fn disconnect(_cx: &mut App) {
 /// A setting of the page changed: the kill switch takes it at once; a new DNS choice goes to the running tunnel; a new place
 /// reconnects a running tunnel.
 pub fn settings_changed(before: &Settings, cx: &mut App) {
+    // the module's switch: off closes a running tunnel and lets go of the kill switch; on starts what start-up would have
+    let was = crate::modules::enabled_in(before, crate::modules::Module::Vpn);
+    if !crate::modules::enabled(cx, crate::modules::Module::Vpn) {
+        if was {
+            leaf_vpn::set_kill_switch(false);
+            disconnect(cx);
+        }
+        return;
+    }
+    if !was || !STARTED.load(Ordering::Acquire) {
+        init(cx);
+    }
     let s = cx.global::<Settings>();
     leaf_vpn::set_kill_switch(s.vpn_kill_switch);
     if let Some(t) = leaf_vpn::tunnel()

@@ -77,7 +77,7 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
-    let any = state_dir().is_some_and(|d| !leaf_share::store::Store::load(&d).shares.is_empty());
+    let any = crate::modules::enabled(cx, crate::modules::Module::Shares) && state_dir().is_some_and(|d| !leaf_share::store::Store::load(&d).shares.is_empty());
     if any {
         ensure(cx);
     }
@@ -87,6 +87,11 @@ pub fn init(cx: &mut App) {
 pub fn apply(cx: &mut App) {
     let Some(ui) = cx.try_global::<ShareUi>() else { return };
     if ui.service.is_none() {
+        return;
+    }
+    // (the shared-folders module switched off: the service stops)
+    if !crate::modules::enabled(cx, crate::modules::Module::Shares) {
+        stop(cx);
         return;
     }
     let s = cx.global::<Settings>();

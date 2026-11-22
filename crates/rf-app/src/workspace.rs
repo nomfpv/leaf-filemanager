@@ -4583,7 +4583,7 @@ impl Workspace {
             }
         }
         // saved hosts (Settings > Hosts), only while there are any
-        let hosts = if shown("hosts") && places_loaded { crate::hosts_ui::all(cx) } else { Vec::new() };
+        let hosts = if shown("hosts") && places_loaded && crate::modules::enabled(cx, crate::modules::Module::Servers) { crate::hosts_ui::all(cx) } else { Vec::new() };
         if !hosts.is_empty() {
             col = col.child(header(t!("Hosts")));
         }

@@ -263,7 +263,8 @@ impl MenuPlace {
 
     /// Whether the menu has it in this situation: the target, the switch of Settings and the row's own condition.
     pub fn shown(&self, ctx: &MenuContext) -> bool {
-        self.targets.contains(ctx.target) && self.switch.is_none_or(|s| ctx.prefs.get(s.key)) && self.when.is_none_or(|w| w(ctx))
+        crate::modules::of_slot(self.slot).is_none_or(|m| !crate::modules::is_off(ctx.modules_off, m))
+            && self.targets.contains(ctx.target) && self.switch.is_none_or(|s| ctx.prefs.get(s.key)) && self.when.is_none_or(|w| w(ctx))
     }
 }
 
@@ -284,6 +285,8 @@ pub struct MenuContext {
     pub in_search: bool,
     pub dual: bool,
     pub prefs: MenuPrefs,
+    /// The modules that are off, one bit each (`modules::off_mask`): their rows are left out. 0: all on.
+    pub modules_off: u32,
     pub show_flatten: bool,
     pub name_index: bool,
     /// "Send to" has its place: files of one folder on disk.

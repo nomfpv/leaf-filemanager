@@ -67,6 +67,9 @@ fn row(p: &Palette, ix: usize, c: &'static CommandSpec, cx: &App) -> AnyElement 
     };
     let only = c.platforms.label();
     let desc = if only.is_empty() { crate::i18n::t(c.description).to_string() } else { format!("{} ({only})", crate::i18n::t(c.description)) };
+    // a command of a part of leaf that is switched off is listed, marked, not hidden
+    let off = !c.module_on(cx);
+    let desc = if off { format!("{} {}", crate::i18n::t("Off, turn on in Settings > Features."), desc) } else { desc };
     h_flex()
         .id(("feat", ix))
         .min_h(px(52.))
@@ -74,6 +77,7 @@ fn row(p: &Palette, ix: usize, c: &'static CommandSpec, cx: &App) -> AnyElement 
         .py_2()
         .gap_4()
         .items_center()
+        .when(off, |d| d.opacity(0.6))
         .child(Icon::new(c.icon).size(px(16.)).flex_shrink_0().text_color(p.text_secondary))
         .child(
             v_flex()
@@ -133,7 +137,7 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let mut any = false;
     for cat in Category::ALL {
         let rows: Vec<&'static CommandSpec> =
-            crate::registry::all().filter(|c| c.category == cat && c.places.contains(Places::PAGE) && c.available(cx) && matches(c, &words)).collect();
+            crate::registry::all().filter(|c| c.category == cat && c.places.contains(Places::PAGE) && c.when.is_none_or(|w| w(cx)) && matches(c, &words)).collect();
         if rows.is_empty() {
             continue;
         }

@@ -54,9 +54,20 @@ pub fn note_finished() {
 }
 
 /// Looks at the schedule and the queue every 5 seconds, for as long as leaf runs.
+/// Whether the timer is running.
+static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn start(cx: &mut App) {
+    // (the downloads module off: no timer; `modules::changed` starts it when the module is turned on)
+    if !crate::modules::enabled(cx, crate::modules::Module::Downloads) || RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
     cx.spawn(async move |cx| {
         loop {
+            if !cx.update(|cx| crate::modules::enabled(cx, crate::modules::Module::Downloads)) {
+                RUNNING.store(false, std::sync::atomic::Ordering::Release);
+                break;
+            }
             let _ = cx.update(tick);
             cx.background_executor().timer(Duration::from_secs(5)).await;
         }

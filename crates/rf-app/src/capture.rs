@@ -126,7 +126,7 @@ pub fn handle(req: String, mut ack: leaf_sys::handover::Ack, cx: &mut App) {
         return;
     }
     let s = cx.global::<Settings>();
-    let (on, min_bytes) = (s.capture_browser, u64::from(s.capture_min_mb) << 20);
+    let (on, min_bytes) = (s.capture_browser && crate::modules::enabled_in(s, crate::modules::Module::Downloads), u64::from(s.capture_min_mb) << 20);
     let taken = match msg {
         Ok(m) if m.kind == "ping" || m.kind == "hello" => Ok(None),
         // "Download video with leaf": a page address for yt-dlp (the media dialog's defaults; no cookies come along)

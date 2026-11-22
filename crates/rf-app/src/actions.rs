@@ -114,6 +114,7 @@ gpui_kit::actions!(
         CompareFolders,
         FindDuplicates,
         ShowFeatures,
+        SetupGuide,
         CustomizeHome,
         ResetHome,
         ShowTransferHistory,

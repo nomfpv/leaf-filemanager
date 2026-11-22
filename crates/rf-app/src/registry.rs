@@ -195,7 +195,18 @@ impl CommandSpec {
     }
 
     pub fn available(&self, cx: &App) -> bool {
-        self.when.is_none_or(|w| w(cx))
+        self.module_on(cx) && self.when.is_none_or(|w| w(cx))
+    }
+
+    /// The module this command belongs to (`modules.rs`), when it has one.
+    pub fn module(&self) -> Option<crate::modules::Module> {
+        if self.custom.is_empty() { crate::modules::of_command(self.id) } else { None }
+    }
+
+    /// Whether its module is on (a command of no module: yes). A command of a module that is off is not offered; "What leaf can do"
+    /// lists it with a note instead.
+    pub fn module_on(&self, cx: &App) -> bool {
+        self.module().is_none_or(|m| crate::modules::enabled(cx, m))
     }
 }
 
@@ -287,6 +298,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(ResetHome, View, "Reset Home", "Puts the Home page back to its default widgets.", RotateCcw, [], keywords: &["dashboard", "widgets", "default"], since: "0.9.5"),
     c!(GoSettings, App, "Settings", "Opens leaf's settings.", Settings, [w("ctrl-,")], keywords: &["options", "preferences"]),
     c!(ShowFeatures, App, "What leaf can do", "Lists every command with what it does and its shortcut.", Sparkles, [], keywords: &["features", "commands", "help", "shortcuts"], since: "0.9.5"),
+    c!(SetupGuide, App, "Setup guide", "Walks through the look, what you use leaf for and which parts of leaf are on. Nothing changes until you finish it.", Sparkles, [], keywords: &["setup", "first run", "welcome", "guide", "features", "modules", "tour"], since: "0.9.6"),
     c!(GoRecycleBin, Navigation, "Trash", "Opens the Trash.", Trash, [], keywords: &["trash", "deleted"]),
     c!(FocusAddress, Navigation, "Focus address bar", "Puts the keyboard in the address bar to type a path.", TextCursorInput, [w("ctrl-l"), w("alt-d")], keywords: &["path", "location"]),
     c!(FocusSearch, Navigation, "Search", "Searches this folder.", Search, [w("ctrl-f"), w("ctrl-e")], keywords: &["find", "filter"]),

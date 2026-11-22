@@ -402,6 +402,10 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
     let mut shown = 0;
     for (pos, &(i, size)) in placed.iter().enumerate() {
         let w = &WIDGETS[i];
+        // (a widget of a module that is off is not drawn and computes nothing; its place in the layout is kept)
+        if crate::modules::of_widget(w.id).is_some_and(|m| !crate::modules::enabled(cx, m)) {
+            continue;
+        }
         let span = size.span(cols);
         let width = col_w * f32::from(span) + gap * f32::from(span - 1) - 2. * W_PAD;
         let rows = size.rows(w.rows);
@@ -453,7 +457,9 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
             }),
         ));
 
-    let missing: Vec<usize> = (0..WIDGETS.len()).filter(|i| !placed.iter().any(|(j, _)| j == i)).collect();
+    let missing: Vec<usize> = (0..WIDGETS.len())
+        .filter(|i| !placed.iter().any(|(j, _)| j == i) && crate::modules::of_widget(WIDGETS[*i].id).is_none_or(|m| crate::modules::enabled(cx, m)))
+        .collect();
     let adder = editing.then(|| {
         let mut row = h_flex().flex_wrap().gap_2().items_center().child(div().text_sm().text_color(p.text_secondary).child(t!("Add a widget:")));
         if missing.is_empty() {

@@ -255,7 +255,7 @@ pub fn apply(cx: &mut App) {
         return;
     }
     let s = cx.global::<Settings>();
-    let want = s.nearby_enabled.then(|| Started { name: name_of(s), inbox: inbox_of(s).to_string_lossy().into_owned(), auto_accept_trusted: s.nearby_auto_accept_trusted });
+    let want = (s.nearby_enabled && crate::modules::enabled_in(s, crate::modules::Module::Shares)).then(|| Started { name: name_of(s), inbox: inbox_of(s).to_string_lossy().into_owned(), auto_accept_trusted: s.nearby_auto_accept_trusted });
     let vis = match s.nearby_visibility {
         NearbyVisibility::Off => Visibility::Off,
         NearbyVisibility::Trusted => Visibility::Trusted,
