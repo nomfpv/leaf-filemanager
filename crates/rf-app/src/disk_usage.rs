@@ -189,7 +189,7 @@ const SIZE_NUM_W: f32 = 44.;
 const SIZE_UNIT_W: f32 = 22.;
 const BAR_W: f32 = 110.;
 const PCT_W: f32 = 40.;
-const FILES_W: f32 = 48.;
+const FILES_W: f32 = 72.;
 
 /// One drawn rectangle of the treemap.
 struct Cell {
@@ -806,7 +806,7 @@ impl Render for DiskUsageView {
                             .child(div().h(px(6.)).w(px(BAR_W)).flex_shrink_0().rounded_full().bg(p.pressed).child(div().h_full().rounded_full().bg(bar).w(relative(frac.clamp(0.0, 1.0)))))
                             .child(div().w(px(PCT_W)).flex_shrink_0().whitespace_nowrap().text_right().text_color(p.text_secondary).font_features(tnum.clone()).child(crate::i18n::pct(frac * 100.))),
                     )
-                    .child(div().w(px(FILES_W)).flex_shrink_0().text_right().text_color(p.text_secondary).font_features(tnum.clone()).when(is_dir, |d| d.child(count(t.files(id) as u64)))),
+                    .child(div().w(px(FILES_W)).flex_shrink_0().whitespace_nowrap().text_right().text_color(p.text_secondary).font_features(tnum.clone()).when(is_dir, |d| d.child(count(t.files(id) as u64)))),
             );
         }
         let hidden = self.rows.len().saturating_sub(LIST_MAX);
