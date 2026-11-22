@@ -112,7 +112,7 @@ fn animated(bytes: &[u8], format: image::ImageFormat, max_side: u32) -> Option<V
     (frames.len() > 1).then_some(frames)
 }
 
-fn with_image_crate(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
+pub(crate) fn with_image_crate(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
     let reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let format = reader.format().ok_or_else(|| anyhow!("unknown format"))?;
     if let Some(frames) = animated(bytes, format, max_side) {
@@ -126,7 +126,7 @@ fn with_image_crate(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
     Ok(Decoded { frames: vec![(to_bgra(shrink(img.into_rgba8(), max_side)), 0)], orientation, exif, width, height })
 }
 
-fn svg(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
+pub(crate) fn svg(bytes: &[u8], max_side: u32) -> anyhow::Result<Decoded> {
     use resvg::{tiny_skia, usvg};
     let mut opt = usvg::Options::default();
     // sistem yazı tipleri yalnız metin içeren SVG'de gerekir; yüklemesi pahalı, bir kez yapılır

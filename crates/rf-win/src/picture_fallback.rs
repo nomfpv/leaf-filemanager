@@ -63,3 +63,28 @@ pub fn thumbnail(path: &Path, size: u32) -> Option<Bgra> {
         }
     }
 }
+
+/// An SVG or SVGZ file: drawn by `resvg` (the same render as the Space viewer), which Windows has no thumbnail for.
+pub fn is_svg(path: &Path) -> bool {
+    matches!(ext(path).as_str(), "svg" | "svgz")
+}
+
+/// Largest SVG file drawn for a thumbnail (a hostile or huge one is left alone, not parsed).
+const MAX_SVG: u64 = 16 << 20;
+
+/// The SVG at `size` pixels on its long side. `None`: too big, not an SVG, or the render failed (never panics).
+pub fn svg_thumbnail(path: &Path, size: u32) -> Option<Bgra> {
+    if std::fs::metadata(path).ok()?.len() > MAX_SVG {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let drawn = std::panic::catch_unwind(|| crate::look::decode::svg(&bytes, size.clamp(16, 1024))).ok()?;
+    match drawn {
+        Ok(mut d) if !d.frames.is_empty() => Some(d.frames.swap_remove(0).0),
+        Ok(_) => None,
+        Err(e) => {
+            log::debug!("{}: {e}", path.display());
+            None
+        }
+    }
+}
