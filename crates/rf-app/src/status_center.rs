@@ -1173,6 +1173,9 @@ fn transfer_run(
     };
     let note_from = sources.first().and_then(|p| p.parent()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     let note_to = dest.to_string_lossy().into_owned();
+    if kind == Transfer::Move && crate::ext::active() && sources.first().and_then(|p| p.parent()) != Some(dest.as_path()) {
+        crate::ext::rows_leaving(crate::ext::LeaveCause::Move, sources.first().and_then(|p| p.parent()).map(|p| p.to_path_buf()), &sources, cx);
+    }
     let id = start_with_id(cx, title, move |t| {
         t.set_verify(verify);
         t.limit.store(limit, Ordering::Relaxed);
@@ -1896,6 +1899,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
         }
     }));
     crate::ext::kind_hint(crate::ext::OpKind::Delete);
+    crate::ext::rows_leaving(crate::ext::LeaveCause::Delete { permanent }, paths.first().and_then(|p| p.parent()).map(|p| p.to_path_buf()), &paths, cx);
     let id = start_with_id(cx, title, move |t| {
         // permanent: our parallel delete (the shell takes what it can't); recycle bin: the shell
         let r = if permanent && fast {

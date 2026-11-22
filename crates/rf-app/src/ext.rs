@@ -260,6 +260,50 @@ impl SidebarRow {
     }
 }
 
+/// Why rows leave the file list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaveCause {
+    /// Deleted: to the Trash, or for good.
+    Delete { permanent: bool },
+    /// Moved to another folder.
+    Move,
+}
+
+/// One row that is about to leave the file list.
+#[derive(Clone, Debug)]
+pub struct LeavingRow {
+    pub path: PathBuf,
+    /// The name as the list shows it (the real name; a display-name hook is not applied).
+    pub name: String,
+    /// The kind by name (a folder is not told apart from a file without a name extension: `Folder` only when the row was on screen).
+    pub kind: FileKind,
+    /// Where the row is drawn right now (window coordinates); `None` when it is not on screen.
+    pub rect: Option<Bounds<Pixels>>,
+}
+
+/// What a "rows leave the list" hook is told, just before the list drops the rows. Visual only: the operation does not wait for the
+/// hook and never sees what it returns.
+#[derive(Clone, Debug)]
+pub struct RowsLeaving {
+    pub cause: LeaveCause,
+    /// The folder the rows are in.
+    pub dir: Option<PathBuf>,
+    pub rows: Vec<LeavingRow>,
+}
+
+/// What a "a folder opens" hook is told.
+#[derive(Clone, Debug)]
+pub struct FolderOpening {
+    /// The place left (`None` on a first load or when it is not a folder).
+    pub from: Option<PathBuf>,
+    pub to: Option<PathBuf>,
+    /// The content area as it is now (window coordinates).
+    pub content: Option<Bounds<Pixels>>,
+}
+
+/// The longest the list keeps leaving rows painted (see [`Registrar::on_rows_leave`]).
+pub const KEEP_ROWS_MAX_MS: u64 = 1500;
+
 /// What a row decoration or icon hook is told about a file row.
 #[derive(Clone, Debug)]
 pub struct RowInfo {
@@ -341,6 +385,8 @@ pub struct Registrar {
     row_hook: Option<Rc<dyn Fn(&RowInfo) -> Option<AnyElement>>>,
     icon_hook: Option<Rc<dyn Fn(&Path) -> Option<Arc<RenderImage>>>>,
     about: Option<Rc<dyn Fn(&mut App) -> AnyElement>>,
+    leave_hook: Option<Rc<dyn Fn(&RowsLeaving, &mut App) -> Option<u64>>>,
+    open_hook: Option<Rc<dyn Fn(&FolderOpening, &mut App)>>,
 }
 
 type Layer = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
@@ -396,6 +442,18 @@ impl Registrar {
     /// Display only: a picture shown instead of a file's icon.
     pub fn icon_override(&mut self, f: impl Fn(&Path) -> Option<Arc<RenderImage>> + 'static) {
         self.icon_hook = Some(Rc::new(f));
+    }
+    /// Transition hook (visual only): rows are about to leave the list because they are deleted or moved away. The hook gets their
+    /// names, kinds and on-screen rectangles and may play its own effect in an overlay. Returning `Some(ms)` asks the list to keep
+    /// those rows painted, greyed and not clickable, for up to `ms` (at most [`KEEP_ROWS_MAX_MS`]) after they are gone, then it closes
+    /// the gap. Rows of items that were not deleted stay as they are. Only the details list keeps rows (not the grid or columns).
+    /// The operation itself starts at once and never waits.
+    pub fn on_rows_leave(&mut self, f: impl Fn(&RowsLeaving, &mut App) -> Option<u64> + 'static) {
+        self.leave_hook = Some(Rc::new(f));
+    }
+    /// Transition hook (visual only): a folder is being opened in a tab; the old and new place and the content area's rectangle.
+    pub fn on_folder_open(&mut self, f: impl Fn(&FolderOpening, &mut App) + 'static) {
+        self.open_hook = Some(Rc::new(f));
     }
     /// A section under this extension's row in Settings > About (its own switches and texts).
     pub fn about_section(&mut self, f: impl Fn(&mut App) -> AnyElement + 'static) {
@@ -1172,6 +1230,81 @@ pub(crate) fn has_icon_hook() -> bool {
 pub(crate) fn icon_override(path: &Path) -> Option<Arc<RenderImage>> {
     let reg = registry()?;
     reg.on().find_map(|(_, e)| e.r.icon_hook.as_ref().and_then(|f| guard(&e.id, || f(path)).flatten()))
+}
+
+// ------------------------------------------------------------------------------------------------------------------------- transitions
+
+thread_local! {
+    /// Rows asked to stay painted after they left the list: path -> until.
+    static KEEP: RefCell<std::collections::HashMap<PathBuf, std::time::Instant>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Runs the "rows leave" hooks for `paths` (in folder `dir`). Called on the UI thread just before the job starts.
+pub(crate) fn rows_leaving(cause: LeaveCause, dir: Option<PathBuf>, paths: &[PathBuf], cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(reg) = registry() else { return };
+    if !reg.on().any(|(_, e)| e.r.leave_hook.is_some()) {
+        return;
+    }
+    let rows: Vec<LeavingRow> = paths
+        .iter()
+        .take(200)
+        .map(|p| {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            match row_geo(p) {
+                Some((rect, name, kind)) => LeavingRow { path: p.clone(), name, kind, rect: Some(rect) },
+                None => LeavingRow { path: p.clone(), kind: FileKind::of_name(&name, false), name, rect: None },
+            }
+        })
+        .collect();
+    let info = RowsLeaving { cause, dir, rows };
+    let mut keep = 0u64;
+    for (_, e) in reg.on() {
+        if let Some(f) = &e.r.leave_hook
+            && let Some(Some(ms)) = guard(&e.id, || f(&info, cx))
+        {
+            keep = keep.max(ms);
+        }
+    }
+    let keep = keep.min(KEEP_ROWS_MAX_MS);
+    if keep > 0 {
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(keep);
+        KEEP.with(|k| {
+            let mut k = k.borrow_mut();
+            let now = std::time::Instant::now();
+            k.retain(|_, t| *t > now);
+            for p in paths {
+                k.insert(p.clone(), until);
+            }
+        });
+    }
+}
+
+/// How long the row for `path` is still to be kept painted after it left the list (`None`: not at all).
+pub(crate) fn keep_for(path: &Path) -> Option<std::time::Duration> {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return None;
+    }
+    KEEP.with(|k| k.borrow().get(path).and_then(|t| t.checked_duration_since(std::time::Instant::now())))
+}
+
+/// Whether any row is waiting to be kept (a cheap check before the list looks).
+pub(crate) fn keeping_rows() -> bool {
+    ACTIVE.load(Ordering::Relaxed) && KEEP.with(|k| !k.borrow().is_empty())
+}
+
+/// Runs the "a folder opens" hooks.
+pub(crate) fn folder_opening(from: Option<PathBuf>, to: Option<PathBuf>, cx: &mut App) {
+    let Some(reg) = registry() else { return };
+    let info = FolderOpening { from, to, content: content_rect() };
+    for (_, e) in reg.on() {
+        if let Some(f) = &e.r.open_hook {
+            let f = f.clone();
+            guard(&e.id, || f(&info, cx));
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- About

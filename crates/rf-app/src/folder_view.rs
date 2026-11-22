@@ -524,6 +524,10 @@ pub struct FolderView {
     props: prop_cols::PropState,
     /// Ranks for a sort by tag or path (see `sort_ext`); empty and idle for every other key.
     sortx: sort_ext::SortxState,
+    /// The place this view showed before the load in progress (for an extension's "a folder opens" hook).
+    ext_prev: Option<PathBuf>,
+    /// Names of rows an extension asked to keep painted after the file went (greyed, not clickable, see `ext::keep_for`).
+    ghosts: HashSet<Arc<str>>,
     cursor: Option<usize>,
     anchor: Option<usize>,
     /// The other pane of a split tab has the focus: the selection here is drawn in the neutral colour (set by the workspace).
@@ -787,6 +791,8 @@ impl FolderView {
             selected: HashSet::new(),
             props: prop_cols::PropState::default(),
             sortx: Default::default(),
+            ext_prev: None,
+            ghosts: HashSet::new(),
             cursor: None,
             anchor: None,
             pane_inactive: false,
@@ -1431,6 +1437,13 @@ impl FolderView {
         self.load_serial += 1;
         // every folder landed on (navigating, Back/Forward, a refresh) is remembered for the palette's folder search
         crate::folder_history::record(self.location());
+        if crate::ext::active() {
+            let to = self.location().path().map(std::path::Path::to_path_buf);
+            if to != self.ext_prev {
+                crate::ext::folder_opening(self.ext_prev.take(), to.clone(), cx);
+                self.ext_prev = to;
+            }
+        }
         self.apply_folder_layout(cx);
         self.images.update(cx, |c, _| c.cancel_pending());
         self.git = None;
@@ -2407,9 +2420,66 @@ impl FolderView {
         self.swap_in(fresh, None, sorted, cx);
     }
 
+    /// The entries of the old listing that are missing from `new` and that an extension asked to keep painted (see
+    /// `ext::Registrar::on_rows_leave`); `self.ghosts` is made to match, and a timer ends their time on screen.
+    fn ghosts_to_keep(&mut self, new: &[Entry], cx: &mut Context<Self>) -> Vec<Entry> {
+        let mut out = Vec::new();
+        let (Some(dir), true) = (self.location().path().map(std::path::Path::to_path_buf), self.view_mode == ViewMode::Details) else {
+            self.ghosts.clear();
+            return out;
+        };
+        let present: HashSet<&Arc<str>> = new.iter().map(|e| &e.name).collect();
+        let mut names = HashSet::new();
+        let mut soonest: Option<Duration> = None;
+        for e in &self.entries {
+            let there = present.contains(&e.name);
+            // (a name that is still in the new listing and is no ghost is a file like any other)
+            if there && !self.ghosts.contains(&e.name) {
+                continue;
+            }
+            if let Some(left) = crate::ext::keep_for(&dir.join(&*e.name)) {
+                names.insert(e.name.clone());
+                soonest = Some(soonest.map_or(left, |s| s.min(left)));
+                // (an old ghost is in the new listing already: the watcher's patch keeps what it did not hear of)
+                if !there {
+                    out.push(e.clone());
+                }
+            }
+        }
+        self.ghosts = names;
+        if let Some(after) = soonest {
+            // (when it is over the gap closes: the listing is swapped again, without them)
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(after + Duration::from_millis(20)).await;
+                let _ = this.update(cx, |v, cx| {
+                    let fresh: Vec<Entry> = v.entries.iter().filter(|e| !v.ghosts.contains(&e.name) || v.path_gone_keep(&e.name)).cloned().collect();
+                    if fresh.len() != v.entries.len() {
+                        v.swap_in(fresh, None, None, cx);
+                    }
+                });
+            })
+            .detach();
+        }
+        out
+    }
+
+    /// Whether the ghost called `name` is still to be kept painted (its time has not run out).
+    fn path_gone_keep(&self, name: &Arc<str>) -> bool {
+        self.location().path().is_some_and(|d| crate::ext::keep_for(&d.join(&**name)).is_some())
+    }
+
     /// Puts a new listing of the same folder in place, keeping the selection, the cursor and a
     /// rename by name. `sorted`: the new entries' sort order when already known.
     fn swap_in(&mut self, new_entries: Vec<Entry>, view: Option<View>, sorted: Option<Vec<u32>>, cx: &mut Context<Self>) {
+        let (mut new_entries, mut sorted) = (new_entries, sorted);
+        // rows an extension asked to keep painted: the entries that went are put back, as ghosts, for the time asked
+        if crate::ext::keeping_rows() || !self.ghosts.is_empty() {
+            let kept = self.ghosts_to_keep(&new_entries, cx);
+            if !kept.is_empty() {
+                new_entries.extend(kept);
+                sorted = None;
+            }
+        }
         let (was_selected, applying) = (self.selected.len(), Instant::now());
         let selected_names: HashSet<Arc<str>> =
             self.selected.iter().map(|&i| self.entries[i as usize].name.clone()).collect();
@@ -4282,7 +4352,12 @@ impl FolderView {
             // only items that are real files have a path; a phone's items have none
             return self.shell_items.get(ei as usize)?.fs_path.clone();
         }
-        Some(self.parent_of(ei)?.join(&*self.entries.get(ei as usize)?.name))
+        let name = &self.entries.get(ei as usize)?.name;
+        // (a row kept painted for an extension is not a file any more: nothing acts on it)
+        if !self.ghosts.is_empty() && self.ghosts.contains(name) {
+            return None;
+        }
+        Some(self.parent_of(ei)?.join(&**name))
     }
 
     pub(crate) fn places_pinned_paths(&self, cx: &App) -> Vec<PathBuf> {
@@ -5020,6 +5095,27 @@ impl FolderView {
                 r
             };
             let Some(&ei) = self.visible.get(vi) else { break };
+            // a row an extension asked to keep painted: greyed, not clickable
+            if !self.ghosts.is_empty() && self.ghosts.contains(&self.entries[ei as usize].name) {
+                let g = &self.entries[ei as usize];
+                let cat = icons::category(g);
+                out.push(
+                    h_flex()
+                        .id(("ghost", vi))
+                        .h(row_h)
+                        .w_full()
+                        .pl(px(9.))
+                        .gap_2()
+                        .items_center()
+                        .opacity(0.4)
+                        .text_size(px(p.fs))
+                        .text_color(p.text_secondary)
+                        .child(Icon::new(icons::icon_for(cat)).size(px(16.)).flex_shrink_0().text_color(theme::kind_color(cat, p.dark)))
+                        .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(g.name.to_string()))
+                        .into_any_element(),
+                );
+                continue;
+            }
             let prop_cells = match &prop_ctx {
                 Some(c) => {
                     shown = Some(shown.map_or((vi, vi), |(a, b)| (a.min(vi), b.max(vi))));
