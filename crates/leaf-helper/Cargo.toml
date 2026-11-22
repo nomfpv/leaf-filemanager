@@ -1,0 +1,24 @@
+[package]
+name = "leaf-helper"
+description = "leaf: the administrator helper; does a fixed list of file operations for leaf after one UAC (or pkexec) prompt, then ends"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[[bin]]
+name = "leaf-helper"
+path = "src/main.rs"
+
+[dependencies]
+# the messages, the path checks and (through leaf-sys) the same copy and delete engines leaf runs itself
+leaf-common.workspace = true
+leaf-sys.workspace = true
+log.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

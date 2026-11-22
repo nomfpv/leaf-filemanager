@@ -26,3 +26,6 @@ crc32fast.workspace = true
 # photo.rs: the date a photo was taken, from its EXIF fields
 kamadak-exif = "0.6"
 chrono.workspace = true
+# admin.rs: the messages between leaf and its administrator helper
+serde.workspace = true
+serde_json.workspace = true

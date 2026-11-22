@@ -18,6 +18,7 @@ pub mod recycle;
 pub mod thumbs;
 
 // modules that work on every system as they are
+pub mod admin;
 pub mod design;
 pub mod dupes;
 pub mod docs;

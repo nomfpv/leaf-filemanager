@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-nmhost", "crates/leaf-download", "crates/leaf-sync", "crates/leaf-copy", "crates/leaf-agents", "crates/leaf-vpn", "crates/leaf-share", "crates/leaf-open", "crates/leaf-ytdlp", "crates/leaf-nzb", "crates/leaf-bluray"]
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-player", "crates/rustdecoder", "crates/leaf-common", "crates/leaf-unix", "crates/leaf-sys", "crates/leaf-decode", "crates/leaf-dev", "crates/leaf-vfs", "crates/leaf-remote", "crates/leaf-mcp", "crates/leaf-nmhost", "crates/leaf-download", "crates/leaf-sync", "crates/leaf-copy", "crates/leaf-agents", "crates/leaf-vpn", "crates/leaf-share", "crates/leaf-open", "crates/leaf-ytdlp", "crates/leaf-nzb", "crates/leaf-bluray", "crates/leaf-helper"]
 exclude = ["vendor/velopack"]
 
 [workspace.package]
