@@ -632,5 +632,8 @@ fn tagged(path: &Path, opts: &Options) -> Vec<String> {
             }
         }
     }
+    if let Ok(more) = crate::tags::extra(path, false) {
+        v.extend(more.into_iter().map(|f| f.label));
+    }
     v
 }

@@ -1645,3 +1645,94 @@ fn scrub_mp3_leaves_no_marker_anywhere() {
     assert_no_markers(&dst, "mp3");
     let _ = fs::remove_dir_all(&d);
 }
+
+/// What the tag library leaves: WAV production chunks (bext, iXML, XMP, LIST INFO), a FLAC APPLICATION block, and ID3v1, Lyrics3
+/// and APE tags at the end of an mp3. All go; the audio stays.
+#[test]
+fn scrub_audio_chunks_beyond_the_tag_library_leave_no_marker() {
+    let d = tmp_dir("audio-more");
+    let chunk = |id: &[u8; 4], body: &[u8]| {
+        let mut v = id.to_vec();
+        v.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        v.extend_from_slice(body);
+        if body.len() & 1 == 1 {
+            v.push(0);
+        }
+        v
+    };
+    // WAV: 16-bit mono 8 kHz, 800 samples
+    let fmt = [1u16.to_le_bytes(), 1u16.to_le_bytes()].concat();
+    let fmt = [&fmt[..], &8000u32.to_le_bytes(), &16000u32.to_le_bytes(), &2u16.to_le_bytes(), &16u16.to_le_bytes()].concat();
+    let audio: Vec<u8> = (0..1600u32).map(|i| (i * 7 % 251) as u8).collect();
+    let mut bext = vec![0u8; 602];
+    bext[256..256 + AUTHOR.len()].copy_from_slice(AUTHOR);
+    let body = [
+        &b"WAVE"[..],
+        &chunk(b"fmt ", &fmt),
+        &chunk(b"bext", &bext),
+        &chunk(b"iXML", &[&b"<BWFXML><NOTE>"[..], SERIAL, b"</NOTE></BWFXML>"].concat()),
+        &chunk(b"_PMX", b"<x:xmpmeta>Planted Author</x:xmpmeta>"),
+        &chunk(b"data", &audio),
+        &chunk(b"LIST", &[&b"INFOIART"[..], &15u32.to_le_bytes(), b"Planted Author\0"].concat()),
+    ]
+    .concat();
+    let wav = [&b"RIFF"[..], &(body.len() as u32).to_le_bytes(), &body].concat();
+    let src = d.join("a.wav");
+    fs::write(&src, &wav).unwrap();
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label == "Audio chunk (bext)"), "{:?}", before.findings);
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "wav");
+    assert!(contains(&fs::read(&dst).unwrap(), &audio));
+    assert_clean_listing(&dst);
+    // FLAC: STREAMINFO, an APPLICATION block, a frame header's worth of audio
+    let info: u64 = (44100u64 << 44) | (15 << 36) | 4096;
+    let streaminfo = [&4096u16.to_be_bytes()[..], &4096u16.to_be_bytes(), &[0u8; 6], &info.to_be_bytes(), &[0u8; 16]].concat();
+    let app = [&b"LEAF"[..], SERIAL, b" Planted Author"].concat();
+    let flac = [
+        &b"fLaC"[..],
+        &[0x00, 0, 0, streaminfo.len() as u8],
+        &streaminfo,
+        &[0x82, 0, 0, app.len() as u8],
+        &app,
+        &[0xFF, 0xF8, 0x69, 0x08, 0x00, 0x0F, 0xA3],
+        &[0u8; 64],
+    ]
+    .concat();
+    let src = d.join("a.flac");
+    fs::write(&src, &flac).unwrap();
+    {
+        inspect(&src, &opts()).unwrap();
+        let dst = clean_copy_name(&src);
+        clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+        assert_no_markers(&dst, "flac");
+        assert_eq!(fs::read(&dst).unwrap().len(), flac.len(), "the block became padding of the same size");
+    }
+    // mp3: APE, Lyrics3 and ID3v1 after the audio
+    let mut mp3 = Vec::new();
+    for _ in 0..40 {
+        let mut f = vec![0xFF, 0xFB, 0x90, 0x00];
+        f.resize(417, 0);
+        mp3.extend(f);
+    }
+    let item = [&(AUTHOR.len() as u32).to_le_bytes()[..], &0u32.to_le_bytes(), b"Artist\0", AUTHOR].concat();
+    let footer = [&b"APETAGEX"[..], &2000u32.to_le_bytes(), &((item.len() + 32) as u32).to_le_bytes(), &1u32.to_le_bytes(), &0u32.to_le_bytes(), &[0u8; 8]].concat();
+    mp3.extend_from_slice(&item);
+    mp3.extend_from_slice(&footer);
+    let lyr = [&b"LYRICSBEGIN"[..], b"LYR00017", SERIAL].concat();
+    mp3.extend_from_slice(&lyr);
+    mp3.extend_from_slice(format!("{:06}LYRICS200", lyr.len()).as_bytes());
+    let mut v1 = b"TAG".to_vec();
+    v1.resize(33, 0);
+    v1.extend_from_slice(AUTHOR);
+    v1.resize(128, 0);
+    mp3.extend_from_slice(&v1);
+    let src = d.join("b.mp3");
+    fs::write(&src, &mp3).unwrap();
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "mp3 tail tags");
+    assert_eq!(fs::read(&dst).unwrap().len(), 40 * 417);
+    let _ = fs::remove_dir_all(&d);
+}
