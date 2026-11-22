@@ -499,6 +499,33 @@ pub fn dial_blocking(host: &str, port: u16, timeout: Duration) -> io::Result<Blo
     Ok(BlockingStream { stream, rt, read_timeout: None, write_timeout: None })
 }
 
+/// A connection inside the tunnel and nowhere else (Usenet's "only while the VPN is on"): no LAN shortcut, no direct
+/// fallback. Refused with the kill switch's error while the tunnel is not up; a name that resolves to this PC or the local
+/// network is refused too.
+pub fn dial_tunnel_blocking(host: &str, port: u16, timeout: Duration) -> io::Result<BlockingStream> {
+    let t = tunnel().ok_or_else(blocked)?;
+    let rt = runtime().ok_or_else(|| io::Error::other("leaf's VPN is not set up in this copy of leaf"))?;
+    let name = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let stream = rt.block_on(async move {
+        let ips = match route::inet_aton(&name) {
+            Some(ip) => vec![ip],
+            None => t.resolve(&name).await?,
+        };
+        if ips.iter().any(|ip| ip.is_unspecified() || route::is_lan_ip(IpAddr::V4(*ip))) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the name points to this PC or the local network; leaf does not connect to it through the VPN"));
+        }
+        let mut last = io::Error::new(io::ErrorKind::NotFound, "the server's name has no address");
+        for ip in ips {
+            match t.connect(ip, port, timeout).await {
+                Ok(s) => return Ok(Stream::Tunnel(s)),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    })?;
+    Ok(BlockingStream { stream, rt, read_timeout: None, write_timeout: None })
+}
+
 /// One HTTPS GET of `host` `path` through `tunnel` (for checks: the self-test). The status and the body's length; never the body.
 pub async fn https_get(tunnel: &Tunnel, host: &str, path: &str) -> Result<(u16, usize), String> {
     let ips = tunnel.resolve(host).await.map_err(|e| format!("lookup: {e}"))?;
