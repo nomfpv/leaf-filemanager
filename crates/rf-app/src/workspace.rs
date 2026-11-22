@@ -4813,6 +4813,71 @@ impl Workspace {
         self.recycle_count
     }
 
+    /// "Pause all" in the status bar: one switch while something runs (and while it is on), with a short list of what it holds and
+    /// for how long. It is not near the VPN switch (that is in the title bar and has nothing to do with it).
+    fn pause_all_switch(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let (running, view) = {
+            let o = self.ops.read(cx);
+            (o.running(), o.pause_all_view())
+        };
+        if running == 0 && view.is_none() {
+            return Vec::new();
+        }
+        let on = view.is_some();
+        let label = match &view {
+            Some(v) => format!("{} · {}", t!("Paused"), crate::status_center::fmt_duration(v.secs)),
+            None => t!("Pause all").to_string(),
+        };
+        let mut out = vec![h_flex()
+            .id("pause-all")
+            .h(px(22.))
+            .px_2()
+            .gap_1()
+            .items_center()
+            .rounded(theme::RADIUS_SM)
+            .cursor_pointer()
+            .when(on, |d| d.text_color(p.accent))
+            .hover(|s| s.bg(p.hover).text_color(p.text))
+            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(if on { t!("Resume all") } else { t!("Pause all") }).build(w, cx))
+            .child(Icon::new(if on { L::Play } else { L::Pause }).size(px(12.)))
+            .child(label)
+            .on_click(move |_, _, cx| crate::status_center::set_pause_all(cx, !on))
+            .into_any_element()];
+        if let Some(v) = view {
+            let held = v.held.len();
+            let hold_text = if v.cannot.is_empty() { format!("{held} {}", t!("held")) } else { format!("{held} {} · {} {}", t!("held"), v.cannot.len(), t!("cannot pause")) };
+            out.push(
+                h_flex()
+                    .id("pause-all-list")
+                    .h(px(22.))
+                    .px_2()
+                    .items_center()
+                    .rounded(theme::RADIUS_SM)
+                    .cursor_pointer()
+                    .text_color(p.text_tertiary)
+                    .hover(|s| s.bg(p.hover).text_color(p.text))
+                    .child(hold_text)
+                    .on_click(move |_, window, cx| {
+                        use crate::fluent_menu::{Item, Menu, MenuIcon};
+                        let mut items: Vec<Item> = vec![Item::action(t!("Resume all"), MenuIcon::Lucide(L::Play), |_, cx| crate::status_center::set_pause_all(cx, false))];
+                        // (a window of the list: what the switch holds now, read again when it is clicked)
+                        let now = cx.try_global::<crate::status_center::OpsGlobal>().map(|g| g.0.clone()).and_then(|e| e.read(cx).pause_all_view());
+                        if let Some(now) = now {
+                            for (title, secs) in now.held {
+                                items.push(Item::action(title, MenuIcon::None, |_, _| {}).hint(crate::status_center::fmt_duration(secs)));
+                            }
+                            for title in now.cannot {
+                                items.push(Item::action(title, MenuIcon::None, |_, _| {}).hint(t!("cannot pause, finishing")));
+                            }
+                        }
+                        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+                    })
+                    .into_any_element(),
+            );
+        }
+        out
+    }
+
     fn render_statusbar(&mut self, p: &Palette, strip_bar_w: Option<f32>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // the status line's own colours (Index: an inverted readout)
         let p = &p.for_status();
@@ -4992,6 +5057,7 @@ impl Workspace {
             crate::transfer_view::strip(&self.ops, p, rf_core::transfer::strip_room(bar_w, held), self.viewport_w > 1280., cx)
         });
         let perf = cx.global::<crate::settings::Settings>().show_perf_info;
+        let pause_all = self.pause_all_switch(p, cx);
         let demo_lane = crate::mockup_demo::on() && self.viewport_w > 1280.;
         theme::sheet(p, p.status_bg)
             .flex()
@@ -5070,6 +5136,7 @@ impl Workspace {
                                     }),
                             )
                     }))
+                    .children(pause_all)
                     .children(ide_button)
                     // a downloaded update: one click restarts into it
                     .children(matches!(crate::installer::state(), crate::installer::State::Ready(_)).then(|| {
@@ -6279,6 +6346,16 @@ impl Render for Workspace {
                 let paths = this.active_tab().read(cx).selection_paths();
                 crate::usenet::download_selected(paths, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &RemoveMetadata, window, cx| {
+                let paths: Vec<PathBuf> = this.active_tab().read(cx).selection_paths().into_iter().filter(|p| p.is_file()).collect();
+                if paths.is_empty() {
+                    crate::prompt::notice(t!("Remove metadata"), t!("Select one or more files first.").to_string(), window, cx);
+                } else {
+                    crate::scrub_ui::open(paths, cx);
+                }
+            }))
+            .on_action(cx.listener(|_, _: &PauseAll, _, cx| crate::status_center::set_pause_all(cx, true)))
+            .on_action(cx.listener(|_, _: &ResumeAll, _, cx| crate::status_center::set_pause_all(cx, false)))
             .on_action(cx.listener(|_, _: &UsenetPauseAll, _, cx| {
                 crate::usenet::pause_all(!leaf_nzb::queue::all_paused());
                 cx.refresh_windows();

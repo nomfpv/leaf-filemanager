@@ -1189,6 +1189,14 @@ impl PropsView {
                 ],
             ));
         }
+        // "Remove metadata…" for the file kinds it is for (the same window as the right-click entry)
+        if self.drive.is_none() && crate::scrub_ui::offers(&self.paths) {
+            out.push(
+                link_button(p, "scrub", L::Eraser, t!("Remove metadata…"))
+                    .on_click(cx.listener(|v, _, _, cx| crate::scrub_ui::open(v.paths.clone(), cx)))
+                    .into_any_element(),
+            );
+        }
         // (the system's own dialog: Windows only; leaf's page is the properties page elsewhere)
         if cfg!(windows) {
             out.push(

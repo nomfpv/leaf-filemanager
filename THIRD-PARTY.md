@@ -11,7 +11,7 @@ are MIT, Copyright (c) 2026 Ozer Guzel and the leaf authors; they appear in the 
 
 | Licence | Crates |
 |---|---|
-| MIT License (MIT) | 643 |
+| MIT License (MIT) | 654 |
 | Apache License 2.0 (Apache-2.0) | 39 |
 | Unicode License v3 (Unicode-3.0) | 25 |
 | ISC License (ISC) | 23 |
@@ -5819,6 +5819,39 @@ DEALINGS IN THE SOFTWARE.
 ### MIT License (MIT)
 
 Used by:
+- [nom 8.0.0](https://github.com/rust-bakery/nom)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright (c) 2014-2019 Geoffroy Couprie
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
 - [float-cmp 0.9.0](https://github.com/mikedilger/float-cmp)
 
 <details><summary>Licence text</summary>
@@ -7570,6 +7603,38 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
+- [stringprep 0.1.5](https://github.com/sfackler/rust-stringprep)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright (c) 2017 The rust-stringprep Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ```
 
 </details>
@@ -10212,6 +10277,44 @@ DEALINGS IN THE SOFTWARE.
 ### MIT License (MIT)
 
 Used by:
+- [ecb 0.2.1](https://github.com/RustCrypto/block-modes)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright (c) 2026 RustCrypto Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
 - [wnaf 0.14.1](https://github.com/RustCrypto/elliptic-curves)
 
 <details><summary>Licence text</summary>
@@ -10738,6 +10841,26 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ### MIT License (MIT)
 
 Used by:
+- [rangemap 1.8.0](https://github.com/jeffparsons/rangemap)
+
+<details><summary>Licence text</summary>
+
+```text
+Copyright 2019 Jeffrey Parsons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
 - [rle-decode-fast 1.0.3](https://github.com/WanzenBug/rle-decode-helper)
 
 <details><summary>Licence text</summary>
@@ -10989,6 +11112,40 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+</details>
+
+### MIT License (MIT)
+
+Used by:
+- [lopdf 0.47.0](https://github.com/J-F-Liu/lopdf.git)
+
+<details><summary>Licence text</summary>
+
+```text
+MIT License
+
+Copyright (c) 2016 Junfeng Liu
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ```
 
@@ -12059,7 +12216,9 @@ Used by:
 - leaf-download 0.9.4
 - leaf-nzb 0.9.4
 - leaf-open 0.9.4
+- leaf-proc 0.9.4
 - leaf-remote 0.9.4
+- leaf-scrub 0.9.4
 - leaf-share 0.9.4
 - leaf-sync 0.9.4
 - leaf-sys 0.9.4
@@ -12087,6 +12246,8 @@ Used by:
 - [heifer 0.5.1](https://github.com/HarpeLm/Heifer)
 - [lazy-regex-proc_macros 3.6.2](https://github.com/Canop/lazy-regex/tree/main/src/proc_macros)
 - [libm 0.2.16](https://github.com/rust-lang/compiler-builtins)
+- [lofty 0.25.5](https://github.com/Serial-ATA/lofty-rs)
+- [lofty_attr 0.13.0](https://github.com/Serial-ATA/lofty-rs)
 - [lyon 1.0.19](https://github.com/nical/lyon)
 - [lyon_algorithms 1.0.22](https://github.com/nical/lyon)
 - [lyon_geom 1.0.20](https://github.com/nical/lyon)
@@ -12094,6 +12255,7 @@ Used by:
 - [lyon_tessellation 1.0.23](https://github.com/nical/lyon)
 - [mac 0.1.1](https://github.com/reem/rust-mac.git)
 - [md5 0.8.1](https://github.com/stainless-steel/md5)
+- [ogg_pager 0.8.0](https://github.com/Serial-ATA/lofty-rs)
 - [profiling-procmacros 1.0.18](https://github.com/aclysma/profiling)
 - [profiling 1.0.18](https://github.com/aclysma/profiling)
 - [pulp-wasm-simd-flag 0.1.1](https://github.com/sarah-quinones/pulp/)
@@ -14099,6 +14261,7 @@ SOFTWARE.
 
 Used by:
 - [weezl 0.1.12](https://github.com/image-rs/weezl)
+- [weezl 0.2.1](https://github.com/image-rs/weezl)
 
 <details><summary>Licence text</summary>
 

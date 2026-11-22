@@ -180,6 +180,7 @@ pub enum Slot {
     RotateRight,
     RotateLeft,
     ConvertVideo,
+    RemoveMetadata,
     MountImage,
     EjectImage,
     Wallpaper,
@@ -311,6 +312,8 @@ pub struct MenuContext {
     pub extractable: bool,
     /// The selection is an unprotected Blu-ray / AVCHD disc, folder, image or `.m2ts` files to convert.
     pub bluray: bool,
+    /// The selection holds a file "Remove metadata" is for (a picture, PDF, Office document, music or video file).
+    pub scrubbable: bool,
     /// One disc image (`.iso`, `.img`) is selected.
     pub disc_image: bool,
     /// That image is mounted.

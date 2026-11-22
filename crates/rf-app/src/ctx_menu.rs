@@ -192,6 +192,7 @@ fn build_item(p: &MenuPlace, b: &Build) -> Item {
         Slot::RotateRight => Item::action(label, ic, act(me, |v, w, cx| v.rotate_selection(true, w, cx))),
         Slot::RotateLeft => Item::action(label, ic, act(me, |v, w, cx| v.rotate_selection(false, w, cx))),
         Slot::ConvertVideo => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::ConvertToVideo), cx)),
+        Slot::RemoveMetadata => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::RemoveMetadata), cx)),
         Slot::MountImage => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::MountImage), cx)),
         Slot::EjectImage => Item::action(label, ic, |w, cx| w.dispatch_action(Box::new(crate::actions::EjectImage), cx)),
         Slot::Wallpaper => {
@@ -553,6 +554,7 @@ impl FolderView {
             fonts: !items.is_empty() && items.iter().all(|p| leaf_sys::fileactions::is_font(p)),
             extractable: !items.is_empty() && items.iter().all(|p| rf_archive::is_supported(p)),
             bluray: !in_archive && crate::bluray_ui::offers(items),
+            scrubbable: !in_archive && crate::scrub_ui::offers(items),
             disc_image: !in_archive && crate::bluray_ui::is_image(items),
             image_mounted: !in_archive && crate::bluray_ui::is_image(items) && crate::bluray_ui::image_mounted(items),
             nearby: crate::nearby::running(cx),
