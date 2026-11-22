@@ -1,6 +1,7 @@
 //! PDF: the Info dictionary, XMP streams, document ids, page thumbnails and application private data.
 //! The file is rewritten as one clean revision (earlier saved versions inside the file go with it).
-//! Comments, form fields, layers and attachments inside the pages are NOT touched, and the notes say so.
+//! Comment author names and dates and attached files' dates are removed; the comments' text, form fields, JavaScript, layers
+//! and the attachments themselves are NOT touched, and the notes say so.
 
 use crate::{Finding, Inspection, Result, ScrubError, MAX_IN_MEMORY};
 use lopdf::{Dictionary, Document, Object};
@@ -8,6 +9,32 @@ use std::fs;
 use std::path::Path;
 
 const DROP_KEYS: [&[u8]; 4] = [b"Metadata", b"Thumb", b"PieceInfo", b"LastModified"];
+/// Who wrote a comment and when (annotation dictionaries). `T` of a form field is its NAME, so widgets are never touched.
+const ANNOT_KEYS: [&[u8]; 3] = [b"T", b"M", b"CreationDate"];
+const MARKUP: [&[u8]; 15] = [
+    b"Text", b"FreeText", b"Highlight", b"Underline", b"StrikeOut", b"Squiggly", b"Stamp", b"Caret", b"Ink", b"Line", b"Square", b"Circle",
+    b"Polygon", b"PolyLine", b"FileAttachment",
+];
+/// Dates of an attached file, in the `Params` of its stream.
+const PARAM_KEYS: [&[u8]; 2] = [b"CreationDate", b"ModDate"];
+
+fn is_markup(d: &Dictionary) -> bool {
+    matches!(d.get(b"Subtype"), Ok(Object::Name(n)) if MARKUP.contains(&n.as_slice())) && d.has(b"Rect")
+}
+
+/// The ids of dictionaries used as `Params` of a stream by reference (attached files' dates), and whether a direct one holds dates.
+fn params_ids(doc: &Document) -> Vec<lopdf::ObjectId> {
+    doc.objects
+        .values()
+        .filter_map(|o| match o {
+            Object::Stream(s) => match s.dict.get(b"Params") {
+                Ok(Object::Reference(id)) => Some(*id),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
 
 fn load(path: &Path) -> Result<(Document, Vec<u8>)> {
     if fs::metadata(path)?.len() > MAX_IN_MEMORY {
@@ -115,40 +142,65 @@ fn analyse(doc: &Document, raw: &[u8]) -> (Vec<Finding>, Vec<String>) {
     if eofs > 1 {
         f.push(Finding::new("Earlier saved versions inside the file", format!("{} older", eofs - 1), true));
     }
-    // what stays
     let mut annots = 0;
     let mut authors = 0;
+    let mut dates = 0;
     for d in dicts(doc) {
-        if let Ok(Object::Name(st)) = d.get(b"Subtype") {
-            let st = st.as_slice();
-            let markup = [
-                &b"Text"[..], b"FreeText", b"Highlight", b"Underline", b"StrikeOut", b"Squiggly", b"Stamp", b"Caret", b"Ink", b"Line",
-                b"Square", b"Circle", b"Polygon", b"PolyLine", b"FileAttachment",
-            ];
-            if markup.contains(&st) && d.has(b"Rect") {
-                annots += 1;
-                if d.has(b"T") {
-                    authors += 1;
+        if is_markup(d) {
+            annots += 1;
+            if d.has(b"T") {
+                authors += 1;
+            }
+            if d.has(b"M") || d.has(b"CreationDate") {
+                dates += 1;
+            }
+        }
+    }
+    if authors > 0 {
+        f.push(Finding::new("Comment author names", format!("{authors} comments"), true));
+    }
+    if dates > 0 {
+        f.push(Finding::new("Comment dates", format!("{dates} comments"), true));
+    }
+    let ids = params_ids(doc);
+    let mut attach_dates = 0;
+    for o in doc.objects.values() {
+        if let Object::Stream(s) = o {
+            if let Ok(Object::Dictionary(p)) = s.dict.get(b"Params") {
+                if PARAM_KEYS.iter().any(|k| p.has(k)) {
+                    attach_dates += 1;
                 }
             }
         }
     }
+    for id in &ids {
+        if doc.get_object(*id).ok().and_then(|o| o.as_dict().ok()).is_some_and(|p| PARAM_KEYS.iter().any(|k| p.has(k))) {
+            attach_dates += 1;
+        }
+    }
+    if attach_dates > 0 {
+        f.push(Finding::new("Dates of attached files", format!("{attach_dates} files"), true));
+    }
+    // what stays
     if annots > 0 {
-        notes.push(format!("Still inside: {annots} comments or markings in the pages ({authors} with an author name). They are not touched."));
+        notes.push(format!("Still inside: the text of {annots} comments or markings in the pages. Their author names and dates are removed, what they say is not."));
+    }
+    let attached: Vec<String> = dicts(doc)
+        .filter(|d| matches!(d.get(b"Type"), Ok(Object::Name(n)) if n == b"Filespec") && d.has(b"EF"))
+        .filter_map(|d| d.get(b"UF").or_else(|_| d.get(b"F")).ok().map(|n| text(n, doc)))
+        .take(5)
+        .collect();
+    if !attached.is_empty() {
+        notes.push(format!("Still inside: attached files ({}). The file names stay, their dates are removed; the files keep their own metadata.", attached.join(", ")));
+    }
+    if dicts(doc).any(|d| d.has(b"JS") || d.has(b"JavaScript")) {
+        notes.push("Still inside: JavaScript in the document (reported, not removed).".into());
     }
     if doc.catalog().map(|c| c.has(b"AcroForm")).unwrap_or(false) {
         notes.push("Still inside: form fields and what was typed into them are not touched.".into());
     }
     if doc.catalog().map(|c| c.has(b"OCProperties")).unwrap_or(false) {
         notes.push("Still inside: hidden and visible layers are not touched.".into());
-    }
-    if doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).map(|n| match n {
-        Object::Dictionary(d) => d.has(b"EmbeddedFiles"),
-        Object::Reference(id) => doc.get_object(*id).ok().and_then(|o| o.as_dict().ok()).map(|d| d.has(b"EmbeddedFiles")).unwrap_or(false),
-        _ => false,
-    }).unwrap_or(false)
-    {
-        notes.push("Still inside: attached files are not touched (they carry their own metadata).".into());
     }
     notes.push("Pictures inside the pages keep their own metadata.".into());
     (f, notes)
@@ -170,6 +222,14 @@ pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
     }
     doc.trailer.remove(b"Info");
     doc.trailer.remove(b"ID");
+    let pids = params_ids(&doc);
+    for id in pids {
+        if let Some(Object::Dictionary(p)) = doc.objects.get_mut(&id) {
+            for k in PARAM_KEYS {
+                p.remove(k);
+            }
+        }
+    }
     for o in doc.objects.values_mut() {
         let d = match o {
             Object::Dictionary(d) => d,
@@ -178,6 +238,16 @@ pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
         };
         for k in DROP_KEYS {
             d.remove(k);
+        }
+        if is_markup(d) {
+            for k in ANNOT_KEYS {
+                d.remove(k);
+            }
+        }
+        if let Ok(Object::Dictionary(p)) = d.get_mut(b"Params") {
+            for k in PARAM_KEYS {
+                p.remove(k);
+            }
         }
     }
     doc.prune_objects();

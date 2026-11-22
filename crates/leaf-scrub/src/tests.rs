@@ -820,3 +820,71 @@ fn scrub_bmp_says_nothing_found_and_archives_are_refused() {
     assert!(e.to_string().contains("keeps the metadata of the files inside"), "{e}");
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn scrub_pdf_leaves_no_marker_anywhere_not_in_old_revisions_or_unreferenced_objects() {
+    use lopdf::{Dictionary, Document, Object, Stream, dictionary};
+    let d = tmp_dir("pdf-raw");
+    let src = d.join("a.pdf");
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let content = doc.add_object(Stream::new(Dictionary::new(), b"BT ET".to_vec()));
+    let thumb = doc.add_object(Stream::new(dictionary! { "Subtype" => "Image" }, b"LEAFTESTSERIAL123".to_vec()));
+    let annot = doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+        "T" => Object::string_literal("Planted Author"), "M" => Object::string_literal("D:20261122142233"), "Contents" => Object::string_literal("note"),
+    });
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content, "Thumb" => thumb, "Annots" => vec![annot.into()],
+        "PieceInfo" => dictionary! { "App" => dictionary! { "Private" => Object::string_literal("LEAFTESTSERIAL123") } },
+        "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+    });
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+    let xmp = doc.add_object(Stream::new(dictionary! { "Type" => "Metadata", "Subtype" => "XML" }, b"<x:xmpmeta>Planted Author LEAFTESTSERIAL123</x:xmpmeta>".to_vec()));
+    let attached = doc.add_object(Stream::new(
+        dictionary! { "Type" => "EmbeddedFile", "Params" => dictionary! { "ModDate" => Object::string_literal("LEAFTESTSERIAL123") } },
+        b"file".to_vec(),
+    ));
+    let spec = doc.add_object(dictionary! { "Type" => "Filespec", "F" => Object::string_literal("a.txt"), "EF" => dictionary! { "F" => attached } });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id, "Metadata" => xmp,
+        "Names" => dictionary! { "EmbeddedFiles" => dictionary! { "Names" => vec![Object::string_literal("a.txt"), spec.into()] } },
+    });
+    doc.trailer.set("Root", catalog);
+    let info = doc.add_object(dictionary! { "Author" => Object::string_literal("Planted Author"), "Producer" => Object::string_literal("LEAFTESTSERIAL123") });
+    doc.trailer.set("Info", info);
+    doc.add_object(dictionary! { "Orphan" => Object::string_literal("Planted Author LEAFTESTSERIAL123") });
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    // an incremental update after the first revision, as an editor writes it: the first revision's Info stays in the file
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let prev: usize = text[text.rfind("startxref").unwrap() + 10..].lines().next().unwrap().trim().parse().unwrap();
+    let new_id = doc.max_id + 1;
+    bytes.push(b'\n');
+    let off = bytes.len();
+    bytes.extend_from_slice(format!("{new_id} 0 obj\n<< /Author (Planted Author) /Producer (LEAFTESTSERIAL123) >>\nendobj\n").as_bytes());
+    let xoff = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "xref\n0 1\n0000000000 65535 f \n{new_id} 1\n{off:010} 00000 n \ntrailer\n<< /Size {} /Root {} 0 R /Info {new_id} 0 R /Prev {prev} >>\nstartxref\n{xoff}\n%%EOF\n",
+            new_id + 1,
+            catalog.0
+        )
+        .as_bytes(),
+    );
+    fs::write(&src, &bytes).unwrap();
+    assert_markers_present(&src, "pdf");
+    let before = inspect(&src, &opts()).unwrap();
+    for want in ["Comment author names", "Comment dates", "Dates of attached files", "Earlier saved versions inside the file"] {
+        assert!(before.findings.iter().any(|f| f.label == want), "{want} missing from {:?}", before.findings);
+    }
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "pdf");
+    assert_clean_listing(&dst);
+    let again = Document::load(&dst).unwrap();
+    assert_eq!(again.get_pages().len(), 1);
+    let out = fs::read(&dst).unwrap();
+    assert!(contains(&out, b"Contents") && contains(&out, b"(note)"), "the comment's text stays");
+    let _ = fs::remove_dir_all(&d);
+}
