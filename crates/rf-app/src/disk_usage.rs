@@ -70,6 +70,22 @@ fn ring_nodes(t: &DiskTree, m: Metric, ids: &[u32], depth: u8) -> Vec<RingNode> 
         .collect()
 }
 
+/// A column of the list that can be sorted by (Share and Size give the same order inside one folder).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SortCol {
+    Name,
+    Size,
+    Share,
+    Files,
+}
+
+/// The list's widths, shared by the heading row and the rows so they line up.
+const SIZE_NUM_W: f32 = 44.;
+const SIZE_UNIT_W: f32 = 22.;
+const BAR_W: f32 = 110.;
+const PCT_W: f32 = 32.;
+const FILES_W: f32 = 48.;
+
 /// One drawn rectangle of the treemap.
 struct Cell {
     id: u32,
@@ -89,6 +105,10 @@ pub struct DiskUsageView {
     metric: Metric,
     /// Children of `cur`, biggest first.
     kids: Vec<u32>,
+    /// `kids` in the list's order (the chosen sort; the treemap keeps `kids`).
+    rows: Vec<u32>,
+    sort: SortCol,
+    sort_desc: bool,
     selected: Option<u32>,
     hover: Option<u32>,
     /// Size of the treemap area, measured while drawing.
@@ -113,6 +133,9 @@ impl DiskUsageView {
             cur: 0,
             metric: Metric::Logical,
             kids: Vec::new(),
+            rows: Vec::new(),
+            sort: SortCol::Size,
+            sort_desc: true,
             selected: None,
             hover: None,
             area: size(px(600.), px(400.)),
@@ -163,6 +186,37 @@ impl DiskUsageView {
         self.cells = None;
         self.arcs = None;
         self.kids = self.tree.as_ref().map(|t| t.sorted_children(self.cur, self.metric)).unwrap_or_default();
+        self.sort_rows();
+    }
+
+    /// Puts `kids` in the list's order.
+    fn sort_rows(&mut self) {
+        let mut rows = self.kids.clone();
+        if let Some(t) = &self.tree {
+            let m = self.metric;
+            // ascending for the column, then flipped for descending; kids come biggest first, which is Size/Share descending
+            match self.sort {
+                SortCol::Size | SortCol::Share => rows.reverse(),
+                SortCol::Name => rows.sort_by_cached_key(|&i| t.name(i).to_lowercase()),
+                SortCol::Files => rows.sort_by_key(|&i| (if t.is_dir(i) { t.files(i) } else { 0 }, std::cmp::Reverse(t.weight(i, m)))),
+            }
+            if self.sort_desc {
+                rows.reverse();
+            }
+        }
+        self.rows = rows;
+    }
+
+    /// A heading was clicked: sort by it, or reverse when it is already the sort.
+    fn set_sort(&mut self, c: SortCol, cx: &mut Context<Self>) {
+        if self.sort == c {
+            self.sort_desc = !self.sort_desc;
+        } else {
+            self.sort = c;
+            self.sort_desc = c != SortCol::Name;
+        }
+        self.sort_rows();
+        cx.notify();
     }
 
     fn go(&mut self, id: u32, cx: &mut Context<Self>) {
@@ -437,7 +491,8 @@ impl Render for DiskUsageView {
                 .child(label)
         };
         let summary = format!(
-            "{} · {}",
+            "{}: {} · {}",
+            if metric == Metric::OnDisk { t!("Size on disk") } else { t!("Size") },
             format::size(t.weight(cur, metric)),
             format!("{} {}", count(t.files(cur) as u64), t!("files"))
         );
@@ -472,14 +527,53 @@ impl Render for DiskUsageView {
             );
 
         // ---- list
+        let sort = self.sort;
+        let sort_desc = self.sort_desc;
+        let head_col = |id: &'static str, label: &'static str, col: SortCol, right: bool, cx: &mut Context<Self>| {
+            let active = sort == col;
+            let arrow = if sort_desc { L::ChevronDown } else { L::ChevronUp };
+            h_flex()
+                .id(id)
+                .h_full()
+                .gap_1()
+                .items_center()
+                .rounded(theme::RADIUS_SM)
+                .cursor_pointer()
+                .hover(|s| s.bg(p.hover))
+                .text_color(if active { p.text_secondary } else { p.text_tertiary })
+                .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
+                .when(right, |d| d.justify_end())
+                .overflow_hidden()
+                .child(div().min_w_0().whitespace_nowrap().overflow_hidden().text_ellipsis().child(label))
+                .when(active, |d| d.child(Icon::new(arrow).size(px(12.)).flex_shrink_0().text_color(p.text_tertiary)))
+                .on_click(cx.listener(move |v, _, _, cx| v.set_sort(col, cx)))
+        };
+        // same padding and gaps as a row, so the headings sit over their columns (the Files heading says what the column counts)
+        let list_head = h_flex()
+            .h(px(24.))
+            .px(px(12.))
+            .gap_2()
+            .items_center()
+            .flex_shrink_0()
+            .text_xs()
+            .border_b_1()
+            .border_color(p.divider)
+            .child(div().w(px(16.)).flex_shrink_0())
+            .child(head_col("lh-name", t!("Name"), SortCol::Name, false, cx).flex_1().min_w_0())
+            .child(head_col("lh-size", t!("Size"), SortCol::Size, true, cx).w(px(SIZE_NUM_W + SIZE_UNIT_W + 4.)).flex_shrink_0())
+            .child(head_col("lh-share", t!("Share"), SortCol::Share, false, cx).w(px(BAR_W + PCT_W + 4.)).flex_shrink_0())
+            .child(head_col("lh-files", t!("Files"), SortCol::Files, true, cx).w(px(FILES_W)).flex_shrink_0());
         let mut list = v_flex().id("du-list").flex_1().min_h_0().overflow_y_scroll().p_1();
-        for (i, &id) in self.kids.iter().take(LIST_MAX).enumerate() {
+        let tnum = gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]));
+        for (i, &id) in self.rows.iter().take(LIST_MAX).enumerate() {
             let w = t.weight(id, metric);
             let frac = w as f32 / total as f32;
             let cat = category_of(t, id);
             let is_dir = t.is_dir(id);
             let sel = self.selected == Some(id);
             let hov = self.hover == Some(id);
+            let (num, unit) = format::size_parts(w);
+            let bar = if is_dir { p.accent } else { theme::kind_color(cat, p.dark) };
             list = list.child(
                 h_flex()
                     .id(("du-row", i))
@@ -506,25 +600,33 @@ impl Render for DiskUsageView {
                     .on_mouse_down(MouseButton::Middle, cx.listener(move |v, _, _, cx| v.open_in_new_tab(id, cx)))
                     .child(Icon::new(icons::icon_for(cat)).size(px(16.)).text_color(theme::kind_color(cat, p.dark)))
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(t.name(id).to_string()))
-                    .child(div().w(px(76.)).flex_shrink_0().text_right().text_color(p.text_secondary).child(format::size(w)))
+                    // number and unit in their own columns, so the decimal points and the units form straight lines
                     .child(
-                        div()
-                            .w(px(64.))
+                        h_flex()
+                            .w(px(SIZE_NUM_W + SIZE_UNIT_W + 4.))
                             .flex_shrink_0()
-                            .flex()
+                            .gap_1()
+                            .text_color(p.text_secondary)
+                            .child(div().w(px(SIZE_NUM_W)).text_right().font_features(tnum.clone()).child(num))
+                            .child(div().w(px(SIZE_UNIT_W)).child(unit)),
+                    )
+                    .child(
+                        h_flex()
+                            .w(px(BAR_W + PCT_W + 4.))
+                            .flex_shrink_0()
                             .items_center()
                             .gap_1()
-                            .child(div().h(px(4.)).flex_1().rounded_full().bg(p.pressed).child(div().h_full().rounded_full().bg(p.accent).w(relative(frac.clamp(0.0, 1.0)))))
-                            .child(div().w(px(34.)).text_xs().text_right().text_color(p.text_tertiary).child(crate::i18n::pct(frac * 100.))),
+                            .child(div().h(px(6.)).w(px(BAR_W)).flex_shrink_0().rounded_full().bg(p.pressed).child(div().h_full().rounded_full().bg(bar).w(relative(frac.clamp(0.0, 1.0)))))
+                            .child(div().w(px(PCT_W)).text_right().text_color(p.text_secondary).font_features(tnum.clone()).child(crate::i18n::pct(frac * 100.))),
                     )
-                    .child(div().w(px(54.)).flex_shrink_0().text_xs().text_right().text_color(p.text_tertiary).when(is_dir, |d| d.child(count(t.files(id) as u64)))),
+                    .child(div().w(px(FILES_W)).flex_shrink_0().text_right().text_color(p.text_secondary).font_features(tnum.clone()).when(is_dir, |d| d.child(count(t.files(id) as u64)))),
             );
         }
-        let hidden = self.kids.len().saturating_sub(LIST_MAX);
+        let hidden = self.rows.len().saturating_sub(LIST_MAX);
         if hidden > 0 {
             list = list.child(div().px_2().py_1().text_xs().text_color(p.text_tertiary).child(format!("+{} {}", count(hidden as u64), t!("more items"))));
         }
-        if self.kids.is_empty() {
+        if self.rows.is_empty() {
             list = list.child(div().p_4().text_sm().text_color(p.text_tertiary).child(t!("This folder is empty")));
         }
 
@@ -587,7 +689,18 @@ impl Render for DiskUsageView {
             // clicks, which is the same folder either way
             let label_color = if is_dir && !flat { p.text } else { gpui::white() };
             if head {
-                cell = cell.px_1p5().flex().items_center().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(label_color).whitespace_nowrap().child(div().overflow_hidden().text_ellipsis().child(format!("{}  {}", t.name(id), format::size(t.weight(id, metric)))));
+                // the name gives way first: the size keeps its room when the strip is narrow
+                cell = cell
+                    .px_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(label_color)
+                    .whitespace_nowrap()
+                    .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(t.name(id).to_string()))
+                    .when(r.w > 56., |d| d.child(div().flex_shrink_0().child(format::size(t.weight(id, metric)))));
             } else if !is_dir && r.w > 44. && r.h > 20. {
                 let big = r.w > 80. && r.h > 36.;
                 cell = cell.p_1().text_xs().text_color(label_color).child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().child(t.name(id).to_string())).when(big, |d| {
@@ -708,9 +821,17 @@ impl Render for DiskUsageView {
         let focus = hover.or(selected).unwrap_or(cur);
         let foot = {
             let path = t.path(focus);
-            let mut s = format!("{}  ·  {}", path.to_string_lossy(), format::size(t.weight(focus, metric)));
+            let w = t.weight(focus, metric);
+            let share = |of: u64| if of == 0 { 0. } else { w as f32 / of as f32 * 100. };
+            let mut s = format!("{}  ·  {}", path.to_string_lossy(), format::size(w));
+            if focus != cur {
+                s.push_str(&format!("  ·  {} {}", crate::i18n::pct(share(t.weight(cur, metric))), t!("of this folder")));
+            }
+            if focus != 0 {
+                s.push_str(&format!("  ·  {} {}", crate::i18n::pct(share(t.weight(0, metric))), t!("of the scan")));
+            }
             if t.is_dir(focus) {
-                s.push_str(&format!("  ·  {}", format!("{} {}", count(t.files(focus) as u64), t!("files"))));
+                s.push_str(&format!("  ·  {} {}", count(t.files(focus) as u64), t!("files")));
             }
             if t.skipped() > 0 && focus == 0 {
                 s.push_str(&format!("  ·  {} {}", t.skipped(), t!("folders could not be read")));
@@ -725,7 +846,7 @@ impl Render for DiskUsageView {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(v_flex().w(px(430.)).flex_shrink_0().h_full().border_r_1().border_color(p.divider).child(list))
+                    .child(v_flex().w(px(540.)).flex_shrink_0().h_full().border_r_1().border_color(p.divider).child(list_head).child(list))
                     .child(div().relative().flex_1().min_w_0().h_full().p_2().child(div().relative().size_full().child(probe).child(map))),
             )
             .child(

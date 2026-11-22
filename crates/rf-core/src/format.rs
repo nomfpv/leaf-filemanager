@@ -68,6 +68,26 @@ fn size_with(bytes: u64, decimal: bool) -> String {
     format!("{s} {}", units[u])
 }
 
+/// A size split into its number and unit, with one decimal from KB up ("100.0", "MB"; "512", "B"), so a column of them lines up.
+pub fn size_parts(bytes: u64) -> (String, &'static str) {
+    size_parts_with(bytes, DECIMAL.load(Ordering::Relaxed))
+}
+
+fn size_parts_with(bytes: u64, decimal: bool) -> (String, &'static str) {
+    let base: f64 = if decimal { 1000.0 } else { 1024.0 };
+    let units: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if (bytes as f64) < base {
+        return (bytes.to_string(), units[0]);
+    }
+    let mut v = bytes as f64;
+    let mut u = 0;
+    while v >= base && u < units.len() - 1 {
+        v /= base;
+        u += 1;
+    }
+    (format!("{v:.1}"), units[u])
+}
+
 /// A file time in the chosen [`DateStyle`].
 pub fn datetime(ms: i64) -> String {
     let now = chrono::Local::now().timestamp_millis();
