@@ -125,7 +125,7 @@ pub(crate) fn extra(path: &Path, apply: bool) -> Result<Vec<Finding>> {
             }
             // a new file of the kept chunks, copied as they are, then in place of the old one
             let tmp = path.with_extension("leafwav");
-            {
+            let written = (|| -> Result<()> {
                 let mut w = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?);
                 let body: u64 = 4 + keep.iter().map(|k| k.1).sum::<u64>();
                 w.write_all(b"RIFF")?;
@@ -137,6 +137,11 @@ pub(crate) fn extra(path: &Path, apply: bool) -> Result<Vec<Finding>> {
                 }
                 w.flush()?;
                 w.get_ref().sync_all()?;
+                Ok(())
+            })();
+            if let Err(e) = written {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
             }
             drop_and_replace(f, &tmp, path)?;
         }
