@@ -58,6 +58,10 @@ pub struct Tracker {
     /// destination; `None` cancels the operation. Without it, both are kept.
     #[allow(clippy::type_complexity)]
     pub ask: Option<Box<dyn Fn(&[crate::fastcopy::Conflict]) -> Option<Vec<crate::fastcopy::Resolve>> + Send + Sync>>,
+    /// Our engine only, never the system's (an agent's job, plan F9): what our engine would hand to the shell (a tree with a link
+    /// inside, a file it could not copy, a path that is not on a local file system, a copy into the items' own folder) is left and
+    /// counted as not done instead. The shell would follow links and could ask about replacing.
+    pub own_engine_only: bool,
 }
 
 impl Tracker {
@@ -85,6 +89,7 @@ impl Tracker {
             limit: Default::default(),
             verify: Default::default(),
             ask: None,
+            own_engine_only: false,
         }
     }
 }

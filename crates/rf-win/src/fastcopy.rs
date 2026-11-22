@@ -702,6 +702,9 @@ fn run_jobs(mut p: Plan, tracker: &Tracker, threads: usize, journal: Option<(&Jr
     Outcome { undo: p.undo, failed, whole: p.whole, copied, src_dirs: p.src_dirs, cancelled }
 }
 
+/// The refusal of a transfer only the system's engine could do, for a tracker that is limited to ours.
+const OWN_ONLY: &str = "Only the system's copy engine could do this (another drive kind, a network path, or a copy into the same folder), and it is not used here";
+
 /// Copies `sources` into `dest_dir` in parallel (conflicts as `tracker.ask` says; without it
 /// both are kept). Returns the undo pairs and the leftovers for the shell.
 pub fn copy(sources: &[PathBuf], dest_dir: &Path, tracker: &Tracker, threads: usize) -> Outcome {
@@ -720,6 +723,9 @@ pub fn transfer(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: A
     // system path: the shell's way
     let same_dir = sources.iter().all(|s| s.parent() == Some(dest_dir));
     if same_dir || !local_fs(dest_dir) || !sources.iter().all(|s| local_fs(s)) {
+        if tracker.own_engine_only {
+            anyhow::bail!("{}", OWN_ONLY);
+        }
         return crate::fileops::transfer_tracked(kind, sources, dest_dir, tracker);
     }
     let (here, there): (Vec<PathBuf>, Vec<PathBuf>) = sources.iter().cloned().partition(|s| kind == Transfer::Move && same_volume(s, dest_dir));
@@ -766,7 +772,11 @@ fn finish(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: &Arc<Tr
     // counted and the verification and (for a move) the removal of the verified sources still happen, then the user is told how many
     // items are left (`PartlyDone`), instead of being told nothing changed while the copies sit at the destination.
     let mut left = 0usize;
-    if !out.whole.is_empty() {
+    if tracker.own_engine_only {
+        // (an agent's job: nothing goes to the shell; what is left is counted, and no shell can follow a link or ask to replace)
+        left += out.whole.len() + out.failed.len();
+        ok &= out.whole.is_empty() && out.failed.is_empty();
+    } else if !out.whole.is_empty() {
         ok &= absorb_no_shell(crate::fileops::transfer_tracked(kind, &out.whole, dest_dir, tracker.clone()), out.whole.len(), &mut left)?;
     }
     // failed single files: one shell call per destination folder
@@ -776,6 +786,9 @@ fn finish(kind: Transfer, sources: &[PathBuf], dest_dir: &Path, tracker: &Arc<Tr
             Some((_, v)) => v.push(f.clone()),
             None => by_dir.push((d.clone(), vec![f.clone()])),
         }
+    }
+    if tracker.own_engine_only {
+        by_dir.clear();
     }
     for (d, fs) in by_dir {
         // the shell reports its own results; those files' undo is covered by their folder
@@ -1353,6 +1366,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&b);
         std::fs::create_dir_all(&b).unwrap();
         b
+    }
+
+    /// `docs` holds a file and `cfg`, a junction to a folder outside. Returns (base, docs, dest, outside).
+    fn junction_case(name: &str) -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+        let b = base(name);
+        let (docs, dest, outside) = (b.join("proj").join("docs"), b.join("proj").join("backup"), b.join("outside"));
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(docs.join("a.txt"), b"a").unwrap();
+        std::fs::write(outside.join("secret.txt"), b"outside").unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(docs.join("cfg")).arg(&outside).output().is_ok_and(|o| o.status.success());
+        if !made {
+            let _ = std::fs::remove_dir_all(&b);
+            return None;
+        }
+        Some((b, docs, dest, outside))
+    }
+
+    /// An agent's job (our engine only): a source with a junction inside is not handed to the shell; nothing is written.
+    #[test]
+    fn own_engine_only_never_hands_a_source_with_a_junction_to_the_shell() {
+        let Some((b, docs, dest, outside)) = junction_case("own-only-junction") else { return };
+        let own = || {
+            let mut t = tracker();
+            t.own_engine_only = true;
+            Arc::new(t)
+        };
+        let r = transfer(Transfer::Copy, std::slice::from_ref(&docs), &dest, own());
+        assert!(r.is_err() || matches!(r, Ok(false)), "the copy is not done: {r:?}");
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "nothing was written");
+        assert!(docs.join("a.txt").exists() && outside.join("secret.txt").exists(), "nothing was taken away");
+        // a copy into the items' own folder (the shell's "x - Copy") is refused, not done by the shell
+        assert!(transfer(Transfer::Copy, &[docs.join("a.txt")], &docs, own()).is_err());
+        // a move on the same drive is one rename of the folder: the junction goes along as a junction, nothing outside is copied in
+        let r = transfer(Transfer::Move, std::slice::from_ref(&docs), &dest, own());
+        if dest.join("docs").exists() {
+            let m = std::fs::symlink_metadata(dest.join("docs").join("cfg")).unwrap();
+            assert!(is_reparse(&m), "still a junction, not a copied folder: {r:?}");
+        } else {
+            assert!(r.is_err() || matches!(r, Ok(false)));
+        }
+        assert!(outside.join("secret.txt").exists());
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    /// The fact behind it (manual, it runs the shell's engine): `cargo test -p rf-win user_copy_of_a_source_with_a_junction --
+    /// --ignored --nocapture` prints what the user's own copy does with a junction inside a source.
+    #[test]
+    #[ignore]
+    fn user_copy_of_a_source_with_a_junction() {
+        let Some((b, docs, dest, _)) = junction_case("user-junction") else { return };
+        crate::shell::ensure_com();
+        let r = transfer(Transfer::Copy, std::slice::from_ref(&docs), &dest, Arc::new(tracker()));
+        let cfg = dest.join("docs").join("cfg");
+        let link = std::fs::symlink_metadata(&cfg).ok().map(|m| is_reparse(&m));
+        let secret = std::fs::read(cfg.join("secret.txt")).ok();
+        println!("JUNCTION FACT: result {r:?}; copy of cfg exists: {}, is a junction: {link:?}, outside file readable there: {}; in it: {:?}", link.is_some(), secret.is_some(), std::fs::read_dir(&cfg).map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>()).ok());
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     fn tree(root: &Path) {
