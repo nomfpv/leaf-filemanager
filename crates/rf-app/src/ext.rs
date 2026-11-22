@@ -775,6 +775,10 @@ pub(crate) fn display_name(path: &Path, shown: SharedString) -> SharedString {
     shown
 }
 
+pub(crate) fn has_name_hook() -> bool {
+    NAME_HOOK.load(Ordering::Relaxed)
+}
+
 pub(crate) fn has_row_hook() -> bool {
     ROW_HOOK.load(Ordering::Relaxed)
 }

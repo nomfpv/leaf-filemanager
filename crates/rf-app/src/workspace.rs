@@ -2518,6 +2518,11 @@ impl Workspace {
         for (i, tab) in self.tabs.iter().enumerate() {
             let v = tab.view().read(cx);
             let name = v.title(cx);
+            // (display only: an extension's text for the folder's name; the tab still opens the real folder)
+            let name = match v.location() {
+                Location::Path(p) if crate::ext::has_name_hook() => crate::ext::display_name(p, name.into()).to_string(),
+                _ => name,
+            };
             let tab_full = cx.global::<crate::settings::Settings>().tab_full_path;
             // (the room in characters for a full path, about 7 px each; the tab's own width is only known further down)
             let room_w = if fit_names { tab_max } else { tab_w };
@@ -4126,6 +4131,15 @@ impl Workspace {
                 out
             }
             other => vec![(crate::i18n::td(&other.title()), other.clone())],
+        };
+        // (display only: an extension's text for a folder's name in the address row; each crumb still opens the real folder)
+        let crumbs: Vec<(String, Location)> = if crate::ext::has_name_hook() {
+            crumbs.into_iter().map(|(label, l)| match &l {
+                Location::Path(p) => (crate::ext::display_name(p, label.into()).to_string(), l),
+                _ => (label, l),
+            }).collect()
+        } else {
+            crumbs
         };
         // Too long for the address box: hide leading segments after the drive behind "…"
         // (the current folder must stay visible). Widths are estimated from text length.

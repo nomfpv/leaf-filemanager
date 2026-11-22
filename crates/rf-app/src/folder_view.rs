@@ -5057,6 +5057,8 @@ impl FolderView {
             let kind_c = p.mark_on_row(sel_on, theme::kind_color(cat, p.dark));
             let dim = e.is_hidden() || e.is_cloud_placeholder();
             let name: SharedString = crate::rtl::display_text(&row_name(e, show_ext, renamed.as_ref())).into();
+            // (display only: an extension may show another text; everything that acts on the file reads the entry itself)
+            let name = if crate::ext::has_name_hook() { self.path_of(ei).map_or(name.clone(), |p| crate::ext::display_name(&p, name)) } else { name };
             // (Windows' icons only when asked for: the line icons are the default look)
             let packed = pack.as_ref().and_then(|pk| self.images.update(cx, |c, cx| c.pack_icon(pk, e, 32, tint_bytes(kind_c), cx)));
             let shell_icon = packed.or_else(|| {
@@ -5065,6 +5067,14 @@ impl FolderView {
                     .flatten()
                     .and_then(|d| self.images.update(cx, |c, cx| c.icon(&d, e, cx)))
             });
+            // (display only: an extension's picture instead of the icon)
+            let shell_icon = if crate::ext::has_icon_hook() { self.path_of(ei).and_then(|p| crate::ext::icon_override(&p)).or(shell_icon) } else { shell_icon };
+            // an extension's mark after the name (one flag per row while none is registered)
+            let row_ext: Vec<AnyElement> = if crate::ext::has_row_hook() {
+                self.path_of(ei).map(|path| crate::ext::row_decoration(&crate::ext::RowInfo { path, is_dir: self.entries[ei as usize].is_dir(), selected })).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             // cut and waiting for a paste: greyed, with a small "cut" mark after the name
             let is_cut = any_cut && self.path_of(ei).is_some_and(|p| crate::cut_marks::contains(&p));
             let overlay = self.overlay_of(ei, px(16.), cx);
@@ -5443,6 +5453,7 @@ impl FolderView {
                         .children(marks.weight)
                         .children(marks.tokens)
                         .children(git_badge)
+                        .children(row_ext)
                         .child(div().flex_1())
                         .children(share_badge)
                         .children(cloud_badge),
