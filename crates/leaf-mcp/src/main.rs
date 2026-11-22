@@ -115,7 +115,7 @@ fn tools(changes: bool) -> Value {
         }),
     ];
     if changes {
-        let note = " Runs in leaf as a Status Center job the user can cancel and undo. Inside the project folder only (no \"..\", no links); an existing target is never overwritten (the call fails and names it). The first change of a session asks the user in leaf.";
+        let note = " Runs in leaf as a Status Center job the user can cancel and undo. Inside the project folder only (no \"..\", no links, no folder with a link inside; .claude and .git are never changed); an existing target is never overwritten (the call fails and names it). The first change of a session asks the user in leaf.";
         list.extend([
             json!({
                 "name": "copy",
@@ -143,7 +143,7 @@ fn tools(changes: bool) -> Value {
             }),
             json!({
                 "name": "trash",
-                "description": format!("Move files or folders to the Recycle Bin / Trash (never a permanent delete), at most 50 per call, never the project folder itself.{note}"),
+                "description": format!("Move files or folders to the Recycle Bin / Trash (never a permanent delete), at most 50 items and 2000 files / 1 GB in all per call, never the project folder itself, .claude or .git.{note}"),
                 "inputSchema": { "type": "object", "properties": { "paths": paths_prop("What to move to the Recycle Bin / Trash (at most 50).", 50) }, "required": ["paths"] },
                 "annotations": { "destructiveHint": true, "idempotentHint": false }
             }),
@@ -267,7 +267,7 @@ fn respond(ctx: &mut Ctx, msg: &Value) -> Option<Value> {
     let result = match method {
         "initialize" => {
             if let Some(n) = params.pointer("/clientInfo/name").and_then(Value::as_str) {
-                ctx.agent = n.chars().filter(|c| !c.is_control()).take(60).collect();
+                ctx.agent = n.chars().filter(|c| c.is_alphanumeric() || " -_.".contains(*c)).take(40).collect();
             }
             let version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("2025-06-18");
             json!({
