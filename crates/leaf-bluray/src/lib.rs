@@ -7,6 +7,7 @@
 
 pub mod codec;
 pub mod disc;
+pub mod ffmpeg;
 pub mod mkv;
 pub mod mpls;
 pub mod output;
