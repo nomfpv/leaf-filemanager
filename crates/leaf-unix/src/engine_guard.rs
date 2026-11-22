@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::engine_guard. Status: STUB (Linux has no shell engine and never raises these errors)
+//! Linux backend of rf_win::engine_guard. Status: N/A (Linux has no shell engine and never raises these errors; the types exist for the app)
 
 use std::time::Duration;
 

@@ -1,6 +1,5 @@
-//! Linux backend of the leaf-sys module `geom` (Windows side: rf-win geom.rs). Status: PARTIAL (`window_rect` is a stub)
+//! Linux backend of the leaf-sys module `geom` (Windows side: rf-win geom.rs). Status: REAL (`window_rect` has no answer on Linux: a Wayland client is not told where its windows are)
 
-use leaf_common::stub;
 
 use crate::Owner;
 
@@ -31,5 +30,5 @@ pub fn owner_from_raw(_hwnd: isize) -> Owner {
 
 /// The screen rectangle of a window of ours (left, top, right, bottom); Wayland does not tell a client where its windows are.
 pub fn window_rect(_hwnd: isize) -> Option<(i32, i32, i32, i32)> {
-    stub!("geom::window_rect")
+    None
 }

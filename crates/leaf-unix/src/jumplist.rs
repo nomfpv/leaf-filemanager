@@ -1,4 +1,4 @@
-//! Linux backend of rf_win::jumplist. Status: STUB
+//! Linux backend of rf_win::jumplist. Status: N/A (the desktop actions are static in leaf's own `.desktop` file; the recent-places list of `recently-used.xbel` belongs to every program, leaf does not write it)
 
 use leaf_common::stub_err;
 use std::path::Path;

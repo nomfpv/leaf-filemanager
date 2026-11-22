@@ -1,9 +1,9 @@
-//! Linux backend of rf_win::vfiles. Status: STUB
+//! Linux backend of rf_win::vfiles (files other programs offer as virtual clipboard data). Status: N/A (files on the Linux clipboard are real paths: see `clipboard`)
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use leaf_common::{stub, stub_err};
+use leaf_common::stub_err;
 
 /// A data operation: nothing is pasted, `progress` is never called, the answer is `Err`.
 pub fn paste_clipboard(_dest: &Path, _progress: &mut dyn FnMut(Progress), _cancel: &AtomicBool) -> anyhow::Result<Pasted> {
@@ -11,11 +11,11 @@ pub fn paste_clipboard(_dest: &Path, _progress: &mut dyn FnMut(Progress), _cance
 }
 
 pub fn clipboard_has() -> bool {
-    stub!("vfiles::clipboard_has")
+    false
 }
 
 pub fn drag_paths(_data: *mut std::ffi::c_void, _fetch: bool) -> Option<Vec<PathBuf>> {
-    stub!("vfiles::drag_paths")
+    None
 }
 
 // TYPE-COPY(rf-win vfiles.rs:171)
