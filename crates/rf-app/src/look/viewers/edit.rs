@@ -118,7 +118,8 @@ pub fn load(path: &Path) -> Result<Loaded, SharedString> {
     if let Some(why) = place_refusal(path) {
         return Err(why);
     }
-    if let Err(e) = std::fs::OpenOptions::new().write(true).open(path) {
+    // (a file this user may not change can still be edited when leaf can save it as administrator: the save asks first)
+    if let Err(e) = std::fs::OpenOptions::new().write(true).open(path).or_else(|e| if crate::admin::denied_io(&e) { Ok(std::fs::File::open(path)?) } else { Err(e) }) {
         return Err(match e.kind() {
             std::io::ErrorKind::PermissionDenied => t!("You don't have permission to change this file").into(),
             _ if e.raw_os_error() == Some(32) => t!("Another program is using the file").into(),
@@ -380,6 +381,10 @@ impl EditView {
             })()
         };
         if let Err(e) = r {
+            // refused with "access denied": the same bytes can be saved again as administrator (after the click and the prompt)
+            if crate::admin::denied_io(&e) {
+                return self.offer_admin_save(bytes, next, then, window, cx);
+            }
             let why = match e.kind() {
                 std::io::ErrorKind::PermissionDenied => t!("Access was denied (no permission, or another program holds the file).").to_string(),
                 _ => e.to_string(),
@@ -387,14 +392,50 @@ impl EditView {
             log::warn!("look edit: save {}: {e}", self.path.display());
             return prompt::notice(t!("Not saved"), format!("{why} {}", t!("The file on disk was not changed.")), window, cx);
         }
+        self.saved_now(bytes.len(), next, then, window, cx);
+    }
+
+    fn saved_now(&mut self, len: usize, next: TextFormat, then: Option<Then>, window: &mut Window, cx: &mut Context<Self>) {
         self.format = next;
-        self.stamp = stamp_of(&self.path).unwrap_or(Stamp(bytes.len() as u64, None));
+        self.stamp = stamp_of(&self.path).unwrap_or(Stamp(len as u64, None));
         self.saved = self.state.read(cx).text().clone();
         self.set_dirty(false, window, cx);
         self.say(t!("Saved"), cx);
         if let Some(then) = then {
             window.defer(cx, then);
         }
+    }
+
+    /// "Retry as administrator" for a save Windows refused: the bytes go through leaf's administrator helper.
+    fn offer_admin_save(&mut self, bytes: Vec<u8>, next: TextFormat, then: Option<Then>, window: &mut Window, cx: &mut Context<Self>) {
+        let me = cx.weak_entity();
+        let path = self.path.clone();
+        let bytes = std::sync::Arc::new(bytes);
+        let then = Rc::new(Cell::new(then));
+        let handle = window.window_handle();
+        let what = format!("\"{}\": {}", self.name(), t!("access was denied. The file on disk was not changed."));
+        crate::admin::offer(
+            t!("Not saved").to_string(),
+            what,
+            move |cx| {
+                let (me, path, bytes, then, next) = (me.clone(), path.clone(), bytes.clone(), then.clone(), next.clone());
+                let b = bytes.clone();
+                let task = cx.background_spawn(async move { crate::admin::write_file(&path, &b) });
+                cx.spawn(async move |cx| {
+                    let r = task.await;
+                    let _ = handle.update(cx, |_, window, cx| match r {
+                        Ok(()) => {
+                            let _ = me.update(cx, |v, cx| v.saved_now(bytes.len(), next, then.take(), window, cx));
+                        }
+                        Err(e) => prompt::notice(t!("Not saved"), format!("{e:#}
+{}", t!("The file on disk was not changed.")), window, cx),
+                    });
+                })
+                .detach();
+            },
+            window,
+            cx,
+        );
     }
 
     /// "Reload" after the file changed on disk: its new content replaces the edits (the user chose that).

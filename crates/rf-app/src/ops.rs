@@ -649,16 +649,44 @@ impl FolderView {
             return;
         }
         let name = if folder { t!("New folder") } else { t!("New text document") }.to_string();
+        let (retry_dir, retry_name) = (dir.clone(), name.clone());
         let task = cx.background_spawn(async move {
             if folder { fileops::new_folder(&dir, &name) } else { fileops::new_text_file(&dir, &name) }
         });
+        let window = cx.active_window();
         cx.spawn(async move |this, cx| {
-            if let Ok(path) = task.await {
-                crate::undo::push(crate::undo::UndoOp::Created { path: path.clone() });
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                let _ = this.update(cx, |v, cx| {
-                    v.expect_new_item(name, cx);
-                });
+            match task.await {
+                Ok(path) => {
+                    crate::undo::push(crate::undo::UndoOp::Created { path: path.clone() });
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                    let _ = this.update(cx, |v, cx| {
+                        v.expect_new_item(name, cx);
+                    });
+                }
+                // a new folder refused with "access denied": offered again as administrator
+                Err(e) if folder && crate::admin::denied(&e) => {
+                    let what = format!("{}
+{}", retry_dir.display(), t!("Access was denied."));
+                    let view = this.clone();
+                    if let Some(w) = window {
+                        let _ = w.update(cx, |_, window, cx| {
+                            crate::admin::offer(
+                                t!("New folder").to_string(),
+                                what,
+                                move |cx| {
+                                    let view = view.clone();
+                                    crate::admin::retry_new_folder(cx, retry_dir.clone(), retry_name.clone(), move |p, cx| {
+                                        let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+                                        let _ = view.update(cx, |v, cx| v.expect_new_item(name, cx));
+                                    })
+                                },
+                                window,
+                                cx,
+                            )
+                        });
+                    }
+                }
+                Err(e) => log::warn!("new item: {e:#}"),
             }
         })
         .detach();
@@ -864,11 +892,22 @@ impl FolderView {
                         other => {
                             let failed = matches!(other, Ok(Err(_)));
                             let n2c = n2_for_notice;
+                            let denied = matches!(&other, Ok(Err(e)) if crate::admin::denied(e));
                             if let Ok(Err(e)) = other {
                                 log::warn!("rename: {e:#}");
                             }
                             // nothing to wait for
                             let _ = this.update(cx, |v, cx| v.rename_failed(cx));
+                            // refused with "access denied": offered again as administrator (only on that click)
+                            if denied {
+                                let (from, name) = (from.clone(), n2c.clone());
+                                let what = format!("\"{}\" → \"{name}\"
+{}", rf_core::history::display_name(&from), crate::t!("Access was denied."));
+                                let _ = handle.update(cx, |_, window, cx| {
+                                    crate::admin::offer(crate::t!("Rename").to_string(), what, move |cx| crate::admin::retry_rename(cx, from.clone(), name.clone()), window, cx)
+                                });
+                                return;
+                            }
                             // the system refused: if a program has the file open, say which (looked up here, off the UI thread)
                             if failed {
                                 let held = from.clone();

@@ -2,6 +2,7 @@
 #![recursion_limit = "256"]
 
 mod actions;
+mod admin;
 mod agent_files;
 mod aliases;
 mod background;

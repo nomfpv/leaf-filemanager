@@ -942,7 +942,16 @@ fn transfer_run(
     // a move re-keys the tags of what it moved (a copy leaves the copy untagged); undo and redo of moves come through here too
     let tag_moves = Arc::new(std::sync::Mutex::new(Vec::<(std::path::PathBuf, std::path::PathBuf)>::new()));
     let tag_moves_out = tag_moves.clone();
+    // refused with "access denied": the finished card offers the same transfer again as administrator
+    let denied = Arc::new(AtomicBool::new(false));
+    let denied_seen = denied.clone();
+    let own_id = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let own_id_done = own_id.clone();
+    let (retry_sources, retry_dest) = (sources.clone(), dest.clone());
     let on_done: Option<OnDone> = Some(Box::new(move |_, cx: &mut App| {
+        if denied_seen.load(Ordering::Relaxed) {
+            offer_admin(cx, own_id_done.get(), move |cx| crate::admin::retry_transfer(cx, kind, retry_sources.clone(), retry_dest.clone(), record));
+        }
         crate::tags::follow(cx, &std::mem::take(&mut *tag_moves.lock().unwrap()));
         if let Some(f) = after {
             f(std::mem::take(&mut *arrived.lock().unwrap()), cx);
@@ -974,6 +983,9 @@ fn transfer_run(
         } else {
             fileops::transfer_tracked(kind, &sources, &dest, t.clone())
         };
+        if r.as_ref().is_err_and(crate::admin::denied) {
+            denied.store(true, Ordering::Relaxed);
+        }
         let pairs = t.results.lock().unwrap().clone();
         if matches!(r, Ok(true)) {
             use crate::usage::{Counter, bump};
@@ -1001,9 +1013,18 @@ fn transfer_run(
         }
         r
     }, on_done);
+    own_id.set(id);
     set_extras(cx, id, Some(words), Some(open_dest), record.then_some(mark));
     set_lock_paths(cx, id, lock_paths);
     set_transfer(cx, id, crate::xfer_history::Note { kind: if kind == Transfer::Copy { crate::xfer_history::Kind::Copy } else { crate::xfer_history::Kind::Move }, what: note_what, from: note_from, to: note_to });
+}
+
+/// A failed operation's card gets "Retry as administrator" (the click starts the helper, or uses the one that runs).
+fn offer_admin(cx: &mut App, id: u64, retry: impl Fn(&mut App) + 'static) {
+    if id == 0 {
+        return;
+    }
+    set_result(cx, id, None, Some((t!("Retry as administrator").to_string(), std::rc::Rc::new(retry))));
 }
 
 /// Marks a running job as a transfer: when it ends, it is written to the history of transfers.
@@ -1515,6 +1536,18 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     // a drive without a trash: the job asks here, on the UI side, and waits for the answer
     #[cfg(not(windows))]
     let ask_tx = no_trash_asker(cx);
+    let denied = Arc::new(AtomicBool::new(false));
+    let denied_seen = denied.clone();
+    let own_id = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let own_id_done = own_id.clone();
+    let retry_paths = paths.clone();
+    // (on Linux the helper has no Trash of the user's: only a permanent delete is offered again)
+    let offer_retry = permanent || cfg!(windows);
+    let on_done: Option<OnDone> = Some(Box::new(move |_, cx: &mut App| {
+        if offer_retry && denied_seen.load(Ordering::Relaxed) {
+            offer_admin(cx, own_id_done.get(), move |cx| crate::admin::retry_delete(cx, retry_paths.clone(), permanent, record));
+        }
+    }));
     let id = start_with_id(cx, title, move |t| {
         // permanent: our parallel delete (the shell takes what it can't); recycle bin: the shell
         let r = if permanent && fast {
@@ -1530,6 +1563,9 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
             },
             ok => ok,
         };
+        if r.as_ref().is_err_and(crate::admin::denied) {
+            denied.store(true, Ordering::Relaxed);
+        }
         if matches!(r, Ok(true)) {
             crate::usage::bump(crate::usage::Counter::FilesDeleted, paths.len() as u64);
         }
@@ -1539,7 +1575,8 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
             crate::undo::push(crate::undo::UndoOp::Recycled { pairs });
         }
         r
-    }, None);
+    }, on_done);
+    own_id.set(id);
     set_lock_paths(cx, id, lock_paths);
     if record && !permanent {
         set_extras(cx, id, None, None, Some(mark));
@@ -2362,6 +2399,7 @@ fn panel(ops: &Entity<Ops>, p: &Palette, cx: &App) -> Div {
                 ),
         )
         .children(update)
+        .children(crate::admin::status_row(p))
         .child(body)
 }
 

@@ -2062,6 +2062,7 @@ impl FolderView {
             .spawn(move || {
                 let tx2 = tx.clone();
                 let mut all: Vec<Entry> = Vec::new();
+                let mut as_admin = if crate::archive_view::split(&path).is_none() { crate::admin::list(&path) } else { None };
                 let r = match crate::archive_view::split(&path) {
                     // inside an archive: list its entries like a folder
                     // a protected archive asks for its password first (zip lists without one,
@@ -2095,6 +2096,14 @@ impl FolderView {
                             Ok(0)
                         }
                     },
+                    // a folder the user chose to see as administrator ("Retry as administrator" on its "access denied")
+                    None if as_admin.is_some() => as_admin.take().unwrap_or_else(|| Ok(Vec::new())).map(|mut es| {
+                        rf_core::tssource::mark_ts_sources(&path, &mut es);
+                        let n = es.len();
+                        all.extend(es.iter().cloned());
+                        let _ = tx2.unbounded_send(Msg::Batch(es));
+                        n
+                    }),
                     None => {
                         let mut list = || {
                             leaf_sys::list_dir(&path, 512, &|| cancel.load(Ordering::Relaxed), &mut |mut b| {
@@ -5502,7 +5511,33 @@ impl FolderView {
                 )
                 .into_any_element()
         } else if let Some(err) = &self.error {
-            empty_state(p, L::TriangleAlert, crate::i18n::td(err), t!("Couldn't open folder")).into_any_element()
+            let state = empty_state(p, L::TriangleAlert, crate::i18n::td(err), t!("Couldn't open folder"));
+            // "access denied" on a local folder: it can be listed as administrator (after the click, and the prompt)
+            let denied_here = *err == leaf_sys::ListError::AccessDenied.to_string() && crate::admin::available();
+            match self.location().path().map(|d| d.to_path_buf()).filter(|_| denied_here) {
+                Some(dir) => state
+                    .child(
+                        div()
+                            .id("admin-list")
+                            .mt_2()
+                            .px_3()
+                            .py_1()
+                            .rounded(theme::RADIUS_SM)
+                            .border_1()
+                            .border_color(p.divider)
+                            .text_sm()
+                            .text_color(p.text_secondary)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(p.hover))
+                            .child(t!("Retry as administrator"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                crate::admin::list_here(&dir);
+                                this.refresh(cx);
+                            })),
+                    )
+                    .into_any_element(),
+                None => state.into_any_element(),
+            }
         } else if count == 0 && self.loading && self.load_started.elapsed() >= SLOW_LOAD {
             let text = self.search_stage.map_or_else(|| t!("Loading…").to_string(), |s| s.text().to_string());
             empty_state(p, L::LoaderCircle, text, "").into_any_element()
