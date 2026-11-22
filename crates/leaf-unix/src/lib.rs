@@ -19,6 +19,7 @@ pub mod ctxmenu;
 pub mod datefmt;
 pub mod default_fm;
 pub mod dialogs;
+pub mod discimage;
 pub mod diskusage;
 pub mod dnd;
 pub mod drives;

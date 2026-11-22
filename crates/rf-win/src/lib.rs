@@ -27,6 +27,7 @@ pub mod ctxmenu;
 pub mod default_fm;
 pub mod design;
 pub mod dialogs;
+pub mod discimage;
 pub mod diskusage;
 pub mod elf;
 pub mod dnd;
