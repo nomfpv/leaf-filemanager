@@ -265,6 +265,15 @@ impl DiskUsageView {
         &self.root
     }
 
+    /// What the window's status line says on this page: the folder shown and its totals (while scanning, how far it is).
+    pub fn status_text(&self) -> String {
+        let Some(t) = Weighed::of(&self.tree, &self.tokens, &self.activity) else {
+            return format!("{} {} · {}", count(self.progress.0), t!("entries"), format::size(self.progress.1));
+        };
+        let name = t.path(self.cur).to_string_lossy().into_owned();
+        format!("{name} · {} · {} {}", show(self.metric, t.weight(self.cur, self.metric)), count(t.files(self.cur) as u64), t!("files"))
+    }
+
     /// Watches the walk: counters twice a second, the finished tree when it arrives.
     fn poll(&mut self, cx: &mut Context<Self>) {
         self._poll = Some(cx.spawn(async move |this, cx| {

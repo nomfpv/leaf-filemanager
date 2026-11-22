@@ -4380,6 +4380,7 @@ impl FolderView {
             Location::Brain(_) => self.brain.as_ref()?.read(cx).status_text(),
             Location::SyncJobs => self.sync.as_ref()?.read(cx).status_text(cx),
             Location::Agents => self.agents.as_ref()?.read(cx).status_text(cx),
+            Location::DiskUsage(_) => self.disk_usage.as_ref()?.read(cx).status_text(),
             _ => return None,
         };
         (!text.is_empty()).then_some(text)
