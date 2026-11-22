@@ -3591,6 +3591,9 @@ impl Workspace {
 
         let tab = self.active_tab().read(cx);
         let in_folder = tab.location().path().is_some();
+        // a tag's or a library's list: real paths from many folders, no folder of its own (no New, Paste, terminal or hidden-files here, as in
+        // its right-click menu), but sort, view, filter and every item command work
+        let listed = matches!(tab.location(), Location::Tag(_) | Location::Library { .. });
         let (sel, _, _) = tab.selection_summary();
         let has_sel = sel > 0;
         // a phone's folder is read-only here: changing commands are greyed out, not refused later
@@ -3762,10 +3765,10 @@ impl Workspace {
             .items_center()
             .text_size(px(p.fs))
             // New folder, with the other new items (file types, shortcut, ...) under the arrow beside it
-            .children(on("new").then(|| {
+            .children((on("new") && !listed).then(|| {
                 cmd("cb-newfolder", L::FolderPlus, Some("New folder"), "New folder  (Ctrl+Shift+N)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(NewFolder), cx))
             }))
-            .children(on("new").then(|| {
+            .children((on("new") && !listed).then(|| {
                 div()
                     .id("cb-new")
                     .h(px(28.))
@@ -3813,15 +3816,15 @@ impl Workspace {
             }))
             .children(on("share").then(|| cmd("cb-share", L::Share2, None, "Share", writable_sel, cx, |this, w, cx| this.with_tab(cx, |v, cx| v.share(w, cx)))))
             .children(on("props").then(|| {
-                cmd("cb-props", L::Wrench, None, "Properties  (Alt+Enter)", in_folder, cx, |this, _, cx| {
+                cmd("cb-props", L::Wrench, None, "Properties  (Alt+Enter)", in_folder || (listed && has_sel), cx, |this, _, cx| {
                     this.with_tab(cx, |v, cx| if v.selection_paths().is_empty() { v.folder_properties(cx) } else { v.properties(cx) })
                 })
             }))
-            .children(extra("terminal").then(|| cmd("cb-terminal", L::SquareTerminal, None, "Open in Terminal  (Ctrl+Shift+`)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(OpenTerminal), cx))))
-            .children(extra("hidden").then(|| cmd("cb-hidden", L::Eye, None, "Show/hide hidden items  (Ctrl+H)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(ToggleHidden), cx))))
+            .children((extra("terminal") && !listed).then(|| cmd("cb-terminal", L::SquareTerminal, None, "Open in Terminal  (Ctrl+Shift+`)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(OpenTerminal), cx))))
+            .children((extra("hidden") && !listed).then(|| cmd("cb-hidden", L::Eye, None, "Show/hide hidden items  (Ctrl+H)", in_folder, cx, |_, w, cx| w.dispatch_action(Box::new(ToggleHidden), cx))))
             .children(extra("refresh").then(|| cmd("cb-refresh", L::RotateCw, None, "Refresh  (F5)", true, cx, |_, w, cx| w.dispatch_action(Box::new(Refresh), cx))))
             // undo, the selection commands, properties, Settings (issue 55, Explorer's "See more")
-            .children(on("more").then(|| drop("cb-more", L::Ellipsis, None, "More", in_folder, cx, |_, _| crate::ctx_menu::BarMenu::More)))
+            .children((on("more") && !listed).then(|| drop("cb-more", L::Ellipsis, None, "More", in_folder, cx, |_, _| crate::ctx_menu::BarMenu::More)))
             .children((!inline_commands.is_empty() || !menu_commands.is_empty()).then(sep))
             .when(!inline_commands.is_empty(), |d| {
                 d.child(
@@ -3949,12 +3952,12 @@ impl Workspace {
                     .items_center()
                     .rounded(px(p.control_radius))
                     .whitespace_nowrap()
-                    .text_color(if in_folder { p.text_secondary } else { p.text_disabled })
+                    .text_color(if in_folder || listed { p.text_secondary } else { p.text_disabled })
                     .when(!popups_open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Sort and group")).build(w, cx)))
                     .child(Icon::new(L::ArrowDownUp).size(px(16.)))
                     .child(sort_label)
                     .child(Icon::new(if sort_asc { L::ChevronUp } else { L::ChevronDown }).size(px(12.)))
-                    .when(in_folder, |d| {
+                    .when(in_folder || listed, |d| {
                         d.hover(|s| s.bg(p.hover).text_color(p.text)).on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
                             let pos = point(ev.position().x - px(14.), ev.position().y + px(18.));
                             this.active_tab().clone().update(cx, |v, cx| v.show_bar_menu(crate::ctx_menu::BarMenu::Sort, pos, window, cx));
@@ -3999,11 +4002,67 @@ impl Workspace {
                     .text_color(p.text_secondary)
                     .when(filter_on, |d| d.bg(p.selection).text_color(p.accent))
                     .when(!filter_on, |d| d.hover(|s| s.bg(p.hover)))
-                    .when(in_folder, |d| d.on_click(cx.listener(|this, _, window, cx| this.toggle_filter_bar(window, cx))))
-                    .when(!in_folder, |d| d.text_color(p.text_disabled))
+                    .when(in_folder || listed, |d| d.on_click(cx.listener(|this, _, window, cx| this.toggle_filter_bar(window, cx))))
+                    .when(!(in_folder || listed), |d| d.text_color(p.text_disabled))
                     .child(Icon::new(L::ListFilter).size(px(16.)))
             }))
             .child(search_field)
+    }
+
+    /// The tool bar row on the pages that have no folder of their own (Home, Settings, Sync jobs, Disk usage, the result pages): the row keeps
+    /// its height there (so opening a folder does not move the frame) and holds what works on that page. Home: Customize Home, Refresh and a
+    /// search of the indexed drives (the quick search window, the only search that needs no folder). The others: the page's title, quietly.
+    fn render_page_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let loc = self.active_tab().read(cx).location().clone();
+        let narrow_bar = self.viewport_w <= 1200.;
+        let btn = |id: &'static str, icon: L, label: Option<&'static str>, tip: &'static str, cx: &mut Context<Self>, run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
+            let label = label.filter(|_| !narrow_bar);
+            h_flex()
+                .id(id)
+                .h(px(28.))
+                .px(px(if label.is_some() { 8. } else { 6. }))
+                .gap(px(6.))
+                .flex_shrink_0()
+                .items_center()
+                .rounded(px(p.control_radius))
+                .whitespace_nowrap()
+                .text_color(p.text_secondary)
+                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::t(tip)).build(w, cx))
+                .hover(|s| s.bg(p.hover).text_color(p.text))
+                .active(|s| s.bg(p.pressed))
+                .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
+                .child(Icon::new(icon).size(px(16.)))
+                .children(label.map(|l| div().child(crate::i18n::t(l))))
+        };
+        let row = h_flex().h(px(p.toolbar_h)).px(px(10.)).gap(px(2.)).items_center().text_size(px(p.fs));
+        match loc {
+            Location::Home => row
+                .child(btn("pb-customize", L::LayoutGrid, Some("Customize Home"), "Customize Home", cx, |_, w, cx| w.dispatch_action(Box::new(CustomizeHome), cx)))
+                .child(btn("pb-refresh", L::RotateCw, None, "Refresh  (F5)", cx, |_, w, cx| w.dispatch_action(Box::new(Refresh), cx)))
+                .child(div().flex_1().min_w(px(8.)))
+                .child(
+                    h_flex()
+                        .id("pb-search")
+                        .flex_shrink(1.)
+                        .min_w(px(140.))
+                        .w(px(240.))
+                        .h(px(28.))
+                        .px(px(8.))
+                        .gap(px(8.))
+                        .items_center()
+                        .rounded(px(p.control_radius + 2.))
+                        .bg(p.field_bg)
+                        .border_1()
+                        .border_color(p.field_border)
+                        .text_color(p.text_tertiary)
+                        .hover(|s| s.border_color(p.accent))
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Search the indexed drives")).build(w, cx))
+                        .child(Icon::new(L::Search).size(px(16.)).flex_shrink_0())
+                        .child(div().flex_1().min_w_0().truncate().child(t!("Search everywhere")))
+                        .on_click(|_, _, cx| crate::quick_search::toggle(cx)),
+                ),
+            other => row.child(div().min_w_0().truncate().px(px(6.)).text_color(p.text_secondary).child(crate::i18n::td(&other.title()))),
+        }
     }
 
     fn render_breadcrumb(&mut self, loc: &Location, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -5745,6 +5804,7 @@ impl Render for Workspace {
         let toolbar = self.render_toolbar(&p, cx);
         let typebar = self.render_typebar(&p, cx);
         let commandbar = self.render_commandbar(&p, cx);
+        let pagebar = self.render_page_bar(&p, cx);
         let filter_strip = self.render_filter_bar(&p, window, cx);
         // off-screen check (tools/TESTING.md): `LEAF_CHECK_COMPARE=<folder>` splits the first tab at that folder and compares
         if let Ok(dir) = std::env::var("LEAF_CHECK_COMPARE") {
@@ -6502,14 +6562,14 @@ impl Render for Workspace {
                                         .child(commandbar),
                                 )
                             })
-                            // Home and the other pages have no item commands: the row keeps its height, empty, so opening a folder
-                            // does not push the content down
+                            // Home and the other pages have no item commands: the row keeps its height and holds the page's own (render_page_bar)
                             .when(!show_commandbar && show_toolbar, |d| {
                                 d.child(
                                     theme::sheet(&p, p.toolbar_bg)
                                         .h(px(p.toolbar_h))
                                         .flex_shrink_0()
-                                        .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border)),
+                                        .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border))
+                                        .child(pagebar),
                                 )
                             })
                             .children(filter_strip)
