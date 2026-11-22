@@ -62,6 +62,8 @@ pub struct LookWindow {
     _watch_task: Option<Task<()>>,
     focus: FocusHandle,
     _hide: Option<Task<()>>,
+    /// One more look after the fade-in is over (see `load`).
+    _settle: Option<Task<()>>,
     /// The file being opened off the UI thread (a slow place, see `load_in_background`).
     _loading: Option<Task<()>>,
     _subs: Vec<Subscription>,
@@ -219,6 +221,7 @@ impl LookWindow {
             _watch_task: None,
             focus,
             _hide: None,
+            _settle: None,
             _loading: None,
             _subs: subs,
             viewer,
@@ -305,6 +308,13 @@ impl LookWindow {
         self.more_open = false;
         self.load_gen += 1;
         self.watch(window, cx);
+        // The fade-in starts at opacity 0 and needs frames to finish. A viewer that has nothing more to say (the hex dump) asks for
+        // none, and the follow-up frame the animation asks for can be lost when the window opens inside an update: the window then
+        // stayed empty (opacity 0) until the pointer moved. One more look after the fade does it.
+        self._settle = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(200)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
         cx.notify();
     }
 
