@@ -298,6 +298,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     c!(GoUp, Navigation, "Up one level", "Opens the folder this one is in.", ArrowUp, [w("alt-up")], keywords: &["parent"]),
     c!(GoHome, Navigation, "Home", "Opens the Home page.", House, [w("alt-home")]),
     c!(CustomizeHome, View, "Customize Home", "Opens Home with buttons to add, remove, resize and reorder its widgets.", LayoutGrid, [], keywords: &["dashboard", "widgets", "edit layout"], since: "0.9.5"),
+    c!(ShareCard, View, "Share card", "Draws a picture of some of your own totals (files moved, data copied, fastest transfer, days in a row) in leaf's look with the leaf logo, to copy or save. A list first shows every line with its value and a tick box; no folder, file or user names are on the picture, and nothing is sent anywhere.", Share2, [], keywords: &["share", "picture", "image", "stats", "numbers", "card", "show off", "png"], since: "0.9.6"),
     c!(ShowTransferHistory, View, "Transfer history", "Lists the copies, moves, downloads and uploads that finished (what, from, to, size, time, speed, result), with Clear history and the switch that turns recording off. Kept on this PC only.", Activity, [], keywords: &["transfers", "history", "copy", "download", "speed", "log"], since: "0.9.6"),
     c!(ResetHome, View, "Reset Home", "Puts the Home page back to its default widgets.", RotateCcw, [], keywords: &["dashboard", "widgets", "default"], since: "0.9.5"),
     c!(GoSettings, App, "Settings", "Opens leaf's settings.", Settings, [w("ctrl-,")], keywords: &["options", "preferences"]),

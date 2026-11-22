@@ -167,6 +167,27 @@ pub fn header(p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
         .into_any_element()
 }
 
+/// The heading of "Your numbers": the share card, and the page with all the figures.
+pub fn numbers_header(p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
+    h_flex()
+        .gap_1()
+        .child(
+            div()
+                .id("numbers-share")
+                .px_2()
+                .py_0p5()
+                .rounded(theme::RADIUS_SM)
+                .text_xs()
+                .text_color(p.text_secondary)
+                .cursor_pointer()
+                .hover(|s| s.bg(p.hover).text_color(p.text))
+                .child(t!("Share card"))
+                .on_click(|_, window, cx| crate::share_card::open(window, cx)),
+        )
+        .child(header(p, cx))
+        .into_any_element()
+}
+
 /// The full history on the "Your numbers" page: the switch, the list (newest first) and "Clear history".
 pub fn page_section(p: &Palette, s: &Settings) -> Vec<AnyElement> {
     use crate::settings_view::{button, card, section, shell, sw};

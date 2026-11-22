@@ -2,7 +2,7 @@
 //! The numbers are counted on this PC, kept in one file in the config folder and never sent anywhere.
 
 use gpui_kit::assets::IconName as L;
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::component::h_flex;
 use gpui_kit::*;
 
 use crate::settings::Settings;
@@ -112,9 +112,11 @@ pub fn page(p: &Palette, s: &Settings, _cx: &mut App) -> Vec<AnyElement> {
     v.push(card_.into_any_element());
 
     v.push(
-        v_flex()
+        h_flex()
             .pt_4()
+            .gap_2()
             .items_start()
+            .child(button("numbers-share", p, t!("Share card"), |window, cx| crate::share_card::open(window, cx)))
             .child(button("numbers-reset", p, t!("Reset"), |_, cx| {
                 crate::usage::reset();
                 cx.refresh_windows();

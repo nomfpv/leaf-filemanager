@@ -49,7 +49,8 @@ rf-archive.workspace = true
 rf-nearby.workspace = true
 rf-player.workspace = true
 rustdecoder.workspace = true
-resvg = { version = "0.46", default-features = false }
+# the share card and the About this PC picture draw text with it (fonts of the system; the same features rf-win already uses)
+resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts"] }
 gpui-kit.workspace = true
 anyhow.workspace = true
 log.workspace = true
