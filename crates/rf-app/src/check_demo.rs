@@ -26,14 +26,15 @@ pub(crate) fn home(cx: &mut App) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let _ = Command::new("git")
-        .args(["-c", "user.name=user", "-c", "user.email=user@example.com", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let mut c = Command::new("git");
+    c.args(["-c", "user.name=user", "-c", "user.email=user@example.com", "-c", "commit.gpgsign=false"]).args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // (no console window: leaf has none of its own, so Windows would open one for every git started here)
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    let _ = c.status();
 }
 
 /// "2026-11-22T10:11:12.000Z" for the time `secs` seconds ago.
