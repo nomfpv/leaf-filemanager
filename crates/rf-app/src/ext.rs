@@ -671,6 +671,7 @@ pub(crate) fn frame(window: &mut Window, cx: &mut App) {
     if !ACTIVE.load(Ordering::Relaxed) {
         return;
     }
+    geo_new_frame();
     let now = std::time::Instant::now();
     let anim = ANIM_UNTIL.get().is_some_and(|t| t > now);
     let wanted = registry().is_some_and(|r| r.on().any(|(_, e)| r.frames.borrow().contains(&e.id)));
@@ -728,6 +729,137 @@ pub fn data_dir(id: &str) -> Option<PathBuf> {
 /// own: the scheme decides, and a scheme without a sound plays nothing.
 pub fn play_sound() {
     leaf_sys::sound::notify();
+}
+
+// ------------------------------------------------------------------------------------------------------------------------- geometry
+
+/// Where things were drawn, as the last frames saw them (window coordinates), for an extension that places an effect on something.
+/// Recorded only while an extension is registered; an entry older than a frame is not given out.
+#[derive(Default)]
+struct Geo {
+    frame: u64,
+    rows: std::collections::HashMap<PathBuf, (u64, Bounds<Pixels>, FileKind, String)>,
+    content: Option<(u64, Bounds<Pixels>)>,
+    panes: std::collections::HashMap<usize, (u64, Bounds<Pixels>)>,
+    cards: std::collections::HashMap<u64, (u64, Bounds<Pixels>)>,
+    bars: std::collections::HashMap<u64, (u64, Bounds<Pixels>)>,
+}
+
+thread_local! {
+    static GEO: RefCell<Geo> = RefCell::new(Geo::default());
+}
+
+/// What a probe records.
+pub(crate) enum Spot {
+    Row(PathBuf, FileKind, String),
+    Content,
+    Pane(usize),
+    Card(u64),
+    Bar(u64),
+}
+
+/// An invisible element that records its bounds under `spot` each time it is laid out. Put it as a child of a `relative` element.
+pub(crate) fn probe(spot: Spot) -> AnyElement {
+    canvas(
+        move |bounds, _, _| {
+            GEO.with(|g| {
+                let mut g = g.borrow_mut();
+                let f = g.frame;
+                match &spot {
+                    Spot::Row(p, k, n) => {
+                        g.rows.insert(p.clone(), (f, bounds, *k, n.clone()));
+                    }
+                    Spot::Content => g.content = Some((f, bounds)),
+                    Spot::Pane(i) => {
+                        g.panes.insert(*i, (f, bounds));
+                    }
+                    Spot::Card(i) => {
+                        g.cards.insert(*i, (f, bounds));
+                    }
+                    Spot::Bar(i) => {
+                        g.bars.insert(*i, (f, bounds));
+                    }
+                }
+            })
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
+}
+
+/// Called once per window draw: moves the frame counter on and drops what is not drawn any more.
+fn geo_new_frame() {
+    GEO.with(|g| {
+        let mut g = g.borrow_mut();
+        g.frame += 1;
+        let f = g.frame;
+        if g.rows.len() > 600 {
+            g.rows.retain(|_, v| v.0 + 1 >= f);
+        }
+        g.cards.retain(|_, v| v.0 + 2 >= f);
+        g.bars.retain(|_, v| v.0 + 2 >= f);
+    });
+}
+
+fn fresh(g: &Geo, at: u64) -> bool {
+    at + 1 >= g.frame
+}
+
+/// The rectangle (window coordinates) of the file row of `path`, when that row is on screen.
+pub fn row_rect(path: &Path) -> Option<Bounds<Pixels>> {
+    GEO.with(|g| {
+        let g = g.borrow();
+        g.rows.get(path).filter(|r| fresh(&g, r.0)).map(|r| r.1)
+    })
+}
+
+/// The rectangle of the content area: the file panes together.
+pub fn content_rect() -> Option<Bounds<Pixels>> {
+    GEO.with(|g| {
+        let g = g.borrow();
+        g.content.filter(|c| fresh(&g, c.0)).map(|c| c.1)
+    })
+}
+
+/// The rectangles of the file panes on screen, left to right (one without a split view).
+pub fn pane_rects() -> Vec<Bounds<Pixels>> {
+    GEO.with(|g| {
+        let g = g.borrow();
+        let mut v: Vec<Bounds<Pixels>> = g.panes.values().filter(|c| fresh(&g, c.0)).map(|c| c.1).collect();
+        v.sort_by(|a, b| a.origin.x.partial_cmp(&b.origin.x).unwrap_or(std::cmp::Ordering::Equal));
+        v
+    })
+}
+
+/// The rectangle of the Status Center card of job `id` (the `id` of the operation events), while the card is shown.
+pub fn card_rect(id: u64) -> Option<Bounds<Pixels>> {
+    GEO.with(|g| {
+        let g = g.borrow();
+        g.cards.get(&id).filter(|c| fresh(&g, c.0)).map(|c| c.1)
+    })
+}
+
+/// The rectangle of the progress bar of job `id` in its card.
+pub fn progress_rect(id: u64) -> Option<Bounds<Pixels>> {
+    GEO.with(|g| {
+        let g = g.borrow();
+        g.bars.get(&id).filter(|c| fresh(&g, c.0)).map(|c| c.1)
+    })
+}
+
+/// The pointer's position in window coordinates.
+pub fn pointer(window: &Window) -> Point<Pixels> {
+    window.mouse_position()
+}
+
+/// A row recorded for the transition hooks: `(rect, name, kind)`.
+pub(crate) fn row_geo(path: &Path) -> Option<(Bounds<Pixels>, String, FileKind)> {
+    GEO.with(|g| {
+        let g = g.borrow();
+        g.rows.get(path).filter(|r| fresh(&g, r.0)).map(|r| (r.1, r.3.clone(), r.2))
+    })
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- layers and slots

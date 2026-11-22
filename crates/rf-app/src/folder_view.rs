@@ -5075,6 +5075,15 @@ impl FolderView {
             } else {
                 Vec::new()
             };
+            // where the row is drawn, for an extension that places an effect on it (nothing while none is registered)
+            let row_probe = if crate::ext::active() {
+                self.path_of(ei).map(|path| {
+                    let nm = self.entries[ei as usize].name.to_string();
+                    crate::ext::probe(crate::ext::Spot::Row(path, crate::ext::FileKind::of_name(&nm, self.entries[ei as usize].is_dir()), nm))
+                })
+            } else {
+                None
+            };
             // cut and waiting for a paste: greyed, with a small "cut" mark after the name
             let is_cut = any_cut && self.path_of(ei).is_some_and(|p| crate::cut_marks::contains(&p));
             let overlay = self.overlay_of(ei, px(16.), cx);
@@ -5458,6 +5467,7 @@ impl FolderView {
                         .children(share_badge)
                         .children(cloud_badge),
                 )
+                .children(row_probe)
                 .children(tag_cell)
                 .children(git_cell)
                 .children(sync_cell)

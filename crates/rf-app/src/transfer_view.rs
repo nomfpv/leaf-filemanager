@@ -252,6 +252,11 @@ fn bar(p: &Palette, frac: Option<f32>, color: Hsla, w: Option<f32>) -> Div {
         )
 }
 
+/// The progress bar of job `v`; an extension that asks for where it is drawn gets it (see `ext::progress_rect`).
+fn job_bar(p: &Palette, v: &OpView, color: Hsla, w: Option<f32>) -> Div {
+    bar(p, v.frac, color, w).relative().when(crate::ext::active(), |d| d.child(crate::ext::probe(crate::ext::Spot::Bar(v.id))))
+}
+
 /// Two thin upright strokes in a 12 px box (the mockups' pause icon: lines at 5.5 and 10.5 of 16, from 3.5 to 12.5).
 fn pause_mark(color: Hsla) -> Div {
     let bar = |x: f32| div().absolute().left(px(x)).top(px(2.6)).w(px(1.)).h(px(6.8)).rounded_full().bg(color);
@@ -498,7 +503,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, wide: bool, cx: 
                 main()
                     .child(Icon::new(mark).size(px(16.)).flex_shrink_0().text_color(p.text_tertiary))
                     .when(fit.text, |d| d.child(div().when(!wide, |d| d.max_w(px(STRIP_WORDS_W))).min_w_0().flex_shrink(1.).overflow_hidden().text_ellipsis().whitespace_nowrap().child(text)))
-                    .child(bar(p, v.frac, accent, Some(120.)))
+                    .child(job_bar(p, v, accent, Some(120.)))
                     .child(div().flex_shrink_0().whitespace_nowrap().child(pct))
                     .children(pace.map(|s| div().flex_shrink_0().whitespace_nowrap().child(s))),
             )
@@ -574,6 +579,8 @@ fn card(ops: &Entity<Ops>, p: &Palette, v: &OpView) -> Stateful<Div> {
         // the list behind must not take a click that lands on the card
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+        .relative()
+        .when(crate::ext::active(), |d| d.child(crate::ext::probe(crate::ext::Spot::Card(v.id))))
         .text_color(p.text);
     let title = |icon: L, color: Hsla, text: String| {
         h_flex()
@@ -666,7 +673,7 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
                     .items_center()
                     .child(Icon::new(L::LoaderCircle).size(px(14.)).text_color(accent))
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_xs().text_color(p.text_secondary).child(pace))
-                    .child(bar(p, v.frac, accent, Some(56.)))
+                    .child(job_bar(p, v, accent, Some(56.)))
                     .child(fold)
                     .child(cancel),
             );
@@ -698,7 +705,7 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
                 .child(fold),
         )
         .children(current.map(|c| div().text_xs().text_color(p.text_secondary).overflow_hidden().whitespace_nowrap().child(c)))
-        .child(h_flex().gap_2().items_center().child(div().flex_1().child(bar(p, v.frac, accent, None))).child(div().w(px(36.)).text_xs().text_right().child(pct)))
+        .child(h_flex().gap_2().items_center().child(div().flex_1().child(job_bar(p, v, accent, None))).child(div().w(px(36.)).text_xs().text_right().child(pct)))
         .child(
             h_flex()
                 .gap_2()

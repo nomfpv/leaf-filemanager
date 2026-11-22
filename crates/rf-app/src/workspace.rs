@@ -6116,6 +6116,7 @@ impl Render for Workspace {
                 .overflow_hidden()
                 .relative()
                 .when(marked && p.pane_marker == "rim", |d| d.shadow(p.focus_rim()))
+                .when(crate::ext::active(), |d| d.child(crate::ext::probe(crate::ext::Spot::Pane(usize::from(is_right)))))
                 .capture_any_mouse_down(cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                     if dual {
                         this.set_active_pane(is_right, cx)
@@ -6240,6 +6241,7 @@ impl Render for Workspace {
             // Drop a tab here: it moves into a new window.
             .drag_over::<TabDrag>(move |s, _, _, _| s.bg(p.selection))
             .on_drop(cx.listener(|this, d: &TabDrag, window, cx| this.detach_tab(d.ix, window, cx)))
+            .when(crate::ext::active(), |d| d.child(crate::ext::probe(crate::ext::Spot::Content)))
             .child(content);
         let main_row: AnyElement = if preview_bottom {
             self.preview_bottom_row(list_slot, shelf, bottom_pane, cx)
