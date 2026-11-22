@@ -3433,11 +3433,11 @@ impl Workspace {
                     this.begin_address_edit(window, cx);
                 }
             }));
-        let in_folder = loc.path().is_some();
         // (the terminal button where a terminal can open there: main's `terminal::offered`)
         let term_offered = crate::terminal::offered(&loc);
         // (with the type bar under it the row sits a little higher, as one sheet with it)
-        let typebar = in_folder && p.typebar_h > 0.;
+        // (every page keeps the row: Home, Settings and the result pages reserve its space, so the frame does not jump)
+        let typebar = p.typebar_h > 0.;
 
         h_flex()
             .h(px(if typebar { 42. } else { 48. }))
@@ -5279,7 +5279,8 @@ fn pane_header(view: &Entity<FolderView>, marked: bool, dual: bool, p: &Palette,
         Location::Tag(_) => t!("Tag"),
         Location::Shell { .. } => t!("Device"),
         Location::Remote(_) => t!("Server"),
-        _ => return None,
+        // Home and the full pages have no folder to name: the header's space stays, so the list does not move
+        _ => return Some(div().h(px(p.pane_header_h)).flex_shrink_0().into_any_element()),
     };
     let name = v.title(cx);
     let count = crate::i18n::items(v.item_count());
@@ -5643,11 +5644,8 @@ impl Render for Workspace {
             prefs.show_toolbar,
             prefs.show_statusbar,
         );
-        // Home and Settings have nothing to count: no empty strip at the bottom
-        // where a running operation's progress is shown; a strip brings the status bar up on Home and Settings too
+        // The status bar stays on every page (empty on Home and Settings): hiding it there made the content jump when a folder opened.
         let surface = crate::transfer_view::surface(cx.global::<crate::settings::Settings>().transfer_progress, show_statusbar, false);
-        let strip_due = surface == crate::transfer_view::Surface::Strip && crate::transfer_view::strip_due(&self.ops, cx);
-        let show_statusbar = show_statusbar && (strip_due || !matches!(self.active_tab().read(cx).location(), Location::Home | Location::Settings));
         use crate::settings::BackdropPref;
         // LEAF_GLASS=1 forces Glass for this run (nothing is saved); a window whose glass failed is on Mica until the setting changes
         if self.backdrop_pref_seen != Some(backdrop) {
@@ -5977,11 +5975,8 @@ impl Render for Workspace {
                 .when(p.gap <= 0., |d| d.border_l_1().border_color(p.sheet_border))
                 .child(self.shelf.clone())
         });
-        let pane_shown = self.preview_open && self.compact.is_none() && room_for_preview && {
-            // (the change feed's page has its own list, and the diff of the chosen file shows in the pane)
-            let loc = self.active_tab().read(cx).location().clone();
-            loc.path().is_some() || matches!(loc, Location::Changes(_) | Location::Brain(_))
-        };
+        // (the same on every page: an open pane stays open on Home and Settings too, empty there, so the list's right edge does not move)
+        let pane_shown = self.preview_open && self.compact.is_none() && room_for_preview;
         // the hosted preview handler is a separate window: hide it whenever something of ours
         // could be under it (pane closed, a dialog or the Status Center open, palette, bulk rename)
         let overlay_open = crate::prompt::current(window, cx).is_some() || crate::conflict_dialog::current(window, cx).is_some() || self.ops.read(cx).open || self.palette.is_some() || self.bulk.is_some() || crate::organizer::is_open(window, cx) || crate::prop_chooser::is_open(window, cx);
@@ -6447,7 +6442,7 @@ impl Render for Workspace {
                             .flex_col()
                             .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border))
                             .child(toolbar)
-                            .children(typebar),
+                            .children(typebar.or_else(|| (p.typebar_h > 0.).then(|| div().h(px(p.typebar_h)).flex_shrink_0().into_any_element()))),
                     )
             .child(
                 h_flex()
@@ -6505,6 +6500,16 @@ impl Render for Workspace {
                                         .flex_shrink_0()
                                         .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border))
                                         .child(commandbar),
+                                )
+                            })
+                            // Home and the other pages have no item commands: the row keeps its height, empty, so opening a folder
+                            // does not push the content down
+                            .when(!show_commandbar && show_toolbar, |d| {
+                                d.child(
+                                    theme::sheet(&p, p.toolbar_bg)
+                                        .h(px(p.toolbar_h))
+                                        .flex_shrink_0()
+                                        .when(p.gap <= 0., |d| d.border_b_1().border_color(p.sheet_border)),
                                 )
                             })
                             .children(filter_strip)
