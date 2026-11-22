@@ -1276,6 +1276,11 @@ impl FolderView {
         }
         self.git_stale = false;
         self.git_last = Some(Instant::now());
+        // (the developer-tools module off: no git process is started for this folder)
+        if !crate::modules::enabled(cx, crate::modules::Module::Dev) {
+            self.git = None;
+            return;
+        }
         let Some(dir) = self.location().path().map(|p| p.to_path_buf()).filter(|_| !self.is_search()) else {
             self.git = None;
             return;
@@ -6280,6 +6285,8 @@ impl Render for FolderView {
             }
             _ => self.render_details(&p, cx),
         };
+        // the first-use tip of a page that belongs to a module (once per module, until dismissed)
+        let content = crate::setup::with_tip(content, self.location(), &p, cx);
         div()
             .id("folder-view")
             .key_context(FOLDER_CTX)

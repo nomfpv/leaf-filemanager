@@ -40,12 +40,16 @@ pub enum Page {
     Speed,
     Organizer,
     Numbers,
+    /// Settings > Features: one switch per part of leaf (`modules.rs`).
+    Modules,
     Features,
     WhatsNew,
     About,
+    /// The first-run setup (`setup.rs`): no entry in the list of pages, it fills the whole Settings pane.
+    Setup,
 }
 
-const PAGES: [(Page, L, &str); 20] = [
+const PAGES: [(Page, L, &str); 21] = [
     (Page::General, L::Settings, "General"),
     (Page::Appearance, L::Palette, "Appearance"),
     (Page::Layout, L::LayoutGrid, "Layout"),
@@ -63,6 +67,7 @@ const PAGES: [(Page, L, &str); 20] = [
     (Page::Speed, L::Gauge, "Speed test"),
     (Page::Organizer, L::WandSparkles, "File organizer"),
     (Page::Numbers, L::Activity, "Your numbers"),
+    (Page::Modules, L::ToggleRight, "Features"),
     (Page::Features, L::Sparkles, "What leaf can do"),
     (Page::WhatsNew, L::Bell, "What's new"),
     (Page::About, L::Info, "About"),
@@ -220,25 +225,50 @@ fn build_page(page: Page, p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyEle
         Page::Actions => actions(p, s, cx),
         Page::YourActions => crate::custom_actions_page::page(p, cx),
         Page::Tags => tags(p, cx),
-        Page::Hosts => crate::hosts_ui::page(p, cx),
-        Page::Vpn => crate::vpn_page::page(p, s, cx),
+        Page::Hosts => module_page(Page::Hosts, p, s, cx, |cx| crate::hosts_ui::page(p, cx)),
+        Page::Vpn => module_page(Page::Vpn, p, s, cx, |cx| crate::vpn_page::page(p, s, cx)),
         Page::Look => look(p, s, cx),
-        Page::Nearby => crate::nearby::page(p, s, cx),
+        Page::Nearby => module_page(Page::Nearby, p, s, cx, |cx| crate::nearby::page(p, s, cx)),
         Page::Search => quick_search_cards(p, s, cx),
         // the developer tools are a part of Gelişmiş (they had a page of their own)
         Page::Advanced => {
             let mut v = advanced(p, s, cx);
             v.push(section(p, t!("Developer tools")));
-            v.extend(dev(p, s, cx));
+            // (the developer-tools module off: one line with a "Turn on" button)
+            if crate::modules::enabled_in(s, crate::modules::Module::Dev) {
+                v.extend(dev(p, s, cx));
+            } else {
+                v.push(crate::setup::off_card(p, crate::modules::Module::Dev));
+            }
             v
         }
         Page::Speed => crate::bench_view::page(p, cx),
         Page::Organizer => crate::organizer::page::page(p, cx),
         Page::Numbers => crate::numbers_page::page(p, s, cx),
+        Page::Modules => crate::setup::features_page(p, s, cx),
         Page::Features => crate::features_page::page(p, cx),
+        Page::Setup => Vec::new(),
         Page::WhatsNew => crate::whats_new_page::page(p, cx),
         Page::About => about(p, cx),
     }
+}
+
+/// The page of a module: its cards, with the module's first-use tip above them; one line with a "Turn on" button when it is off.
+fn module_page(page: Page, p: &Palette, s: &Settings, cx: &mut App, build: impl FnOnce(&mut App) -> Vec<AnyElement>) -> Vec<AnyElement> {
+    let Some(m) = crate::modules::of_page(page) else { return build(cx) };
+    if !crate::modules::enabled_in(s, m) {
+        return vec![crate::setup::off_card(p, m)];
+    }
+    let mut v = build(cx);
+    if !collecting() && crate::modules::tip_due(s, m) {
+        v.insert(0, crate::setup::tip_strip(p, m));
+    }
+    v
+}
+
+/// A card of a module: itself when the module is on, else its one line with the "Turn on" button.
+fn gated(p: &Palette, s: &Settings, m: crate::modules::Module, card: AnyElement) -> AnyElement {
+    if crate::modules::enabled_in(s, m) { card } else { crate::setup::off_card(p, m) }
 }
 
 pub fn open_page(page: Page, cx: &mut App) {
@@ -466,6 +496,10 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool, 
     let page = ui(cx).page;
     PAGE_SCROLL.with(|h| *h.borrow_mut() = Some(scroll.clone()));
     let s = cx.global::<Settings>().clone();
+    // the first-run setup fills the pane: no list of pages, no search
+    if page == Page::Setup {
+        return crate::setup::render(p, &s, cx);
+    }
     crate::features_page::ensure_search(window, cx);
     let search = match ui(cx).search.clone() {
         Some(e) => e,
@@ -3070,6 +3104,38 @@ mod ext_tests {
     }
 }
 
+/// Whether this copy of leaf runs from a build folder without the launcher beside it: it is not turned into the folder handler (each
+/// rebuild replaces the exe, a clean removes it, and Windows would be left with no program for folders). With the launcher, folders
+/// open in Explorer meanwhile.
+pub(crate) fn default_fm_refused() -> bool {
+    !crate::DEFAULT_FM.load(std::sync::atomic::Ordering::Relaxed)
+        && std::env::current_exe().is_ok_and(|e| is_build_folder_exe(&e) && !leaf_sys::default_fm::launcher_beside(&e))
+        && std::env::var_os("LEAF_DFM_ALLOW_BUILD").is_none()
+}
+
+/// The words that say why a build-folder copy cannot be made the default file manager (Settings > Advanced and the setup say them).
+pub(crate) fn default_fm_refusal() -> &'static str {
+    t!("This copy of leaf runs from a build folder (target) and leaf-open.exe is not next to it. Every rebuild replaces leaf and a clean removes it, which would leave Windows with no program to open folders. Build leaf-open too (it is built with leaf), or turn this on from an installed leaf.")
+}
+
+/// Turns "leaf is the default file manager" on or off: the one code path of Settings > Advanced and of the first-run setup. `refused`:
+/// [`default_fm_refused`] (nothing is written then).
+pub(crate) fn set_default_file_manager(on: bool, refused: bool) {
+    if refused && on {
+        log::warn!("default file manager: not turned on from a build folder");
+        return;
+    }
+    let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
+    std::thread::spawn(move || {
+        let classes = leaf_sys::default_fm::CLASSES;
+        let r = if on { leaf_sys::default_fm::enable(&exe, classes) } else { leaf_sys::default_fm::disable(classes) };
+        if let Err(e) = r {
+            log::warn!("default file manager: {e:#}");
+        }
+        crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
+    });
+}
+
 /// A card that only means something on Windows (start with Windows, WSL, the default file manager, QuickLook): elsewhere it is an empty
 /// strip that cancels the page's gap, so nothing shows and nothing is left over.
 fn win_only(card: AnyElement) -> AnyElement {
@@ -3097,9 +3163,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
     // a copy run from a cargo build folder without the launcher (leaf-open.exe) beside it is not turned into the folder handler:
     // each rebuild replaces the exe, a clean removes it, and Windows would be left with no program for folders until leaf starts
     // again. With the launcher, folders open in Explorer meanwhile.
-    let dfm_dev = !dfm_on
-        && std::env::current_exe().is_ok_and(|e| is_build_folder_exe(&e) && !leaf_sys::default_fm::launcher_beside(&e))
-        && std::env::var_os("LEAF_DFM_ALLOW_BUILD").is_none();
+    let dfm_dev = default_fm_refused();
     // while leaf is the default file manager: archives can be given to it too (only the
     // user can pick the default app, in Windows' own page)
     let archives = (dfm_on && cfg!(windows)).then(|| {
@@ -3280,10 +3344,10 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         ),
         download_categories_card(p, s),
         download_servers_card(p, s),
-        download_proxy_card(p, s),
-        download_schedule_card(p, s),
-        crate::videodl::settings_card(p, s),
-        crate::usenet::servers_card(p, s),
+        gated(p, s, crate::modules::Module::Downloads, download_proxy_card(p, s)),
+        gated(p, s, crate::modules::Module::Downloads, download_schedule_card(p, s)),
+        gated(p, s, crate::modules::Module::VideoDl, crate::videodl::settings_card(p, s)),
+        gated(p, s, crate::modules::Module::Usenet, crate::usenet::servers_card(p, s)),
         card(
             p,
             L::Globe,
@@ -3354,26 +3418,14 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
             L::AppWindow,
             t!("Set as default file manager"),
             Some(if dfm_dev {
-                t!("This copy of leaf runs from a build folder (target) and leaf-open.exe is not next to it. Every rebuild replaces leaf and a clean removes it, which would leave Windows with no program to open folders. Build leaf-open too (it is built with leaf), or turn this on from an installed leaf.")
+                default_fm_refusal()
             } else if cfg!(windows) {
                 t!("Folders and Win+E open with leaf. Applies to this user only and can be reverted at any time. It also covers Win+E and 'Show in folder' from other programs, and turning it off restores what was there before.")
             } else {
                 t!("Folders open with leaf (your mimeapps.list names it for inode/directory). Applies to this user only; turning it off gives folders back to the program that had them.")
             }),
             switch("dfm", p, dfm_on, move |window, _| {
-                if dfm_dev {
-                    log::warn!("default file manager: not turned on from a build folder");
-                    return;
-                }
-                let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
-                std::thread::spawn(move || {
-                    let classes = leaf_sys::default_fm::CLASSES;
-                    let r = if dfm_on { leaf_sys::default_fm::disable(classes) } else { leaf_sys::default_fm::enable(&exe, classes) };
-                    if let Err(e) = r {
-                        log::warn!("default file manager: {e:#}");
-                    }
-                    crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
-                });
+                set_default_file_manager(!dfm_on, dfm_dev);
                 window.refresh();
             }),
         ),

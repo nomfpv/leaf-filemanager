@@ -20,6 +20,8 @@ mod compare_mode;
 mod conflict_dialog;
 mod ctx_menu;
 mod menu_model;
+mod modules;
+mod setup;
 mod basket;
 mod agent_marks;
 mod branch_map;
@@ -758,6 +760,7 @@ pub fn main() {
         actions::bind(cx);
         actions::bind_user(cx);
         features_page::init(cx);
+        setup::init(cx);
         custom_actions::init(cx);
         // leaf's VPN: the kill switch, the state the windows show, "Connect when leaf starts"
         vpn::init(cx);
@@ -773,6 +776,7 @@ pub fn main() {
                     "hypersearch" => settings_view::Page::Search,
                     "numbers" => settings_view::Page::Numbers,
                     "features" => settings_view::Page::Features,
+                    "modules" => settings_view::Page::Modules,
                     "whatsnew" => settings_view::Page::WhatsNew,
                     "advanced" => settings_view::Page::Advanced,
                     _ => settings_view::Page::Look,
@@ -794,17 +798,27 @@ pub fn main() {
             quick_search::toggle(cx);
         } else {
             start_mark("opening the window");
-            open_main_window(if open_look_settings { Some(Location::Settings) } else { start }, None, None, cx);
+            // the first start (no settings file): the setup guide, in Settings
+            let first_run = !cx.global::<settings::Settings>().setup_done && std::env::var_os("LEAF_MULTI_INSTANCE").is_none();
+            if first_run {
+                setup::begin(cx);
+            }
+            open_main_window(if open_look_settings || first_run { Some(Location::Settings) } else { start }, None, None, cx);
             start_mark("window opened");
             if let Some((url, folder)) = download {
                 downloads::start_cli(url, folder, cx);
             }
             fast_start::remember(cx);
             // downloads that were not finished last time: back in the Status Center, resuming from their part files
-            downloads::restore(cx);
+            // (a module that is off starts nothing: no download is taken up, no timer runs, no Usenet job is looked at)
+            if modules::enabled(cx, modules::Module::Downloads) {
+                downloads::restore(cx);
+            }
             download_schedule::start(cx);
             downloads::init_ui(cx);
-            usenet::init(cx);
+            if modules::enabled(cx, modules::Module::Usenet) {
+                usenet::init(cx);
+            }
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);
         }
