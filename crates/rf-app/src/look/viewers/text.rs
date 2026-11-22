@@ -657,8 +657,15 @@ impl Render for TextView {
         let Some(file) = self.file.clone() else {
             return div().size_full().p_4().text_color(p.danger).child(self.error.clone().unwrap_or_default()).into_any_element();
         };
-        let digits = (file.line_count().max(1) as f64).log10().floor() as usize + 1;
-        let gutter = px(font_size * 0.62 * digits.max(3) as f32 + 16.0);
+        // the gutter is measured the way the editor (`edit.rs`) measures its own: the width of as many "+" as the line count has
+        // digits (three at least, seven at most) plus 6 px, so nothing moves when E starts the editor
+        let digits = ((file.line_count().max(1) as f64).log10().floor() as usize + 1).clamp(3, 7);
+        let gutter = {
+            let mut f = window.text_style().font();
+            f.family = font.clone();
+            let run = TextRun { len: digits, font: f, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+            window.text_system().shape_line("+".repeat(digits).into(), px(font_size), &[run], None).width + px(6.)
+        };
         let spans = self.spans.clone();
         let (text_c, num_c) = (p.text, p.text_tertiary);
         // horizontal range without wrapping: the longest line seen × a monospace advance
@@ -682,7 +689,7 @@ impl Render for TextView {
                 if wrap {
                     return;
                 }
-                let d = ev.delta.pixel_delta(px(font_size * 1.45));
+                let d = ev.delta.pixel_delta(px(font_size * 1.5));
                 let sideways = if ev.modifiers.shift { f32::from(d.y) } else { f32::from(d.x) };
                 if sideways != 0.0 {
                     this.hoff = (this.hoff - sideways).clamp(0.0, max_off);
@@ -726,7 +733,9 @@ impl Render for TextView {
             .child(canvas(move |b, _, _| vw.set(f32::from(b.size.width)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
             .font_family(font)
             .text_size(px(font_size))
-            .line_height(px(font_size * 1.45))
+            // (the editor's own line height, left padding and top padding: `edit.rs`)
+            .line_height(relative(1.5))
+            .pt(px(8.))
             .child(
                 list(self.list.clone(), move |i, _window, _cx| {
                     let mut line = file.line(i).unwrap_or_default();
@@ -752,9 +761,10 @@ impl Render for TextView {
                     h_flex()
                         .w_full()
                         .items_start()
-                        .px_2()
+                        .pl(px(6.))
+                        .pr(px(10.))
                         .when(numbers, |d| {
-                            d.child(div().w(gutter).flex_shrink_0().pr_3().text_right().text_color(num_c).child((i + 1).to_string()))
+                            d.child(div().w(gutter).flex_shrink_0().pr(px(6.)).text_right().text_color(num_c).child((i + 1).to_string()))
                         })
                         .child(
                             div()
