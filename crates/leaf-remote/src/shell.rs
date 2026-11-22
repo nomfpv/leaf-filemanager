@@ -729,7 +729,7 @@ impl ShellFs {
                 // cut at the offset (dd's `seek=` with nothing to copy), then append
                 let body = format!(
                     "P={}; if [ -L \"$P\" ]; then exit {E_LINK}; fi; if [ ! -f \"$P\" ]; then exit {E_NOT_FOUND}; fi; \
-                     dd if=/dev/null of=\"$P\" bs=1 seek={off} 2>/dev/null || exit 1; cat >> \"$P\" && printf 'leaf-size %s\\n' \"$(wc -c < \"$P\")\"",
+                     dd if=/dev/null of=\"$P\" bs=1 seek={off} 2>/dev/null || exit 1; exec 3>>\"$P\" || exit 1; {STREAM}",
                     qp(&target)?
                 );
                 (cmd(&body), off, None)
@@ -742,7 +742,7 @@ impl ShellFs {
                     return Err(FsError::Other("There is no file on the server to keep a backup of".into()));
                 }
                 // (`set -C`: the file is made new, never written through something that is there)
-                let new_file = |path: &str| -> Result<String, FsError> { Ok(cmd(&format!("P={}; set -C; cat > \"$P\" && printf 'leaf-size %s\\n' \"$(wc -c < \"$P\")\"", qp(path)?))) };
+                let new_file = |path: &str| -> Result<String, FsError> { Ok(cmd(&format!("P={}; set -C; exec 3>\"$P\" || exit 1; {STREAM}", qp(path)?))) };
                 if crate::sftp::is_part_name(p.name()) && backup.is_none() {
                     if existing.is_some() {
                         return Err(FsError::Exists);
@@ -757,9 +757,49 @@ impl ShellFs {
                 }
             }
         };
-        let ch = conn::block_on(&|| false, self.c.open_exec(&command))?;
+        let mut ch = conn::block_on(&|| false, self.c.open_exec(&command))?;
+        // the file is open on the server before a byte is sent (a folder that cannot be written fails here, not at the end)
+        conn::block_on(&|| false, opened(&mut ch, self.limit))?;
         self.c.busy.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(Writer { fs: ShellFs { c: self.c.clone(), st: self.st.clone(), limit: self.limit }, ch: Some(ch), buf: Vec::new(), sent: 0, base, place, done: false, failed: false }))
+    }
+}
+
+/// The end of a write command, once the shell has the file open on descriptor 3: says so, copies its input there, closes
+/// it and prints the size the file has now.
+const STREAM: &str = "echo leaf-open; cat >&3 || exit 1; exec 3>&-; printf 'leaf-size %s\\n' \"$(wc -c < \"$P\")\"";
+
+/// Waits for a write command's `leaf-open` line; its failure (the file could not be made) as the error.
+async fn opened(ch: &mut russh::Channel<russh::client::Msg>, limit: Duration) -> Result<(), FsError> {
+    let mut out = RawOut::default();
+    let r = tokio::time::timeout(limit, async {
+        while let Some(m) = ch.wait().await {
+            match m {
+                russh::ChannelMsg::Data { data } => {
+                    out.stdout.extend_from_slice(&data);
+                    if out.stdout.windows(10).any(|w| w == b"leaf-open\n") {
+                        return true;
+                    }
+                }
+                russh::ChannelMsg::ExtendedData { data, ext: 1 } if out.stderr.len() < 16 * 1024 => out.stderr.extend_from_slice(&data),
+                russh::ChannelMsg::ExitStatus { exit_status } => out.code = Some(exit_status),
+                russh::ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        false
+    })
+    .await;
+    match r {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            let _ = ch.close().await;
+            Err(if out.code == Some(0) { FsError::Other("The server did not open the file".into()) } else { failure(&out) })
+        }
+        Err(_) => {
+            let _ = ch.close().await;
+            Err(FsError::Offline("the server did not open the file in time".into()))
+        }
     }
 }
 
@@ -920,7 +960,9 @@ impl Fs for ShellFs {
                 return Err(FsError::Exists);
             }
         }
-        self.ok(&cmd(&move_command(&a, &b, replace, None, None)?)).map(|_| ())
+        // (a move to another disk of the server copies: it may take a while)
+        let o = self.run(&cmd(&move_command(&a, &b, replace, None, None)?), LONG, &|| false)?;
+        if o.code == Some(0) { Ok(()) } else { Err(failure(&o)) }
     }
 
     fn remove(&self, p: &VPath, recursive: bool) -> Result<(), FsError> {
