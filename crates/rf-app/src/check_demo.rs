@@ -81,6 +81,15 @@ pub(crate) fn agents(cx: &mut App) {
     let _ = std::fs::write(proj.join("src/search.rs"), "pub fn search() {}\n");
     git(&proj, &["add", "-A"]);
     git(&proj, &["commit", "-q", "-m", "Start the search"]);
+    // two lanes (worktrees on their own branches) for the branch map
+    if let Some(demo) = proj.parent() {
+        for (name, branch) in [("Search", "lane/search"), ("Greeting", "lane/greeting")] {
+            let path = demo.join(format!("lane-{}", name.to_lowercase()));
+            git(&proj, &["worktree", "add", "-q", "-b", branch, &path.to_string_lossy(), "main"]);
+            let color = crate::lanes::next_color(cx);
+            crate::lanes::add(crate::lanes::Lane { name: name.into(), repo: proj.clone(), path, branch: branch.into(), base: "main".into(), color, created_ms: 0 }, cx);
+        }
+    }
     // a tracked file that is gone from the folder since the last commit: the ghost row
     let _ = std::fs::remove_file(proj.join("notes.txt"));
 
