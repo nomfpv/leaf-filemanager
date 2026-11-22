@@ -58,7 +58,7 @@ fn portal_filters(filters: &[(&str, &str)]) -> Vec<PortalFilter> {
 }
 
 /// `file:///a%20b` -> `/a b`. Only `file:` URIs on this machine are paths.
-fn uri_to_path(uri: &str) -> Option<PathBuf> {
+pub(crate) fn uri_to_path(uri: &str) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
     let rest = uri.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
