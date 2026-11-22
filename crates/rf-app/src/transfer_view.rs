@@ -252,6 +252,16 @@ fn bar(p: &Palette, frac: Option<f32>, color: Hsla, w: Option<f32>) -> Div {
         )
 }
 
+/// The speed text of job `v`: an extension's wording when one is registered and gives one, else leaf's own.
+fn shown_speed(v: &OpView, speed: f64) -> String {
+    if crate::ext::active()
+        && let Some(t) = crate::ext::speed_override(v.id, v.kind, v.frac, Some(speed as u64))
+    {
+        return t;
+    }
+    speed_text(speed)
+}
+
 /// The progress bar of job `v`; an extension that asks for where it is drawn gets it (see `ext::progress_rect`).
 fn job_bar(p: &Palette, v: &OpView, color: Hsla, w: Option<f32>) -> Div {
     // an extension's picture instead of the bar (the normal bar when none is registered or it returns nothing)
@@ -450,7 +460,7 @@ pub(crate) fn strip(ops: &Entity<Ops>, p: &Palette, avail: f32, wide: bool, cx: 
 
     let accent = if v.paused { p.text_tertiary } else { p.accent };
     let pct = v.frac.map(|f| crate::i18n::pct(f * 100.0)).unwrap_or_default();
-    let speed = v.pace.speed.filter(|s| *s >= 1.0 && fit.speed).map(speed_text);
+    let speed = v.pace.speed.filter(|s| *s >= 1.0 && fit.speed).map(|s| shown_speed(v, s));
     let eta = v.pace.eta_secs.filter(|_| fit.eta).map(strip_eta);
     // "38.4 MB/s · 1 min 7 s left" (the mockups' one piece of text)
     let pace = match (speed, eta) {
@@ -673,7 +683,7 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
         })
     };
     let pct = v.frac.map(|f| crate::i18n::pct(f * 100.0)).unwrap_or_default();
-    let speed = v.pace.speed.filter(|s| *s >= 1.0).map(speed_text);
+    let speed = v.pace.speed.filter(|s| *s >= 1.0).map(|s| shown_speed(v, s));
     let eta = v.pace.eta_secs.map(eta_text);
 
     // folded to one line: the pace and a thin bar

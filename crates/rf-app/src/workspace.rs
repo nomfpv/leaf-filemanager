@@ -425,6 +425,19 @@ pub fn main_windows(cx: &App) -> Vec<AnyWindowHandle> {
         .unwrap_or_default()
 }
 
+/// Deletes the selection of the active tab of the focused main window (the first one when none has the focus), through the same code
+/// and the same confirmation as the Delete key (see `ext::delete_selection`).
+pub(crate) fn delete_selection_of_main(permanent: bool, cx: &mut App) {
+    let list = cx.try_global::<OpenWorkspaces>().map(|g| g.0.clone()).unwrap_or_default();
+    let active = cx.active_window().map(|w| w.window_id());
+    let pick = list.iter().find(|(h, ws)| Some(h.window_id()) == active && ws.upgrade().is_some()).or_else(|| list.iter().find(|(_, ws)| ws.upgrade().is_some()));
+    let Some((handle, ws)) = pick.cloned() else { return };
+    let Some(ws) = ws.upgrade() else { return };
+    let _ = handle.update(cx, |_, window, cx| {
+        ws.update(cx, |w, cx| w.with_tab(cx, |v, cx| v.delete_selected(permanent, window, cx)));
+    });
+}
+
 pub fn any_main_window(cx: &App) -> bool {
     let open = cx.windows();
     cx.try_global::<OpenWorkspaces>()
@@ -6075,6 +6088,20 @@ impl Render for Workspace {
         if crate::ext::active() {
             let (count, bytes, _) = self.active_tab().read(cx).selection_summary();
             crate::ext::note_selection(count, bytes, cx);
+            let tab = self.active_tab().read(cx);
+            crate::ext::note_view(crate::ext::ViewState {
+                dual_pane: self.tabs.get(self.active).is_some_and(|t| t.right.is_some()),
+                preview_open: self.preview_open,
+                hidden_shown: tab.filter.show_hidden,
+                filter: Some(tab.filter.query.to_string()).filter(|q| !q.is_empty()),
+                vpn_on: false,
+                sort: tab.sort,
+                view_mode: match tab.view_mode {
+                    ViewMode::Details => crate::ext::ViewKind::Details,
+                    ViewMode::Grid => crate::ext::ViewKind::Grid,
+                    ViewMode::Columns => crate::ext::ViewKind::Columns,
+                },
+            });
         }
         // Taskbar title follows the active folder.
         let title = {
@@ -6640,7 +6667,7 @@ impl Render for Workspace {
             // an extension's full-window scene always ends on Esc (a question of leaf's own is answered first)
             .capture_key_down(cx.listener(|_, ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key == "escape" && crate::ext::scene_active() && crate::prompt::current(window, cx).is_none() {
-                    crate::ext::end_scene(cx);
+                    crate::ext::end_scene_by_escape(cx);
                     cx.stop_propagation();
                 } else if crate::ext::scene_active() && crate::prompt::current(window, cx).is_none() && crate::ext::scene_key(ev, cx) {
                     cx.stop_propagation();

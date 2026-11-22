@@ -175,6 +175,12 @@ pub enum Event {
     FriendLink { friend: String, friend_name: String, online: bool },
     /// A message from a friend's leaf on a shared folder's link (see `ext::peer`). Delivered only when both switches allow it.
     PeerMessage { friend: String, friend_name: String, kind: u16, payload: Vec<u8> },
+    /// An item of a folder on this PC was renamed in the file list and the rename succeeded (the full old and new paths). Not sent
+    /// for renames inside an archive or on a server.
+    ItemRenamed { from: PathBuf, to: PathBuf },
+    /// The scene of extension `ext_id` ended. `by_escape`: the user pressed Esc; otherwise its time ran out, [`end_scene`] was called
+    /// or another scene replaced it.
+    SceneEnded { ext_id: String, by_escape: bool },
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- types
@@ -354,6 +360,41 @@ pub struct ProgressInfo {
     pub height: f32,
 }
 
+/// How the file list of the active pane is laid out (see [`ViewState`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewKind {
+    Details,
+    Grid,
+    Columns,
+}
+
+pub use rf_core::{SortDir, SortKey, SortSpec};
+
+/// A read-only snapshot of the main window's view settings, as the last frame saw them (see [`view_state`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewState {
+    /// The active tab shows two panes.
+    pub dual_pane: bool,
+    /// The preview pane is open.
+    pub preview_open: bool,
+    /// Hidden files are shown in the active pane.
+    pub hidden_shown: bool,
+    /// The text of the active pane's quick filter; `None` when it is empty.
+    pub filter: Option<String>,
+    /// leaf's own VPN tunnel is up (connected, whether or not its check has finished).
+    pub vpn_on: bool,
+    /// The sort of the active pane.
+    pub sort: SortSpec,
+    /// The layout of the active pane.
+    pub view_mode: ViewKind,
+}
+
+impl Default for ViewState {
+    fn default() -> Self {
+        Self { dual_pane: false, preview_open: false, hidden_shown: false, filter: None, vpn_on: false, sort: SortSpec::default(), view_mode: ViewKind::Details }
+    }
+}
+
 /// The height of the slot an extension's progress bar visual gets (the normal bar is 4 pixels).
 pub const PROGRESS_SLOT_H: f32 = 20.;
 
@@ -480,6 +521,7 @@ pub struct Registrar {
     icon_hook: Option<Rc<dyn Fn(&Path) -> Option<Arc<RenderImage>>>>,
     about: Option<Rc<dyn Fn(&mut App) -> AnyElement>>,
     progress_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<AnyElement>>>,
+    speed_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<String>>>,
     regions: Option<Rc<dyn Fn(&mut App) -> Vec<Bounds<Pixels>>>>,
     pointer_hook: Option<Rc<dyn Fn(&PointerEvent, &mut App)>>,
     key_hook: Option<Rc<dyn Fn(&KeyPress, &mut App)>>,
@@ -563,6 +605,11 @@ impl Registrar {
     pub fn progress_bar(&mut self, f: impl Fn(&ProgressInfo) -> Option<AnyElement> + 'static) {
         self.progress_hook = Some(Rc::new(f));
     }
+    /// Display only: the speed text of a transfer card (like "46.1 MB/s") is replaced by the returned text; `None` keeps leaf's own.
+    /// The progress, the remaining amount and the job are not touched. Called while the card is drawn, with `width` and `height` 0.
+    pub fn speed_text(&mut self, f: impl Fn(&ProgressInfo) -> Option<String> + 'static) {
+        self.speed_hook = Some(Rc::new(f));
+    }
     /// A section with its own entry in the list of Settings (not only a part of About).
     pub fn settings_section(&mut self, title: &str, icon: IconName, body: impl Fn(&mut App) -> Vec<AnyElement> + 'static) {
         self.settings = Some(SettingsReg { title: title.to_string(), icon, body: Rc::new(body) });
@@ -622,6 +669,7 @@ struct Registry {
     panes_open: RefCell<Vec<(usize, usize)>>,
     scene: RefCell<Option<Scene>>,
     scene_gen: Cell<u64>,
+    snap: RefCell<Snap>,
     frames: RefCell<Vec<String>>,
 }
 
@@ -669,7 +717,7 @@ fn guard<R>(who: &str, f: impl FnOnce() -> R) -> Option<R> {
 
 impl Registry {
     fn new(list: Vec<Entry>) -> Self {
-        Self { list, panes_open: RefCell::new(Vec::new()), scene: RefCell::new(None), scene_gen: Cell::new(0), frames: RefCell::new(Vec::new()) }
+        Self { list, panes_open: RefCell::new(Vec::new()), scene: RefCell::new(None), scene_gen: Cell::new(0), snap: RefCell::new(Snap::default()), frames: RefCell::new(Vec::new()) }
     }
     /// The Home widget table rows of all extensions (ids are `ext:<extension>/<widget>`; the strings live as long as the program).
     fn home_widgets(&self) -> Vec<crate::home::Widget> {
@@ -963,6 +1011,84 @@ pub fn data_dir(id: &str) -> Option<PathBuf> {
     let d = crate::settings::app_dir()?.join("extensions").join(sanitize(id));
     std::fs::create_dir_all(&d).ok()?;
     Some(d)
+}
+
+thread_local! {
+    static VIEW: RefCell<ViewState> = RefCell::new(ViewState::default());
+}
+
+/// Called while the main window is drawn: keeps the view settings [`view_state`] gives out.
+pub(crate) fn note_view(state: ViewState) {
+    if ACTIVE.load(Ordering::Relaxed) {
+        VIEW.with(|v| *v.borrow_mut() = state);
+    }
+}
+
+/// The view settings of the main window (active tab and pane) as the last frame saw them; the VPN flag is read at the call. Without a
+/// registered extension it is the default value.
+pub fn view_state(_cx: &App) -> ViewState {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return ViewState::default();
+    }
+    let mut s = VIEW.with(|v| v.borrow().clone());
+    s.vpn_on = matches!(leaf_vpn::state(), leaf_vpn::State::On { .. });
+    s
+}
+
+/// Starts leaf's normal delete of the current selection of the active tab (to the Trash, or for good with `permanent`). It is the
+/// same code as the Delete key: leaf's own confirmation dialog comes first when Settings ask for one (for a permanent delete unless the
+/// user turned that off), and the usual events and row hooks follow. Does nothing without a window or a selection.
+pub fn delete_selection(permanent: bool, cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    crate::workspace::delete_selection_of_main(permanent, cx);
+}
+
+/// A picture of the window: `width * height * 4` bytes of straight RGBA, opaque.
+#[derive(Clone, Debug)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Arc<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct Snap {
+    /// The last finished picture.
+    last: Option<Frame>,
+    /// A capture is running on its thread.
+    busy: Arc<AtomicBool>,
+    done: Arc<std::sync::Mutex<Option<Frame>>>,
+}
+
+/// The window's content as it is on screen (client area, the extension's own layers included), for effects that distort what is behind
+/// them. The copy is made on a thread of its own: this call never waits. It returns the newest finished picture (`None` until the first
+/// one is ready, and always on a system that does not allow reading the screen) and starts the next capture, so the picture is a few
+/// frames old. Call it once when an effect starts and again whenever it needs a fresher picture.
+pub fn window_snapshot(window: &Window, _cx: &mut App) -> Option<Frame> {
+    let reg = registry()?;
+    let hwnd = crate::look::window::hwnd_of(window);
+    let mut snap = reg.snap.borrow_mut();
+    if let Some(f) = snap.done.lock().ok().and_then(|mut d| d.take()) {
+        snap.last = Some(f);
+    }
+    if !snap.busy.swap(true, Ordering::AcqRel) {
+        let (busy, done) = (snap.busy.clone(), snap.done.clone());
+        let flag = busy.clone();
+        let started = std::thread::Builder::new().name("leaf-ext-snapshot".into()).spawn(move || {
+            if let Some((width, height, rgba)) = leaf_sys::window::capture_client(hwnd)
+                && let Ok(mut d) = done.lock()
+            {
+                *d = Some(Frame { width, height, rgba: Arc::new(rgba) });
+            }
+            flag.store(false, Ordering::Release);
+        });
+        if started.is_err() {
+            busy.store(false, Ordering::Release);
+        }
+    }
+    snap.last.clone()
 }
 
 /// Plays the notification sound of the user's sound scheme (what leaf plays for its own notices). leaf has no sound setting of its
@@ -1443,6 +1569,10 @@ pub const SCENE_MAX_MS: u64 = 30_000;
 pub fn start_scene(ext_id: &str, ms: u64, render: impl Fn(&mut Window, &mut App) -> AnyElement + 'static, cx: &mut App) {
     let Some(reg) = registry() else { return };
     let Some(ix) = reg.list.iter().position(|e| e.id == sanitize(ext_id)) else { return };
+    let replaced = reg.scene.borrow_mut().take();
+    if let Some(old) = replaced {
+        scene_ended(&reg, old.ext, false, cx);
+    }
     let gen_now = reg.scene_gen.get() + 1;
     reg.scene_gen.set(gen_now);
     *reg.scene.borrow_mut() = Some(Scene { ext: ix, render: Rc::new(render) });
@@ -1461,10 +1591,29 @@ pub fn start_scene(ext_id: &str, ms: u64, render: impl Fn(&mut Window, &mut App)
 
 /// Ends the scene, if one runs.
 pub fn end_scene(cx: &mut App) {
+    finish_scene(false, cx);
+}
+
+/// Ends the scene because the user pressed Esc.
+pub(crate) fn end_scene_by_escape(cx: &mut App) {
+    finish_scene(true, cx);
+}
+
+fn finish_scene(by_escape: bool, cx: &mut App) {
     if let Some(reg) = registry() {
-        reg.scene.borrow_mut().take();
+        let old = reg.scene.borrow_mut().take();
         reg.scene_gen.set(reg.scene_gen.get() + 1);
+        if let Some(old) = old {
+            scene_ended(&reg, old.ext, by_escape, cx);
+        }
         cx.refresh_windows();
+    }
+}
+
+fn scene_ended(reg: &Registry, ix: usize, by_escape: bool, cx: &mut App) {
+    if let Some(e) = reg.list.get(ix) {
+        let ext_id = e.id.clone();
+        emit(cx, || Event::SceneEnded { ext_id, by_escape });
     }
 }
 
@@ -1591,6 +1740,13 @@ pub(crate) fn progress_visual(id: u64, kind: OpKind, fraction: Option<f32>, byte
     let reg = registry()?;
     let info = ProgressInfo { id, kind, fraction, bytes_per_sec, width, height: PROGRESS_SLOT_H };
     reg.on().find_map(|(_, e)| e.r.progress_hook.as_ref().and_then(|f| guard(&e.id, || f(&info)).flatten()))
+}
+
+/// The extension's text for a transfer card's speed, when one is registered and gives one.
+pub(crate) fn speed_override(id: u64, kind: OpKind, fraction: Option<f32>, bytes_per_sec: Option<u64>) -> Option<String> {
+    let reg = registry()?;
+    let info = ProgressInfo { id, kind, fraction, bytes_per_sec, width: 0., height: 0. };
+    reg.on().find_map(|(_, e)| e.r.speed_hook.as_ref().and_then(|f| guard(&e.id, || f(&info)).flatten()))
 }
 
 /// The icon of an extension page's tab.

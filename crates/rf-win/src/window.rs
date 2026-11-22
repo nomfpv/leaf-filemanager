@@ -359,6 +359,56 @@ pub fn screen_color(hwnd: isize, x: i32, y0: i32, y1: i32) -> Option<[u8; 3]> {
     }
 }
 
+/// The pixels on screen over `hwnd`'s client area as `(width, height, RGBA)`, whatever is above it included. Safe to call from any
+/// thread (the window handle is only read). `None` when the window is minimised, has no area or the copy failed.
+pub fn capture_client(hwnd: isize) -> Option<(u32, u32, Vec<u8>)> {
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsIconic};
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        if IsIconic(h).as_bool() {
+            return None;
+        }
+        let mut r = RECT::default();
+        GetClientRect(h, &mut r).ok()?;
+        let (w, ht) = (r.right - r.left, r.bottom - r.top);
+        if w <= 0 || ht <= 0 || i64::from(w) * i64::from(ht) > 16_000_000 {
+            return None;
+        }
+        let mut p = POINT { x: 0, y: 0 };
+        if !ClientToScreen(h, &mut p).as_bool() {
+            return None;
+        }
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let bmp = CreateCompatibleBitmap(screen, w, ht);
+        let old = SelectObject(mem, bmp.into());
+        let copied = BitBlt(mem, 0, 0, w, ht, Some(screen), p.x, p.y, SRCCOPY).is_ok();
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -ht, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
+            ..Default::default()
+        };
+        let mut px = vec![0u8; w as usize * ht as usize * 4];
+        let rows = if copied { GetDIBits(mem, bmp, 0, ht as u32, Some(px.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS) } else { 0 };
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        if rows <= 0 {
+            return None;
+        }
+        // BGRA to RGBA, opaque
+        for c in px.chunks_exact_mut(4) {
+            c.swap(0, 2);
+            c[3] = 255;
+        }
+        Some((w as u32, ht as u32, px))
+    }
+}
+
 /// A window for a log line: handle, process, class and title.
 pub fn describe(hwnd: isize) -> String {
     use windows::Win32::Foundation::HWND;

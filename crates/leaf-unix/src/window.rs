@@ -75,6 +75,11 @@ pub fn screen_color(_hwnd: isize, _x: i32, _y0: i32, _y1: i32) -> Option<[u8; 3]
     None
 }
 
+/// The pixels on screen over a window: reading the screen is not allowed to a client here.
+pub fn capture_client(_hwnd: isize) -> Option<(u32, u32, Vec<u8>)> {
+    None
+}
+
 /// The windows of a test run parked off the screen (Windows only: the headless runs here use their own compositor).
 pub fn offscreen() -> bool {
     false

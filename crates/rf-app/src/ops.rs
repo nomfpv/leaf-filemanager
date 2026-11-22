@@ -887,6 +887,7 @@ impl FolderView {
                                 crate::tags::follow(cx, &[(from.clone(), to.clone())]);
                                 // a pinned folder renamed in the list: its pin follows it
                                 crate::places::pins_follow(cx, &from, Some(&to));
+                                crate::ext::emit(cx, || crate::ext::Event::ItemRenamed { from: from.clone(), to: to.clone() });
                             });
                         }
                         other => {

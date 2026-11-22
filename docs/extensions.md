@@ -46,8 +46,10 @@ size, the largest entry's name and `FileKind`; `result` is `Done`, or `Failed(""
 `OperationFinished` says why), `DriveSpace { drive, free, total }` (when a drive's space moved by at least 1 percent of its size;
 drives are read when they change, and every half minute while an extension is registered), `TransferSpeed { id, bytes_per_sec }` (at
 most twice a second per job), `DownloadFinished { name, size, kind }`, `WindowFocus { focused }`, `WindowMinimized { minimized }`,
-`Frame { dt_ms }` (only while frames were asked for, see Animation), `FriendLink { friend, friend_name, online }` and
-`PeerMessage { .. }`.
+`Frame { dt_ms }` (only while frames were asked for, see Animation), `FriendLink { friend, friend_name, online }`,
+`PeerMessage { .. }`, `ItemRenamed { from, to }` (an item of a folder on this PC was renamed in the file list and it worked; not sent for
+renames inside an archive or on a server) and `SceneEnded { ext_id, by_escape }` (the scene of that extension ended: `by_escape` when
+the user pressed Esc, otherwise its time ran out, `end_scene` was called or another scene replaced it).
 
 ```rust
 e.subscribe(|ev, _cx| if let Event::FolderOpened { items, .. } = ev { println!("{items} items") });
@@ -109,6 +111,9 @@ e.menu_entry(MenuTarget::Files, Command::new("n", "Count", |ctx, _| println!("{}
 - `icon_override(|&Path| -> Option<Arc<RenderImage>>)`: a picture instead of the icon.
 - `progress_bar(|&ProgressInfo| -> Option<AnyElement>)`: the element drawn in place of a transfer's progress bar in the Status Center
   (fraction, speed, kind, the room `width` x `ext::PROGRESS_SLOT_H`, clipped); `None` keeps the normal bar. The job never sees it.
+- `speed_text(|&ProgressInfo| -> Option<String>)`: the text shown for a transfer's speed on its Status Center card (and strip) instead of
+  leaf's own ("46.1 MB/s"); `None` keeps leaf's. Only the words change: the progress, the remaining time and the job are not touched.
+  `width` and `height` of the `ProgressInfo` are 0 here.
 - `on_rows_leave(|&RowsLeaving, &mut App| -> Option<u64>)`: rows are about to leave the list because they are deleted or moved to
   another folder. You get each row's name, kind and on-screen rectangle (the rectangle is `None` for a row that is not on screen) and
   may play an effect in an overlay. Return `Some(ms)` (at most `ext::KEEP_ROWS_MAX_MS`, 1500) to ask the list to keep those rows
@@ -120,11 +125,25 @@ e.menu_entry(MenuTarget::Files, Command::new("n", "Count", |ctx, _| println!("{}
   runs underneath.
 - `ext::start_scene(ext_id, ms, render, cx)`: takes the whole window content for a short scene. Esc always ends it, it ends by
   itself after `ms` (at most 30 s), leaf's own dialogs and menus are drawn above it, and it takes the mouse while it runs.
-  `ext::end_scene(cx)` ends it from code.
+  `ext::end_scene(cx)` ends it from code. `Event::SceneEnded { ext_id, by_escape }` tells when it is over, whichever way.
 
 ```rust
 e.display_name(|p| p.extension().is_some_and(|x| x == "log").then(|| "a log".to_string()));
 ```
+
+**View state and actions**:
+- `ext::view_state(&App) -> ViewState { dual_pane, preview_open, hidden_shown, filter: Option<String>, vpn_on, sort: SortSpec,
+  view_mode: ViewKind }`: a read-only snapshot of the main window's active tab and pane as the last frame saw them (`filter` is the
+  quick filter's text, `None` when empty; `vpn_on` is read at the call; `ViewKind` is `Details`, `Grid` or `Columns`). `SortSpec`,
+  `SortKey` and `SortDir` are re-exported from `ext`. Without a registered extension it is the default value.
+- `ext::delete_selection(permanent: bool, &mut App)`: starts leaf's normal delete of the active tab's selection, by the same code as the
+  Delete key. leaf's own confirmation dialog comes first whenever Settings ask for one (always for a permanent delete unless the user
+  turned that off), so the user can still say no; then the Status Center job, `ItemsDeleted` and the `on_rows_leave` hooks follow as for
+  any delete. It does nothing without a selection.
+- `ext::window_snapshot(&Window, &mut App) -> Option<Frame>` (`Frame { width, height, rgba: Arc<Vec<u8>> }`, opaque straight RGBA): the
+  window's client area as it is on screen, for effects that distort what is behind them. The copy is made on a thread of its own and the
+  call never waits: it returns the newest finished picture (`None` until the first one is ready, and always on a system that does not
+  let a program read the screen) and starts the next capture. Layers of the extension that were up at the time are in the picture.
 
 **Painting**: `ext::FrameSurface::new(Scaling::Linear | Scaling::Nearest(k))`, then `set_frame(width, height, &rgba)` each frame
 and `element()` in a layer or slot. It hands the pixels to the toolkit (`paint_image`) with one copy and no encoding. Linear is the
