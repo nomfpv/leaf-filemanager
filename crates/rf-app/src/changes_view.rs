@@ -448,6 +448,10 @@ impl Render for ChangesView {
             .border_b_1()
             .border_color(p.divider)
             .child(Icon::new(L::GitCompare).size(px(16.)).text_color(p.accent))
+            // (D6) a feed of a lane wears the lane's colour and name
+            .children(crate::lanes::of_dir(cx, &self.dir).map(|l| {
+                h_flex().gap(px(5.)).items_center().flex_shrink_0().child(div().size(px(7.)).rounded_full().bg(crate::lanes::color(l.color, &p))).child(div().text_xs().text_color(p.text_secondary).child(l.name))
+            }))
             .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().text_color(p.text).child(summary))
             .child(switch)
             .child(button("changes-refresh", t!("Refresh"), &p).on_click(cx.listener(|v, _, _, cx| v.refresh(cx))));
