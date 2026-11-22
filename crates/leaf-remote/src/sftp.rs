@@ -104,7 +104,27 @@ impl SftpFs {
         if !self.shared.is_connected(&t) {
             return None;
         }
+        // (a shell host: what `df` said the last time the user did something there; no command runs for the tile)
+        if let Some(c) = self.shared.live(&t)
+            && let Some(st) = &c.shell
+        {
+            return st.last_free();
+        }
         self.free_space(v).ok().flatten()
+    }
+
+    /// Whether the open connection to `v`'s server reaches the files through shell commands (H1), never connecting: `None`
+    /// when no connection is open or it is SFTP; `Some(names_reliable)` for a shell host (`false`: only `ls` is there).
+    pub fn shell_access(&self, v: &VPath) -> Option<bool> {
+        let t = self.target(v).ok()?;
+        let c = self.shared.live(&t)?;
+        c.shell.as_ref().map(|st| st.names_reliable())
+    }
+
+    /// The shell side of `v`'s server when its connection has no SFTP (H1); `None`: SFTP as before. Connects when needed.
+    fn shell(&self, v: &VPath, cancelled: &dyn Fn() -> bool) -> Result<Option<crate::shell::ShellFs>, FsError> {
+        let c = self.with(v, cancelled, async |c| Ok(c))?;
+        Ok(crate::shell::ShellFs::new(c, self.cfg.op_timeout))
     }
 
     /// Runs a shell command on the server of `v` over the connection that is open (or a new one) and returns what it printed.
@@ -172,6 +192,9 @@ impl SftpFs {
     pub fn open_write_keeping_backup(&self, p: &VPath, backup: &str) -> Result<Box<dyn WriteSink>, FsError> {
         if leaf_vfs::names::address_problem(backup).is_some() {
             return Err(FsError::Other("The backup's name cannot be used".into()));
+        }
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.writer(p, leaf_vfs::WriteMode::Replace, Some(backup));
         }
         self.writer(p, leaf_vfs::WriteMode::Replace, Some(backup))
     }
@@ -369,13 +392,13 @@ fn put_in_place(c: &Conn, from: &str, to: &str, replace: bool, backup: Option<&s
 }
 
 /// The generic copy's temporary name (`.name.<n>.leaf-part`): such a file is written in place.
-fn is_part_name(name: &str) -> bool {
+pub(crate) fn is_part_name(name: &str) -> bool {
     name.starts_with('.') && name.ends_with(".leaf-part")
 }
 
 /// A hidden name beside `name` that nothing else uses: `.name.<tag>-<n>` (the name shortened to keep it under 255 bytes).
 /// It carries no secret: the process id and a counter.
-fn side_name(name: &str, tag: &str) -> String {
+pub(crate) fn side_name(name: &str, tag: &str) -> String {
     use std::sync::atomic::AtomicU64;
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
@@ -467,6 +490,9 @@ impl Fs for SftpFs {
     }
 
     fn list(&self, dir: &VPath, batch: usize, cancelled: &dyn Fn() -> bool, on_batch: &mut dyn FnMut(Vec<Entry>)) -> Result<usize, FsError> {
+        if let Some(sh) = self.shell(dir, cancelled)? {
+            return sh.list(dir, batch, cancelled, on_batch);
+        }
         let handle = self.with(dir, cancelled, async |c| Ok(c.sftp.opendir(spath(&c, dir)).await?.handle))?;
         let t = self.target(dir)?;
         let mut sent = 0;
@@ -522,10 +548,16 @@ impl Fs for SftpFs {
     }
 
     fn stat(&self, p: &VPath) -> Result<Meta, FsError> {
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.stat(p);
+        }
         self.with(p, &|| false, async |c| Ok(meta_of(&c.sftp.lstat(spath(&c, p)).await?.attrs)))
     }
 
     fn open_read(&self, p: &VPath, offset: u64) -> Result<Box<dyn Read + Send>, FsError> {
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.open_read(p, offset);
+        }
         let (c, handle) = self.with(p, &|| false, async |c| {
             let h = c.sftp.open(spath(&c, p), OpenFlags::READ, FileAttributes::empty()).await?;
             Ok((c, h.handle))
@@ -535,10 +567,16 @@ impl Fs for SftpFs {
     }
 
     fn open_write(&self, p: &VPath, o: WriteOpts) -> Result<Box<dyn WriteSink>, FsError> {
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.open_write(p, o);
+        }
         self.writer(p, o.mode, None)
     }
 
     fn mkdir(&self, p: &VPath) -> Result<(), FsError> {
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.mkdir(p);
+        }
         // the first try without the retry of `with`: a folder there afterwards is then told apart from one there before
         let c = self.conn_of(p)?;
         match run(&c, self.cfg.op_timeout, c.sftp.mkdir(spath(&c, p), FileAttributes::empty())) {
@@ -577,6 +615,9 @@ impl Fs for SftpFs {
         if from.is_root() || to.is_root() {
             return Err(FsError::Denied);
         }
+        if let Some(sh) = self.shell(from, &|| false)? {
+            return sh.rename(from, to, replace);
+        }
         let c = self.conn_of(from)?;
         let (a, b) = (spath(&c, from), spath(&c, to));
         let src = lstat_on(&c, &a, self.cfg.op_timeout)?.ok_or(FsError::NotFound)?;
@@ -590,6 +631,9 @@ impl Fs for SftpFs {
     fn remove(&self, p: &VPath, recursive: bool) -> Result<(), FsError> {
         if p.is_root() || p.path() == "/~" {
             return Err(FsError::Denied);
+        }
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.remove(p, recursive);
         }
         let c = self.conn_of(p)?;
         // never the root, the home folder (by any address of it) or a folder the home folder is in
@@ -610,6 +654,9 @@ impl Fs for SftpFs {
     fn set_meta(&self, p: &VPath, m: &MetaChange) -> Result<(), FsError> {
         if m.modified_ms.is_none() && m.mode.is_none() {
             return Ok(());
+        }
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.set_meta(p, m);
         }
         // SETSTAT follows a link: a link's target is never changed through it
         if self.stat(p)?.kind == Kind::Link {
@@ -633,6 +680,9 @@ impl Fs for SftpFs {
     }
 
     fn details(&self, p: &VPath) -> Result<Details, FsError> {
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.details(p);
+        }
         self.with(p, &|| false, async |c| {
             let path = spath(&c, p);
             let a = c.sftp.lstat(path.clone()).await?.attrs;
@@ -653,6 +703,9 @@ impl Fs for SftpFs {
     }
 
     fn free_space(&self, p: &VPath) -> Result<Option<Space>, FsError> {
+        if let Some(sh) = self.shell(p, &|| false)? {
+            return sh.free_space(p);
+        }
         self.with(p, &|| false, async |c| {
             if !c.statvfs {
                 return Ok(None);

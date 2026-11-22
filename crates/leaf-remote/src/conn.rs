@@ -107,6 +107,8 @@ pub(crate) struct Target {
     pub jump: Option<String>,
     /// The saved host says "Through VPN": the connection goes through leaf's VPN (see `leaf_vpn::dial`).
     pub vpn: bool,
+    /// The saved host's "File access" (SFTP, shell commands, or SFTP with the shell as the fallback).
+    pub access: rf_core::hosts::FileAccess,
 }
 
 fn local_user() -> String {
@@ -151,6 +153,7 @@ fn target_for(cfg: &Config, host: &str, port: u16, want_user: Option<&str>) -> R
         key: format!("{user}@{}", known_hosts::host_name(&host, port)),
         key_file: h.as_ref().and_then(|h| h.key_file.as_deref()).map(expand_home),
         vpn: h.as_ref().is_some_and(|h| h.vpn),
+        access: h.as_ref().map(|h| h.access).unwrap_or_default(),
         jump: h.and_then(|h| h.jump),
         host,
         port,
@@ -197,6 +200,10 @@ pub(crate) struct Conn {
     route: leaf_vpn::RouteMark,
     /// What kind of machine this is (`uname -s`), asked the first time it is needed and kept as long as the connection lives.
     family: tokio::sync::OnceCell<crate::hostkind::HostFamily>,
+    /// Set when this connection reaches the files through shell commands (`crate::shell`, H1) instead of SFTP: the server
+    /// refused the SFTP subsystem, or the saved host says "Shell". `sftp` is then a session that was never opened (nothing
+    /// sends on it: every file operation of `SftpFs` goes to `crate::shell` first).
+    pub shell: Option<Arc<crate::shell::ShellState>>,
 }
 
 impl Conn {
@@ -240,6 +247,13 @@ impl Shared {
     pub fn is_connected(&self, t: &Target) -> bool {
         let Some(slot) = lock(&self.pool).get(&t.key).cloned() else { return false };
         slot.try_lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.alive()))
+    }
+
+    /// The live connection to the target, if one is open now; never connects (and never waits for one being made).
+    pub fn live(&self, t: &Target) -> Option<Arc<Conn>> {
+        let slot = lock(&self.pool).get(&t.key).cloned()?;
+        let g = slot.try_lock().ok()?;
+        g.as_ref().filter(|c| c.alive()).cloned()
     }
 
     /// Forgets every secret kept for the host `name` (`host` or `[host]:port`): its passwords, and the unlocked key files
@@ -460,22 +474,87 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
             h
         }
     };
-    let ch = step(cfg.op_timeout, handle.channel_open_session()).await?;
-    step(cfg.op_timeout, ch.request_subsystem(true, "sftp")).await?;
+    use rf_core::hosts::FileAccess;
+    let opened = match t.access {
+        FileAccess::Shell => Err(SftpOpen::Refused("the host is set to Shell".into())),
+        _ => open_sftp(cfg, &handle).await,
+    };
+    let (sftp, statvfs, posix_rename, home) = match opened {
+        Ok(x) => x,
+        Err(SftpOpen::Failed(e)) => return Err(e),
+        Err(SftpOpen::Refused(why)) if t.access == FileAccess::Sftp => return Err(FsError::Other(format!("The server has no SFTP: {why}"))),
+        Err(SftpOpen::Refused(why)) => {
+            // H1: the files through shell commands on exec channels, after one check of what the server has
+            log::info!("remote: no SFTP on {} ({why}); using shell commands", known_hosts::host_name(&t.host, t.port));
+            let mut c = Conn { sftp: Arc::new(unopened_sftp()), statvfs: false, posix_rename: false, home: "/".into(), handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route, family: tokio::sync::OnceCell::new(), shell: None };
+            let state = crate::shell::start(&c).await?;
+            c.home = state.home.clone();
+            let _ = c.family.set(state.family);
+            c.shell = Some(Arc::new(state));
+            return Ok(c);
+        }
+    };
+    log::info!("remote: connected (SFTP, statvfs {statvfs}, posix-rename {posix_rename})");
+    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route, family: tokio::sync::OnceCell::new(), shell: None })
+}
+
+/// Why no SFTP session was opened.
+enum SftpOpen {
+    /// The server has no SFTP for this login (it refused the subsystem, or the channel closed before SFTP began on a
+    /// connection that is still up): the shell may stand in.
+    Refused(String),
+    /// Anything else (the line broke, a time limit): an error as before.
+    Failed(FsError),
+}
+
+/// The SFTP channel: the subsystem request and its answer, then SFTP's version exchange and the home folder.
+async fn open_sftp(cfg: &Config, handle: &client::Handle<Client>) -> Result<(RawSftpSession, bool, bool, String), SftpOpen> {
+    let mut ch = step(cfg.op_timeout, handle.channel_open_session()).await.map_err(SftpOpen::Failed)?;
+    step(cfg.op_timeout, ch.request_subsystem(true, "sftp")).await.map_err(SftpOpen::Failed)?;
+    // the answer to the request: Success, or Failure (OpenSSH without a `Subsystem sftp` line); a server that runs a missing
+    // sftp-server answers Success and then closes the channel (Dropbear), which the version exchange below meets
+    let answer = tokio::time::timeout(cfg.op_timeout, async {
+        loop {
+            match ch.wait().await {
+                Some(russh::ChannelMsg::Success) => return Ok(()),
+                Some(russh::ChannelMsg::Failure) => return Err("the server refused the SFTP subsystem".to_string()),
+                Some(russh::ChannelMsg::Close | russh::ChannelMsg::Eof) | None => return Err("the server closed the SFTP channel".to_string()),
+                Some(russh::ChannelMsg::ExitStatus { exit_status }) => return Err(format!("the SFTP program ended at once (exit code {exit_status})")),
+                Some(_) => {}
+            }
+        }
+    })
+    .await;
+    match answer {
+        Err(_) => return Err(SftpOpen::Failed(offline("the server did not answer the SFTP request in time"))),
+        Ok(Err(why)) if !handle.is_closed() => return Err(SftpOpen::Refused(why)),
+        Ok(Err(why)) => return Err(SftpOpen::Failed(offline(why))),
+        Ok(Ok(())) => {}
+    }
     let sftp = RawSftpSession::new(ch.into_stream());
     sftp.set_timeout(cfg.op_timeout.as_secs().max(1));
-    let version = tokio::time::timeout(cfg.op_timeout, sftp.init())
-        .await
-        .map_err(|_| offline("the server did not start SFTP in time"))?
-        .map_err(|e| FsError::Other(format!("The server has no SFTP: {e}")))?;
+    let version = match tokio::time::timeout(cfg.op_timeout, sftp.init()).await {
+        Err(_) => return Err(SftpOpen::Failed(offline("the server did not start SFTP in time"))),
+        // (the subsystem was accepted but nothing that speaks SFTP answered: a missing sftp-server, or a login shell that
+        // printed a menu into the channel)
+        Ok(Err(e)) if !handle.is_closed() => return Err(SftpOpen::Refused(format!("SFTP did not start ({e})"))),
+        Ok(Err(e)) => return Err(SftpOpen::Failed(FsError::Other(format!("The server has no SFTP: {e}")))),
+        Ok(Ok(v)) => v,
+    };
     let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
     let posix_rename = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
     let home = match tokio::time::timeout(cfg.op_timeout, sftp.realpath(".")).await {
         Ok(Ok(n)) => n.files.into_iter().next().map(|f| f.filename).filter(|h| h.starts_with('/')).unwrap_or_else(|| "/".into()),
         _ => "/".into(),
     };
-    log::info!("remote: connected (SFTP version {}, statvfs {statvfs}, posix-rename {posix_rename})", version.version);
-    Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route, family: tokio::sync::OnceCell::new() })
+    log::info!("remote: SFTP version {}", version.version);
+    Ok((sftp, statvfs, posix_rename, home))
+}
+
+/// The `sftp` of a shell connection: a session on a stream whose other end is gone (it is never sent on).
+fn unopened_sftp() -> RawSftpSession {
+    let (near, _far) = tokio::io::duplex(64);
+    RawSftpSession::new(near)
 }
 
 /// What a host set to use leaf's VPN reads while the VPN is down and its kill switch is on.
@@ -846,6 +925,16 @@ pub struct ExecOut {
     pub truncated: bool,
 }
 
+/// What a command printed, as bytes.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawOut {
+    pub stdout: Vec<u8>,
+    /// The start of its standard error (64 KiB at most).
+    pub stderr: Vec<u8>,
+    pub code: Option<u32>,
+    pub truncated: bool,
+}
+
 /// How long a Cancel waits for a copy command's pid line before it gives up stopping it.
 const STOP_WAIT: Duration = Duration::from_secs(5);
 
@@ -879,20 +968,28 @@ impl Conn {
     /// Runs `command` (the server's shell parses it) on a new channel of this connection and collects what it prints, waiting
     /// at most `limit` in all.
     pub async fn exec(&self, command: &str, limit: Duration) -> Result<ExecOut, FsError> {
-        let mut ch = step(self.limit_open(), self.handle.channel_open_session()).await?;
-        // (`sh -c`: the account's own shell may be csh, which does not read POSIX syntax)
-        step(self.limit_open(), ch.exec(true, crate::hostkind::posix(command).into_bytes())).await?;
-        let mut out = ExecOut::default();
-        let mut bytes: Vec<u8> = Vec::new();
+        let raw = self.exec_raw(command, limit).await?;
+        Ok(ExecOut { stdout: String::from_utf8_lossy(&raw.stdout).into_owned(), code: raw.code, truncated: raw.truncated })
+    }
+
+    /// `exec` with the bytes as they came (standard output and, apart, standard error), for output that is not text (`cat`
+    /// of a file, NUL-separated names). No PTY is asked for: the bytes are not translated on the way.
+    pub(crate) async fn exec_raw(&self, command: &str, limit: Duration) -> Result<RawOut, FsError> {
+        let mut ch = self.open_exec(command).await?;
+        let mut out = RawOut::default();
         let read = async {
             while let Some(msg) = ch.wait().await {
                 match msg {
                     russh::ChannelMsg::Data { data } => {
-                        let room = EXEC_CAP.saturating_sub(bytes.len());
+                        let room = EXEC_CAP.saturating_sub(out.stdout.len());
                         if data.len() > room {
                             out.truncated = true;
                         }
-                        bytes.extend_from_slice(&data[..data.len().min(room)]);
+                        out.stdout.extend_from_slice(&data[..data.len().min(room)]);
+                    }
+                    russh::ChannelMsg::ExtendedData { data, ext: 1 } => {
+                        let room = (64 * 1024usize).saturating_sub(out.stderr.len());
+                        out.stderr.extend_from_slice(&data[..data.len().min(room)]);
                     }
                     russh::ChannelMsg::ExitStatus { exit_status } => out.code = Some(exit_status),
                     russh::ChannelMsg::Close => break,
@@ -905,8 +1002,15 @@ impl Conn {
             return Err(offline("the server did not finish the command in time"));
         }
         self.touch();
-        out.stdout = String::from_utf8_lossy(&bytes).into_owned();
         Ok(out)
+    }
+
+    /// A new exec channel running `command` (in `sh -c`; no PTY), for a caller that streams its input or output.
+    pub(crate) async fn open_exec(&self, command: &str) -> Result<russh::Channel<client::Msg>, FsError> {
+        let ch = step(self.limit_open(), self.handle.channel_open_session()).await?;
+        // (`sh -c`: the account's own shell may be csh, which does not read POSIX syntax)
+        step(self.limit_open(), ch.exec(true, crate::hostkind::posix(command).into_bytes())).await?;
+        Ok(ch)
     }
 
     /// Runs a copy command (`crate::server_copy::copy_command`) on a new channel and follows it until it ends, with no time

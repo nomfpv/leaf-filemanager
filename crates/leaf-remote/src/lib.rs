@@ -28,6 +28,7 @@ pub mod rclone;
 pub mod secrets;
 pub mod server_copy;
 mod sftp;
+pub mod shell;
 pub mod smb;
 pub mod trash;
 mod webdav;
@@ -176,6 +177,16 @@ pub fn is_connected(v: &VPath) -> bool {
         "dav" | "davs" => dav_backend().target_connected(v),
         _ => false,
     }
+}
+
+/// How the open connection to the `sftp://` server of `v` reaches its files (never connects): `None` when nothing is open
+/// or it is SFTP; `Some(names_reliable)` when the server has no SFTP and leaf uses shell commands (H1), `false` when only
+/// `ls` is there to read names with (names with unusual characters may be shown wrong).
+pub fn shell_access(v: &VPath) -> Option<bool> {
+    if v.scheme() != "sftp" {
+        return None;
+    }
+    sftp_backend().shell_access(v)
 }
 
 /// Free bytes on the server, only while it is connected already (never connects; `None` when unknown).
