@@ -9,7 +9,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rf_core::Location;
-use rf_core::hosts::{Host, HostKind, Hosts};
+use rf_core::hosts::{FileAccess, Host, HostKind, Hosts};
 use std::rc::Rc;
 use rf_core::vpath::VPath;
 
@@ -110,6 +110,7 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
     use crate::prompt::{Button, Kind};
     let initial = old.as_ref().map(Host::to_line).unwrap_or_default();
     let old_kind = old.as_ref().map(|h| h.kind);
+    let old_access = old.as_ref().map(|h| h.access).unwrap_or_default();
     let vpn = Rc::new(std::cell::Cell::new(old.as_ref().is_some_and(|h| h.vpn)));
     let vpn_on = vpn.clone();
     let old_name = old.map(|h| h.name);
@@ -127,6 +128,13 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
         options: std::iter::once(SharedString::from(t!("Guess"))).chain(HostKind::ALL.iter().map(|k| SharedString::from(crate::i18n::td(k.label())))).collect(),
         selected: selected.clone(),
     };
+    // "File access" of an SFTP host (H1): SFTP with shell commands when the server has none, or always one of the two
+    let access = Rc::new(std::cell::Cell::new(FileAccess::ALL.iter().position(|a| *a == old_access).unwrap_or(0)));
+    let access_choice = crate::prompt::Choice {
+        label: t!("File access").into(),
+        options: FileAccess::ALL.iter().map(|a| SharedString::from(crate::i18n::td(a.label()))).collect(),
+        selected: access.clone(),
+    };
     // "Through VPN": its connections go through leaf's VPN (Settings > VPN); never for an address on the local network
     let vpn_check = crate::prompt::Check {
         label: t!("Through VPN").into(),
@@ -138,12 +146,16 @@ fn edit_dialog(old: Option<Host>, window: &mut Window, cx: &mut App) {
         title,
         Some(message),
         Some((initial, t!("name = sftp://user@host/folder").to_string())),
-        vec![kind_choice],
+        vec![kind_choice, access_choice],
         vec![vpn_check],
         vec![
             Button::new(t!("Save"), Kind::Primary, move |text, _, cx| {
                 let mut h = Host::from_line(text.as_deref().unwrap_or_default()).map_err(|e| crate::i18n::td(&e))?;
                 h.vpn = vpn_on.get();
+                h.access = FileAccess::ALL.get(access.get()).copied().unwrap_or_default();
+                if h.access != FileAccess::Auto && !h.scheme.eq_ignore_ascii_case("sftp") {
+                    return Err(t!("File access applies to SFTP hosts only. Set it to Automatic for this host.").to_string());
+                }
                 // (only these connections are made by leaf itself and can go through its VPN; a docker, smb, nfs or rclone host
                 // would go direct with the tick on)
                 if h.vpn && !matches!(h.scheme.to_ascii_lowercase().as_str(), "sftp" | "ftp" | "ftps") {
@@ -245,6 +257,11 @@ pub fn page(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
             })
             .into_any_element();
         let mut desc = subtitle(&h);
+        match h.access {
+            FileAccess::Auto => {}
+            FileAccess::Sftp => desc.push_str(&format!("  ·  {}", t!("File access: SFTP"))),
+            FileAccess::Shell => desc.push_str(&format!("  ·  {}", t!("File access: Shell"))),
+        }
         if let Some(k) = &h.key_file {
             desc.push_str(&format!("  ·  {} {k}", t!("key")));
         }
@@ -379,6 +396,8 @@ struct Probe {
     running: bool,
     /// Set to use leaf's VPN, which is down: not probed.
     waits_vpn: bool,
+    /// The open connection reaches the files through shell commands (no SFTP there); `Some(false)`: names only from `ls`.
+    shell: Option<bool>,
 }
 
 #[derive(Default)]
@@ -427,7 +446,9 @@ fn probe_host(h: &Host) -> Probe {
     };
     let ping_ms = online.then(|| started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32);
     let free = if online { VPath::parse(&h.address()).ok().and_then(|v| leaf_remote::free_if_connected(&v)) } else { None };
-    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false, waits_vpn: false }
+    // (never connects and runs nothing on the host: it looks at the connection that is open)
+    let shell = VPath::parse(&h.address()).ok().and_then(|v| leaf_remote::shell_access(&v));
+    Probe { online: Some(online), ping_ms, free, at: Some(std::time::Instant::now()), running: false, waits_vpn: false, shell }
 }
 
 /// Starts the probes of the hosts whose answer is old (the page is redrawn when one comes back).
@@ -485,6 +506,12 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
             Some(f) => format!("{state} \u{b7} {} {}", rf_core::format::size(f), t!("free")),
             None => state,
         };
+        // H1: a host without SFTP, reached through shell commands
+        let shell_note = match probe.shell {
+            Some(true) => Some(t!("Shell access: no SFTP on this host; names with unusual characters may be limited")),
+            Some(false) => Some(t!("Shell access (ls only): no SFTP on this host; names with unusual characters may be shown wrong")),
+            None => None,
+        };
         grid = grid.child(
             v_flex()
                 .id(("home-host", i))
@@ -516,7 +543,8 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
                                         .text_color(p.text_secondary)
                                         .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(dot))
                                         .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().child(state)),
-                                ),
+                                )
+                                .when_some(shell_note, |d, note| d.child(div().text_xs().text_color(p.text_tertiary).child(note))),
                         ),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
