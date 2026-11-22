@@ -470,6 +470,11 @@ pub fn start_with(cx: &mut App, req: Request, after: Option<Box<dyn FnOnce(Vec<P
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     crate::status_center::set_result(cx, id, Some(format!("{} {name}", t!("Downloaded"))), None);
                     crate::status_center::set_extras(cx, id, None, p.parent().map(Path::to_path_buf), None);
+                    if crate::ext::active() {
+                        let size = std::fs::metadata(p).map_or(0, |m| m.len());
+                        let kind = crate::ext::FileKind::of_name(&name, p.is_dir());
+                        crate::ext::emit(cx, || crate::ext::Event::DownloadFinished { name, size, kind });
+                    }
                 }
                 if let Some(after) = after {
                     after(v, cx);

@@ -159,10 +159,13 @@ impl Places {
         // Notice drives appearing/disappearing (USB, network mappings) without any shell hooks.
         cx.spawn(async move |this, cx| {
             let mut mask = leaf_sys::drives::drive_mask();
+            let mut beat = 0u32;
             loop {
                 cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
                 let now = leaf_sys::drives::drive_mask();
-                if now != mask {
+                beat += 1;
+                // (with an extension registered the drives are also read every half minute, so it hears of free space changing)
+                if now != mask || (beat % 10 == 0 && crate::ext::active()) {
                     mask = now;
                     if this.update(cx, |p, cx| p.refresh(cx)).is_err() {
                         break;
@@ -274,6 +277,10 @@ impl Places {
             let pin_names = cx.background_spawn(async move { leaf_sys::localized::warm(pin_paths) });
             let _ = this.update(cx, |p, cx| {
                 p.pinned = pinned;
+                if crate::ext::active() {
+                    let space: Vec<(PathBuf, u64, u64)> = drives.iter().map(|d| (d.root.clone(), d.free, d.total)).collect();
+                    crate::ext::note_drives(&space, cx);
+                }
                 p.drives = drives;
                 p.libraries = libraries;
                 p.network = network;

@@ -374,6 +374,7 @@ fn start_run(plan: Plan, cx: &mut App) {
     let id_cell = Rc::new(std::cell::Cell::new(0u64));
     let (out2, id2) = (out.clone(), id_cell.clone());
     let p2 = plan.clone();
+    crate::ext::kind_hint(crate::ext::OpKind::Sync);
     let id = crate::status_center::start_with_id(
         cx,
         format!("{} {name}", t!("Sync:")),

@@ -31,6 +31,8 @@ pub type ResultAction = (String, std::rc::Rc<dyn Fn(&mut App)>);
 
 pub struct OpState {
     id: u64,
+    /// What an extension is told the job is (see `ext::OpKind`).
+    kind: crate::ext::OpKind,
     title: String,
     total: u32,
     done: u32,
@@ -165,6 +167,7 @@ impl OpState {
     fn new(id: u64, title: String, cancel: Arc<AtomicBool>, paused: Arc<AtomicBool>, bytes: Arc<ByteProgress>) -> Self {
         Self {
             id,
+            kind: crate::ext::take_kind(),
             title,
             total: 0,
             done: 0,
@@ -737,8 +740,12 @@ pub fn start_with_id(
         keep_ticking(cx, &entity);
     }
     if crate::ext::active() {
-        let title = entity.read(cx).ops.iter().find(|o| o.id == id).map(|o| o.title.clone()).unwrap_or_default();
-        crate::ext::emit(cx, || crate::ext::Event::OperationStarted { id, title });
+        // (after the caller has marked the job a transfer, which tells its kind)
+        let entity = entity.clone();
+        cx.defer(move |cx| {
+            let Some((kind, title)) = entity.read(cx).ops.iter().find(|o| o.id == id).map(|o| (o.kind, o.title.clone())) else { return };
+            crate::ext::emit(cx, || crate::ext::Event::OperationStarted { id, kind, title });
+        });
     }
     // the card is due once the operation has run a moment, the attention pulse is over a moment after it began
     notify_in(cx, &entity, xfer::CARD_APPEAR_MS + 50);
@@ -798,6 +805,7 @@ pub fn start_with_id(
             // what the extensions are told once this batch is applied (only built when one is registered)
             let mut told: Vec<crate::ext::Event> = Vec::new();
             let mut progressed = false;
+            let mut speed: Option<u64> = None;
             let _ = entity.update(cx, |ops, cx| {
                 if let Some(op) = ops.ops.iter_mut().find(|o| o.id == id) {
                     for e in evs {
@@ -846,6 +854,7 @@ pub fn start_with_id(
                                 if crate::ext::active() {
                                     told.push(crate::ext::Event::OperationFinished {
                                         id,
+                                        kind: op.kind,
                                         title: op.title.clone(),
                                         result: match &op.phase {
                                             OpPhase::Done => crate::ext::OpResult::Done,
@@ -864,8 +873,12 @@ pub fn start_with_id(
                         let (bd, bt) = op.bytes.get();
                         let units = (op.done, op.total);
                         let pace = op.stats.pace(op.started.elapsed().as_secs_f64(), units, (bd, bt));
+                        if let Some(sp) = pace.speed {
+                            speed = Some(sp as u64);
+                        }
                         told.push(crate::ext::Event::OperationProgress {
                             id,
+                            kind: op.kind,
                             title: op.title.clone(),
                             items_done: op.done,
                             items_total: op.total,
@@ -895,11 +908,19 @@ pub fn start_with_id(
                 }
                 cx.notify();
             });
-            if !told.is_empty() {
+            if crate::ext::active() {
                 cx.update(|cx| {
                     for ev in told {
                         crate::ext::emit(cx, || ev);
                     }
+                    if let Some(sp) = speed {
+                        crate::ext::note_speed(id, sp, cx);
+                    }
+                    if finished {
+                        crate::ext::forget_speed(id);
+                    }
+                    // (what a worker thread posted: the archive jobs)
+                    crate::ext::pump(cx);
                 });
             }
             for (list, reply) in asks {
@@ -1265,6 +1286,15 @@ pub fn set_transfer(cx: &mut App, id: u64, note: crate::xfer_history::Note) {
             if let Some(via) = note.via {
                 op.dl = Some(DlMeta { via, name: note.what.clone(), from: note.from.clone(), to: note.to.clone(), saved: note.saved.clone(), queue: None });
             }
+            if op.kind == crate::ext::OpKind::Other {
+                use crate::xfer_history::Kind;
+                op.kind = match note.kind {
+                    Kind::Copy => crate::ext::OpKind::Copy,
+                    Kind::Move => crate::ext::OpKind::Move,
+                    Kind::Download => crate::ext::OpKind::Download,
+                    Kind::Upload => crate::ext::OpKind::Upload,
+                };
+            }
             op.note = Some(note);
         }
     });
@@ -1512,6 +1542,7 @@ fn ask_then_extract(cx: &mut App, mut rest: Vec<std::path::PathBuf>, to: Extract
 }
 
 fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
+    crate::ext::kind_hint(crate::ext::OpKind::Extract);
     let title = match &to {
         ExtractTo::Into(d) | ExtractTo::SmartInto(d) => format!("{} {} → {}", t!("Extracting:"), short(&archive), short(d)),
         _ => format!("{} {}", t!("Extracting:"), short(&archive)),
@@ -1519,6 +1550,9 @@ fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
     // the folder holding the result, when it is a new one: opened afterwards if the user wants
     let made = Arc::new(parking_lot::Mutex::new(None::<std::path::PathBuf>));
     let made2 = made.clone();
+    // what the extensions are told: known once the worker has the destination, read back when the job ends
+    let told: Arc<parking_lot::Mutex<Option<crate::ext::ExtractInfo>>> = Arc::default();
+    let told_w = told.clone();
     let work = move |t: Arc<Tracker>| {
         let opts = crate::archive_view::options(&archive);
         let parent = archive.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -1544,6 +1578,18 @@ fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
             ExtractTo::Smart => smart(&parent),
             ExtractTo::SmartInto(d) => smart(d),
         };
+        if crate::ext::active() {
+            // (read only when an extension is registered; a list that cannot be read gives an empty summary)
+            let entries = rf_archive::list_with(&archive, &opts).unwrap_or_default();
+            let largest = entries.iter().filter(|e| !e.is_dir).max_by_key(|e| e.size).map(|e| {
+                let name = e.path.rsplit('/').next().unwrap_or(&e.path).to_string();
+                let kind = crate::ext::FileKind::of_name(&name, false);
+                (name, kind)
+            });
+            let info = crate::ext::ExtractInfo { archive: archive.clone(), dest: dest.clone(), entries: entries.len(), total_bytes: entries.iter().map(|e| e.size).sum(), largest };
+            *told_w.lock() = Some(info.clone());
+            crate::ext::post(crate::ext::Event::ArchiveExtractStarting { info });
+        }
         let cancel = t.cancel.clone();
         let mut prog = archive_progress(&t);
         match rf_archive::extract_with(&archive, &dest, &opts, &mut prog, &|| cancel.load(Ordering::Relaxed)) {
@@ -1563,6 +1609,9 @@ fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
         }
     };
     let done: OnDone = Box::new(move |ok, cx| {
+        if let Some(info) = told.lock().take() {
+            crate::ext::emit(cx, || crate::ext::Event::ArchiveExtracted { info, result: if ok { crate::ext::OpResult::Done } else { crate::ext::OpResult::Failed(String::new()) } });
+        }
         let dir = made.lock().take();
         if let (true, Some(dir), true) = (ok, dir, cx.global::<crate::settings::Settings>().open_after_extract) {
             if dir.is_dir() {
@@ -1575,6 +1624,7 @@ fn extract_now(cx: &mut App, archive: std::path::PathBuf, to: ExtractTo) {
 
 /// Creates an archive with options: a password, a 7z dictionary size, parts of a given size.
 pub fn compress_opts(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path::PathBuf, format: rf_archive::Format, level: u32, opts: rf_archive::CompressOptions) {
+    crate::ext::kind_hint(crate::ext::OpKind::Compress);
     let title = format!("{} {} → {}", t!("Compressing:"), crate::i18n::items(sources.len()), short(&dest));
     start(cx, title, move |t| {
         let cancel = t.cancel.clone();
@@ -1592,6 +1642,7 @@ pub fn compress_opts(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::
 
 /// RAR through WinRAR's Rar.exe (`level` 0…9).
 pub fn compress_rar(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path::PathBuf, level: u32, password: Option<String>) {
+    crate::ext::kind_hint(crate::ext::OpKind::Compress);
     let title = format!("{} {} → {}", t!("Compressing:"), crate::i18n::items(sources.len()), short(&dest));
     start(cx, title, move |t| {
         let cancel = t.cancel.clone();
@@ -1613,6 +1664,7 @@ pub fn compress(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path:
 
 /// `level`: 0 store … 9 smallest.
 pub fn compress_level(cx: &mut App, sources: Vec<std::path::PathBuf>, dest: std::path::PathBuf, format: rf_archive::Format, level: u32) {
+    crate::ext::kind_hint(crate::ext::OpKind::Compress);
     let title = format!("{} {} → {}", t!("Compressing:"), crate::i18n::items(sources.len()), short(&dest));
     start(cx, title, move |t| {
         let cancel = t.cancel.clone();
@@ -1843,6 +1895,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
             offer_admin(cx, own_id_done.get(), move |cx| crate::admin::retry_delete(cx, retry_paths.clone(), permanent, record));
         }
     }));
+    crate::ext::kind_hint(crate::ext::OpKind::Delete);
     let id = start_with_id(cx, title, move |t| {
         // permanent: our parallel delete (the shell takes what it can't); recycle bin: the shell
         let r = if permanent && fast {

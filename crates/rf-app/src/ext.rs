@@ -61,6 +61,77 @@ pub enum OpResult {
     Failed(String),
 }
 
+/// What a Status Center job does. `Other` for the jobs that are none of the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpKind {
+    Copy,
+    Move,
+    Delete,
+    Rename,
+    Extract,
+    Compress,
+    Download,
+    Upload,
+    Sync,
+    Other,
+}
+
+/// The kind of a file as leaf groups them for its icons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileKind {
+    Folder,
+    Image,
+    Video,
+    Audio,
+    Archive,
+    Code,
+    Document,
+    Spreadsheet,
+    Pdf,
+    Executable,
+    Text,
+    Other,
+}
+
+impl FileKind {
+    /// The kind of an item called `name` (by its extension; `is_dir` for a folder).
+    pub fn of_name(name: &str, is_dir: bool) -> Self {
+        use crate::icons::Category as C;
+        if is_dir {
+            return Self::Folder;
+        }
+        let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+        match crate::icons::category_for_ext(&ext) {
+            C::Folder => Self::Folder,
+            C::Image => Self::Image,
+            C::Video => Self::Video,
+            C::Audio => Self::Audio,
+            C::Archive => Self::Archive,
+            C::Code => Self::Code,
+            C::Document => Self::Document,
+            C::Spreadsheet => Self::Spreadsheet,
+            C::Pdf => Self::Pdf,
+            C::Executable => Self::Executable,
+            C::Text => Self::Text,
+            C::Other => Self::Other,
+        }
+    }
+}
+
+/// What an archive extraction is about (see [`Event::ArchiveExtractStarting`]).
+#[derive(Clone, Debug)]
+pub struct ExtractInfo {
+    pub archive: PathBuf,
+    /// The folder the files are written into.
+    pub dest: PathBuf,
+    /// Entries in the archive (files and folders); 0 when the list could not be read.
+    pub entries: usize,
+    /// The uncompressed size of all of them.
+    pub total_bytes: u64,
+    /// The name and kind of the largest entry.
+    pub largest: Option<(String, FileKind)>,
+}
+
 /// A read-only notification. New variants may be added: match with a `_` arm.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -75,17 +146,31 @@ pub enum Event {
     SelectionChanged { count: usize, total_bytes: u64 },
     /// A job of the Status Center (copy, move, delete, extract, compress, download, upload, sync, ...) started. `title` is leaf's own
     /// wording for it ("Moving to Trash: 3 items"); the kind is not given separately.
-    OperationStarted { id: u64, title: String },
+    OperationStarted { id: u64, kind: OpKind, title: String },
     /// A job reported progress (at most a few times a second). `bytes` is `(done, total)` when the engine counts bytes, and
     /// `bytes_per_sec` the speed leaf shows for it.
-    OperationProgress { id: u64, title: String, items_done: u32, items_total: u32, bytes: Option<(u64, u64)>, bytes_per_sec: Option<u64>, current: Option<String> },
+    OperationProgress { id: u64, kind: OpKind, title: String, items_done: u32, items_total: u32, bytes: Option<(u64, u64)>, bytes_per_sec: Option<u64>, current: Option<String> },
     /// A job ended.
-    OperationFinished { id: u64, title: String, result: OpResult, bytes: u64, elapsed_ms: u64 },
+    OperationFinished { id: u64, kind: OpKind, title: String, result: OpResult, bytes: u64, elapsed_ms: u64 },
     /// Items were deleted (to the Trash, or for good) and the job succeeded. Names are the top-level items; `sizes` are the file
     /// sizes read just before (0 for a folder). At most 200 items are listed.
     ItemsDeleted { names: Vec<String>, sizes: Vec<u64>, permanent: bool, total: usize },
+    /// An archive is about to be extracted (the extraction starts at once and runs on; an extension may show a scene meanwhile).
+    ArchiveExtractStarting { info: ExtractInfo },
+    /// The extraction of an archive ended.
+    ArchiveExtracted { info: ExtractInfo, result: OpResult },
+    /// A drive's free or total space changed by a real amount (at least 1 percent of its size). `drive` is its root ("C:\\").
+    DriveSpace { drive: PathBuf, free: u64, total: u64 },
+    /// The live speed of a running transfer (at most twice a second per job); `id` is the one of `OperationStarted`.
+    TransferSpeed { id: u64, bytes_per_sec: u64 },
+    /// A download finished and its file is in place.
+    DownloadFinished { name: String, size: u64, kind: FileKind },
     /// The window gained or lost the focus.
     WindowFocus { focused: bool },
+    /// The window was minimised (`true`) or brought back (`false`).
+    WindowMinimized { minimized: bool },
+    /// A frame is being drawn while an extension asked for frames (see [`animate`] and [`want_frames`]); `dt_ms` since the last one.
+    Frame { dt_ms: u32 },
     /// A message from a friend's leaf on a shared folder's link (see `ext::peer`). Delivered only when both switches allow it.
     PeerMessage { friend: String, friend_name: String, kind: u16, payload: Vec<u8> },
 }
@@ -333,6 +418,7 @@ struct Registry {
     pane_open: Cell<Option<usize>>,
     scene: RefCell<Option<Scene>>,
     scene_gen: Cell<u64>,
+    frames: RefCell<Vec<String>>,
 }
 
 struct Scene {
@@ -394,7 +480,7 @@ pub(crate) fn install(ext: Extensions, cx: &mut App) {
     if ext.list.is_empty() {
         return;
     }
-    let reg = Rc::new(Registry { list: ext.list, pane_open: Cell::new(None), scene: RefCell::new(None), scene_gen: Cell::new(0) });
+    let reg = Rc::new(Registry { list: ext.list, pane_open: Cell::new(None), scene: RefCell::new(None), scene_gen: Cell::new(0), frames: RefCell::new(Vec::new()) });
     reg.refresh_flags();
     REG.with(|r| *r.borrow_mut() = Some(reg.clone()));
     ACTIVE.store(true, Ordering::Relaxed);
@@ -440,6 +526,165 @@ pub(crate) fn note_selection(count: usize, bytes: u64, cx: &mut App) {
     }
     SEL.set((count, bytes));
     emit(cx, || Event::SelectionChanged { count, total_bytes: bytes });
+}
+
+/// Events raised on other threads (an archive job's worker) wait here until the UI thread takes them with [`pump`].
+static POSTED: std::sync::Mutex<Vec<Event>> = std::sync::Mutex::new(Vec::new());
+
+/// Queues an event from any thread. Nothing is kept when no extension is registered.
+pub(crate) fn post(ev: Event) {
+    if ACTIVE.load(Ordering::Relaxed)
+        && let Ok(mut q) = POSTED.lock()
+        && q.len() < 256
+    {
+        q.push(ev);
+    }
+}
+
+/// Delivers what [`post`] queued (called from the UI thread where jobs report).
+pub(crate) fn pump(cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let list = POSTED.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+    for ev in list {
+        emit(cx, || ev);
+    }
+}
+
+thread_local! {
+    static MINIMIZED: Cell<bool> = const { Cell::new(false) };
+    static KIND_HINT: Cell<Option<OpKind>> = const { Cell::new(None) };
+    static ANIM_UNTIL: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    static LAST_FRAME: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    static SPEED_SENT: RefCell<std::collections::HashMap<u64, std::time::Instant>> = RefCell::new(std::collections::HashMap::new());
+    static SPACE: RefCell<std::collections::HashMap<PathBuf, (u64, u64)>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Says what the job started next is (the Status Center reads it once). Jobs that note a transfer kind need no hint.
+pub(crate) fn kind_hint(k: OpKind) {
+    if ACTIVE.load(Ordering::Relaxed) {
+        KIND_HINT.set(Some(k));
+    }
+}
+
+pub(crate) fn take_kind() -> OpKind {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return OpKind::Other;
+    }
+    KIND_HINT.take().unwrap_or(OpKind::Other)
+}
+
+/// A transfer's speed, passed on at most twice a second per job.
+pub(crate) fn note_speed(id: u64, bytes_per_sec: u64, cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let due = SPEED_SENT.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.get(&id).is_some_and(|t| now.duration_since(*t).as_millis() < 500) {
+            return false;
+        }
+        m.insert(id, now);
+        true
+    });
+    if due {
+        emit(cx, || Event::TransferSpeed { id, bytes_per_sec });
+    }
+}
+
+pub(crate) fn forget_speed(id: u64) {
+    if ACTIVE.load(Ordering::Relaxed) {
+        SPEED_SENT.with(|m| m.borrow_mut().remove(&id));
+    }
+}
+
+/// Drives seen by the sidebar: an event for each whose space moved by at least 1 percent of its size (the first sight is silent).
+pub(crate) fn note_drives(list: &[(PathBuf, u64, u64)], cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    for (root, free, total) in list {
+        // the reference moves only when an event is sent, so a slow drift adds up to one
+        let moved = SPACE.with(|m| {
+            let mut m = m.borrow_mut();
+            match m.get(root) {
+                None => {
+                    m.insert(root.clone(), (*free, *total));
+                    false
+                }
+                Some(&(f, t)) if t != *total || f.abs_diff(*free) >= (*total / 100).max(1) => {
+                    m.insert(root.clone(), (*free, *total));
+                    true
+                }
+                Some(_) => false,
+            }
+        });
+        if moved {
+            let (root, free, total) = (root.clone(), *free, *total);
+            emit(cx, || Event::DriveSpace { drive: root, free, total });
+        }
+    }
+}
+
+/// Called when a window's size or activation changed: an event when its minimised state differs from the last one seen.
+pub(crate) fn note_minimized(window: &Window, cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let minimized = leaf_sys::window::is_minimized(crate::look::window::hwnd_of(window));
+    if MINIMIZED.replace(minimized) != minimized {
+        emit(cx, || Event::WindowMinimized { minimized });
+    }
+}
+
+/// Keeps frames coming for `ms` milliseconds (at most a minute) without the extension running a loop of its own: every window draws
+/// again each frame and [`Event::Frame`] is delivered. Frames stop by themselves when nothing asked for them. Calling it again extends.
+pub fn animate(cx: &mut App, ms: u64) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(ms.min(60_000));
+    if ANIM_UNTIL.get().is_none_or(|t| t < until) {
+        ANIM_UNTIL.set(Some(until));
+    }
+    cx.refresh_windows();
+}
+
+/// Asks for a frame every refresh until `on` is false (for the extension `ext_id`): for an extension with a long-running effect. Prefer
+/// [`animate`], which ends by itself.
+pub fn want_frames(ext_id: &str, on: bool, cx: &mut App) {
+    let Some(reg) = registry() else { return };
+    let id = sanitize(ext_id);
+    let mut w = reg.frames.borrow_mut();
+    w.retain(|x| *x != id);
+    if on {
+        w.push(id);
+    }
+    drop(w);
+    cx.refresh_windows();
+}
+
+/// Called while a window is drawn: asks for the next frame and delivers [`Event::Frame`] while something wants frames.
+pub(crate) fn frame(window: &mut Window, cx: &mut App) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let anim = ANIM_UNTIL.get().is_some_and(|t| t > now);
+    let wanted = registry().is_some_and(|r| r.on().any(|(_, e)| r.frames.borrow().contains(&e.id)));
+    if !anim && !wanted {
+        ANIM_UNTIL.set(None);
+        return;
+    }
+    window.request_animation_frame();
+    let dt = LAST_FRAME.get().map_or(16, |t| now.duration_since(t).as_millis().min(1000) as u32);
+    // (several windows draw in one frame: one event for all)
+    if dt >= 4 || LAST_FRAME.get().is_none() {
+        LAST_FRAME.set(Some(now));
+        emit(cx, || Event::Frame { dt_ms: dt });
+    }
 }
 
 /// Redraws every window (for a layer whose picture changed).
@@ -926,7 +1171,7 @@ mod tests {
     fn display_name_hook_changes_only_what_is_shown() {
         let mut ext = Extensions::new();
         ext = ext.add("t", "T", |e| e.display_name(|p| p.file_name().map(|n| format!("shown {}", n.to_string_lossy()))));
-        let reg = Rc::new(Registry { list: ext.list, pane_open: Cell::new(None), scene: RefCell::new(None), scene_gen: Cell::new(0) });
+        let reg = Rc::new(Registry { list: ext.list, pane_open: Cell::new(None), scene: RefCell::new(None), scene_gen: Cell::new(0), frames: RefCell::new(Vec::new()) });
         reg.refresh_flags();
         REG.with(|r| *r.borrow_mut() = Some(reg.clone()));
         ACTIVE.store(true, Ordering::Relaxed);

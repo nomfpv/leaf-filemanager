@@ -881,6 +881,7 @@ impl Workspace {
         remember_placement(window, cx);
         cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
             remember_placement(window, cx);
+            crate::ext::note_minimized(window, cx);
             this.preview.update(cx, |pv, _| pv.invalidate_host());
             this.schedule_behind_sample(window, cx);
             cx.notify();
@@ -893,6 +894,7 @@ impl Workspace {
             }
             let focused = window.is_window_active();
             crate::ext::emit(cx, || crate::ext::Event::WindowFocus { focused });
+            crate::ext::note_minimized(window, cx);
         })
         .detach();
         let ws = cx.entity().downgrade();
@@ -5902,6 +5904,7 @@ impl Render for Workspace {
         self.tab_lens_claimed = false;
         self.plus_lens_claimed = false;
         crate::ext::note_theme(&p);
+        crate::ext::frame(window, cx);
         let ext_under = crate::ext::underlays(window, cx);
         let titlebar = self.render_titlebar(&p, window, cx);
         self.tab_lens = false;
