@@ -598,6 +598,7 @@ pub struct FolderView {
     _watch_task: Option<Task<()>>,
     pub renaming: Option<(u32, Entity<gpui_kit::component::input::InputState>)>,
     recycle: Option<Entity<crate::recycle_view::RecycleView>>,
+    downloads: Option<Entity<crate::download_view::DownloadView>>,
     /// The disk usage page of this tab (kept while the tab stays on that folder).
     disk_usage: Option<Entity<crate::disk_usage::DiskUsageView>>,
     /// The duplicate finder page and the file it has selected (for the preview pane).
@@ -831,6 +832,7 @@ impl FolderView {
             marquee: None,
             typeahead: (String::new(), Instant::now()),
             recycle: None,
+            downloads: None,
             disk_usage: None,
             dups: None,
             junk: None,
@@ -4400,6 +4402,7 @@ impl FolderView {
             Location::Changes(_) => self.changes.as_ref()?.read(cx).status_text(),
             Location::Brain(_) => self.brain.as_ref()?.read(cx).status_text(),
             Location::SyncJobs => self.sync.as_ref()?.read(cx).status_text(cx),
+            Location::Downloads => self.downloads.as_ref()?.read(cx).status_text(),
             Location::Agents => self.agents.as_ref()?.read(cx).status_text(cx),
             Location::DiskUsage(_) => self.disk_usage.as_ref()?.read(cx).status_text(),
             _ => return None,
@@ -6319,16 +6322,28 @@ impl Render for FolderView {
                 };
                 div().size_full().child(cv).into_any_element()
             }
-            // (the HyperDownload page is cut: a tab restored on it says so instead of staying blank)
             Location::Downloads => {
-                let p = Palette::for_window(window);
-                div()
-                    .size_full()
-                    .p_4()
-                    .text_sm()
-                    .text_color(p.text_tertiary)
-                    .child(t!("This page is empty. Running downloads are in the Status Center."))
-                    .into_any_element()
+                let dv = match &self.downloads {
+                    Some(dv) => dv.clone(),
+                    None => {
+                        let tab = cx.entity().downgrade();
+                        let dv = cx.new(|cx| crate::download_view::DownloadView::new(tab, cx));
+                        cx.subscribe(&dv, |this, _, ev: &crate::download_view::DlEvent, cx| match ev {
+                            crate::download_view::DlEvent::ShowInFolder(path) => {
+                                if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+                                    this.set_reselect(name.to_string_lossy().into_owned());
+                                    this.navigate(Location::Path(parent.to_path_buf()), cx);
+                                }
+                            }
+                            crate::download_view::DlEvent::OpenFolder(dir) => this.navigate(Location::Path(dir.clone()), cx),
+                        })
+                        .detach();
+                        cx.observe(&dv, |_, _, cx| cx.notify()).detach();
+                        self.downloads = Some(dv.clone());
+                        dv
+                    }
+                };
+                div().size_full().child(dv).into_any_element()
             }
             Location::Agents => {
                 let av = match &self.agents {

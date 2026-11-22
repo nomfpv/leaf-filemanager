@@ -355,7 +355,7 @@ fn columns_for(width: f32) -> (Option<f32>, bool) {
     }
 }
 
-fn button(id: &'static str, icon: L, label: &'static str, enabled: bool, compact: bool, p: &Palette) -> Stateful<Div> {
+pub(crate) fn button(id: &'static str, icon: L, label: &'static str, enabled: bool, compact: bool, p: &Palette) -> Stateful<Div> {
     h_flex()
         .id(id)
         .h(px(30.))

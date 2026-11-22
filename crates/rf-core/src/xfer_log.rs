@@ -51,6 +51,12 @@ pub struct Record {
     /// For a download of the download manager: the way it came. `None` on older records and on transfers of other kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<Via>,
+    /// For a download: the file (or, for Usenet, the folder) it made, when it made one. `to` is the folder it was asked to go into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// For a failed download: why, in leaf's words (first lines only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl Record {
@@ -115,7 +121,7 @@ mod tests {
     use super::*;
 
     fn rec(i: u64) -> Record {
-        Record { kind: Kind::Copy, what: format!("f{i}"), from: "C:/a".into(), to: "D:/b".into(), bytes: 1000 * i, millis: 500, result: Outcome::Done, at_ms: i as i64, via: None }
+        Record { kind: Kind::Copy, what: format!("f{i}"), from: "C:/a".into(), to: "D:/b".into(), bytes: 1000 * i, millis: 500, result: Outcome::Done, at_ms: i as i64, via: None, file: None, reason: None }
     }
 
     #[test]

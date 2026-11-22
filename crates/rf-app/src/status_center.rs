@@ -139,8 +139,6 @@ pub struct LiveDl {
     pub eta_secs: Option<f64>,
     /// When it began, ms since 1970.
     pub started_ms: i64,
-    /// How long it ran (so far).
-    pub ran_ms: u64,
     /// "Retry" on a failed one: starts it again like the card's button.
     pub retry: Option<ResultAction>,
     pub can_queue: bool,
@@ -450,6 +448,7 @@ impl Ops {
                 can_undo: false,
                 action: None,
                 brief: xfer::Brief { running: true, noticed: true, asking: false, failed: false, dismissed: false },
+                download: false,
             });
         }
         v
@@ -598,6 +597,8 @@ pub(crate) struct OpView {
     pub can_undo: bool,
     pub action: Option<ResultAction>,
     pub brief: xfer::Brief,
+    /// A job of the download manager: its title opens the Downloads page on it.
+    pub download: bool,
 }
 
 impl OpState {
@@ -635,6 +636,7 @@ impl OpState {
             can_undo,
             action: self.action.clone(),
             brief: xfer::Brief { running, noticed: ran_ms >= xfer::CARD_APPEAR_MS, asking: question.is_some(), failed: matches!(self.phase, OpPhase::Failed(_)), dismissed: self.dismissed },
+            download: self.dl.is_some(),
         }
     }
 }
@@ -827,7 +829,8 @@ pub fn start_with_id(
                                         OpPhase::Cancelled => crate::xfer_history::Outcome::Cancelled,
                                         _ => crate::xfer_history::Outcome::Failed,
                                     };
-                                    crate::xfer_history::record(n, op.bytes.get().0, op.started.elapsed().as_millis() as u64, result);
+                                    let reason = if let OpPhase::Failed(e) = &op.phase { Some(e.clone()) } else { None };
+                                    crate::xfer_history::record_with(n, op.bytes.get().0, op.started.elapsed().as_millis() as u64, result, reason);
                                 }
                                 if matches!(op.phase, OpPhase::Failed(_)) {
                                     lookup = std::mem::take(&mut op.lock_paths);
@@ -1253,7 +1256,6 @@ impl Ops {
             .filter_map(|o| {
                 let d = o.dl.as_ref()?;
                 let v = o.view();
-                let ran_ms = o.ended.unwrap_or_else(Instant::now).duration_since(o.started).as_millis() as u64;
                 Some(LiveDl {
                     id: o.id,
                     via: d.via,
@@ -1269,7 +1271,6 @@ impl Ops {
                     speed: v.pace.speed,
                     eta_secs: v.pace.eta_secs,
                     started_ms: now_ms - o.started.elapsed().as_millis() as i64,
-                    ran_ms,
                     retry: o.action.clone().filter(|(label, _)| *label == t!("Retry")),
                     can_queue: d.queue.is_some(),
                 })
@@ -2093,7 +2094,16 @@ fn render_op(ops: &Entity<Ops>, op: &OpState, p: &Palette) -> AnyElement {
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(op.title.clone()))
+                .child({
+                    let title = div().id(("op-title", op.id as usize)).text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(op.title.clone());
+                    if op.dl.is_some() {
+                        // a download's title opens the Downloads page on its row
+                        let id = op.id;
+                        title.cursor_pointer().hover(|s| s.text_color(p.accent)).on_click(move |_, window, cx| crate::download_view::reveal(id, window, cx))
+                    } else {
+                        title
+                    }
+                })
                 .when(running, |d| {
                     d.child(
                         div()

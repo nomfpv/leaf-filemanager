@@ -54,14 +54,19 @@ fn with<T>(f: impl FnOnce(&mut Log) -> T) -> T {
 
 /// Records a finished transfer (nothing while the setting is off).
 pub fn record(n: Note, bytes: u64, millis: u64, result: Outcome) {
+    record_with(n, bytes, millis, result, None);
+}
+
+/// [`record`] with the words a failure ended with.
+pub fn record_with(n: Note, bytes: u64, millis: u64, result: Outcome, reason: Option<String>) {
     if !enabled() {
         return;
     }
     let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
-    // (a download: where the file went, not only the folder it was asked to go into)
-    let to = n.saved.as_ref().and_then(|f| f().into_iter().next()).map_or(n.to, |p| p.to_string_lossy().into_owned());
+    // (a download: the file it made, apart from the folder it was asked to go into)
+    let file = n.saved.as_ref().and_then(|f| f().into_iter().next()).map(|p| p.to_string_lossy().into_owned());
     with(|log| {
-        log.push(Record { kind: n.kind, what: n.what, from: n.from, to, bytes, millis, result, at_ms, via: n.via });
+        log.push(Record { kind: n.kind, what: n.what, from: n.from, to: n.to, bytes, millis, result, at_ms, via: n.via, file, reason: reason.map(|r| r.chars().take(400).collect()) });
         if let Some(p) = path() {
             let _ = xfer_log::save(&p, log);
         }

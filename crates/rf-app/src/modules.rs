@@ -338,7 +338,7 @@ pub fn of_command(id: &str) -> Option<Module> {
         "BookmarkRemoteFolder" | "FollowRemoteFile" | "MapNetworkDrive" | "DisconnectNetworkDrive" => Module::Servers,
         "SyncJobs" | "SyncWith" => Module::Sync,
         "ShareFolder" | "JoinSharedFolder" | "SharedFolders" | "SendToDevice" => Module::Shares,
-        "DownloadHere" | "DownloadMany" => Module::Downloads,
+        "DownloadHere" | "DownloadMany" | "ShowDownloadList" => Module::Downloads,
         "DownloadNzb" | "UsenetPauseAll" => Module::Usenet,
         "VpnConnect" | "VpnDisconnect" => Module::Vpn,
         "ShowChanges" | "Checkpoint" | "ShowCheckpoints" | "ShowWorktrees" | "NewWorktree" | "FindBuildJunk" | "CopyAsContext" | "CopyBasketAsContext"

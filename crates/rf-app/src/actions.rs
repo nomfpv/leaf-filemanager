@@ -149,6 +149,7 @@ gpui_kit::actions!(
         AllowAgentsHere,
         BookmarkRemoteFolder,
         DownloadHere,
+        ShowDownloadList,
         DownloadMany,
         DownloadNzb,
         UsenetPauseAll,

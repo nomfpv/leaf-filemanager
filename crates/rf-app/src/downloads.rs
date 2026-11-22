@@ -300,7 +300,7 @@ impl Request {
 }
 
 /// The server's name in an address (for the VPN's LAN rule and the kill switch).
-fn host_of(url: &str) -> String {
+pub(crate) fn host_of(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let hostport = authority.rsplit('@').next().unwrap_or("");
@@ -521,10 +521,11 @@ pub fn saved_of(arrived: &Arc<Mutex<Vec<PathBuf>>>) -> crate::xfer_history::Save
     Arc::new(move || arrived.lock().unwrap_or_else(|e| e.into_inner()).clone())
 }
 
-/// The whole address of a download that ended, for "Retry" after a restart: the saved list keeps it (the history of transfers does not
-/// keep the query). `plain` is what the history has; `None` when no download of that address and folder is remembered.
+/// The whole address of a download of the saved list (running, or one of the last that ended), for "Retry" and "Copy the address": the
+/// history of transfers does not keep the query. `plain` is what the history has; `None` when none of that address and folder is remembered.
 pub fn past_url(plain: &str, dest: &Path) -> Option<String> {
-    store().history.iter().find(|p| crate::xfer_history::plain_url(&p.url) == plain && (p.dest == dest || dest.starts_with(&p.dest))).map(|p| p.url.clone())
+    let kept = store();
+    kept.active.iter().map(|s| (&s.url, &s.dest)).chain(kept.history.iter().map(|p| (&p.url, &p.dest))).find(|(url, d)| crate::xfer_history::plain_url(url) == plain && (**d == dest || dest.starts_with(d.as_path()))).map(|(url, _)| url.clone())
 }
 
 /// "Limit speed" on a running download's card: asks for the limit in MB/s (0 = none) and applies it at once.

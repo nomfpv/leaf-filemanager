@@ -151,7 +151,7 @@ impl Location {
             Location::BuildJunk(p) => format!("Build junk — {}", display_name(p)),
             Location::Changes(p) => format!("Changes — {}", display_name(p)),
             Location::Brain(p) => format!("Project brain — {}", display_name(p)),
-            Location::Downloads => "HyperDownload".into(),
+            Location::Downloads => "Downloads".into(),
             Location::SyncJobs => "Sync jobs".into(),
             Location::Agents => "Agents".into(),
             Location::Remote(v) if v.is_root() && v.authority().is_empty() => v.scheme().to_string(),

@@ -4537,6 +4537,10 @@ impl Workspace {
         col = col.child(bin.when(!rail, |d| {
             d.children(binned.map(|n| div().flex_shrink_0().text_size(px(p.fs_xs)).text_color(p.text_tertiary).child(n.to_string())))
         }));
+        // the download manager's list: named so that it is not taken for the Downloads folder, with an icon of its own
+        if crate::modules::enabled(cx, crate::modules::Module::Downloads) {
+            col = col.child(self.sidebar_item("sb-downloads".into(), L::ListChecks, p.text_secondary, t!("Download list").into(), Location::Downloads, cur == Location::Downloads, None, p, cx));
+        }
         // the folder tree stands right under the pinned folders, above the drives and the tags (where the user asked for it: the
         // tree is what one works in, the drives and tags are looked at less often)
         let hidden = cx.global::<crate::settings::Settings>().sidebar_hidden.clone();
@@ -6340,6 +6344,13 @@ impl Render for Workspace {
                 match dir {
                     Some(dir) => crate::downloads::ask(v.downgrade(), dir, window, cx),
                     None => crate::prompt::notice(t!("Download here"), t!("This works in a folder on this PC. Open the folder the file should go to first.").to_string(), window, cx),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowDownloadList, window, cx| {
+                // an open Downloads page comes forward; otherwise it opens in a tab of its own
+                match (0..this.tabs.len()).find(|&i| this.tabs[i].left.read(cx).location() == &Location::Downloads) {
+                    Some(i) => this.activate(i, window, cx),
+                    None => this.open_tab(Location::Downloads, window, cx),
                 }
             }))
             .on_action(cx.listener(|this, _: &DownloadNzb, window, cx| {

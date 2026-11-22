@@ -104,6 +104,7 @@ mod mcp_host;
 mod capture;
 mod space_check;
 mod download_schedule;
+mod download_view;
 mod downloads;
 mod videodl;
 mod usenet;

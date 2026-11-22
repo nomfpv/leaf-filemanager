@@ -73,6 +73,7 @@ To write it again: `LEAF_WRITE_FEATURES=1 cargo test -p rf-app features_md`.
 | Pause or resume all Usenet downloads | Holds every Usenet job (or lets them go on again). |  |
 | Pause all | Holds every running and waiting copy, move, sync, download (web, video, Usenet), upload and server-to-server copy until you choose Resume all. The Status Center and the status bar list what is held and for how long. A job that cannot pause says so and finishes. Not the VPN. A restart starts without it. |  |
 | Resume all | Lets the jobs that Pause all held go on again; jobs you paused yourself stay paused. |  |
+| Download list | Opens the Downloads page: one list of every download (web addresses, videos, Usenet, the browser's) with its state, progress, size, speed, time left and where it was saved. Pause, cancel, retry, open the file, show it in its folder, copy the address, take it off the list. Drop or paste a link or an NZB file on it to add one. |  |
 | Download several | Downloads many web addresses into this folder: paste links (one per line) or a pattern such as file[001-100].zip or photo[a-f].jpg. A list shows how many there are before they are added to the download queue. |  |
 | Send to device | Sends the selected items to a device nearby: a phone or computer running LocalSend, or another leaf. With several devices in reach, the right-click menu (Send with Nearby) lets you pick; this sends to the one used last, or to the only one found. |  |
 | Add to shelf | Puts the selected items on the shelf to drop them somewhere else later. | `Ctrl+Shift+S` |

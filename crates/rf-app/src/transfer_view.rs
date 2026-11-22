@@ -686,7 +686,15 @@ fn running_card(ops: &Entity<Ops>, p: &Palette, v: &OpView, shell: Stateful<Div>
                 .gap_2()
                 .items_center()
                 .child(Icon::new(L::LoaderCircle).size(px(14.)).text_color(accent))
-                .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().font_weight(FontWeight::SEMIBOLD).child(v.title.clone()))
+                .child({
+                    let title = div().id(("card-title", id)).flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_sm().font_weight(FontWeight::SEMIBOLD).child(v.title.clone());
+                    if v.download {
+                        // a download's title opens the Downloads page on its row
+                        title.cursor_pointer().hover(|s| s.text_color(p.accent)).on_click(move |_, window, cx| crate::download_view::reveal(vid, window, cx))
+                    } else {
+                        title
+                    }
+                })
                 .child(fold),
         )
         .children(current.map(|c| div().text_xs().text_color(p.text_secondary).overflow_hidden().whitespace_nowrap().child(c)))
