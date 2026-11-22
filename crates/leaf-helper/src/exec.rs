@@ -12,7 +12,10 @@
 //! - the named item itself between [`crate::os::check_item`] and the engine's own open (it can only be swapped by someone who may
 //!   write to its folder, so not in a protected folder, which is what the helper is for);
 //! - anything INSIDE a folder that is copied, moved or deleted: the engines walk it by path. They do not follow links inside (a
-//!   link is copied or removed as a link), but the walk and the act on each entry are separate steps.
+//!   link is copied or removed as a link), but the walk and the act on each entry are separate steps;
+//! - on Linux, the folders on the way too: a descriptor held open does not keep a folder from being renamed, so for a new folder,
+//!   a rename and everything that goes through the engines, the path is looked up again after the walk that checked it (the listing,
+//!   stat, read and the editor's write work through the descriptors and have no such gap).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
