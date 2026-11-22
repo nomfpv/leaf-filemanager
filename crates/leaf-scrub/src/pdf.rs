@@ -163,6 +163,8 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspection> {
 pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
     let (mut doc, _) = load(src)?;
     let pages_before = doc.get_pages().len();
+    // what every page draws, as it is now: the rewrite must give the same back
+    let drawn: Vec<Vec<u8>> = doc.get_pages().values().map(|id| doc.get_page_content(*id)).collect();
     if let Some(Object::Reference(id)) = doc.trailer.get(b"Info").ok().cloned() {
         doc.delete_object(id);
     }
@@ -187,6 +189,10 @@ pub(crate) fn produce(src: &Path, dst: &Path) -> Result<()> {
     let (again, _) = load(dst)?;
     if again.get_pages().len() != pages_before {
         return Err(ScrubError::Verify("the rewritten PDF has a different number of pages".into()));
+    }
+    let drawn_again: Vec<Vec<u8>> = again.get_pages().values().map(|id| again.get_page_content(*id)).collect();
+    if drawn != drawn_again {
+        return Err(ScrubError::Verify("the rewritten PDF draws its pages differently".into()));
     }
     Ok(())
 }
