@@ -2500,7 +2500,9 @@ impl Workspace {
         // while there are few, shrinking as more open, scrolling only below the minimum.
         // (the right-hand controls take their room first, in a window wide enough for them)
         let prefs_shown = self.compact.is_none() && self.viewport_w >= TITLEBAR_PREFS_MIN_W;
-        let prefs_w = if prefs_shown { crate::titlebar_prefs::width(cx) } else { 0. };
+        // (the extensions' items at the right of the strip: their room is taken from the tabs')
+        let (ext_title, ext_title_w) = if prefs_shown { crate::ext::title_items(cx) } else { (Vec::new(), 0.) };
+        let prefs_w = if prefs_shown { crate::titlebar_prefs::width(cx) } else { 0. } + ext_title_w;
         let strip = (self.viewport_w - 150. - if pill { TITLEBAR_LEAD_PILL } else { TITLEBAR_LEAD } - 40. - 40. - prefs_w).max(120.);
         let n = self.tabs.len().max(1) as f32;
         let tab_max = p.tab_w.max(TAB_MIN_W);
@@ -2831,6 +2833,7 @@ impl Workspace {
                     // the right-hand controls (the mockup's), at the end of the strip before the window buttons
                     .when(prefs_shown, |d| {
                         d.child(div().flex_1().min_w(px(8.)))
+                            .children((!ext_title.is_empty()).then(|| h_flex().flex_shrink_0().h_full().items_center().children(ext_title)))
                             .child(div().flex_shrink_0().h_full().when(!pill, |d| d.flex().items_end().pb(px(2.))).child(crate::titlebar_prefs::render(p, &self.ops, popups_open, cx)))
                     }),
             )
@@ -4743,6 +4746,9 @@ impl Workspace {
             let active = cur == Location::Agents;
             col = col.child(self.sidebar_item("sb-agents".into(), L::Brain, p.text_secondary, t!("Agents").into(), Location::Agents, active, None, p, cx));
         }
+        for group in crate::ext::sidebar_groups(p, rail, cx) {
+            col = col.child(group);
+        }
         let settings = self.sidebar_item(
             "sb-settings".into(),
             L::Settings,
@@ -5063,6 +5069,9 @@ impl Workspace {
             crate::transfer_view::strip(&self.ops, p, rf_core::transfer::strip_room(bar_w, held), self.viewport_w > 1280., cx)
         });
         let perf = cx.global::<crate::settings::Settings>().show_perf_info;
+        // the extensions' items, left and right group (empty vectors, no cost, when none is registered)
+        let ext_left = crate::ext::status_items(crate::ext::Side::Left, cx);
+        let ext_right = crate::ext::status_items(crate::ext::Side::Right, cx);
         let pause_all = self.pause_all_switch(p, cx);
         let demo_lane = crate::mockup_demo::on() && self.viewport_w > 1280.;
         theme::sheet(p, p.status_bg)
@@ -5079,6 +5088,7 @@ impl Workspace {
             // Index: the status line is a readout in the monospace face
             .when(p.mono_chrome && !p.font_mono.is_empty(), |d| d.font_family(p.font_mono))
             .child(left)
+            .children(ext_left)
             // LEAF_MOCKUP_DEMO, as the mockup in a window wider than 1280 px: the working lane in the middle, the copy at the right
             .when(demo_lane, |d| {
                 d.child(div().flex_1()).child(
@@ -5100,6 +5110,7 @@ impl Workspace {
                 h_flex()
                     .gap_3()
                     .items_center()
+                    .children(ext_right)
                     .children(git.map(|g| {
                         // Files-style git controls: ↑↓ (sync menu) and the branch (branch menu)
                         let view = self.active_tab().downgrade();
@@ -5876,6 +5887,8 @@ impl Render for Workspace {
         self.tab_lens = glass_on;
         self.tab_lens_claimed = false;
         self.plus_lens_claimed = false;
+        crate::ext::note_theme(&p);
+        let ext_under = crate::ext::underlays(window, cx);
         let titlebar = self.render_titlebar(&p, window, cx);
         self.tab_lens = false;
         let strip_frame = crate::glass::StripFrame { on_screen: true, tab_claimed: self.tab_lens_claimed, plus_claimed: self.plus_lens_claimed };
@@ -6216,6 +6229,15 @@ impl Render for Workspace {
         } else {
             h_flex().flex_1().min_h_0().gap(px(p.gap)).child(list_slot).children(shelf).children(preview).into_any_element()
         };
+        // a pane an extension docks at the side (nothing changes while none is open)
+        let ext_panes = crate::ext::side_panes(&p, window, cx);
+        let main_row: AnyElement = if ext_panes.is_empty() {
+            main_row
+        } else {
+            h_flex().flex_1().min_h_0().gap(px(p.gap)).child(div().flex().flex_1().min_w_0().h_full().child(main_row)).children(ext_panes).into_any_element()
+        };
+        let ext_over = crate::ext::overlays(window, cx);
+        let ext_scene = crate::ext::scene_element(window, cx);
 
         crate::platform::watch_input(v_flex().id("workspace"))
             .size_full()
@@ -6580,7 +6602,20 @@ impl Render for Workspace {
                 crate::terminal::open_location(&loc, cx);
             }))
             .relative()
+            // an extension's full-window scene always ends on Esc (a question of leaf's own is answered first)
+            .capture_key_down(cx.listener(|_, ev: &KeyDownEvent, window, cx| {
+                if ev.keystroke.key == "escape" && crate::ext::scene_active() && crate::prompt::current(window, cx).is_none() {
+                    crate::ext::end_scene(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_action(cx.listener(|this, a: &crate::ext::RunExtCommand, _, cx| {
+                let v = this.active_tab().read(cx);
+                let ctx = crate::ext::CmdCtx { dir: v.current_dir(), selection: v.selection_paths() };
+                crate::ext::run_command(&a.id, &ctx, cx);
+            }))
             .children(backdrop_layers)
+            .children(ext_under)
             .child(titlebar)
             // Under the tab strip the window is a column of sheets: the address row, then the sidebar beside the tool bar and the panes,
             // then the status line across the whole width (the mockups' layout). The theme's gap lies between them and round them.
@@ -6685,6 +6720,8 @@ impl Render for Workspace {
             .children(crate::status_center::update_toast(&p, false))
             .children(crate::speed_hud::overlay(&p, hud_open, hud_items, cx))
             .children(quick_look_layer)
+            .children(ext_over)
+            .children(ext_scene)
             .children(self.palette.clone())
             .children(crate::fluent_menu::current(window, cx))
             .children(crate::prompt::current(window, cx))

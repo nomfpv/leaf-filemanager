@@ -3727,6 +3727,12 @@ const REPO_URL: &str = "https://github.com/nomfpv/leaf-filemanager";
 const ISSUES_URL: &str = "https://github.com/nomfpv/leaf-filemanager/issues";
 
 fn about(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
+    let mut rows = about_base(p, cx);
+    rows.extend(crate::ext::about_rows(p, cx));
+    rows
+}
+
+fn about_base(p: &Palette, cx: &mut App) -> Vec<AnyElement> {
     let ver = crate::installer::version_full();
     let version = format!("{} {ver}", t!("Version:"));
     let pp = *p;

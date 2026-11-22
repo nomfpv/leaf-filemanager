@@ -255,7 +255,7 @@ pub struct Registrar {
     name_hook: Option<Rc<dyn Fn(&Path) -> Option<String>>>,
     row_hook: Option<Rc<dyn Fn(&RowInfo) -> Option<AnyElement>>>,
     icon_hook: Option<Rc<dyn Fn(&Path) -> Option<Arc<RenderImage>>>>,
-    about: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>>,
+    about: Option<Rc<dyn Fn(&mut App) -> AnyElement>>,
 }
 
 type Layer = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
@@ -313,7 +313,7 @@ impl Registrar {
         self.icon_hook = Some(Rc::new(f));
     }
     /// A section under this extension's row in Settings > About (its own switches and texts).
-    pub fn about_section(&mut self, f: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
+    pub fn about_section(&mut self, f: impl Fn(&mut App) -> AnyElement + 'static) {
         self.about = Some(Rc::new(f));
     }
 }
@@ -796,10 +796,10 @@ pub(crate) fn icon_override(path: &Path) -> Option<Arc<RenderImage>> {
 // ------------------------------------------------------------------------------------------------------------------------- About
 
 /// Settings > About: "Extensions: none", or one row per extension with a switch for this session.
-pub(crate) fn about_rows(p: &crate::theme::Palette, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
+pub(crate) fn about_rows(p: &crate::theme::Palette, cx: &mut App) -> Vec<AnyElement> {
     use crate::settings_view::{card, section, switch};
     let Some(reg) = registry() else {
-        return vec![section(p, crate::t!("Extensions")), div().px_1().text_xs().text_color(p.text_secondary).child(format!("{}: {}", crate::t!("Extensions"), crate::t!("none"))).into_any_element()];
+        return vec![div().px_1().text_xs().text_color(p.text_secondary).child(format!("{}: {}", crate::t!("Extensions"), crate::t!("none"))).into_any_element()];
     };
     let mut out = vec![section(p, crate::t!("Extensions"))];
     for (ix, e) in reg.list.iter().enumerate() {
@@ -818,7 +818,7 @@ pub(crate) fn about_rows(p: &crate::theme::Palette, window: &mut Window, cx: &mu
         out.push(card(p, IconName::Puzzle, &e.name, Some(&crate::t!("Switch off for this session: its additions are not drawn and not called.")), sw));
         if on && let Some(f) = &e.r.about {
             let f = f.clone();
-            if let Some(el) = guard(&e.id, || f(window, cx)) {
+            if let Some(el) = guard(&e.id, || f(cx)) {
                 out.push(el);
             }
         }
