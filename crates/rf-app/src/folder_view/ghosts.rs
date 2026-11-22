@@ -1,10 +1,10 @@
 //! Ghost rows (PLAN D5): in a folder of a repository whose project has agent sessions, the files deleted since the last commit show as faint
-//! rows under the list, with "Restore" (the file comes back from the last commit, never over a file that is there) and "Dismiss".
+//! rows under the list, with "Restore" (the file comes back from the last commit or, never committed, from a checkpoint; never over a file that is there) and "Dismiss".
 //!
 //! They are display only and are not part of the list: they take no part in the selection, copy, delete, rename, the sort, the item
 //! count or the size totals. Which session deleted a file is a best guess (a session works in this project); the tooltip says so.
 //! Restore writes a file and records it as a created item, so Undo moves the restored file to the Trash again.
-//! Only git is the source of the content here; a checkpoint is not read for it.
+//! The content comes from the last commit; a file git never had comes from the newest checkpoint that holds it.
 
 use std::path::PathBuf;
 
@@ -112,7 +112,17 @@ impl FolderView {
     /// Writes the file back from the last commit (off the UI thread); on success it counts as a created item for Undo.
     fn restore_ghost(&mut self, root: PathBuf, rel: String, full: PathBuf, cx: &mut Context<Self>) {
         self.ghost_note = None;
-        let work = cx.background_executor().spawn(async move { leaf_dev::gitread::restore_deleted(&root, &rel) });
+        let work = cx.background_executor().spawn(async move {
+            match leaf_dev::gitread::restore_deleted(&root, &rel) {
+                Ok(p) => Ok(p),
+                // git has no such file (never committed): the newest checkpoint that holds it
+                Err(e) if e.contains("there again") => Err(e),
+                Err(e) => match crate::checkpoint_ui::store_of(&root) {
+                    Ok(store) => leaf_dev::checkpoint::restore_missing(&store, &rel).map_err(|e2| if e2.contains("No checkpoint") { e } else { e2 }),
+                    Err(_) => Err(e),
+                },
+            }
+        });
         cx.spawn(async move |this, cx| {
             let r = work.await;
             let _ = this.update(cx, |v, cx| {

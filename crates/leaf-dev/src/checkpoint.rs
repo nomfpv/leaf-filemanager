@@ -1143,6 +1143,59 @@ pub fn restore_one(store: &Store, plan: &Plan, rel: &str, trash: &dyn Fn(&[PathB
     }
 }
 
+/// Brings back a file that is gone and that git cannot supply (never committed): the content comes from the newest checkpoint
+/// that holds it. `rel` is relative to the store's folder, with `/`. It never overwrites: when anything is at the path already the
+/// answer is an error and nothing is read or written. Returns the path written. Blocks.
+pub fn restore_missing(store: &Store, rel: &str) -> Result<PathBuf, String> {
+    if rel.is_empty() || rel.starts_with('-') || rel.starts_with('/') || rel.split('/').any(|c| c.is_empty() || c == "..") {
+        return Err("The file name is not valid".into());
+    }
+    let copy = matches!(store, Store::Copy { .. });
+    let folder = store.folder().to_path_buf();
+    let path = if copy { folder.join(name_from_text(rel)) } else { folder.join(rel) };
+    if std::fs::symlink_metadata(&path).is_ok() {
+        return Err("A file of that name is there again; nothing was changed".into());
+    }
+    no_link_on_the_way(&folder, rel, copy)?;
+    let cps = list(store).map_err(|e| e.to_string())?;
+    match store {
+        Store::Copy { .. } => {
+            for cp in &cps {
+                let src = PathBuf::from(&cp.handle).join("files").join(name_from_text(rel));
+                if src.is_file() {
+                    put(&path, |tmp| reflink_copy::reflink_or_copy(&src, tmp).map(|_| ()))?;
+                    return Ok(path);
+                }
+            }
+        }
+        Store::Git { root, git_dir, empty_tree, .. } => {
+            let mut blobs = Blobs::open(root, git_dir, empty_tree).map_err(|e| e.to_string())?;
+            for cp in &cps {
+                let raw = run(with_args(store_git(root, git_dir, empty_tree, false), &["ls-tree", "-z", &cp.handle, "--", rel]), &[0], Duration::from_secs(30)).map_err(|e| e.to_string())?;
+                let text = String::from_utf8_lossy(&raw);
+                let Some((head, _)) = text.split_once('\t') else { continue };
+                let f: Vec<&str> = head.split_whitespace().collect();
+                if f.len() != 3 || f[1] != "blob" {
+                    continue;
+                }
+                let mode = u32::from_str_radix(f[0], 8).unwrap_or(0o100644);
+                let bytes = blobs.get(f[2])?;
+                if std::fs::symlink_metadata(&path).is_ok() {
+                    return Err("A file of that name is there again; nothing was changed".into());
+                }
+                if mode == 0o120000 {
+                    put_link(&path, &bytes)?;
+                } else {
+                    put(&path, |tmp| std::fs::write(tmp, &bytes))?;
+                    set_exec(&path, mode == 0o100755);
+                }
+                return Ok(path);
+            }
+        }
+    }
+    Err("No checkpoint has this file".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1407,6 +1460,17 @@ mod tests {
         assert!(done.trashed.is_empty());
         assert!(d.join("added.txt").is_file() && d.join("deep/er/added.bin").is_file());
         assert_eq!(std::fs::read(d.join("a.txt")).unwrap(), b"kept");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn restore_missing_refuses_when_the_path_exists_again() {
+        let d = temp("missing");
+        write(&d, "a.txt", b"new\n");
+        let store = Store::Copy { folder: d.clone(), base: d.join("none") };
+        let err = restore_missing(&store, "a.txt").unwrap_err();
+        assert!(err.contains("there again"), "{err}");
+        assert_eq!(std::fs::read(d.join("a.txt")).unwrap(), b"new\n");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
