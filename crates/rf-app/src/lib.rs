@@ -403,8 +403,12 @@ pub fn main() {
     }
     // Velopack (installer / updater): first, it may run an install hook and exit
     installer::startup();
-    // the id Velopack gives the Start menu / taskbar shortcuts: a pin survives updates
-    leaf_sys::window::set_app_id(installer::APP_ID);
+    // the id Velopack gives the Start menu / taskbar shortcuts: a pin survives updates. Only the installed copy takes it: a copy
+    // started from a build or a plain folder is pinned by a shortcut without the id, and with the id its window would sit beside
+    // that pin as a second taskbar button instead of joining it
+    if installer::is_installed() {
+        leaf_sys::window::set_app_id(installer::APP_ID);
+    }
     install_panic_log();
     leaf_sys::shell::suppress_critical_error_dialogs();
     // before any shell icon/thumbnail work: see keep_gdiplus_alive (loader-lock deadlock)

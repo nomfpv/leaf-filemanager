@@ -10,6 +10,12 @@ use velopack::VelopackApp;
 /// AppUserModelID of the installed app (Velopack names shortcuts "velopack.<pack id>").
 pub const APP_ID: &str = "velopack.leaf";
 
+/// This copy was put in place by the installer (Velopack's layout: the program in `current`, `Update.exe` one folder up), so its
+/// shortcuts carry [`APP_ID`]. A build or a copied folder is not.
+pub fn is_installed() -> bool {
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())).is_some_and(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("current")) && d.parent().is_some_and(|r| r.join("Update.exe").is_file()))
+}
+
 /// Whether a process started with this first argument may apply a waiting update as it starts. Velopack does that before any code
 /// of ours runs, and it ends every running leaf process to do it.
 ///
