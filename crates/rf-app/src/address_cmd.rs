@@ -60,6 +60,27 @@ impl Workspace {
             cx.notify();
             return;
         }
+        // a shell namespace (`This PC`, `shell:Downloads`, `::{CLSID}`, `\\`): listed here when leaf can (asked off the UI thread, with a
+        // limit: a device or a share may not answer), else Explorer's; the text never reaches the place parser or the program search
+        if crate::namespaces::is_typed(&text) {
+            let work = {
+                let name = text.clone();
+                cx.background_spawn(async move { crate::namespaces::resolve(&name, Duration::from_secs(4)) })
+            };
+            self.focus_active(window, cx);
+            cx.spawn_in(window, async move |this, cx| {
+                let place = work.await;
+                let _ = this.update_in(cx, |ws, window, cx| match place {
+                    crate::namespaces::Place::Here(loc) => ws.navigate(loc, window, cx),
+                    crate::namespaces::Place::Explorer => {
+                        leaf_sys::default_fm::open_in_explorer(text.trim().trim_matches('"'));
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
         let Some(loc) = parse_location(&text) else {
             self.focus_active(window, cx);
             cx.notify();

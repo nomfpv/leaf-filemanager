@@ -75,6 +75,7 @@ mod open_rules_page;
 mod ops;
 mod organizer;
 mod nav_touch;
+mod namespaces;
 mod ui_stall;
 mod places;
 mod platform;
@@ -374,13 +375,11 @@ pub(crate) fn is_dir_bounded(p: PathBuf, limit: std::time::Duration) -> Option<b
 
 /// A shell namespace argument resolved to a folder we list ourselves that is not on the file
 /// system (see `leaf_sys::shellfolder::browsable`), within `limit`.
-fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<leaf_sys::shellfolder::Place> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let arg = arg.to_string();
-    std::thread::spawn(move || {
-        let _ = tx.send(leaf_sys::shellfolder::browsable(&arg));
-    });
-    rx.recv_timeout(limit).ok().flatten().filter(|p| p.fs_path.is_none())
+fn shell_place_bounded(arg: &str, limit: std::time::Duration) -> Option<Location> {
+    match namespaces::resolve(arg, limit) {
+        namespaces::Place::Here(loc) => Some(loc),
+        namespaces::Place::Explorer => None,
+    }
 }
 
 /// leaf'ın girişi.
@@ -562,7 +561,7 @@ pub fn main() {
         // Bounded like the folder check: a device that hangs must not keep the window away.
         let shell_place = if shell_namespace { shell_place_bounded(&arg, std::time::Duration::from_secs(3)) } else { None };
         if let Some(place) = shell_place {
-            start = Some(Location::Shell { parsing: place.parsing, name: place.name });
+            start = Some(place);
         } else {
             // a network server root (\\nas) isn't a "directory" to Rust, but we browse its shares
             let server = leaf_sys::network::server_root(std::path::Path::new(&arg)).is_some();

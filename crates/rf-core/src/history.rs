@@ -45,10 +45,14 @@ impl Location {
             return Some(search);
         }
         let s = s.trim().trim_matches('"').trim_end_matches('\\').to_ascii_lowercase();
-        match s.as_str() {
+        // `shell:::{CLSID}` is `::{CLSID}`
+        let s = s.strip_prefix("shell:").filter(|r| r.starts_with("::{")).unwrap_or(&s);
+        match s {
             "::{20d04fe0-3aea-1069-a2d8-08002b30309d}" | "shell:mycomputerfolder" | "::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}"
-            | "::{679f85cb-0220-4080-b29b-5540cc05aab6}" | "shell:::{20d04fe0-3aea-1069-a2d8-08002b30309d}" => Some(Location::Home),
-            "::{645ff040-5081-101b-9f08-00aa002f954e}" | "shell:recyclebinfolder" | "shell:::{645ff040-5081-101b-9f08-00aa002f954e}" => {
+            | "::{679f85cb-0220-4080-b29b-5540cc05aab6}" | "this pc" | "my computer"
+            // Quick access's two lists (frequent folders, recent places)
+            | "::{3936e9e4-d92c-4eea-a85a-bc16d5ea0819}" | "::{22877a6d-37a1-461a-91b0-dbda5aaebc99}" => Some(Location::Home),
+            "::{645ff040-5081-101b-9f08-00aa002f954e}" | "shell:recyclebinfolder" => {
                 Some(Location::RecycleBin)
             }
             // (HyperDownload's page, as a saved session names it)
