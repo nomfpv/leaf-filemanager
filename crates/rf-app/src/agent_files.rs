@@ -180,6 +180,9 @@ async fn answer(ack: leaf_sys::handover::Ack, r: Result<Value, String>, cx: &mut
     let text = v.to_string();
     // (off the UI thread: a long answer is written as fast as the client reads it)
     let held = cx.background_spawn(async move {
+        // (the Linux handover's reply takes the acknowledgement by mutable reference)
+        #[allow(unused_mut)]
+        let mut ack = ack;
         ack.reply(&text);
         ack.done()
     })
