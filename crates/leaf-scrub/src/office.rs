@@ -594,7 +594,7 @@ fn drop_rel_refs(part: &str, xml: &str, ids: &std::collections::BTreeSet<String>
     Ok(apply_edits(xml, edits))
 }
 
-/// External link targets that are local paths are reduced to the file name (a link to `C:\Users\name\x.xlsx` becomes `x.xlsx`).
+/// External link targets that are local paths are reduced to the file name (a link into somebody's own folder becomes just `x.xlsx`).
 fn shorten_local_targets(xml: &str, counts: &mut Counts) -> Result<String> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| ScrubError::Malformed(format!("a relationship list is damaged: {e}")))?;
     let mut edits = Vec::new();
