@@ -14,15 +14,20 @@
 //!   user did something there. A login that lands in a menu (OPNsense's root) is told as such, not parsed.
 //! - Names: `find -printf` (GNU) or `stat -c` / `stat -f` (BusyBox, BSD) print NUL-separated fields, so any byte but NUL
 //!   and `/` passes. Only where neither exists is `ls -la` parsed; names with a newline or ` -> ` can then be read wrong,
-//!   which the host's tile says ([`ShellState::names_reliable`]). A name that is not UTF-8 is left out (counted, never
-//!   guessed: a lossy name would point at another file).
-//! - A write goes to a temporary name in the same folder (`cat > tmp`), its size is checked, and only then is it moved over
-//!   the real name (`mv -f`, one rename): a cut transfer never leaves half a file under the real name. Resuming (`At`) cuts
-//!   the file at the offset (`dd seek=`) and appends (`cat >>`).
+//!   which the host's tile says ([`ShellState::names_reliable`]), and an item such a listing may have shown wrong is never
+//!   deleted, moved, overwritten or changed ([`Doubt`]). A name that is not UTF-8 is left out (counted, never guessed: a
+//!   lossy name would point at another file). A cut listing is an error, never shown as the whole folder.
+//! - A write goes to a temporary name in the same folder (`cat > tmp`, under `umask 077`), its size is checked, and only then
+//!   is it given its mode (and the replaced file's owner where the tools allow) and moved over the real name (`mv -f`, one
+//!   rename): a cut transfer never leaves half a file under the real name. A replace through a link writes the file it leads
+//!   to. Resuming (`At`) cuts the file at the offset (`dd seek=`, the size checked) and appends (`cat >>`).
+//! - Every command reaches `sh` encoded ([`crate::hostkind::posix`]), so a csh, tcsh or fish login shell parses none of it.
+//! - A delete or a move runs with its pid known and is stopped there when it runs past [`LONG`].
 //! - `mv` into an existing folder would move the file INTO it: every move first refuses a folder at the target and removes
 //!   a link there (only when replacing), so a move never lands somewhere else.
 //! - A recursive delete is `rm -rf -- path` built only by [`rm_command`], which refuses an empty path, `/`, a path that is
-//!   not normalised, the home folder and every folder above it, and a path whose quoting does not read back as itself.
+//!   not normalised, the home folder (by every name the server gave for it, and where the folder really is with links
+//!   resolved) and every folder above it, and a path whose quoting does not read back as itself.
 //! - Left out (H1 items 5 and 6): bulk `tar` transfers and the legacy SCP protocol; files go one by one.
 
 use std::io::Read;
@@ -46,10 +51,14 @@ pub fn sh_quote(s: &str) -> Result<String, FsError> {
     Ok(crate::checksum::quote(s))
 }
 
-/// A server path as a shell word: it must be absolute (so it can never be read as an option).
+/// A server path as a shell word: it must be absolute (so it can never be read as an option) and hold no `.` or `..` part
+/// (`VPath` normalises them away; the login folder the server named is joined in after that, so every command checks again).
 fn qp(p: &str) -> Result<String, FsError> {
     if !p.starts_with('/') {
         return Err(FsError::Other("leaf only sends absolute paths to the server".into()));
+    }
+    if p.split('/').any(|s| s == "." || s == "..") {
+        return Err(FsError::Other("leaf does not send a path with . or .. in it to the server".into()));
     }
     sh_quote(p)
 }
@@ -81,11 +90,14 @@ const E_DENIED: u32 = 43;
 const E_NOT_DIR: u32 = 44;
 const E_LINK: u32 = 45;
 const E_BACKUP_DIR: u32 = 47;
+const E_CUT: u32 = 46;
 
 /// The command that removes `path`: `rm -rf` with `recursive`, otherwise a file or link (`rm -f`) or an empty folder
-/// (`rmdir`). Refused: an empty path, `/`, a path that is not absolute and normalised (`//`, `.`, `..`, a trailing `/`), the
-/// home folder and every folder it is in, and a path whose quoted form does not read back as itself.
-pub fn rm_command(path: &str, home: &str, recursive: bool) -> Result<String, FsError> {
+/// (`rmdir`). Refused: an empty path, `/`, a path that is not absolute and normalised (`//`, `.`, `..`, a trailing `/`), each
+/// of `homes` (the login folder as `pwd`, `pwd -P` and `$HOME` named it) and every folder above one, and a path whose quoted
+/// form does not read back as itself. A recursive remove also asks the server where the folder really is (`cd -P`, links
+/// resolved) and refuses `/`, a home folder and every folder above one there too: FreeBSD's `/home` is a link to `/usr/home`.
+pub fn rm_command(path: &str, homes: &[String], recursive: bool) -> Result<String, FsError> {
     let bad = || FsError::Other("leaf does not remove this path on the server".into());
     if path.is_empty() || path == "/" || !path.starts_with('/') || path.ends_with('/') {
         return Err(FsError::Denied);
@@ -93,8 +105,7 @@ pub fn rm_command(path: &str, home: &str, recursive: bool) -> Result<String, FsE
     if path[1..].split('/').any(|s| s.is_empty() || s == "." || s == "..") {
         return Err(bad());
     }
-    let home = home.trim_end_matches('/');
-    if path == home || home.starts_with(&format!("{path}/")) {
+    if homes.iter().any(|h| home_at_or_under(path, h)) {
         return Err(FsError::Denied);
     }
     let q = qp(path)?;
@@ -103,19 +114,59 @@ pub fn rm_command(path: &str, home: &str, recursive: bool) -> Result<String, FsE
     }
     let head = format!("P={q}; if [ ! -e \"$P\" ] && [ ! -L \"$P\" ]; then exit {E_NOT_FOUND}; fi; ");
     Ok(if recursive {
-        format!("{head}exec rm -rf -- \"$P\"")
+        let mut list = String::new();
+        for h in homes.iter().map(|h| h.trim_end_matches('/')).filter(|h| !h.is_empty()) {
+            list.push(' ');
+            list.push_str(&sh_quote(h)?);
+        }
+        format!(
+            "{head}R=$(cd -P \"$P\" 2>/dev/null && pwd -P) || exit {E_DENIED}; case \"$R\" in ''|/) exit {E_DENIED};; esac; \
+             for H in{list}; do case \"$H/\" in \"$R\"/*) exit {E_DENIED};; esac; done; exec rm -rf -- \"$P\""
+        )
     } else {
         format!("{head}if [ -d \"$P\" ] && [ ! -L \"$P\" ]; then exec rmdir -- \"$P\"; else exec rm -f -- \"$P\"; fi")
     })
 }
 
+/// `path` is the home folder `home` or a folder above it.
+fn home_at_or_under(path: &str, home: &str) -> bool {
+    let (path, home) = (path.trim_end_matches('/'), home.trim_end_matches('/'));
+    path.is_empty() || path == home || home.starts_with(&format!("{path}/"))
+}
+
+/// How a replaced file's owner and group are given to the new version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeepOwner {
+    /// GNU `chown --reference`.
+    Reference,
+    /// The numbers from `stat` (`-c %u:%g` or `-f %u:%g`), then `chown`.
+    Stat(&'static str),
+    /// No tool to read them (`ls` only): the new version gets the uploading user's.
+    No,
+}
+
 /// The command that moves `from` to `to` (both server paths): a folder at `to` is never replaced and never moved into; a
 /// file or link at `to` only with `replace` (a link is removed first: `mv` would follow a link to a folder). With `backup`,
-/// the old file becomes that name first (moved back when the new one cannot take the name). `mode`: set on `from` first.
-pub fn move_command(from: &str, to: &str, replace: bool, backup: Option<&str>, mode: Option<u32>) -> Result<String, FsError> {
+/// the old file becomes that name first (moved back when the new one cannot take the name). `mode`: set on `from` first, and
+/// the move fails when it cannot be set (nothing at `to` is touched then). `keep`: when a regular file is replaced, its owner
+/// and group are given to `from` first (best effort: a user who is not root can only give away what is theirs). `mv_t`:
+/// GNU's `mv -T`, so a folder that appears at `to` after the check is never moved into.
+///
+/// Not kept on a replace: hard links (the name gets a new file; other names of the old one keep the old contents), ACLs,
+/// extended attributes and SELinux labels.
+pub(crate) fn move_command(from: &str, to: &str, replace: bool, backup: Option<&str>, mode: Option<u32>, keep: KeepOwner, mv_t: bool) -> Result<String, FsError> {
     let mut c = format!("S={}; T={}; ", qp(from)?, qp(to)?);
+    let chown = match keep {
+        KeepOwner::Reference => "chown --reference=\"$T\" -- \"$S\" 2>/dev/null".to_string(),
+        KeepOwner::Stat(f) => format!("o=$(stat {f} -- \"$T\" 2>/dev/null) && chown -- \"$o\" \"$S\" 2>/dev/null"),
+        KeepOwner::No => String::new(),
+    };
+    if replace && !chown.is_empty() {
+        // (before chmod: a chown clears the set-user-ID bits)
+        c.push_str(&format!("if [ -f \"$T\" ] && [ ! -L \"$T\" ]; then {chown}; fi; "));
+    }
     if let Some(m) = mode {
-        c.push_str(&format!("chmod {:o} -- \"$S\" 2>/dev/null; ", m & 0o7777));
+        c.push_str(&format!("chmod {:o} -- \"$S\" || exit 1; ", m & 0o7777));
     }
     let taken = format!("exit {E_EXISTS}");
     let (on_link, on_file) = match (replace, backup) {
@@ -130,7 +181,8 @@ pub fn move_command(from: &str, to: &str, replace: bool, backup: Option<&str>, m
         ),
     };
     c.push_str(&format!("moved=0; if [ -L \"$T\" ]; then {on_link}; elif [ -d \"$T\" ]; then {taken}; elif [ -e \"$T\" ]; then {on_file}; fi; "));
-    c.push_str("mv -f -- \"$S\" \"$T\" || { if [ \"$moved\" = 1 ]; then mv -f -- \"$B\" \"$T\"; fi; exit 1; }");
+    let t = if mv_t { " -T" } else { "" };
+    c.push_str(&format!("mv -f{t} -- \"$S\" \"$T\" || {{ if [ \"$moved\" = 1 ]; then mv -f{t} -- \"$B\" \"$T\"; fi; exit 1; }}"));
     Ok(c)
 }
 
@@ -153,11 +205,22 @@ pub enum Lister {
 #[derive(Debug)]
 pub struct ShellState {
     pub home: String,
+    /// The login folder as `pwd`, `pwd -P` (links resolved) and `$HOME` named it: none of them, and no folder above one, is
+    /// ever removed or moved.
+    pub homes: Vec<String>,
     pub family: HostFamily,
     pub lister: Lister,
     readlink: bool,
     dd: bool,
     df: bool,
+    /// `ls -q` (a character it cannot show becomes `?`).
+    ls_q: bool,
+    /// GNU `mv -T` (never moves into a folder at the target).
+    mv_t: bool,
+    /// What finds the file a link leads to: `readlink -f` or `realpath`.
+    resolve: Option<&'static str>,
+    /// GNU `chown --reference`.
+    chown_ref: bool,
     /// The free space `df` said the last time the user did something here (the host tile shows it; it never runs `df`).
     last_free: Mutex<Option<Space>>,
 }
@@ -171,16 +234,29 @@ impl ShellState {
     pub(crate) fn last_free(&self) -> Option<Space> {
         *self.last_free.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    fn keep_owner(&self) -> KeepOwner {
+        match self.lister {
+            _ if self.chown_ref => KeepOwner::Reference,
+            Lister::FindPrintf | Lister::StatC => KeepOwner::Stat("-c %u:%g"),
+            Lister::StatF => KeepOwner::Stat("-f %u:%g"),
+            Lister::Ls { .. } => KeepOwner::No,
+        }
+    }
 }
 
 /// The question asked once per connection: the system (the same lines as `hostkind::PROBE`), the login folder and the
 /// tools. Between `leaf-shell-begin` and `leaf-shell-end`; a menu shell prints something else.
 pub const PROBE: &str = "echo leaf-shell-begin; echo \"leaf-uname $(uname -s 2>/dev/null)\"; \
 if ls --help 2>&1 | head -n 3 | grep -qi busybox; then echo leaf-busybox; fi; \
-echo \"leaf-pwd $(pwd)\"; echo \"leaf-home $HOME\"; \
+echo \"leaf-pwd $(pwd)\"; echo \"leaf-pwdp $(pwd -P 2>/dev/null)\"; echo \"leaf-home $HOME\"; \
 if find / -maxdepth 0 -printf '' >/dev/null 2>&1; then echo leaf-find-printf; fi; \
 if stat -c %s / >/dev/null 2>&1; then echo leaf-stat-c; elif stat -f %z / >/dev/null 2>&1; then echo leaf-stat-f; fi; \
 if LC_ALL=C ls -la --time-style=+%s / >/dev/null 2>&1; then echo leaf-ls-epoch; fi; \
+if LC_ALL=C ls -laq / >/dev/null 2>&1; then echo leaf-ls-q; fi; \
+if mv --help 2>&1 | grep -q -- --no-target-directory; then echo leaf-mv-t; fi; \
+if chown --help 2>&1 | grep -q -- --reference; then echo leaf-chown-ref; fi; \
+if readlink -f / >/dev/null 2>&1; then echo leaf-readlink-f; elif command -v realpath >/dev/null 2>&1; then echo leaf-realpath; fi; \
 for t in readlink dd df; do if command -v $t >/dev/null 2>&1; then echo \"leaf-has $t\"; fi; done; \
 echo leaf-shell-end";
 
@@ -204,8 +280,21 @@ pub fn parse_probe(out: &str) -> Result<ShellState, NoShell> {
     }
     let l = &lines[b..e];
     let has = |w: &str| l.contains(&w);
-    let value = |k: &str| l.iter().find_map(|x| x.strip_prefix(k)).map(str::trim).filter(|v| v.starts_with('/'));
+    // (an absolute path with no `.` or `..` part; a trailing `/` dropped)
+    let value = |k: &str| {
+        l.iter()
+            .find_map(|x| x.strip_prefix(k))
+            .map(str::trim)
+            .filter(|v| v.starts_with('/') && !v.split('/').any(|s| s == "." || s == ".."))
+            .map(|v| if v == "/" { v } else { v.trim_end_matches('/') })
+    };
     let home = value("leaf-pwd ").or_else(|| value("leaf-home ")).unwrap_or("/").to_string();
+    let mut homes: Vec<String> = Vec::new();
+    for h in ["leaf-pwd ", "leaf-pwdp ", "leaf-home "].iter().filter_map(|k| value(k)).chain(std::iter::once(home.as_str())) {
+        if !homes.iter().any(|x| x == h) {
+            homes.push(h.to_string());
+        }
+    }
     let lister = if has("leaf-find-printf") {
         Lister::FindPrintf
     } else if has("leaf-stat-c") {
@@ -217,11 +306,22 @@ pub fn parse_probe(out: &str) -> Result<ShellState, NoShell> {
     };
     Ok(ShellState {
         home,
+        homes,
         family: crate::hostkind::parse_probe(&l.join("\n")),
         lister,
         readlink: has("leaf-has readlink"),
         dd: has("leaf-has dd"),
         df: has("leaf-has df"),
+        ls_q: has("leaf-ls-q"),
+        mv_t: has("leaf-mv-t"),
+        resolve: if has("leaf-readlink-f") {
+            Some("readlink -f")
+        } else if has("leaf-realpath") {
+            Some("realpath")
+        } else {
+            None
+        },
+        chown_ref: has("leaf-chown-ref"),
         last_free: Mutex::new(None),
     })
 }
@@ -284,6 +384,8 @@ pub struct Rec {
     pub owner: Option<String>,
     pub group: Option<String>,
     pub target: Option<Vec<u8>>,
+    /// `ls` printed it in a way that may not be the real name (a link whose line holds ` -> ` more than once).
+    pub unsure: bool,
 }
 
 const S_IFMT: u32 = 0o170000;
@@ -340,6 +442,7 @@ pub fn parse_find(out: &[u8], with_names: bool) -> Vec<Rec> {
                 owner: with_names.then(|| text(f[8]).to_string()).filter(|s| !s.is_empty()),
                 group: with_names.then(|| text(f[9]).to_string()).filter(|s| !s.is_empty()),
                 target: (kind == Kind::Link).then(|| f[7].to_vec()),
+                unsure: false,
             })
         })
         .collect()
@@ -380,6 +483,7 @@ pub fn parse_stat(out: &[u8], hex: bool, with_names: bool) -> Vec<Rec> {
                 owner: names.first().map(|s| s.to_string()),
                 group: names.get(1).map(|s| s.to_string()),
                 target: (kind == Kind::Link).then(|| f[2].to_vec()),
+                unsure: false,
             })
         })
         .collect()
@@ -447,15 +551,54 @@ fn word(s: &[u8]) -> Option<(&[u8], &[u8])> {
 /// The lines of `LC_ALL=C ls -la` (GNU, BusyBox, BSD; `--time-style=+%s` too). `now`: Unix seconds, for the year a recent
 /// date leaves out. The time is read as UTC (`ls` prints the server's local time). `.` and `..` and the `total` line are left
 /// out. A name with a newline, or a link whose name holds ` -> `, cannot be told apart here: that is why `ls` is the last
-/// choice.
+/// choice, and why [`read_ls`] says which names to doubt.
 pub fn parse_ls(out: &[u8], now: i64) -> Vec<Rec> {
-    out.split(|&b| b == b'\n').filter_map(|l| parse_ls_line(l.strip_suffix(b"\r").unwrap_or(l), now)).filter(|r| r.name != b"." && r.name != b"..").collect()
+    parse_ls_counted(out, now).0
+}
+
+/// [`parse_ls`] and how many lines could not be read (skipped, never guessed). Every byte of the text comes from the server
+/// and the names in it: nothing here indexes into it by position without `get`, and dates out of range are refused.
+pub fn parse_ls_counted(out: &[u8], now: i64) -> (Vec<Rec>, usize) {
+    let mut skipped = 0;
+    let mut recs = Vec::new();
+    for l in out.split(|&b| b == b'\n') {
+        let l = l.strip_suffix(b"\r").unwrap_or(l);
+        if l.is_empty() || l.starts_with(b"total ") || l == b"leaf-ctl" {
+            continue;
+        }
+        match parse_ls_line(l, now) {
+            Some(r) if r.name == b"." || r.name == b".." => {}
+            Some(r) => recs.push(r),
+            None => skipped += 1,
+        }
+    }
+    (recs, skipped)
+}
+
+/// The earliest and latest second a listing's date may have (the years 1 to 9999).
+const T_MIN: i64 = -62_135_596_800;
+const T_MAX: i64 = 253_402_300_799;
+
+/// The time of a date and clock time read from a listing; `None` when a part is out of range. The year is clamped to 1..=9999.
+fn date_time(y: i64, m: i64, d: i64, hh: i64, mm: i64, ss: i64) -> Option<i64> {
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || !(0..=23).contains(&hh) || !(0..=59).contains(&mm) || !(0..=60).contains(&ss) {
+        return None;
+    }
+    Some(days_from_civil(y.clamp(1, 9999), m, d) * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
+fn num_of(s: Option<&str>) -> Option<i64> {
+    let s = s?;
+    if s.is_empty() || s.len() > 18 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 fn parse_ls_line(line: &[u8], now: i64) -> Option<Rec> {
     let (mode_s, rest) = word(line)?;
     let mode_s = std::str::from_utf8(mode_s).ok()?;
-    let kind = match mode_s.as_bytes()[0] {
+    let kind = match mode_s.as_bytes().first()? {
         b'd' => Kind::Dir,
         b'l' => Kind::Link,
         b'-' | b'c' | b'b' | b'p' | b's' => Kind::File,
@@ -479,39 +622,36 @@ fn parse_ls_line(line: &[u8], now: i64) -> Option<Rec> {
     let d1s = text(d1);
     let (mtime, rest) = if d1s.len() >= 9 && d1s.bytes().all(|b| b.is_ascii_digit()) {
         // `--time-style=+%s`
-        (d1s.parse().ok()?, r1)
-    } else if d1s.len() == 10 && d1s.as_bytes()[4] == b'-' {
+        (num_of(Some(d1s))?.clamp(T_MIN, T_MAX), r1)
+    } else if d1s.len() == 10 && d1s.as_bytes().get(4) == Some(&b'-') {
         // `2024-01-02 03:04[:05.000000000] [+0000]` (GNU full-iso / long-iso)
-        let y: i64 = d1s[..4].parse().ok()?;
-        let m: i64 = d1s[5..7].parse().ok()?;
-        let d: i64 = d1s[8..].parse().ok()?;
+        let (y, m, d) = (num_of(d1s.get(..4))?, num_of(d1s.get(5..7))?, num_of(d1s.get(8..))?);
         let (t, mut r2) = word(r1)?;
         let t = text(t);
-        let hh: i64 = t.get(..2)?.parse().ok()?;
-        let mm: i64 = t.get(3..5)?.parse().ok()?;
-        let ss: i64 = t.get(6..8).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let (hh, mm) = (num_of(t.get(..2))?, num_of(t.get(3..5))?);
+        let ss = num_of(t.get(6..8)).unwrap_or(0);
         if let Some((z, r3)) = word(r2)
             && (z.starts_with(b"+") || z.starts_with(b"-"))
             && z.len() == 5
         {
             r2 = r3;
         }
-        (days_from_civil(y, m, d) * 86400 + hh * 3600 + mm * 60 + ss, r2)
+        (date_time(y, m, d, hh, mm, ss)?, r2)
     } else {
         // `Jan  2 03:04` (this half year) or `Jan  2  2024`
         let mon = MONTHS.iter().position(|m| *m == d1s)? as i64 + 1;
         let (day, r2) = word(r1)?;
-        let day: i64 = text(day).parse().ok()?;
+        let day = num_of(Some(text(day)))?;
         let (yt, r3) = word(r2)?;
         let yt = text(yt);
         let t = if let Some((h, m)) = yt.split_once(':') {
-            let (h, m): (i64, i64) = (h.parse().ok()?, m.get(..2)?.parse().ok()?);
-            let (y_now, _, _) = civil_from_days(now.div_euclid(86400));
-            let at = |y: i64| days_from_civil(y, mon, day) * 86400 + h * 3600 + m * 60;
+            let (h, m) = (num_of(Some(h))?, num_of(m.get(..2))?);
+            let (y_now, _, _) = civil_from_days(now.clamp(T_MIN, T_MAX).div_euclid(86400));
+            let this = date_time(y_now, mon, day, h, m, 0)?;
             // (a date with no year is within the last half year: one that would lie ahead is last year's)
-            if at(y_now) > now + 86400 { at(y_now - 1) } else { at(y_now) }
+            if this > now.saturating_add(86400) { date_time(y_now - 1, mon, day, h, m, 0)? } else { this }
         } else {
-            days_from_civil(yt.parse().ok()?, mon, day) * 86400
+            date_time(num_of(Some(yt))?, mon, day, 0, 0, 0)?
         };
         (t, r3)
     };
@@ -520,16 +660,78 @@ fn parse_ls_line(line: &[u8], now: i64) -> Option<Rec> {
     if name.is_empty() {
         return None;
     }
+    let mut unsure = false;
     let (name, target) = match kind {
         Kind::Link => match name.windows(4).position(|w| w == b" -> ") {
-            Some(i) => (&name[..i], Some(name[i + 4..].to_vec())),
+            Some(i) => {
+                let (n, t) = (name.get(..i)?, name.get(i + 4..)?);
+                // (`a -> b -> c`: the link `a -> b` to `c`, or `a` to `b -> c`; which one cannot be told)
+                unsure = t.windows(4).any(|w| w == b" -> ");
+                (n, Some(t.to_vec()))
+            }
             None => (name, Some(Vec::new())),
         },
         _ => (name, None),
     };
     let num = |w: &[u8]| text(w).parse::<u32>().ok();
     let named = |w: &[u8]| Some(text(w).to_string()).filter(|s| !s.is_empty() && !s.bytes().all(|b| b.is_ascii_digit()));
-    Some(Rec { name: name.to_vec(), kind, size, mtime, mode: Some(mode), uid: num(owner), gid: num(group), owner: named(owner), group: named(group), target })
+    Some(Rec { name: name.to_vec(), kind, size, mtime, mode: Some(mode), uid: num(owner), gid: num(group), owner: named(owner), group: named(group), target, unsure })
+}
+
+/// What an `ls` listing of one folder could not tell for sure. A delete, move, overwrite or chmod of an item it covers is
+/// refused ([`refuses`]): on an `ls`-only host a name with a line break can print a line that reads as another entry
+/// (`config\nzzz` shows a `config` beside the real one), and a link named `backup -> old` reads as `backup`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Doubt {
+    /// Every name of the folder: a name in it holds a control character, and `ls -q` is not there to show it as `?`.
+    pub all: bool,
+    /// These names: shown with `?` by `ls -q` (another character is there), or a link line that holds ` -> ` twice.
+    pub names: std::collections::HashSet<Vec<u8>>,
+}
+
+impl Doubt {
+    pub fn is_empty(&self) -> bool {
+        !self.all && self.names.is_empty()
+    }
+}
+
+/// The start of an `ls` listing's output when a name in the folder holds a control character (the shell's own glob looked).
+const CTL_MARK: &[u8] = b"leaf-ctl\n";
+
+/// What an `ls` listing printed (`q`: it was asked with `-q` when [`CTL_MARK`] came first), with what to doubt in it and how
+/// many lines could not be read.
+pub fn read_ls(out: &[u8], q: bool, now: i64) -> (Vec<Rec>, Doubt, usize) {
+    let ctl = out.starts_with(CTL_MARK);
+    let (recs, skipped) = parse_ls_counted(out.get(if ctl { CTL_MARK.len() } else { 0 }..).unwrap_or_default(), now);
+    let mut d = Doubt { all: ctl && !q, ..Doubt::default() };
+    for r in &recs {
+        if r.unsure || (ctl && r.name.contains(&b'?')) || r.name.iter().any(|b| b.is_ascii_control()) {
+            d.names.insert(r.name.clone());
+        }
+    }
+    (recs, d, skipped)
+}
+
+/// Whether `doubt` (of the folder an item is in) forbids changing the item `name`.
+pub fn refuses(doubt: &Doubt, name: &str) -> bool {
+    doubt.all || doubt.names.contains(name.as_bytes())
+}
+
+/// What leaf says when it does not touch an item whose name it may have read wrong.
+fn unreliable() -> FsError {
+    FsError::Other(
+        "Names in this folder cannot be read reliably on this server (it has only ls, and a name here holds a line break, a \
+         control character or \" -> \"), so leaf does not delete, move, overwrite or change this item. Rename the odd name on \
+         the server first."
+            .into(),
+    )
+}
+
+/// The doubts of the `ls` listings of this run, by `authority` and folder (on the server). Kept for the whole run, not per
+/// connection: the next connection to the host acts on entries the last listing showed.
+fn doubts() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, Doubt>> {
+    static D: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Doubt>>> = std::sync::OnceLock::new();
+    D.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The free space a `df -Pk` run printed (the line after the header; a file system name with blanks is read from the right).
@@ -567,8 +769,16 @@ fn list_command(st: &ShellState, dir: &str) -> String {
                  printf '%s\\000%s\\000%s\\000' \"$f\" \"$s\" \"$t\"; fi; done; exit 0"
             )
         }
-        Lister::Ls { epoch: true } => format!("{check}exec ls -la --time-style=+%s --quoting-style=literal"),
-        Lister::Ls { epoch: false } => format!("{check}exec ls -la"),
+        Lister::Ls { epoch } => {
+            let ls = if epoch { "ls -la --time-style=+%s --quoting-style=literal" } else { "ls -la" };
+            // a name with a control character (the shell's glob looks, `c` holds them all): `leaf-ctl` first, and `ls -q` when
+            // the server has it (the character shown as `?`; not always: in the C locale it turns every non-ASCII byte into `?`)
+            let q = if st.ls_q { " -q" } else { "" };
+            format!(
+                "{check}c=$(printf '\\001\\002\\003\\004\\005\\006\\007\\010\\011\\012\\013\\014\\015\\016\\017\\020\\021\\022\\023\\024\\025\\026\\027\\030\\031\\032\\033\\034\\035\\036\\037\\177x'); \
+                 c=${{c%x}}; for f in * .[!.]* ..?*; do case \"$f\" in *[$c]*) echo leaf-ctl; exec {ls}{q};; esac; done; exec {ls}"
+            )
+        }
     };
     cmd(&body)
 }
@@ -616,6 +826,7 @@ fn failure(o: &RawOut) -> FsError {
         Some(E_NOT_DIR) => return FsError::Other("This is not a folder on the server".into()),
         Some(E_LINK) => return FsError::Other("This is a link on the server; leaf does not write through it".into()),
         Some(E_BACKUP_DIR) => return FsError::Other("A folder has the backup's name".into()),
+        Some(E_CUT) => return FsError::Other("The server could not cut the file at the point to resume from".into()),
         Some(127) => return FsError::Other(format!("The server lacks a program leaf needs for this ({line})")),
         _ => {}
     }
@@ -695,42 +906,120 @@ impl ShellFs {
         }
     }
 
+    /// Refuses `sp` when it is a home folder (by any of the names the probe found for it) or a folder above one.
     fn home_guard(&self, sp: &str) -> Result<(), FsError> {
-        let (norm, home) = (sp.trim_end_matches('/'), self.st.home.trim_end_matches('/'));
-        if norm.is_empty() || norm == home || home.starts_with(&format!("{norm}/")) {
+        if self.st.homes.iter().chain(std::iter::once(&self.st.home)).any(|h| home_at_or_under(sp, h)) {
             return Err(FsError::Denied);
         }
         Ok(())
     }
 
+    /// Refuses to change `v` when the `ls` listing it was shown in may have read its name wrong (see [`Doubt`]).
+    fn sure(&self, v: &VPath) -> Result<(), FsError> {
+        if !matches!(self.st.lister, Lister::Ls { .. }) {
+            return Ok(());
+        }
+        let name = v.name();
+        if name.bytes().any(|b| b.is_ascii_control()) {
+            return Err(unreliable());
+        }
+        let Some(parent) = v.parent() else { return Ok(()) };
+        if doubts().get(&doubt_key(v, &self.spath(&parent))).is_some_and(|d| refuses(d, name)) {
+            return Err(unreliable());
+        }
+        Ok(())
+    }
+
+    /// The file a link at `path` leads to (`readlink -f` or `realpath`), for a write through it.
+    fn resolve(&self, path: &str) -> Result<String, FsError> {
+        let Some(tool) = self.st.resolve else {
+            return Err(FsError::Other(
+                "This is a link on the server, and the server has neither readlink -f nor realpath to find the file it leads to, so \
+                 leaf does not write through it"
+                    .into(),
+            ));
+        };
+        // (the path is absolute: never an option)
+        let o = self.ok(&cmd(&format!("exec {tool} {}", qp(path)?)))?;
+        let out = o.stdout.strip_suffix(b"\n").unwrap_or(&o.stdout);
+        match std::str::from_utf8(out) {
+            Ok(s) if s.starts_with('/') && s != "/" && !s.contains('\n') => Ok(s.to_string()),
+            _ => Err(FsError::Other("leaf could not read where this link on the server leads".into())),
+        }
+    }
+
+    /// Runs a command that may take long and can stop half way (a delete, a move to another disk): no Cancel reaches this far
+    /// (the `Fs` calls have none), so after [`LONG`] its process group is stopped on the server (`Conn::exec_watch` with
+    /// `leaf-pid`) and the error says it may be partly done.
+    fn run_stoppable(&self, command: &str) -> Result<RawOut, FsError> {
+        let started = std::time::Instant::now();
+        let c = self.c.clone();
+        let mut text = String::new();
+        c.busy.fetch_add(1, Ordering::Relaxed);
+        let r = conn::rt().block_on(c.exec_watch(
+            &format!("exec 2>&1; echo leaf-pid $$; {command}"),
+            None,
+            &|| started.elapsed() > LONG,
+            &|| false,
+            &mut |t: &str| {
+                if text.len() < 16 * 1024 {
+                    text.push_str(t);
+                }
+            },
+            &mut |_| {},
+        ));
+        c.busy.fetch_sub(1, Ordering::Relaxed);
+        let partly = |more: &str| FsError::Offline(format!("{more}. It may be partly done: look at the folder before you try again."));
+        match r {
+            Ok(end) if end.unstopped => Err(partly("The server did not finish in time, and leaf could not stop the command there (it may still run)")),
+            Ok(end) if end.code.is_none() => Err(partly("The connection ended before the server said the command was done")),
+            Ok(end) => {
+                let err: String = text.lines().filter(|l| !l.trim().starts_with("leaf-pid ")).collect::<Vec<_>>().join("\n");
+                Ok(RawOut { stdout: Vec::new(), stderr: err.into_bytes(), code: end.code, truncated: false })
+            }
+            Err(FsError::Cancelled) => Err(partly(&format!("The server did not finish in {} minutes, and leaf stopped the command there", LONG.as_secs() / 60))),
+            Err(e) => Err(e),
+        }
+    }
+
     /// `open_write` with `name.leaf-bak`: the file there now becomes `backup` (a sibling name) before the new one takes the
     /// name (H10 over a shell host).
+    ///
+    /// A new file is made under `umask 077` (no one else can read it while it uploads, or when a broken upload leaves it); the
+    /// mode it ends with is set at the move: the replaced file's, or for a new file what the server's umask gives
+    /// (`0666 & ~umask`). Replacing through a link writes the file the link leads to (as the local editor does), and the link
+    /// stays; a server that cannot tell where it leads gets a refusal, never the link replaced by a file.
     pub(crate) fn writer(&self, p: &VPath, mode: WriteMode, backup: Option<&str>) -> Result<Box<dyn WriteSink>, FsError> {
         if p.is_root() {
             return Err(FsError::Denied);
         }
         let parent = p.parent().ok_or(FsError::Denied)?;
-        let target = self.spath(p);
-        let existing = self.lstat_path(&target)?;
+        let mut target = self.spath(p);
+        let mut existing = self.lstat_path(&target)?;
         if existing.as_ref().is_some_and(|r| r.kind == Kind::Dir) {
             return Err(FsError::Exists);
         }
+        if existing.is_some() && mode != WriteMode::CreateNew {
+            self.sure(p)?;
+        }
         let (command, base, place) = match mode {
             WriteMode::At(off) => {
+                // (never used by leaf's copies today: they write a part file anew; kept exact for a caller that resumes)
                 match &existing {
                     Some(r) if r.kind == Kind::Link => return Err(FsError::Other("This is a link on the server; leaf does not write through it".into())),
                     None => return Err(FsError::NotFound),
                     Some(r) if off > r.size => return Err(FsError::Other("the offset is past the end of the file".into())),
+                    Some(r) if off < r.size && !self.st.dd => return Err(FsError::Unsupported),
                     Some(_) => {}
                 }
-                if !self.st.dd {
-                    return Err(FsError::Unsupported);
-                }
-                // cut at the offset (dd's `seek=` with nothing to copy), then append
+                // cut at the offset only when the file is longer (dd's `seek=` with nothing to copy, which cuts there on GNU,
+                // BusyBox and BSD), the size checked afterwards, then append
                 let body = format!(
                     "P={}; if [ -L \"$P\" ]; then exit {E_LINK}; fi; if [ ! -f \"$P\" ]; then exit {E_NOT_FOUND}; fi; \
-                     dd if=/dev/null of=\"$P\" bs=1 seek={off} 2>/dev/null || exit 1; exec 3>>\"$P\" || exit 1; {STREAM}",
-                    qp(&target)?
+                     if [ $(( $(wc -c < \"$P\") )) -ne {off} ]; then dd if=/dev/null of=\"$P\" bs=1 seek={off} 2>/dev/null || exit 1; \
+                     [ $(( $(wc -c < \"$P\") )) -eq {off} ] || exit {E_CUT}; fi; exec 3>>\"$P\" || exit 1; {}",
+                    qp(&target)?,
+                    stream("")
                 );
                 (cmd(&body), off, None)
             }
@@ -741,41 +1030,76 @@ impl ShellFs {
                 if backup.is_some() && existing.as_ref().is_none_or(|r| r.kind != Kind::File) {
                     return Err(FsError::Other("There is no file on the server to keep a backup of".into()));
                 }
-                // (`set -C`: the file is made new, never written through something that is there)
-                let new_file = |path: &str| -> Result<String, FsError> { Ok(cmd(&format!("P={}; set -C; exec 3>\"$P\" || exit 1; {STREAM}", qp(path)?))) };
+                // (`set -C`: the file is made new, never written through something that is there; `umask 077`: only the user
+                // can read it until it is in place; `M`: the umask before, printed for the mode at the end)
+                let new_file = |path: &str, end: &str| -> Result<String, FsError> {
+                    Ok(cmd(&format!(
+                        "P={}; M=$(umask); case \"$M\" in ''|*[!0-7]*) M=022;; esac; umask 077; set -C; exec 3>\"$P\" || exit 1; \
+                         echo \"leaf-umask $M\"; {}",
+                        qp(path)?,
+                        stream(end)
+                    )))
+                };
                 if crate::sftp::is_part_name(p.name()) && backup.is_none() {
                     if existing.is_some() {
                         return Err(FsError::Exists);
                     }
-                    (new_file(&target)?, 0, None)
+                    // (the copy's own part file takes the real name with a plain rename later: it gets its final mode here)
+                    (new_file(&target, "chmod \"$(printf %o $((0666 & ~0$M)))\" -- \"$P\" || exit 1; ")?, 0, None)
                 } else {
-                    let temp = self.spath(&parent.join(&crate::sftp::side_name(p.name(), "leaf-up")));
+                    if existing.as_ref().is_some_and(|r| r.kind == Kind::Link) {
+                        let real = self.resolve(&target)?;
+                        match self.lstat_path(&real)? {
+                            None => return Err(FsError::Other("This link on the server leads nowhere; leaf does not write through it".into())),
+                            Some(r) if r.kind != Kind::File => return Err(FsError::Other("This link on the server does not lead to a file; leaf does not write through it".into())),
+                            r => existing = r,
+                        }
+                        target = real;
+                    }
+                    let (dir, name) = target.rsplit_once('/').ok_or(FsError::Denied)?;
+                    let temp = format!("{dir}/{}", crate::sftp::side_name(name, "leaf-up"));
                     let backup = backup.map(|b| self.spath(&parent.join(b)));
                     // (a new version keeps the mode bits of the file it replaces)
                     let keep = existing.as_ref().and_then(|r| r.mode);
-                    (new_file(&temp)?, 0, Some(Place { temp, target, replace: mode == WriteMode::Replace, backup, mode: keep }))
+                    (new_file(&temp, "")?, 0, Some(Place { temp, target, replace: mode == WriteMode::Replace, backup, mode: keep }))
                 }
             }
         };
         let mut ch = conn::block_on(&|| false, self.c.open_exec(&command))?;
         // the file is open on the server before a byte is sent (a folder that cannot be written fails here, not at the end)
-        conn::block_on(&|| false, opened(&mut ch, self.limit))?;
+        let head = conn::block_on(&|| false, opened(&mut ch, self.limit))?;
+        let mut place = place;
+        if let Some(pl) = place.as_mut()
+            && pl.mode.is_none()
+        {
+            // a new file: what the server's umask gives it; unknown, only the user's (never more than asked)
+            let umask = String::from_utf8_lossy(&head).lines().find_map(|l| l.trim().strip_prefix("leaf-umask ").and_then(|m| u32::from_str_radix(m.trim(), 8).ok()));
+            pl.mode = Some(umask.map_or(0o600, |u| 0o666 & !u));
+        }
         self.c.busy.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(Writer { fs: ShellFs { c: self.c.clone(), st: self.st.clone(), limit: self.limit }, ch: Some(ch), buf: Vec::new(), sent: 0, base, place, done: false, failed: false }))
     }
 }
 
-/// The end of a write command, once the shell has the file open on descriptor 3: says so, copies its input there, closes
-/// it and prints the size the file has now.
-const STREAM: &str = "echo leaf-open; cat >&3 || exit 1; exec 3>&-; printf 'leaf-size %s\\n' \"$(wc -c < \"$P\")\"";
+/// The key of a folder's doubts: the address's authority and the folder's server path.
+fn doubt_key(v: &VPath, dir: &str) -> String {
+    format!("{}\u{0}{dir}", v.authority())
+}
 
-/// Waits for a write command's `leaf-open` line; its failure (the file could not be made) as the error.
-async fn opened(ch: &mut russh::Channel<russh::client::Msg>, limit: Duration) -> Result<(), FsError> {
+/// The end of a write command, once the shell has the file open on descriptor 3: says so, copies its input there, closes
+/// it, runs `end`, and prints the size the file has now.
+fn stream(end: &str) -> String {
+    format!("echo leaf-open; cat >&3 || exit 1; exec 3>&-; {end}printf 'leaf-size %s\\n' \"$(wc -c < \"$P\")\"")
+}
+
+/// Waits for a write command's `leaf-open` line; its failure (the file could not be made) as the error. What it printed up
+/// to that line comes back.
+async fn opened(ch: &mut russh::Channel<russh::client::Msg>, limit: Duration) -> Result<Vec<u8>, FsError> {
     let mut out = RawOut::default();
     let r = tokio::time::timeout(limit, async {
         while let Some(m) = ch.wait().await {
             match m {
-                russh::ChannelMsg::Data { data } => {
+                russh::ChannelMsg::Data { data } if out.stdout.len() < 64 * 1024 => {
                     out.stdout.extend_from_slice(&data);
                     if out.stdout.windows(10).any(|w| w == b"leaf-open\n") {
                         return true;
@@ -791,7 +1115,7 @@ async fn opened(ch: &mut russh::Channel<russh::client::Msg>, limit: Duration) ->
     })
     .await;
     match r {
-        Ok(true) => Ok(()),
+        Ok(true) => Ok(out.stdout),
         Ok(false) => {
             let _ = ch.close().await;
             Err(if out.code == Some(0) { FsError::Other("The server did not open the file".into()) } else { failure(&out) })
@@ -835,13 +1159,33 @@ impl Fs for ShellFs {
         if !fine {
             return Err(failure(&o));
         }
+        // a cut listing is never shown as the whole folder (a sync or a delete of what is not in it would act on it)
         if o.truncated {
             log::warn!("remote: the listing of a folder on {} was cut at its size limit", dir.host());
+            return Err(FsError::Other("This folder holds more than leaf reads in one listing over shell commands (4 MiB of names), so leaf does not show a part of it as the whole folder".into()));
         }
+        let recs = match self.st.lister {
+            Lister::Ls { .. } => {
+                let (recs, doubt, skipped) = read_ls(&o.stdout, self.st.ls_q, leaf_now());
+                if skipped > 0 {
+                    log::warn!("remote: {skipped} lines of an ls listing on {} could not be read and are left out", dir.host());
+                }
+                let key = doubt_key(dir, &self.spath(dir));
+                let mut all = doubts();
+                if doubt.is_empty() {
+                    all.remove(&key);
+                } else {
+                    log::warn!("remote: names in a folder on {} cannot be read reliably with ls; changing them is refused", dir.host());
+                    all.insert(key, doubt);
+                }
+                recs
+            }
+            _ => parse_records(&self.st, &o.stdout, false),
+        };
         let mut sent = 0;
         let mut left_out = 0usize;
         let mut pending = Vec::new();
-        for r in parse_records(&self.st, &o.stdout, false) {
+        for r in recs {
             if cancelled() {
                 return Err(FsError::Cancelled);
             }
@@ -952,6 +1296,8 @@ impl Fs for ShellFs {
         if from.is_root() || to.is_root() {
             return Err(FsError::Denied);
         }
+        self.sure(from)?;
+        self.sure(to)?;
         let (a, b) = (self.spath(from), self.spath(to));
         let src = self.lstat_path(&a)?.ok_or(FsError::NotFound)?;
         if src.kind == Kind::Dir {
@@ -960,8 +1306,8 @@ impl Fs for ShellFs {
                 return Err(FsError::Exists);
             }
         }
-        // (a move to another disk of the server copies: it may take a while)
-        let o = self.run(&cmd(&move_command(&a, &b, replace, None, None)?), LONG, &|| false)?;
+        // (a move to another disk of the server copies: it may take a while, and is stopped there after `LONG`)
+        let o = self.run_stoppable(&cmd(&move_command(&a, &b, replace, None, None, KeepOwner::No, self.st.mv_t)?))?;
         if o.code == Some(0) { Ok(()) } else { Err(failure(&o)) }
     }
 
@@ -969,12 +1315,14 @@ impl Fs for ShellFs {
         if p.is_root() || p.path() == "/~" {
             return Err(FsError::Denied);
         }
+        self.sure(p)?;
         let sp = self.spath(p);
         self.home_guard(&sp)?;
         let r = self.lstat_path(&sp)?.ok_or(FsError::NotFound)?;
-        // (a link is unlinked, never followed: `rm` does not follow it, and it is never removed as a folder)
+        // (a link is unlinked, never followed: `rm` does not follow it, and it is never removed as a folder; callers pass
+        // `recursive` for every item, links too: what is there decides)
         let recursive = recursive && r.kind == Kind::Dir;
-        let o = self.run(&cmd(&rm_command(&sp, &self.st.home, recursive)?), LONG, &|| false)?;
+        let o = self.run_stoppable(&cmd(&rm_command(&sp, &self.st.homes, recursive)?))?;
         match o.code {
             Some(0) => Ok(()),
             _ => match failure(&o) {
@@ -989,6 +1337,7 @@ impl Fs for ShellFs {
         if m.modified_ms.is_none() && m.mode.is_none() {
             return Ok(());
         }
+        self.sure(p)?;
         let sp = self.spath(p);
         // chmod and touch follow a link: a link's target is never changed through it
         let r = self.lstat_path(&sp)?.ok_or(FsError::NotFound)?;
@@ -1216,7 +1565,7 @@ impl WriteSink for Writer {
             self.drain()?;
             self.end()?;
             match &self.place {
-                Some(p) => self.fs.ok(&cmd(&move_command(&p.temp, &p.target, p.replace, p.backup.as_deref(), p.mode)?)).map(|_| ()),
+                Some(p) => self.fs.ok(&cmd(&move_command(&p.temp, &p.target, p.replace, p.backup.as_deref(), p.mode, self.fs.st.keep_owner(), self.fs.st.mv_t)?)).map(|_| ()),
                 None => Ok(()),
             }
         })();
@@ -1309,20 +1658,88 @@ mod tests {
 
     #[test]
     fn shell_rm_never_for_dangerous_paths() {
-        let home = "/home/user";
-        for bad in ["", "/", "//", "/home", "/home/", "/home/user", "/home/user/", "relative", "-rf", "/a/../b", "/a/./b", "/a//b", "/a/b/", "/a\0b", "/..", "/."] {
+        // the login folder as pwd, pwd -P and $HOME named it (FreeBSD: /home is a link to /usr/home)
+        let homes = vec!["/home/user".to_string(), "/usr/home/user".to_string()];
+        for bad in ["", "/", "//", "/home", "/home/", "/home/user", "/home/user/", "/usr", "/usr/home", "/usr/home/user", "relative", "-rf", "/a/../b", "/a/./b", "/a//b", "/a/b/", "/a\0b", "/..", "/."] {
             for recursive in [true, false] {
-                assert!(rm_command(bad, home, recursive).is_err(), "{bad:?} must be refused");
+                assert!(rm_command(bad, &homes, recursive).is_err(), "{bad:?} must be refused");
             }
         }
         // (a home of `/`: nothing is under it to be refused for, but `/` itself still is)
-        assert!(rm_command("/", "/", true).is_err());
-        let c = rm_command("/srv/it's a $dir", home, true).unwrap();
-        assert_eq!(c, "P='/srv/it'\\''s a $dir'; if [ ! -e \"$P\" ] && [ ! -L \"$P\" ]; then exit 40; fi; exec rm -rf -- \"$P\"");
-        let c = rm_command("/home/user/-x", home, false).unwrap();
+        assert!(rm_command("/", &["/".to_string()], true).is_err());
+        let c = rm_command("/srv/it's a $dir", &homes, true).unwrap();
+        assert!(c.starts_with("P='/srv/it'\\''s a $dir'; if [ ! -e \"$P\" ] && [ ! -L \"$P\" ]; then exit 40; fi; "), "{c}");
+        assert!(c.ends_with("exec rm -rf -- \"$P\""), "{c}");
+        // the server resolves the folder's links and refuses / and every home and folder above one there as well
+        assert!(c.contains("R=$(cd -P \"$P\" 2>/dev/null && pwd -P) || exit 43; case \"$R\" in ''|/) exit 43;; esac; for H in '/home/user' '/usr/home/user'; do case \"$H/\" in \"$R\"/*) exit 43;; esac; done; "), "{c}");
+        let c = rm_command("/home/user/-x", &homes, false).unwrap();
         assert!(c.contains("rmdir -- \"$P\"") && c.contains("rm -f -- \"$P\"") && !c.contains("-rf"));
         // the path is quoted once and only used through "$P"
         assert_eq!(c.matches("'/home/user/-x'").count(), 1);
+        // `..` never reaches any command
+        assert!(qp("/a/../b").is_err() && qp("/a/./b").is_err() && qp("/a/b..c").is_ok());
+    }
+
+    /// Review item 1: names an `ls`-only host may have printed wrong are never deleted.
+    #[test]
+    fn shell_ls_unreliable_names_refused_for_delete() {
+        let now = days_from_civil(2024, 6, 1) * 86400;
+        // `config\nzzz` printed raw: its first line reads as a second `config` beside the real one (no `ls -q` there)
+        let raw = b"leaf-ctl\n-rw-r--r-- 1 user user 5 Jan  2  2024 config\nzzz\n-rw-r--r-- 1 root root 9 Jan  2  2024 config\n";
+        let (r, d, _) = read_ls(raw, false, now);
+        assert_eq!(r.iter().filter(|r| r.name == b"config").count(), 2);
+        assert!(d.all && refuses(&d, "config") && refuses(&d, "anything"));
+        // the same folder with `ls -q`: the odd name is `config?zzz`, which is refused; the real `config` is not
+        let q = b"leaf-ctl\n-rw-r--r-- 1 user user 5 Jan  2  2024 config?zzz\n-rw-r--r-- 1 root root 9 Jan  2  2024 config\n";
+        let (_, d, _) = read_ls(q, true, now);
+        assert!(!d.all && refuses(&d, "config?zzz") && !refuses(&d, "config"));
+        // a link named `backup -> old` beside a real folder `backup`: `backup` is refused (a recursive remove would hit the folder)
+        let link = b"drwxr-xr-x 2 root root 4096 Jan  2  2024 backup\nlrwxrwxrwx 1 root root 1 Jan  2  2024 backup -> old -> x\n";
+        let (r, d, _) = read_ls(link, false, now);
+        assert_eq!(r.len(), 2);
+        assert!(!d.all && refuses(&d, "backup") && !refuses(&d, "other"));
+        // a plain folder: nothing to doubt
+        let (_, d, _) = read_ls(b"-rw-r--r-- 1 root root 9 Jan  2  2024 config\nlrwxrwxrwx 1 root root 4 Jan  2  2024 l -> /tmp\n", false, now);
+        assert!(d.is_empty());
+    }
+
+    /// Review item 2: forged `ls` lines never panic (the release build aborts on a panic); a line that does not parse is
+    /// skipped and counted.
+    #[test]
+    fn shell_ls_forged_lines_do_not_panic() {
+        let forged: &[&[u8]] = &[
+            "-rw-r--r-- 1 u u 5 2024-é1-02 03:04 a".as_bytes(),
+            "-rw-r--r-- 1 u u 5 2024-01-é2 03:04 a".as_bytes(),
+            "-rw-r--r-- 1 u u 5 2024-01-0é 03:04 a".as_bytes(),
+            "-rw-r--r-- 1 u u 5 2024-01-02 é3:04 a".as_bytes(),
+            b"-rw-r--r-- 1 u u 5 9999-99-99 99:99 a",
+            b"-rw-r--r-- 1 u u 5 Jan  2  999999999999999999 a",
+            b"-rw-r--r-- 1 u u 5 Jan  2  -9223372036854775808 a",
+            b"-rw-r--r-- 1 u u 5 Jan  99999999999999 2024 a",
+            b"-rw-r--r-- 1 u u 5 Jan  2 99999999999:99 a",
+            b"-rw-r--r-- 1 u u 5 99999999999999999999999 a",
+            b"-rw-r--r-- 1 u u 5 9223372036854775807 a",
+            "-rw-r--r-- 1 u u 5 Jan  2 03:é4 a".as_bytes(),
+            "lrwxrwxrwx 1 u u 5 Jan  2  2024 é -> ".as_bytes(),
+            b"l",
+            b"-",
+            b"-rw-r--r--",
+            b"\xff\xfe 1 u u 5 Jan  2  2024 a",
+        ];
+        let now = days_from_civil(2024, 6, 1) * 86400;
+        let mut all = Vec::new();
+        for l in forged {
+            let _ = parse_ls_line(l, now);
+            all.extend_from_slice(l);
+            all.push(b'\n');
+        }
+        all.extend_from_slice(b"-rw-r--r-- 1 u u 5 Jan  2  2024 fine\n");
+        let (r, skipped) = parse_ls_counted(&all, now);
+        assert!(r.iter().any(|r| r.name == b"fine") && skipped >= 10, "{skipped}");
+        // whatever was read has a time within the years 1..=9999
+        assert!(r.iter().all(|r| (T_MIN..=T_MAX).contains(&r.mtime)));
+        let _ = parse_ls(&[0xe2, 0x82], i64::MAX);
+        let _ = parse_ls(b"-rw-r--r-- 1 u u 5 Jan  2 03:04 a\n", i64::MIN);
     }
 
     #[test]

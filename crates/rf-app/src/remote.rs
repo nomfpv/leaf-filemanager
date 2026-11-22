@@ -214,6 +214,8 @@ enum Ask {
     HostKey(HostKeyQuestion, Box<dyn FnOnce(HostKeyAnswer) + Send>),
     Secret(SecretQuestion, Box<dyn FnOnce(Option<Secret>) + Send>),
     Cert(CertQuestion, Box<dyn FnOnce(HostKeyAnswer) + Send>),
+    /// A host set to File access: Automatic has no SFTP: leaf uses shell commands there (said once per host and run).
+    ShellAccess(String),
 }
 
 impl Ask {
@@ -221,6 +223,7 @@ impl Ask {
         match self {
             Ask::HostKey(_, r) | Ask::Cert(_, r) => r(HostKeyAnswer::Cancel),
             Ask::Secret(_, r) => r(None),
+            Ask::ShellAccess(_) => {}
         }
     }
 }
@@ -244,6 +247,9 @@ impl Prompter for UiPrompter {
         if let Err(e) = self.0.unbounded_send(Ask::Cert(q, reply)) {
             e.into_inner().cancel();
         }
+    }
+    fn shell_access(&self, host: &str) {
+        let _ = self.0.unbounded_send(Ask::ShellAccess(host.to_string()));
     }
 }
 
@@ -310,6 +316,15 @@ type Once<T> = std::rc::Rc<std::cell::Cell<Option<Box<dyn FnOnce(T) + Send>>>>;
 fn show(a: Ask, window: &mut Window, cx: &mut App) {
     use crate::prompt::{Button, Kind};
     match a {
+        Ask::ShellAccess(host) => crate::prompt::notice(
+            t!("Shell access"),
+            format!(
+                "{host}: {}",
+                t!("this server has no SFTP, so leaf reaches its files through shell commands (ls, cat, mv, rm). It stays that way for this host until leaf is restarted. To choose for good, set File access in the host's settings (Hosts, Edit).")
+            ),
+            window,
+            cx,
+        ),
         Ask::HostKey(q, reply) => {
             let reply: Once<HostKeyAnswer> = std::rc::Rc::new(std::cell::Cell::new(Some(reply)));
             let answer = |a: HostKeyAnswer| {

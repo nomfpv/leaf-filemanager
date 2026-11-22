@@ -54,7 +54,8 @@ pub struct Host {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FileAccess {
-    /// SFTP, and shell commands over SSH when the server refuses the SFTP subsystem.
+    /// SFTP, and shell commands over SSH when the server refuses the SFTP subsystem (only that explicit refusal: an SFTP
+    /// that starts and breaks is an error). What the host's first connection found holds for the whole run.
     #[default]
     Auto,
     /// SFTP only (a server without it is an error).

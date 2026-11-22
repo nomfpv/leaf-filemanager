@@ -638,15 +638,27 @@ impl Fs for SftpFs {
         let c = self.conn_of(p)?;
         // never the root, the home folder (by any address of it) or a folder the home folder is in
         let sp = spath(&c, p);
-        let (norm, home) = (sp.trim_end_matches('/'), c.home.trim_end_matches('/'));
-        if norm.is_empty() || norm == home || home.starts_with(&format!("{norm}/")) {
+        let home = c.home.trim_end_matches('/').to_string();
+        let guarded = |path: &str| {
+            let norm = path.trim_end_matches('/');
+            norm.is_empty() || norm == home || home.starts_with(&format!("{norm}/"))
+        };
+        if guarded(&sp) {
             return Err(FsError::Denied);
         }
         let m = lstat_on(&c, &spath(&c, p), self.cfg.op_timeout)?.ok_or(FsError::NotFound)?;
         match m.kind {
             // a link is unlinked (REMOVE never follows it), a file removed
             Kind::Link | Kind::File => self.with(p, &|| false, async |c| c.sftp.remove(spath(&c, p)).await.map(|_| ())),
-            Kind::Dir if recursive => self.remove_tree(p, 0),
+            Kind::Dir if recursive => {
+                // the folder's real place too (the home folder is REALPATH's answer, links resolved): a path through a link
+                // to the home folder or a folder above it (FreeBSD's `/home` -> `/usr/home`) is refused as well
+                let real = run(&c, self.cfg.op_timeout, c.sftp.realpath(sp.clone()))?.files.into_iter().next().map(|f| f.filename);
+                if real.as_deref().is_none_or(|r| !r.starts_with('/') || guarded(r)) {
+                    return Err(FsError::Denied);
+                }
+                self.remove_tree(p, 0)
+            }
             Kind::Dir => self.rmdir(p),
         }
     }

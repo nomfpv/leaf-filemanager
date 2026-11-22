@@ -66,11 +66,28 @@ pub fn parse_probe(out: &str) -> HostFamily {
 }
 
 /// `command` as one `sh -c` word: a server whose login shell is csh or tcsh (FreeBSD's root, OPNsense) has the POSIX syntax of
-/// leaf's commands read by `sh` and not by itself. Single-quoted by the same function every path goes through.
+/// leaf's commands read by `sh` and not by itself.
+///
+/// The login shell still parses the outer word, and csh/tcsh do not read a single-quoted word as POSIX does: `!` is history
+/// expansion even inside quotes, a line break inside quotes is an error, tcsh's `backslash_quote` makes `\'` inside quotes
+/// a quote, fish reads `\\` and `\'` inside quotes. So the outer word holds only letters, digits, blanks and `_./-=:,+@`: every
+/// other byte of the command is written as a `printf` octal escape (`\047`, a `%` as `%%`), and `sh` rebuilds the command
+/// with its own `printf` and runs it with `eval`. (The command cannot come on standard input: uploads send the file there.)
 pub fn posix(command: &str) -> String {
+    let mut fmt = String::with_capacity(command.len() * 2);
+    for (i, b) in command.bytes().enumerate() {
+        match b {
+            b'%' => fmt.push_str("%%"),
+            // (a leading `-` would be an option of printf)
+            b'-' if i == 0 => fmt.push_str("\\055"),
+            b if b.is_ascii_alphanumeric() || matches!(b, b' ' | b'_' | b'.' | b'/' | b'-' | b'=' | b':' | b',' | b'+' | b'@') => fmt.push(b as char),
+            b => fmt.push_str(&format!("\\{b:03o}")),
+        }
+    }
     // (`exec`: a login shell that runs its last command as a child would leave `$$`, the pid the copy prints, not the leader of its
-    // process group, and `kill -- -pid` would fail; csh, tcsh and fish have `exec`)
-    format!("exec sh -c {}", crate::checksum::quote(command))
+    // process group, and `kill -- -pid` would fail; csh, tcsh and fish have `exec`. `eval` runs in that same `sh`: `$$` and an
+    // `exec` inside the command keep that pid.)
+    format!("exec sh -c 'eval \"$(printf \"{fmt}\")\"'")
 }
 
 #[cfg(test)]
@@ -99,6 +116,11 @@ mod tests {
 
     #[test]
     fn posix_wrapper_quotes_everything() {
-        assert_eq!(posix("echo 'a b'; echo $HOME"), r"exec sh -c 'echo '\''a b'\''; echo $HOME'");
+        let w = posix("echo 'a b'; echo $HOME 100% !x\\");
+        assert_eq!(w, r#"exec sh -c 'eval "$(printf "echo \047a b\047\073 echo \044HOME 100%% \041x\134")"'"#);
+        // the part the login shell reads holds no quote, `!`, line break or backslash before a quote
+        let inner = &w["exec sh -c '".len()..w.len() - 1];
+        assert!(!inner.contains(['\'', '!', '\n']) && !inner.contains("\\'") && !inner.contains("\\\\"));
+        assert!(posix("-x").contains("printf \"\\055x\""));
     }
 }

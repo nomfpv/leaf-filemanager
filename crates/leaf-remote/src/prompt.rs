@@ -115,6 +115,9 @@ pub trait Prompter: Send + Sync {
     fn certificate(&self, _q: CertQuestion, reply: Box<dyn FnOnce(HostKeyAnswer) + Send>) {
         reply(HostKeyAnswer::Cancel)
     }
+    /// A host set to "File access: Automatic" has no SFTP and is now reached through shell commands (said once per host and
+    /// run). `host`: `host` or `[host]:port`. Nothing to answer.
+    fn shell_access(&self, _host: &str) {}
 }
 
 /// Answers nothing (every question is cancelled): what a connection gets when no app has set a prompter.

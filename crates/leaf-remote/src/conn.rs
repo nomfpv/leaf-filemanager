@@ -175,6 +175,10 @@ pub(crate) struct Shared {
     /// `user@host:port` -> (the fingerprint of the host key the password was typed for, the password): used again only on a
     /// connection that shows that same key.
     passwords: Mutex<HashMap<String, (String, Secret)>>,
+    /// `user@host:port` -> how its first connection of this run reached the files with "File access: Automatic" (`true`:
+    /// shell commands): every later connection to it does the same, so a host never changes between SFTP and the shell
+    /// from one connection to the next.
+    modes: Mutex<HashMap<String, bool>>,
     idle_watch: OnceLock<()>,
 }
 
@@ -475,14 +479,23 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
         }
     };
     use rf_core::hosts::FileAccess;
-    let opened = match t.access {
-        FileAccess::Shell => Err(SftpOpen::Refused("the host is set to Shell".into())),
+    // (Automatic: what the host's first connection of this run found holds for the run)
+    let decided = if t.access == FileAccess::Auto { lock(&shared.modes).get(&t.key).copied() } else { None };
+    let opened = match (t.access, decided) {
+        (FileAccess::Shell, _) => Err(SftpOpen::Refused("the host is set to Shell".into())),
+        (_, Some(true)) => Err(SftpOpen::Refused("this host has no SFTP (found earlier in this run)".into())),
         _ => open_sftp(cfg, &handle).await,
     };
     let (sftp, statvfs, posix_rename, home) = match opened {
         Ok(x) => x,
         Err(SftpOpen::Failed(e)) => return Err(e),
         Err(SftpOpen::Refused(why)) if t.access == FileAccess::Sftp => return Err(FsError::Other(format!("The server has no SFTP: {why}"))),
+        Err(SftpOpen::Refused(why)) if decided == Some(false) => {
+            return Err(FsError::Other(format!(
+                "The server refused SFTP, which it gave earlier in this run ({why}). leaf does not switch to shell commands in the \
+                 middle of a run; if the server has no SFTP now, set the host's File access to Shell (Hosts, Edit)."
+            )));
+        }
         Err(SftpOpen::Refused(why)) => {
             // H1: the files through shell commands on exec channels, after one check of what the server has
             log::info!("remote: no SFTP on {} ({why}); using shell commands", known_hosts::host_name(&t.host, t.port));
@@ -491,20 +504,63 @@ async fn connect(cfg: &Config, prompter: &Arc<dyn Prompter>, shared: &Arc<Shared
             c.home = state.home.clone();
             let _ = c.family.set(state.family);
             c.shell = Some(Arc::new(state));
+            // the first time a host set to Automatic falls back: said once in the UI, not only on its tile
+            if t.access == FileAccess::Auto && lock(&shared.modes).insert(t.key.clone(), true).is_none() {
+                prompter.shell_access(&known_hosts::host_name(&t.host, t.port));
+            }
             return Ok(c);
         }
     };
+    if t.access == FileAccess::Auto {
+        lock(&shared.modes).entry(t.key.clone()).or_insert(false);
+    }
     log::info!("remote: connected (SFTP, statvfs {statvfs}, posix-rename {posix_rename})");
     Ok(Conn { sftp: Arc::new(sftp), statvfs, posix_rename, home, handle, _jumps: jumps, last_used: AtomicU64::new(0), busy: AtomicUsize::new(0), born: Instant::now(), route, family: tokio::sync::OnceCell::new(), shell: None })
 }
 
 /// Why no SFTP session was opened.
+#[derive(Debug)]
 enum SftpOpen {
-    /// The server has no SFTP for this login (it refused the subsystem, or the channel closed before SFTP began on a
-    /// connection that is still up): the shell may stand in.
+    /// The server has no SFTP for this login (it refused the subsystem, on a connection that is still up): the shell may
+    /// stand in.
     Refused(String),
     /// Anything else (the line broke, a time limit): an error as before.
     Failed(FsError),
+}
+
+/// How the start of SFTP went wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SftpStart {
+    /// The server answered the subsystem request with Failure (OpenSSH without a `Subsystem sftp` line, Dropbear without
+    /// sftp-server on some builds): it has no SFTP for this login.
+    Refused,
+    /// The channel closed before SFTP began.
+    Closed,
+    /// The SFTP program ended at once (this exit code).
+    Ended(u32),
+    /// The subsystem was accepted, but nothing that speaks SFTP answered (a `.bashrc` that prints, a forced command, an
+    /// sftp-server that crashed).
+    NoAnswer(String),
+}
+
+/// What a failed SFTP start means. Only an explicit refusal of the subsystem, on a connection that is still up, lets the
+/// shell stand in (`Refused`): every other cause may be a server whose SFTP is only broken for a moment, and a silent switch
+/// to commands that run `rm` and `mv` there is not leaf's to make. That is an error naming the host's "File access: Shell".
+fn sftp_failure(start: SftpStart, alive: bool) -> SftpOpen {
+    let why = match &start {
+        SftpStart::Refused => "the server refused the SFTP subsystem".to_string(),
+        SftpStart::Closed => "the server closed the SFTP channel".to_string(),
+        SftpStart::Ended(code) => format!("the SFTP program ended at once, exit code {code}"),
+        SftpStart::NoAnswer(e) => format!("no SFTP answered: {e}"),
+    };
+    match start {
+        _ if !alive => SftpOpen::Failed(offline(why)),
+        SftpStart::Refused => SftpOpen::Refused(why),
+        _ => SftpOpen::Failed(FsError::Other(format!(
+            "SFTP did not start on this server ({why}). If the server has no SFTP, set the host's File access to Shell (Hosts, \
+             Edit) and leaf reaches its files through shell commands."
+        ))),
+    }
 }
 
 /// The SFTP channel: the subsystem request and its answer, then SFTP's version exchange and the home folder.
@@ -517,9 +573,9 @@ async fn open_sftp(cfg: &Config, handle: &client::Handle<Client>) -> Result<(Raw
         loop {
             match ch.wait().await {
                 Some(russh::ChannelMsg::Success) => return Ok(()),
-                Some(russh::ChannelMsg::Failure) => return Err("the server refused the SFTP subsystem".to_string()),
-                Some(russh::ChannelMsg::Close | russh::ChannelMsg::Eof) | None => return Err("the server closed the SFTP channel".to_string()),
-                Some(russh::ChannelMsg::ExitStatus { exit_status }) => return Err(format!("the SFTP program ended at once (exit code {exit_status})")),
+                Some(russh::ChannelMsg::Failure) => return Err(SftpStart::Refused),
+                Some(russh::ChannelMsg::Close | russh::ChannelMsg::Eof) | None => return Err(SftpStart::Closed),
+                Some(russh::ChannelMsg::ExitStatus { exit_status }) => return Err(SftpStart::Ended(exit_status)),
                 Some(_) => {}
             }
         }
@@ -527,8 +583,7 @@ async fn open_sftp(cfg: &Config, handle: &client::Handle<Client>) -> Result<(Raw
     .await;
     match answer {
         Err(_) => return Err(SftpOpen::Failed(offline("the server did not answer the SFTP request in time"))),
-        Ok(Err(why)) if !handle.is_closed() => return Err(SftpOpen::Refused(why)),
-        Ok(Err(why)) => return Err(SftpOpen::Failed(offline(why))),
+        Ok(Err(start)) => return Err(sftp_failure(start, !handle.is_closed())),
         Ok(Ok(())) => {}
     }
     let sftp = RawSftpSession::new(ch.into_stream());
@@ -537,8 +592,7 @@ async fn open_sftp(cfg: &Config, handle: &client::Handle<Client>) -> Result<(Raw
         Err(_) => return Err(SftpOpen::Failed(offline("the server did not start SFTP in time"))),
         // (the subsystem was accepted but nothing that speaks SFTP answered: a missing sftp-server, or a login shell that
         // printed a menu into the channel)
-        Ok(Err(e)) if !handle.is_closed() => return Err(SftpOpen::Refused(format!("SFTP did not start ({e})"))),
-        Ok(Err(e)) => return Err(SftpOpen::Failed(FsError::Other(format!("The server has no SFTP: {e}")))),
+        Ok(Err(e)) => return Err(sftp_failure(SftpStart::NoAnswer(e.to_string()), !handle.is_closed())),
         Ok(Ok(v)) => v,
     };
     let statvfs = version.extensions.get(russh_sftp::extensions::STATVFS).is_some_and(|v| v == "2");
@@ -1133,5 +1187,25 @@ impl Conn {
 
     fn limit_open(&self) -> Duration {
         Duration::from_secs(30)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only an explicit refusal of the subsystem lets the shell stand in; a channel that closes or a program that ends while
+    /// SFTP starts is an error that names the host's File access setting.
+    #[test]
+    fn shell_fallback_only_on_refusal() {
+        assert!(matches!(sftp_failure(SftpStart::Refused, true), SftpOpen::Refused(_)));
+        for start in [SftpStart::Closed, SftpStart::Ended(127), SftpStart::NoAnswer("unexpected bytes".into())] {
+            match sftp_failure(start.clone(), true) {
+                SftpOpen::Failed(FsError::Other(m)) => assert!(m.contains("File access to Shell"), "{start:?}: {m}"),
+                other => panic!("{start:?} must be an error, not {other:?}"),
+            }
+        }
+        // the connection itself broke: offline, never the shell
+        assert!(matches!(sftp_failure(SftpStart::Refused, false), SftpOpen::Failed(FsError::Offline(_))));
     }
 }

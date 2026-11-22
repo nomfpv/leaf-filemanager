@@ -509,7 +509,7 @@ pub fn widget(_: &mut crate::folder_view::FolderView, w: &crate::home::WidgetCx,
         // H1: a host without SFTP, reached through shell commands
         let shell_note = match probe.shell {
             Some(true) => Some(t!("Shell access: no SFTP on this host; names with unusual characters may be limited")),
-            Some(false) => Some(t!("Shell access (ls only): no SFTP on this host; names with unusual characters may be shown wrong")),
+            Some(false) => Some(t!("Shell access (ls only): no SFTP on this host; items with unusual names may be shown wrong and are not deleted, moved or changed")),
             None => None,
         };
         grid = grid.child(
