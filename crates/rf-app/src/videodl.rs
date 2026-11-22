@@ -467,6 +467,14 @@ fn work(tr: &Tracker, m: &MediaRequest, plan: Plan, arrived: &Mutex<Vec<PathBuf>
         return fail(format!("{}\n{e}", t!("The file could not be written in this folder")));
     }
     let job = yt::Job { url: m.req.url.clone(), work_dir: work_dir.clone(), kind: m.kind, subtitles: m.subtitles, playlist: m.playlist, ffmpeg: plan.ffmpeg, cookies_from: m.cookies_from.clone(), limit: plan.limit, proxy };
+    // (a proxy file left by a job that was killed is removed; this job's own is written readable by the user only and goes when the job
+    // ends, however it ends. Without the file the job does not start: it would go out directly)
+    yt::remove_stale_proxy_files(&m.req.dest);
+    let _proxy_file = match yt::write_proxy_config(&job) {
+        Ok(f) => f,
+        Err(e) => return fail(format!("{}
+{e}", t!("The VPN's proxy could not be handed to yt-dlp, so nothing was downloaded."))),
+    };
     let args = yt::args(&job);
     // (the VPN proxy's password goes in the process's environment, not on its command line)
     let ctl = yt::RunCtl { cancel: tr.cancel.clone(), paused: tr.paused.clone(), env: job.proxy.as_deref().map(yt::proxy_env).unwrap_or_default() };
@@ -495,7 +503,12 @@ fn work(tr: &Tracker, m: &MediaRequest, plan: Plan, arrived: &Mutex<Vec<PathBuf>
     }
     if end.items.is_empty() {
         log::warn!("videodl: {} -> code {:?}, {} error lines", m.req.url, end.code, end.errors.len());
-        return fail(fail_text(&end.errors));
+        // (yt-dlp may repeat the proxy address with its login in an error line)
+        let errors: Vec<String> = match job.proxy.as_deref() {
+            Some(p) => end.errors.iter().map(|e| yt::redact(e, p)).collect(),
+            None => end.errors.clone(),
+        };
+        return fail(fail_text(&errors));
     }
     // every finished video goes from the work folder to its place, named from its title
     let mut saved: Vec<PathBuf> = Vec::new();

@@ -10,7 +10,7 @@ mod args;
 mod probe;
 mod run;
 
-pub use args::{Audio, Job, Kind, Quality, args, browser_ok, proxy_env, stem_for_title};
+pub use args::{Audio, Job, Kind, ProxyFile, Quality, args, browser_ok, proxy_env, redact, remove_stale_proxy_files, stem_for_title, write_proxy_config};
 pub use probe::{Media, Playlist, Probe, is_drm_host, probe, probe_candidate};
 pub use run::{Event, Progress, RunCtl, RunEnd, WORK_PREFIX, key_for, remove_work_dir, run, work_dir};
 
