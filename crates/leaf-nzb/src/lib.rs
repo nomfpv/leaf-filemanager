@@ -4,9 +4,11 @@
 //! only, no async runtime; leafs Status Center is the face (rf-apps `usenet.rs`).
 
 pub mod dial;
+pub mod engine;
 pub mod nntp;
 pub mod nzb;
 pub mod server;
+pub mod yenc;
 
 pub use nzb::{Nzb, NzbFile, ParseError, Segment, parse};
 pub use server::{Password, Priority, Server};
