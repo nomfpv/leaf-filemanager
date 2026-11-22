@@ -123,6 +123,30 @@ impl Quick {
     }
 }
 
+/// The quick actions as ordinary rows (Settings: "As normal entries"): the same order, each with its icon, label and shortcut
+/// (the tip reads "Cut  (Ctrl+X)"), then a separator before the rest.
+fn quick_rows(quick: Vec<Quick>, rest: bool) -> Vec<Item> {
+    let mut out: Vec<Item> = quick
+        .into_iter()
+        .map(|q| {
+            let (label, hint) = match q.tip.split_once("  (") {
+                Some((l, h)) => (l.to_string(), Some(h.trim_end_matches(')').to_string())),
+                None => (q.tip.to_string(), None),
+            };
+            let run = q.run.clone();
+            let it = Item::action(label, MenuIcon::Lucide(q.icon), move |w, cx| run(w, cx)).enabled(q.enabled);
+            match hint {
+                Some(h) => it.hint(h),
+                None => it,
+            }
+        })
+        .collect();
+    if rest && !out.is_empty() {
+        out.push(Item::Separator);
+    }
+    out
+}
+
 #[derive(Default)]
 pub struct Menu {
     pub quick: Vec<Quick>,
@@ -218,6 +242,12 @@ fn show_ex(menu: Menu, pos: Point<Pixels>, liquid: Option<bool>, window: &mut Wi
     }
     let restore = window.focused(cx);
     let main = window.window_handle();
+    let mut menu = menu;
+    if !menu.quick.is_empty() && !cx.global::<crate::settings::Settings>().menu.quick_row {
+        let mut rows = quick_rows(std::mem::take(&mut menu.quick), !menu.items.is_empty());
+        rows.append(&mut menu.items);
+        menu.items = rows;
+    }
     let view = cx.new(|cx| MenuView {
         quick: menu.quick,
         root: Rc::new(menu.items),
@@ -587,6 +617,14 @@ fn level_height(items: &[Item], quick: bool, m: &Metrics) -> f32 {
 }
 
 impl MenuView {
+    /// The right-click on the icon row: turns the setting to "normal entries" and shows this menu that way at once.
+    fn quick_to_rows(&mut self, cx: &mut Context<Self>) {
+        crate::settings::update(cx, |s| s.menu.quick_row = false);
+        let mut rows = quick_rows(std::mem::take(&mut self.quick), !self.root.is_empty());
+        rows.extend(self.root.iter().cloned());
+        self.set_root(rows, cx);
+    }
+
     /// Replaces the top-level items (a drop-down whose content arrives late).
     pub fn set_root(&mut self, items: Vec<Item>, cx: &mut Context<Self>) {
         self.root = Rc::new(items);
@@ -784,6 +822,13 @@ impl MenuView {
                     .child(Icon::new(q.icon).size(px(16.))),
             );
         }
+        let row = row.on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.quick_to_rows(cx);
+                cx.stop_propagation();
+            }),
+        );
         v_flex().child(row).child(div().h(px(1.)).mx(px(-liquid::metrics(self.liquid).pad_x)).bg(p.divider)).into_any_element()
     }
 

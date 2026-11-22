@@ -937,6 +937,20 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         sw("shell-sub", p, s.menu.shell_submenu, |s, v| s.menu.shell_submenu = v),
     ));
 
+    v.push(card(
+        p,
+        L::SquareMenu,
+        t!("Quick actions in the right-click menu"),
+        Some(t!("Cut, copy, paste, rename and delete at the top of the menu")),
+        dropdown(
+            "quick-row",
+            p,
+            s.menu.quick_row,
+            vec![(true, t!("As a row of icons").into()), (false, t!("As normal entries").into())],
+            |s, v| s.menu.quick_row = v,
+        ),
+    ));
+
     v.push(section(p, t!("Scrolling")));
     v.push(card(p, L::ChevronsUpDown, t!("Smooth scrolling"), None, sw("smooth", p, s.smooth_scroll, |s, v| s.smooth_scroll = v)));
     v

@@ -248,6 +248,8 @@ pub struct MenuPrefs {
     pub send_to: bool,
     /// Shell extensions under "Show more options" (off = listed at the bottom of the menu).
     pub shell_submenu: bool,
+    /// The quick actions (cut, copy, paste...) at the top of the menu as a row of icons (true) or as ordinary entries with a label.
+    pub quick_row: bool,
     /// Switches of rows added later (`menu_model::Switch::key`): the ones with no field of their own. Missing: on.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub more: std::collections::BTreeMap<String, bool>,
@@ -306,6 +308,7 @@ impl Default for MenuPrefs {
             terminal: true,
             send_to: true,
             shell_submenu: true,
+            quick_row: true,
             more: Default::default(),
         }
     }
