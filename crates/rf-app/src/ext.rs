@@ -522,6 +522,7 @@ pub struct Registrar {
     about: Option<Rc<dyn Fn(&mut App) -> AnyElement>>,
     progress_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<AnyElement>>>,
     speed_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<String>>>,
+    escape_hooks: Vec<Rc<dyn Fn(&mut Window, &mut App) -> bool>>,
     regions: Option<Rc<dyn Fn(&mut App) -> Vec<Bounds<Pixels>>>>,
     pointer_hook: Option<Rc<dyn Fn(&PointerEvent, &mut App)>>,
     key_hook: Option<Rc<dyn Fn(&KeyPress, &mut App)>>,
@@ -609,6 +610,13 @@ impl Registrar {
     /// The progress, the remaining amount and the job are not touched. Called while the card is drawn, with `width` and `height` 0.
     pub fn speed_text(&mut self, f: impl Fn(&ProgressInfo) -> Option<String> + 'static) {
         self.speed_hook = Some(Rc::new(f));
+    }
+    /// Esc handler: called when Esc is pressed in the main window, before leaf's own Esc handling and also outside scenes. Returning
+    /// `true` means consumed (leaf does nothing more with that press), `false` lets leaf's normal Esc run. Not called while a scene is
+    /// up (Esc ends it) or while a question of leaf's own is open (Esc answers it). Several handlers run in registration order until
+    /// one consumes.
+    pub fn on_escape(&mut self, f: impl Fn(&mut Window, &mut App) -> bool + 'static) {
+        self.escape_hooks.push(Rc::new(f));
     }
     /// A section with its own entry in the list of Settings (not only a part of About).
     pub fn settings_section(&mut self, title: &str, icon: IconName, body: impl Fn(&mut App) -> Vec<AnyElement> + 'static) {
@@ -1615,6 +1623,20 @@ fn scene_ended(reg: &Registry, ix: usize, by_escape: bool, cx: &mut App) {
         let ext_id = e.id.clone();
         emit(cx, || Event::SceneEnded { ext_id, by_escape });
     }
+}
+
+/// Runs the Esc handlers; true when one consumed the key.
+pub(crate) fn escape(window: &mut Window, cx: &mut App) -> bool {
+    let Some(reg) = registry() else { return false };
+    for (_, e) in reg.on() {
+        for f in &e.r.escape_hooks {
+            let f = f.clone();
+            if guard(&e.id, || f(window, cx)) == Some(true) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn scene_active() -> bool {

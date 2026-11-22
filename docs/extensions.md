@@ -120,6 +120,9 @@ e.menu_entry(MenuTarget::Files, Command::new("n", "Count", |ctx, _| println!("{}
   painted, greyed and not clickable, for that long after the files are gone, and then close the gap. A row whose item was not
   removed (a failed delete) stays an ordinary row. Only the details list keeps rows; the grid and the columns close at once. Kept
   rows are not files: nothing that acts on a file can be done to them. The operation starts at once and never waits.
+- `on_escape(|&mut Window, &mut App| -> bool)`: called when Esc is pressed in the main window, before leaf's own Esc handling and also
+  outside scenes. `true` means consumed (leaf does nothing more), `false` lets leaf's normal Esc run. Not called while a scene is up
+  (Esc ends it) or while a question of leaf's own is open. Several handlers run in order until one consumes.
 - `on_folder_open(|&FolderOpening, &mut App|)`: a tab is opening a folder (old place, new place, the content area's rectangle).
 - an archive being extracted: subscribe to `ArchiveExtractStarting` and call `ext::start_scene(..)`; the extraction has started and
   runs underneath.
