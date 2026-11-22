@@ -1,4 +1,4 @@
-//! Camera RAW files: the largest JPEG picture the camera embedded in them (no RAW development, no LGPL code).
+//! Camera RAW files: the largest JPEG picture the camera embedded in them (files without one are developed: `raw_develop`).
 //!
 //! TIFF-based files (CR2, NEF, ARW, DNG, ORF, RW2, PEF, SRW, ...) are walked IFD by IFD for the JPEG a preview or thumbnail
 //! points at; CR3 (ISO base media boxes) gives its `PRVW` and `THMB` boxes; RAF has the JPEG's place in its header. A file
@@ -292,7 +292,7 @@ fn locate<R: Read + Seek>(r: &mut R, len: u64) -> Preview {
     Preview { found, exif }
 }
 
-fn orient(img: image::DynamicImage, o: u8) -> image::DynamicImage {
+pub(crate) fn orient(img: image::DynamicImage, o: u8) -> image::DynamicImage {
     match o {
         2 => img.fliph(),
         3 => img.rotate180(),
@@ -373,11 +373,22 @@ fn jpeg_exif(jpeg: &[u8]) -> Option<Vec<u8>> {
 pub fn decode(path: &Path, max_side: u32) -> anyhow::Result<Rgba> {
     let mut f = std::fs::File::open(path).with_context(|| path.display().to_string())?;
     let len = f.metadata()?.len();
-    decode_from(&mut f, len, max_side)
+    match decode_from(&mut f, len, max_side) {
+        Ok(r) => Ok(r),
+        // no usable embedded picture: the sensor data is developed (see `raw_develop` for the policy)
+        Err(e) => crate::raw_develop::develop(path, max_side).map_err(|d| anyhow::anyhow!("{e}; develop: {d}")),
+    }
 }
 
 pub fn decode_bytes(bytes: &[u8], max_side: u32) -> anyhow::Result<Rgba> {
     decode_from(&mut Cursor::new(bytes), bytes.len() as u64, max_side)
+}
+
+/// The camera / date rows of the file's own EXIF (empty when none can be read).
+pub(crate) fn exif_rows_of(path: &Path) -> Vec<(String, String)> {
+    let Ok(mut f) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(len) = f.metadata().map(|m| m.len()) else { return Vec::new() };
+    locate(&mut f, len).exif
 }
 
 fn decode_from<R: Read + Seek>(r: &mut R, len: u64, max_side: u32) -> anyhow::Result<Rgba> {

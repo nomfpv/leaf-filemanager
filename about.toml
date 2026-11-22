@@ -18,6 +18,7 @@ accepted = [
     "bzip2-1.0.6",
     "CDLA-Permissive-2.0",
     "MPL-2.0",
+    "LGPL-2.1", # rawler (camera RAW development in leaf-decode), used unmodified from crates.io
 ]
 targets = ["x86_64-pc-windows-msvc"]
 ignore-build-dependencies = true

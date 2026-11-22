@@ -1,6 +1,6 @@
 //! Portable picture decoders in pure Rust (no system calls), the fallback for a system that has no codec for them:
 //! JPEG XL and AVIF (Windows ships none: they come from Microsoft Store extensions), Photoshop files (the flattened
-//! picture) and camera RAW files (the JPEG the camera embedded).
+//! picture) and camera RAW files (the JPEG the camera embedded, or the sensor data developed when there is none).
 //!
 //! Nothing here runs, allocates or initialises until `decode` or `dimensions` is called for a file.
 //! HEIC (`heifer`, pure Rust) is a fallback: Windows asks its own codec first, and Linux has none.
@@ -12,6 +12,7 @@ mod heic;
 mod jxl;
 mod psd;
 mod raw;
+mod raw_develop;
 
 /// A decoded picture: straight-alpha RGBA, 8 bits, its long side at most the size asked.
 pub struct Rgba {
@@ -78,6 +79,18 @@ pub fn decode(path: &Path, max_side: u32) -> anyhow::Result<Rgba> {
     anyhow::ensure!(len <= MAX_FILE, "file too large for a picture: {len} bytes");
     let bytes = std::fs::read(path)?;
     decode_bytes(&bytes, &ext_of(path), max_side)
+}
+
+/// A camera RAW file developed from its sensor data (not its embedded JPEG), the long side at most `max_side`.
+pub fn decode_developed(path: &Path, max_side: u32) -> anyhow::Result<Rgba> {
+    anyhow::ensure!(is_raw_ext(&ext_of(path)), "not a camera RAW file");
+    raw_develop::develop(path, max_side)
+}
+
+/// Whether the viewer should develop this RAW file after showing the embedded picture: that picture is under half the
+/// sensor's size. Reads the headers only; for a worker thread.
+pub fn raw_wants_develop(path: &Path) -> bool {
+    is_raw_ext(&ext_of(path)) && raw_develop::wants_develop(path)
 }
 
 /// As `decode`, from the file's bytes; `ext` names the format.
