@@ -100,21 +100,149 @@ fn rename_free(c: &Child<'_>, what: &str, patches: &mut Vec<Patch>, found: &mut 
     }
 }
 
-fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<()> {
+fn be32(b: &[u8], p: usize) -> Result<u64> {
+    b.get(p..p + 4).map(|x| u32::from_be_bytes(x.try_into().unwrap()) as u64).ok_or_else(|| ScrubError::Malformed("a sample table is cut off".into()))
+}
+
+fn be64(b: &[u8], p: usize) -> Result<u64> {
+    b.get(p..p + 8).map(|x| u64::from_be_bytes(x.try_into().unwrap())).ok_or_else(|| ScrubError::Malformed("a sample table is cut off".into()))
+}
+
+/// A table of `count` entries of `size` bytes after `skip` header bytes must fit in its box (a count read from the file never
+/// drives a loop or an allocation past the box it is in).
+fn table(body: &[u8], skip: usize, size: usize) -> Result<u64> {
+    let count = be32(body, skip - 4)?;
+    if count.checked_mul(size as u64).is_none_or(|n| n > (body.len() - skip.min(body.len())) as u64) {
+        return bad("a sample table says it has more entries than it holds");
+    }
+    Ok(count)
+}
+
+/// One track as far as the cleaning needs it.
+#[derive(Default)]
+struct Track {
+    handler: [u8; 4],
+    /// the type of the first sample entry (`avc1`, `mp4a`, `gpmd`, `tmcd` ...)
+    entry: [u8; 4],
+    /// the file position of the flags byte of `tkhd` that holds "enabled", and its value
+    enabled_at: Option<(u64, u8)>,
+    /// every chunk of samples: (file position, length)
+    chunks: Vec<(u64, u64)>,
+    /// the sample data is in this file (`dref` entries are self-contained)
+    self_contained: bool,
+    /// the tables to find the samples were there and consistent
+    tables: bool,
+}
+
+/// The chunks of a sample table (`stbl`): positions from `stco` / `co64`, how many samples each holds from `stsc`, their
+/// sizes from `stsz`. `None` when a table is missing or uses a form leaf does not read (`stz2`).
+fn chunks_of(stbl: &[u8], base: u64) -> Result<Option<Vec<(u64, u64)>>> {
+    let (mut offs, mut stsc, mut stsz): (Option<Vec<u64>>, Option<&[u8]>, Option<&[u8]>) = (None, None, None);
+    for c in children(stbl, base)? {
+        match &c.ty {
+            b"stco" => {
+                let n = table(c.body, 8, 4)?;
+                offs = Some((0..n as usize).map(|i| be32(c.body, 8 + 4 * i)).collect::<Result<_>>()?);
+            }
+            b"co64" => {
+                let n = table(c.body, 8, 8)?;
+                offs = Some((0..n as usize).map(|i| be64(c.body, 8 + 8 * i)).collect::<Result<_>>()?);
+            }
+            b"stsc" => stsc = Some(c.body),
+            b"stsz" => stsz = Some(c.body),
+            _ => {}
+        }
+    }
+    let (Some(offs), Some(stsc), Some(stsz)) = (offs, stsc, stsz) else { return Ok(None) };
+    let runs = table(stsc, 8, 12)? as usize;
+    let uniform = be32(stsz, 4)?;
+    let samples = be32(stsz, 8)?;
+    if uniform == 0 {
+        table(stsz, 12, 4)?;
+    }
+    let mut out = Vec::with_capacity(offs.len());
+    let mut next_sample = 0u64;
+    let mut run = 0usize;
+    for (i, off) in offs.iter().enumerate() {
+        let chunk = i as u64 + 1;
+        // the last run that starts at or before this chunk (the chunks go up, so the run only moves forward)
+        while run + 1 < runs && be32(stsc, 8 + 12 * (run + 1))? <= chunk {
+            run += 1;
+        }
+        let per = if runs > 0 && be32(stsc, 8 + 12 * run)? <= chunk { be32(stsc, 8 + 12 * run + 4)? } else { 0 };
+        if next_sample.checked_add(per).is_none_or(|n| n > samples) {
+            return bad("the sample tables of a track do not agree");
+        }
+        let len = if uniform != 0 {
+            uniform.checked_mul(per).ok_or_else(|| ScrubError::Malformed("a chunk is too big".into()))?
+        } else {
+            let mut sum = 0u64;
+            for k in next_sample..next_sample + per {
+                sum += be32(stsz, 12 + 4 * k as usize)?;
+            }
+            sum
+        };
+        next_sample += per;
+        out.push((*off, len));
+    }
+    Ok(Some(out))
+}
+
+fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<Track> {
+    let mut t = Track { self_contained: true, ..Default::default() };
     for c in children(body, base)? {
         match &c.ty {
-            b"tkhd" => zero_times(&c, "Track", patches, found),
+            b"tkhd" => {
+                zero_times(&c, "Track", patches, found);
+                if c.body.len() >= 4 {
+                    t.enabled_at = Some((c.off + c.hdr + 3, c.body[3]));
+                }
+            }
             b"udta" | b"meta" => rename_free(&c, "Track tags and device information", patches, found),
             b"mdia" => {
                 for m in children(c.body, c.off + c.hdr)? {
                     match &m.ty {
                         b"mdhd" => zero_times(&m, "Media", patches, found),
-                        b"hdlr" if m.body.len() > 24 => {
-                            let name = &m.body[24..];
-                            if name.iter().any(|b| *b != 0) {
-                                let txt: String = name.iter().filter(|b| **b >= 0x20 && **b < 0x7F).map(|b| *b as char).collect();
-                                found.push(Finding::new("Handler / encoder name", txt, true));
-                                patches.push((m.off + m.hdr + 24, vec![0u8; name.len()]));
+                        b"hdlr" if m.body.len() >= 12 => {
+                            t.handler = m.body[8..12].try_into().unwrap();
+                            if m.body.len() > 24 {
+                                let name = &m.body[24..];
+                                if name.iter().any(|b| *b != 0) {
+                                    let txt: String = name.iter().filter(|b| **b >= 0x20 && **b < 0x7F).map(|b| *b as char).collect();
+                                    found.push(Finding::new("Handler / encoder name", txt, true));
+                                    patches.push((m.off + m.hdr + 24, vec![0u8; name.len()]));
+                                }
+                            }
+                        }
+                        b"minf" => {
+                            for n in children(m.body, m.off + m.hdr)? {
+                                match &n.ty {
+                                    b"dinf" => {
+                                        for dr in children(n.body, n.off + n.hdr)?.into_iter().filter(|x| &x.ty == b"dref") {
+                                            if dr.body.len() < 8 {
+                                                return bad("a data reference is cut off");
+                                            }
+                                            for e in children(&dr.body[8..], dr.off + dr.hdr + 8)? {
+                                                if e.body.len() < 4 || e.body[3] & 1 == 0 {
+                                                    t.self_contained = false;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    b"stbl" => {
+                                        let kids = children(n.body, n.off + n.hdr)?;
+                                        if let Some(sd) = kids.iter().find(|k| &k.ty == b"stsd") {
+                                            if sd.body.len() >= 16 {
+                                                t.entry = sd.body[12..16].try_into().unwrap();
+                                            }
+                                        }
+                                        if let Some(ch) = chunks_of(n.body, n.off + n.hdr)? {
+                                            t.chunks = ch;
+                                            t.tables = true;
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         _ => {}
@@ -124,14 +252,121 @@ fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<F
             _ => {}
         }
     }
+    Ok(t)
+}
+
+const SUBTITLE_HANDLERS: [&[u8; 4]; 4] = [b"sbtl", b"subt", b"text", b"clcp"];
+
+/// What a track that is not picture or sound holds, in words.
+fn track_kind(t: &Track) -> String {
+    let e = &t.entry;
+    let what = match (e, &t.handler) {
+        (b"gpmd", _) => "GoPro telemetry: GPS route and sensors",
+        (b"djmd", _) | (b"dbgi", _) => "DJI telemetry: GPS and flight data",
+        (b"camm", _) | (_, b"camm") => "camera motion and GPS (camm)",
+        (b"rtmd", _) => "Sony real-time metadata",
+        (b"mett", _) | (b"metx", _) | (b"mebx", _) | (_, b"meta") | (_, b"mdta") => "timed metadata (can hold GPS and device data)",
+        (b"tmcd", _) | (_, b"tmcd") => "timecode (recording time)",
+        (_, h) if SUBTITLE_HANDLERS.contains(&h) => "text / subtitles (can hold coordinates)",
+        (_, b"hint") => "streaming hints",
+        _ => "data",
+    };
+    let code = |b: &[u8; 4]| String::from_utf8_lossy(b).trim().to_string();
+    format!("{what}; handler {}, {}", code(&t.handler), code(&t.entry))
+}
+
+/// Tracks that are not picture or sound (and not a subtitle track the user keeps): their samples are overwritten with zeros in
+/// place and the track is disabled; each is named. Refused when that cannot be done safely.
+fn plan_tracks(
+    f: &mut fs::File,
+    tracks: &[Track],
+    mdats: &[(u64, u64)],
+    fragmented: bool,
+    opts: &Options,
+    patches: &mut Vec<Patch>,
+    zero_runs: &mut Vec<(u64, u64)>,
+    found: &mut Vec<Finding>,
+) -> Result<()> {
+    let keeps = |t: &Track| &t.handler == b"vide" || &t.handler == b"soun" || (opts.keep_subtitles && SUBTITLE_HANDLERS.contains(&&t.handler));
+    let mut kept: Vec<(u64, u64)> = Vec::new();
+    for t in tracks.iter().filter(|t| keeps(t)) {
+        kept.extend(t.chunks.iter().map(|(a, n)| (*a, a.saturating_add(*n))));
+        if SUBTITLE_HANDLERS.contains(&&t.handler) {
+            found.push(Finding::new("Subtitle track (kept as you chose)", track_kind(t), false));
+        }
+    }
+    // as disjoint ranges in order, so one search tells whether a range touches any of them
+    kept.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(kept.len());
+    for (s, e) in kept {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+    let kept = merged;
+    for t in tracks.iter().filter(|t| !keeps(t)) {
+        let kind = track_kind(t);
+        if fragmented {
+            return Err(ScrubError::Unsupported(format!("the video is stored in fragments and has a track that is not picture or sound ({kind}): leaf cannot empty it safely")));
+        }
+        if !t.self_contained {
+            return Err(ScrubError::Unsupported(format!("a track ({kind}) keeps its data in another file")));
+        }
+        if !t.tables {
+            return Err(ScrubError::Unsupported(format!("a track ({kind}) has sample tables leaf cannot read, so it cannot be emptied")));
+        }
+        let mut dirty = 0usize;
+        for (a, n) in &t.chunks {
+            let end = a.checked_add(*n).ok_or_else(|| ScrubError::Malformed("a chunk is out of range".into()))?;
+            if *n == 0 {
+                continue;
+            }
+            if !mdats.iter().any(|(s, e)| *a >= *s && end <= *e) {
+                return Err(ScrubError::Unsupported(format!("the samples of a track ({kind}) are not inside the media data, leaf cannot empty them safely")));
+            }
+            // never a byte of a picture or sound sample
+            let i = kept.partition_point(|k| k.1 <= *a);
+            if kept.get(i).is_some_and(|(s, _)| *s < end) {
+                return Err(ScrubError::Unsupported(format!("the samples of a track ({kind}) share bytes with the picture or sound")));
+            }
+            let mut buf = vec![0u8; (*n).min(1 << 20) as usize];
+            let mut at = *a;
+            let mut nonzero = false;
+            while at < end && !nonzero {
+                let k = ((end - at) as usize).min(buf.len());
+                f.seek(SeekFrom::Start(at))?;
+                f.read_exact(&mut buf[..k])?;
+                nonzero = buf[..k].iter().any(|b| *b != 0);
+                at += k as u64;
+            }
+            if nonzero {
+                zero_runs.push((*a, *n));
+                dirty += 1;
+            }
+        }
+        let enabled = t.enabled_at.filter(|(_, fl)| fl & 1 != 0);
+        if let Some((at, fl)) = enabled {
+            patches.push((at, vec![fl & !1]));
+        }
+        if dirty > 0 || enabled.is_some() {
+            found.push(Finding::new(format!("Track that is not picture or sound ({kind})"), format!("{} chunks of samples emptied, track disabled", t.chunks.len()), true));
+        }
+    }
     Ok(())
 }
 
-fn plan(path: &Path) -> Result<(Vec<Patch>, Vec<Finding>)> {
+/// What a run writes: byte patches, and runs of zeros (file position, length) over the samples of emptied tracks.
+type PlanOut = (Vec<Patch>, Vec<(u64, u64)>, Vec<Finding>);
+
+fn plan(path: &Path, opts: &Options) -> Result<PlanOut> {
     let mut f = fs::File::open(path)?;
     let flen = f.metadata()?.len();
     let mut patches = Vec::new();
     let mut found = Vec::new();
+    let mut tracks: Vec<Track> = Vec::new();
+    let mut mdats: Vec<(u64, u64)> = Vec::new();
+    let mut fragmented = false;
     let mut pos = 0u64;
     let mut saw_moov = false;
     while pos < flen {
@@ -173,7 +408,8 @@ fn plan(path: &Path) -> Result<(Vec<Patch>, Vec<Finding>)> {
                     match &c.ty {
                         b"mvhd" => zero_times(&c, "Movie", &mut patches, &mut found),
                         b"udta" | b"meta" => rename_free(&c, "Tags, location and device information", &mut patches, &mut found),
-                        b"trak" => walk_trak(c.body, c.off + c.hdr, &mut patches, &mut found)?,
+                        b"trak" => tracks.push(walk_trak(c.body, c.off + c.hdr, &mut patches, &mut found)?),
+                        b"mvex" => fragmented = true,
                         b"uuid" if c.body.len() >= 16 && c.body[..16] == XMP_UUID => rename_free(&c, "XMP", &mut patches, &mut found),
                         _ => {}
                     }
@@ -204,6 +440,8 @@ fn plan(path: &Path) -> Result<(Vec<Patch>, Vec<Finding>)> {
                     patches.push((pos + hdr, vec![0u8; body.len()]));
                 }
             }
+            b"mdat" => mdats.push((pos + hdr, pos + size)),
+            b"moof" => fragmented = true,
             _ => {}
         }
         pos += size;
@@ -211,11 +449,13 @@ fn plan(path: &Path) -> Result<(Vec<Patch>, Vec<Finding>)> {
     if !saw_moov {
         return bad("no movie header");
     }
-    Ok((patches, found))
+    let mut zero_runs = Vec::new();
+    plan_tracks(&mut f, &tracks, &mdats, fragmented, opts, &mut patches, &mut zero_runs, &mut found)?;
+    Ok((patches, zero_runs, found))
 }
 
-pub(crate) fn inspect(path: &Path) -> Result<Inspection> {
-    let (_, mut findings) = plan(path)?;
+pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
+    let (_, _, mut findings) = plan(path, opts)?;
     // the individual tags, when lofty can read them (only for the list: the removal does not depend on it)
     use lofty::file::TaggedFileExt;
     if let Ok(p) = lofty::probe::Probe::open(path) {
@@ -231,16 +471,27 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspection> {
         notes: vec![
             "Still inside: what the camera or program wrote into the video or audio stream itself (an encoder name in the first frames, for example) is not removed.".into(),
             "Cover art cannot be kept in MP4 and MOV files, it is removed with the tags.".into(),
+            "Tracks that are not picture or sound (telemetry and GPS, timecode, text and subtitles unless you keep them, timed metadata) are emptied with zeros and disabled; each one is named above.".into(),
         ],
         can_clean: true,
         refusal: None,
     })
 }
 
-pub(crate) fn produce(src: &Path, dst: &Path, _opts: &Options) -> Result<Vec<String>> {
-    let (patches, _) = plan(src)?;
+pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<Vec<String>> {
+    let (patches, zero_runs, _) = plan(src, opts)?;
     crate::copy_without_attrs(src, dst)?;
     let mut f = fs::OpenOptions::new().write(true).open(dst)?;
+    let zeros = vec![0u8; 1 << 20];
+    for (off, len) in &zero_runs {
+        f.seek(SeekFrom::Start(*off))?;
+        let mut left = *len;
+        while left > 0 {
+            let k = left.min(zeros.len() as u64) as usize;
+            f.write_all(&zeros[..k])?;
+            left -= k as u64;
+        }
+    }
     for (off, bytes) in &patches {
         f.seek(SeekFrom::Start(*off))?;
         f.write_all(bytes)?;
@@ -248,8 +499,8 @@ pub(crate) fn produce(src: &Path, dst: &Path, _opts: &Options) -> Result<Vec<Str
     f.sync_all()?;
     drop(f);
     // the same walk over the result: nothing left to patch, and the file is the same size
-    let (left, _) = plan(dst)?;
-    if !left.is_empty() {
+    let (left, runs, _) = plan(dst, opts)?;
+    if !left.is_empty() || !runs.is_empty() {
         return Err(ScrubError::Verify("tags or times are still in the file".into()));
     }
     if fs::metadata(dst)?.len() != fs::metadata(src)?.len() {

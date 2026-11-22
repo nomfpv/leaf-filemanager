@@ -335,7 +335,7 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
         },
         Family::Pdf => pdf::inspect(path, opts)?,
         Family::Ooxml | Family::Odf => office::inspect(path, opts)?,
-        Family::Mp4 => mp4::inspect(path)?,
+        Family::Mp4 => mp4::inspect(path, opts)?,
         Family::Tagged => tags::inspect(path, opts)?,
         Family::Plain => Inspection {
             format: name.to_string(),

@@ -845,6 +845,75 @@ fn scrub_mp4_leaves_no_marker_in_renamed_boxes() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// One MP4 track whose samples are `sizes` long and start at `chunk` in the file (one chunk).
+fn mp4_trak(handler: &[u8; 4], entry: &[u8; 4], chunk: u32, sizes: &[u32]) -> Vec<u8> {
+    let tkhd = bx(b"tkhd", &[&[0u8, 0, 0, 3][..], &[0u8; 80]].concat());
+    let hdlr = full_box(b"hdlr", 0, &[&[0u8; 4][..], handler, &[0u8; 12], b"Planted Author\0"].concat());
+    let dinf = bx(b"dinf", &full_box(b"dref", 0, &[&1u32.to_be_bytes()[..], &bx(b"url ", &[0, 0, 0, 1])].concat()));
+    let stsd = full_box(b"stsd", 0, &[&1u32.to_be_bytes()[..], &bx(entry, &[0u8; 8])].concat());
+    let stco = full_box(b"stco", 0, &[1u32.to_be_bytes(), chunk.to_be_bytes()].concat());
+    let stsc = full_box(b"stsc", 0, &[1u32.to_be_bytes(), 1u32.to_be_bytes(), (sizes.len() as u32).to_be_bytes(), 1u32.to_be_bytes()].concat());
+    let mut sz = [0u32.to_be_bytes(), (sizes.len() as u32).to_be_bytes()].concat();
+    for s in sizes {
+        sz.extend_from_slice(&s.to_be_bytes());
+    }
+    let stsz = full_box(b"stsz", 0, &sz);
+    let stbl = bx(b"stbl", &[stsd, stco, stsc, stsz].concat());
+    let minf = bx(b"minf", &[dinf, stbl].concat());
+    let mdia = bx(b"mdia", &[full_box(b"mdhd", 0, &[0u8; 20]), hdlr, minf].concat());
+    bx(b"trak", &[tkhd, mdia].concat())
+}
+
+/// A GoPro-style telemetry track (`gpmd`) and a timecode track are emptied with zeros and disabled; the video samples stay byte
+/// for byte; the tracks are named; a telemetry track whose samples share bytes with the video refuses the file.
+#[test]
+fn scrub_mp4_telemetry_and_timecode_tracks_are_emptied_and_named_video_untouched() {
+    let d = tmp_dir("mp4-tracks");
+    let ftyp = bx(b"ftyp", b"isom\0\0\0\0isom");
+    let video = b"VIDEODATA0123456".to_vec();
+    let gps = [SERIAL, &coord_bytes(), b"GPS5"].concat();
+    let tc = b"\x00\x0e\x11\x22".to_vec();
+    let base = ftyp.len() as u32 + 8;
+    let mdat = bx(b"mdat", &[&video[..], &gps, &tc].concat());
+    let build = |gps_at: u32| {
+        let moov = bx(
+            b"moov",
+            &[
+                bx(b"mvhd", &[0u8; 100]),
+                mp4_trak(b"vide", b"avc1", base, &[8, 8]),
+                mp4_trak(b"meta", b"gpmd", gps_at, &[gps.len() as u32]),
+                mp4_trak(b"tmcd", b"tmcd", base + 16 + gps.len() as u32, &[4]),
+            ]
+            .concat(),
+        );
+        [ftyp.clone(), mdat.clone(), moov].concat()
+    };
+    let file = build(base + 16);
+    let src = d.join("a.mp4");
+    fs::write(&src, &file).unwrap();
+    assert!(contains(&file, SERIAL));
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label.contains("GoPro telemetry")), "{:?}", before.findings);
+    assert!(before.findings.iter().any(|f| f.label.contains("timecode")));
+    let dst = clean_copy_name(&src);
+    let out = clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert!(out.removed.iter().any(|f| f.label.contains("GoPro telemetry")));
+    let cleaned = fs::read(&dst).unwrap();
+    assert_eq!(cleaned.len(), file.len());
+    assert_no_markers(&dst, "mp4 tracks");
+    assert!(!contains(&cleaned, b"GPS5") && !contains(&cleaned, &tc));
+    let v = base as usize;
+    assert_eq!(&cleaned[v..v + 16], &video[..], "the video samples are byte for byte the same");
+    assert_clean_listing(&dst);
+    // a telemetry track that points into the video's bytes: refused, nothing written
+    let bad = d.join("b.mp4");
+    fs::write(&bad, build(base + 4)).unwrap();
+    let dst2 = clean_copy_name(&bad);
+    assert!(matches!(clean_to(&bad, &dst2, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))));
+    assert!(!dst2.exists());
+    let _ = fs::remove_dir_all(&d);
+}
+
 #[test]
 fn scrub_bmp_says_nothing_found_and_archives_are_refused() {
     let d = tmp_dir("bmp");
