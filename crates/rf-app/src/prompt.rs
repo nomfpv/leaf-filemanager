@@ -59,6 +59,9 @@ pub struct Check {
 pub struct DialogView {
     title: SharedString,
     message: Option<SharedString>,
+    /// A line above the message with a long value (a path) kept on one line, cut in the middle; the whole value is its tooltip:
+    /// (what it is, the value).
+    head: Option<(SharedString, SharedString)>,
     error: Option<SharedString>,
     input: Option<Entity<InputState>>,
     /// A user name box above the (password) text box: a share's login. What it holds is put in the cell before a button runs.
@@ -121,6 +124,26 @@ pub fn show_with_checks(
     cx: &mut App,
 ) {
     show_inner(title, message, input, false, choices, checks, buttons, window, cx)
+}
+
+/// [`show_with_checks`] with a line above the message that names a long value (a path): `head` is (what it is, the value). The
+/// value stays on one line, cut in the middle when it is long, and its tooltip has all of it.
+pub fn show_with_checks_head(
+    title: impl Into<SharedString>,
+    head: (String, String),
+    message: Option<String>,
+    checks: Vec<Check>,
+    buttons: Vec<Button>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    show_inner(title, message, None, false, Vec::new(), checks, buttons, window, cx);
+    if let Some((_, view, _)) = cx.try_global::<Host>().and_then(|h| h.0.clone()) {
+        view.update(cx, |v, cx| {
+            v.head = Some((head.0.into(), head.1.into()));
+            cx.notify();
+        });
+    }
 }
 
 /// A text box with check boxes under it.
@@ -255,6 +278,7 @@ fn show_inner(
         DialogView {
             title: title.into(),
             message: message.map(Into::into),
+            head: None,
             error: None,
             input,
             user: None,
@@ -540,6 +564,17 @@ impl Render for DialogView {
                             .p_6()
                             .gap_3()
                             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(self.title.clone()))
+                            .children(self.head.clone().map(|(what, value)| {
+                                let (shown, full) = (crate::full_path::elide_middle(&value, 46), value.clone());
+                                h_flex()
+                                    .id("dialog-head")
+                                    .gap_1()
+                                    .text_sm()
+                                    .text_color(p.text_secondary)
+                                    .child(div().flex_shrink_0().child(what))
+                                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(shown))
+                                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
+                            }))
                             .children(self.message.clone().or_else(|| self.live.as_ref().map(|f| SharedString::from(f()))).map(|m| div().text_sm().text_color(p.text_secondary).child(m)))
                             .children(self.user.as_ref().map(|(u, _)| {
                                 div()

@@ -450,12 +450,12 @@ pub fn show_rules(dir: PathBuf, window: &mut Window, cx: &mut App) {
     let Some(root) = project_root(&dir) else {
         return prompt::notice(title, t!("This is not inside a project (a Git repository or a folder with .claude).").to_string(), window, cx);
     };
-    let mut message = format!("{} {}\n", t!("Project:"), root.display());
+    let mut message = String::new();
     let mut checks: Vec<Check> = Vec::new();
     // (what each ticked row removes, with the file and list it is in)
     let mut rows: Vec<(std::rc::Rc<std::cell::Cell<bool>>, PathBuf, Kind, String)> = Vec::new();
     for kind in Kind::ALL {
-        message.push_str(&format!("\n{}\n", kind.key().to_uppercase()));
+        message.push_str(&format!("{}{}\n", if message.is_empty() { "" } else { "\n" }, kind.key().to_uppercase()));
         let mut any = false;
         for w in [Where::User, Where::Project, Where::Local] {
             let Some(file) = file_of(&root, w) else { continue };
@@ -494,7 +494,7 @@ pub fn show_rules(dir: PathBuf, window: &mut Window, cx: &mut App) {
             Ok(())
         })); }
     buttons.push(Button::new(t!("Close"), BtnKind::Normal, |_, _, _| Ok(())));
-    prompt::show_with_checks(title, Some(message), None, Vec::new(), checks, buttons, window, cx);
+    prompt::show_with_checks_head(title, (t!("Project:").to_string(), root.display().to_string()), Some(message), checks, buttons, window, cx);
 }
 
 /// The preview and the question for removing rules (exact match; leaf marks nothing in the file).
