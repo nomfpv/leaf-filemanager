@@ -390,10 +390,10 @@ fn tiles_height(id: &str, width: f32, v: &FolderView, cx: &App) -> f32 {
     use crate::folder_view::tile_cols;
     let places = v.places.read(cx);
     let (count, min, max, tile_h) = match id {
-        "drives" => (places.drives.len(), 240., 340., 116.),
-        "tags" => (cx.global::<crate::tags::Tags>().0.defs.len(), 140., 220., 64.),
-        "devices" => (places.devices.len(), 240., 340., 52.),
-        "network" => (places.network.len(), 240., 340., 64.),
+        "drives" => (places.drives.len(), 240., 340., 128.),
+        "tags" => (cx.global::<crate::tags::Tags>().0.defs.len(), 140., 220., 76.),
+        "devices" => (places.devices.len(), 240., 340., 58.),
+        "network" => (places.network.len(), 240., 340., 68.),
         _ => return 0.,
     };
     if count == 0 {

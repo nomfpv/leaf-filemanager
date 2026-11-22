@@ -6261,8 +6261,17 @@ impl Render for FolderView {
                 };
                 div().size_full().child(cv).into_any_element()
             }
-            // (the HyperDownload page is cut: a tab restored on it shows nothing)
-            Location::Downloads => div().size_full().into_any_element(),
+            // (the HyperDownload page is cut: a tab restored on it says so instead of staying blank)
+            Location::Downloads => {
+                let p = Palette::for_window(window);
+                div()
+                    .size_full()
+                    .p_4()
+                    .text_sm()
+                    .text_color(p.text_tertiary)
+                    .child(t!("This page is empty. Running downloads are in the Status Center."))
+                    .into_any_element()
+            }
             Location::Agents => {
                 let av = match &self.agents {
                     Some(av) => av.clone(),

@@ -307,6 +307,7 @@ pub fn render(p: &Palette, s: &Settings, cx: &mut App) -> AnyElement {
             body.push(
                 h_flex()
                     .flex_wrap()
+                    .items_stretch()
                     .gap_3()
                     .children(THEMES.iter().enumerate().map(|(i, (id, name, desc))| {
                         let id = *id;
@@ -327,6 +328,7 @@ pub fn render(p: &Palette, s: &Settings, cx: &mut App) -> AnyElement {
             body.push(
                 h_flex()
                     .flex_wrap()
+                    .items_stretch()
                     .gap_3()
                     .child(mode(0, "Light", L::Sun, ThemePref::Light))
                     .child(mode(1, "Dark", L::Moon, ThemePref::Dark))
@@ -339,6 +341,7 @@ pub fn render(p: &Palette, s: &Settings, cx: &mut App) -> AnyElement {
             body.push(
                 h_flex()
                     .flex_wrap()
+                    .items_stretch()
                     .gap_3()
                     .children(PROFILES.iter().enumerate().map(|(i, pr)| {
                         choice(p, ("setup-profile", i), pr.icon, pr.name, pr.desc, profile == Some(i), move |window, cx| {

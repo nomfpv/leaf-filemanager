@@ -190,6 +190,11 @@ impl Workspace {
                     cx.notify();
                 }
             }
+            // the first-run setup guide on Settings (the window is the one running the script, not "the active one")
+            "setup" => {
+                crate::setup::begin(cx);
+                window.dispatch_action(Box::new(crate::actions::GoSettings), cx);
+            }
             "usage" => self.navigate(rf_core::Location::DiskUsage(std::path::PathBuf::from(arg)), window, cx),
             // the change feed page: `changes-pick <part of a path>` selects that row (its diff shows in the preview pane)
             "changes-pick" => {
