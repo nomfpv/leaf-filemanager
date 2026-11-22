@@ -5332,6 +5332,7 @@ dependencies = [
  "leaf-common",
  "leaf-copy",
  "leaf-decode",
+ "leaf-proc",
  "libc",
  "log",
  "notify",

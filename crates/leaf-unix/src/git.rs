@@ -142,35 +142,15 @@ fn git_cmd(root: &Path) -> Command {
 const STATUS_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 /// The same for the `git log` behind the commit columns.
 const LOG_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// The same for the other short git calls (config, branch, one commit).
+const RUN_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// `Command::output` with a time limit: a git still running after `limit` is killed and the call fails.
+
+/// `Command::output` with a time limit: a git still running after `limit` is ended with everything it started, and the call fails. At most
+/// a few gits run at once in the whole app (the rest wait), and they end with leaf.
 fn output_within(c: &mut Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
-    use std::io::Read;
-    let mut child = c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-    let (so, se) = (child.stdout.take(), child.stderr.take());
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut b = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut b);
-            }
-            b
-        })
-    };
-    let (t_out, t_err) = (drain(so.map(|p| Box::new(p) as _)), drain(se.map(|p| Box::new(p) as _)));
-    let start = std::time::Instant::now();
-    let status = loop {
-        if let Some(s) = child.try_wait()? {
-            break s;
-        }
-        if start.elapsed() > limit {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "git took too long"));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    };
-    Ok(std::process::Output { status, stdout: t_out.join().unwrap_or_default(), stderr: t_err.join().unwrap_or_default() })
+    let _turn = leaf_proc::GIT.enter();
+    leaf_proc::output_helper(c, Some(limit))
 }
 
 /// Runs `git status` for the repository at `repo_root` (use [`repo_root`] to find it).
@@ -365,7 +345,10 @@ fn spawn_err(e: std::io::Error) -> anyhow::Error {
 
 /// Runs git and returns the raw output (even on a non-zero exit).
 fn run_git(root: &Path, args: &[&str]) -> Result<std::process::Output> {
-    git_cmd(root).args(args).output().map_err(spawn_err)
+    let mut c = git_cmd(root);
+    c.args(args);
+    let _turn = leaf_proc::GIT.enter();
+    leaf_proc::output_helper(&mut c, Some(RUN_LIMIT)).map_err(spawn_err)
 }
 
 /// Runs git and returns stdout; on failure bails with `what: <stderr>`.
@@ -612,7 +595,7 @@ fn is_progress_line(line: &str) -> bool {
 fn run_streaming(mut cmd: Command, what: &str, on_progress: &mut dyn FnMut(&str)) -> Result<()> {
     use std::io::Read;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(spawn_err)?;
+    let mut child = leaf_proc::spawn_helper(&mut cmd).map_err(spawn_err)?;
     let mut stdout = child.stdout.take().expect("stdout piped");
     let out_thread = std::thread::spawn(move || {
         let mut v = Vec::new();
@@ -818,7 +801,8 @@ pub fn last_commit(root: &Path, path: Option<&Path>) -> Option<Commit> {
     if let Some(p) = path {
         c.arg("--").arg(p);
     }
-    let out = c.output().ok()?;
+    let _turn = leaf_proc::GIT.enter();
+    let out = leaf_proc::output_helper(&mut c, Some(RUN_LIMIT)).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -850,7 +834,8 @@ pub fn last_commits_of_children(root: &Path, dir: &Path, names: &[String], max_c
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         ;
-    let Ok(mut child) = c.spawn() else { return out };
+    let _turn = leaf_proc::GIT.enter();
+    let Ok(mut child) = leaf_proc::spawn_helper(&mut c) else { return out };
     let Some(stdout) = child.stdout.take() else { return out };
     // a watchdog ends a git that runs past LOG_LIMIT (the read below then reaches its end)
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));

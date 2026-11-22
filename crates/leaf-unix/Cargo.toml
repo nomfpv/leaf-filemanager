@@ -7,6 +7,7 @@ license = "MIT"
 publish.workspace = true
 
 [dependencies]
+leaf-proc.workspace = true
 leaf-common.workspace = true
 leaf-decode.workspace = true
 rf-core.workspace = true
