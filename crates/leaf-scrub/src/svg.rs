@@ -53,7 +53,8 @@ fn base64(s: &str) -> Vec<u8> {
 }
 
 struct Found {
-    ranges: Vec<Range<usize>>,
+    /// what is cut out (empty replacement) or replaced
+    ranges: Vec<(Range<usize>, String)>,
     findings: Vec<Finding>,
     notes: Vec<String>,
     decls: Vec<(String, String)>,
@@ -70,16 +71,16 @@ fn scan(xml: &str, opts: &Options) -> Result<Found> {
     for n in doc.descendants() {
         if n.is_comment() {
             f.findings.push(Finding::new("Comment", n.text().unwrap_or(""), true));
-            f.ranges.push(n.range());
+            f.ranges.push((n.range(), String::new()));
         } else if n.is_pi() {
             f.findings.push(Finding::new("Processing instruction", n.pi().map(|p| p.target).unwrap_or(""), true));
-            f.ranges.push(n.range());
+            f.ranges.push((n.range(), String::new()));
         } else if n.is_element() {
             let ns = n.tag_name().namespace();
             if is_editor(ns) || (ns == Some(SVG_NS) && n.tag_name().name() == "metadata") {
                 let label = if n.tag_name().name() == "metadata" { "Metadata element".to_string() } else { format!("Editor data ({})", n.tag_name().name()) };
                 f.findings.push(Finding::new(label, "", true));
-                f.ranges.push(n.range());
+                f.ranges.push((n.range(), String::new()));
                 continue;
             }
             for a in n.attributes() {
@@ -90,7 +91,15 @@ fn scan(xml: &str, opts: &Options) -> Result<Found> {
                     while s > 0 && xml.as_bytes()[s - 1].is_ascii_whitespace() {
                         s -= 1;
                     }
-                    f.ranges.push(s..r.end);
+                    f.ranges.push((s..r.end, String::new()));
+                }
+            }
+            // a link to a file on this computer names the folder (and the user): reduced to the file name
+            for a in n.attributes().filter(|a| a.name() == "href" && !is_editor(a.namespace())) {
+                if local_path(a.value()) {
+                    let file = a.value().rsplit(['/', '\\']).next().unwrap_or("").to_string();
+                    f.findings.push(Finding::new("Local file path in a link (reduced to the file name)", a.value(), true));
+                    f.ranges.push((a.range_value(), file.replace('&', "&amp;").replace('"', "&quot;")));
                 }
             }
             if n.tag_name().name() == "image" {
@@ -138,11 +147,21 @@ fn scan(xml: &str, opts: &Options) -> Result<Found> {
     Ok(f)
 }
 
-fn cut(xml: &str, mut ranges: Vec<Range<usize>>) -> String {
-    ranges.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
+/// A path on this computer or a share: `file:///C:/...`, `C:\...`, `\server\...`, `/home/...`, `/Users/...`.
+pub(crate) fn local_path(t: &str) -> bool {
+    let b = t.as_bytes();
+    t.to_ascii_lowercase().starts_with("file:")
+        || t.starts_with("\\\\")
+        || t.starts_with("/home/")
+        || t.starts_with("/Users/")
+        || (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+}
+
+fn cut(xml: &str, mut ranges: Vec<(Range<usize>, String)>) -> String {
+    ranges.sort_by_key(|(r, _)| (r.start, std::cmp::Reverse(r.end)));
     let mut out = String::with_capacity(xml.len());
     let mut at = 0;
-    for r in ranges {
+    for (r, with) in ranges {
         if r.start < at {
             if r.end > at {
                 at = r.end;
@@ -150,6 +169,7 @@ fn cut(xml: &str, mut ranges: Vec<Range<usize>>) -> String {
             continue;
         }
         out.push_str(&xml[at..r.start]);
+        out.push_str(&with);
         at = r.end;
     }
     out.push_str(&xml[at..]);

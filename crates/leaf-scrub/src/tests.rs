@@ -1736,3 +1736,19 @@ fn scrub_audio_chunks_beyond_the_tag_library_leave_no_marker() {
     assert_eq!(fs::read(&dst).unwrap().len(), 40 * 417);
     let _ = fs::remove_dir_all(&d);
 }
+
+/// SVG links to files on this computer name the folder and the user: reduced to the file name.
+#[test]
+fn scrub_svg_local_paths_in_links_are_reduced_to_the_file_name() {
+    let d = tmp_dir("svg-paths");
+    let src = d.join("a.svg");
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><image xlink:href=\"file:///C:/Users/Planted%20Author/Planted Author/pic.png\" width=\"1\" height=\"1\"/><a href=\"C:\\Users\\LEAFTESTSERIAL123\\doc.pdf\"><rect width=\"1\" height=\"1\"/></a><a href=\"#local\"/></svg>";
+    fs::write(&src, svg).unwrap();
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "svg paths");
+    let out = fs::read_to_string(&dst).unwrap();
+    assert!(out.contains("xlink:href=\"pic.png\"") && out.contains("href=\"doc.pdf\"") && out.contains("href=\"#local\""), "{out}");
+    assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}

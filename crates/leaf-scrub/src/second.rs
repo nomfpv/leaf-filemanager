@@ -613,6 +613,9 @@ fn svg(path: &Path) -> Result<Vec<String>> {
             if n.attributes().any(|a| crate::svg::is_editor(a.namespace())) {
                 v.push("an editor attribute".into());
             }
+            if n.attributes().any(|a| a.name() == "href" && crate::svg::local_path(a.value())) {
+                v.push("a link with a local file path".into());
+            }
         }
     }
     Ok(v)
