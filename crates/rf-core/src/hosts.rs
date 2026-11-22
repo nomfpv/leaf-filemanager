@@ -44,6 +44,50 @@ pub struct Host {
     /// the VPN down, it is not connected at all.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vpn: bool,
+    /// How an SFTP host's files are reached: SFTP, falling back to shell commands when the server has no SFTP (the default),
+    /// or always one of the two.
+    #[serde(default, skip_serializing_if = "FileAccess::is_default", deserialize_with = "FileAccess::lenient")]
+    pub access: FileAccess,
+}
+
+/// "File access" of an SFTP host (H1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileAccess {
+    /// SFTP, and shell commands over SSH when the server refuses the SFTP subsystem.
+    #[default]
+    Auto,
+    /// SFTP only (a server without it is an error).
+    Sftp,
+    /// Shell commands over SSH only (`cat`, `ls`, `mv`...), for a host whose SFTP is broken.
+    Shell,
+}
+
+impl FileAccess {
+    pub const ALL: [FileAccess; 3] = [FileAccess::Auto, FileAccess::Sftp, FileAccess::Shell];
+
+    fn is_default(&self) -> bool {
+        *self == FileAccess::Auto
+    }
+
+    /// An unknown word (a newer version's) reads as Automatic.
+    fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<FileAccess, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "sftp" => FileAccess::Sftp,
+            "shell" => FileAccess::Shell,
+            _ => FileAccess::Auto,
+        })
+    }
+
+    /// The name shown to the user (English; the app translates it where it draws it).
+    pub fn label(self) -> &'static str {
+        match self {
+            FileAccess::Auto => "Automatic",
+            FileAccess::Sftp => "SFTP",
+            FileAccess::Shell => "Shell",
+        }
+    }
 }
 
 /// What kind of machine a saved host is.
@@ -169,7 +213,7 @@ fn default_scheme() -> String {
 
 impl Host {
     pub fn new(name: &str, host: &str) -> Host {
-        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false, kind: HostKind::Server, vpn: false }
+        Host { name: name.into(), scheme: default_scheme(), host: host.into(), port: None, user: None, start_path: None, key_file: None, jump: None, bookmarks: Vec::new(), no_trash: false, kind: HostKind::Server, vpn: false, access: FileAccess::Auto }
     }
 
     /// Whether a remote place is on this host (same scheme, server, user and port).
