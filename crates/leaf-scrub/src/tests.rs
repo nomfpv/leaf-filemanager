@@ -1057,3 +1057,103 @@ fn scrub_odt_leaves_no_marker_anywhere_in_any_entry() {
     roxmltree::Document::parse(&zip_text(&dst, "settings.xml")).unwrap();
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn scrub_jpeg_png_webp_leave_no_marker_anywhere_including_after_the_end_of_the_picture() {
+    let d = tmp_dir("img-raw");
+    // JPEG: Exif with serial and coordinate, XMP, IPTC, a comment, an unknown application segment and bytes after the end
+    let tiff = exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat());
+    let mut j = jpeg_bytes(&tiff, b"Planted Author");
+    let seg = |m: u8, body: &[u8]| {
+        let mut v = vec![0xFF, m];
+        v.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+        v.extend_from_slice(body);
+        v
+    };
+    j.splice(2..2, [seg(0xED, b"Photoshop 3.0\0Planted Author"), seg(0xEC, b"Ducky LEAFTESTSERIAL123")].concat());
+    j.extend_from_slice(b"trailer LEAFTESTSERIAL123 Planted Author");
+    let src = d.join("a.jpg");
+    fs::write(&src, &j).unwrap();
+    assert_markers_present(&src, "jpeg");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "jpeg");
+    assert_clean_listing(&dst);
+    assert_eq!(pixels(&src), pixels(&dst));
+
+    // PNG: text chunks of every kind, Exif, an unknown ancillary chunk
+    let mut p = Vec::new();
+    test_image().write_to(&mut std::io::Cursor::new(&mut p), ::image::ImageFormat::Png).unwrap();
+    let mut extra = png_chunk(b"tEXt", b"Author\0Planted Author");
+    extra.extend(png_chunk(b"iTXt", b"Comment\0\0\0\0\0LEAFTESTSERIAL123"));
+    extra.extend(png_chunk(b"eXIf", &tiff));
+    extra.extend(png_chunk(b"prVt", b"Planted Author"));
+    p.splice(33..33, extra);
+    p.extend_from_slice(b"after IEND LEAFTESTSERIAL123 Planted Author");
+    let src = d.join("a.png");
+    fs::write(&src, &p).unwrap();
+    assert_markers_present(&src, "png");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "png");
+    assert_clean_listing(&dst);
+    assert_eq!(pixels(&src), pixels(&dst));
+
+    // WebP: Exif, XMP, an unknown chunk
+    let mut plain = Vec::new();
+    test_image().write_to(&mut std::io::Cursor::new(&mut plain), ::image::ImageFormat::WebP).unwrap();
+    let chunk = |t: &[u8; 4], b: &[u8]| {
+        let mut c = t.to_vec();
+        c.extend_from_slice(&(b.len() as u32).to_le_bytes());
+        c.extend_from_slice(b);
+        if b.len() % 2 == 1 {
+            c.push(0);
+        }
+        c
+    };
+    let mut vp8x = vec![0x08 | 0x04, 0, 0, 0];
+    vp8x.extend_from_slice(&(24u32 - 1).to_le_bytes()[..3]);
+    vp8x.extend_from_slice(&(16u32 - 1).to_le_bytes()[..3]);
+    let mut body = b"WEBP".to_vec();
+    body.extend(chunk(b"VP8X", &vp8x));
+    body.extend_from_slice(&plain[12..]);
+    body.extend(chunk(b"EXIF", &tiff));
+    body.extend(chunk(b"XMP ", b"<x:xmpmeta>Planted Author</x:xmpmeta>"));
+    body.extend(chunk(b"LEAF", b"LEAFTESTSERIAL123"));
+    let mut w = b"RIFF".to_vec();
+    w.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    w.extend(body);
+    let src = d.join("a.webp");
+    fs::write(&src, &w).unwrap();
+    assert_markers_present(&src, "webp");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "webp");
+    assert_clean_listing(&dst);
+    assert_eq!(pixels(&src), pixels(&dst));
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn scrub_mp3_leaves_no_marker_anywhere() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{Accessor, Tag, TagExt, TagType};
+    let d = tmp_dir("mp3-raw");
+    let src = d.join("a.mp3");
+    let mut audio = Vec::new();
+    for _ in 0..40 {
+        let mut f = vec![0xFF, 0xFB, 0x90, 0x00];
+        f.resize(417, 0);
+        audio.extend(f);
+    }
+    fs::write(&src, &audio).unwrap();
+    let mut t = Tag::new(TagType::Id3v2);
+    t.set_artist("Planted Author".into());
+    t.set_comment("LEAFTESTSERIAL123".into());
+    t.save_to_path(&src, WriteOptions::default()).unwrap();
+    assert_markers_present(&src, "mp3");
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert_no_markers(&dst, "mp3");
+    let _ = fs::remove_dir_all(&d);
+}
