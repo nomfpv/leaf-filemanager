@@ -83,8 +83,8 @@ pub fn build(_owner: Owner, target: &ShellTarget, _extended: bool) -> anyhow::Re
 
     if !background {
         // "Open with": one list when every item has the same type
-        if mimes.iter().all(|m| *m == mimes[0]) && mimes[0] != "inode/directory" {
-            let mut kids: Vec<ShellItem> = crate::openwith::apps_for(&mimes[0]).into_iter().take(12).map(|a| add(&mut acts, a.name.clone(), "openas", Act::OpenWith(a))).collect();
+        if let Some(first) = mimes.first().filter(|f| *f != "inode/directory" && mimes.iter().all(|m| m == *f)) {
+            let mut kids: Vec<ShellItem> = crate::openwith::apps_for(first).into_iter().take(12).map(|a| add(&mut acts, a.name.clone(), "openas", Act::OpenWith(a))).collect();
             if !kids.is_empty() {
                 kids.push(ShellItem { separator: true, ..empty_item() });
             }
