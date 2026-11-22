@@ -653,6 +653,14 @@ mod discovery_tests {
     use super::*;
 
     #[test]
+    fn showmount_and_kio_fuse_replies() {
+        let t = "/volume1/data 192.0.2.0/24\n/volume1/photos *\n/volume1/data 198.51.100.7\n";
+        assert_eq!(parse_exports(t), vec!["/volume1/data".to_string(), "/volume1/photos".to_string()]);
+        assert_eq!(parse_dbus_string("('/run/user/1000/kio-fuse-x/smb/nas.example.com/share',)\n").as_deref(), Some("/run/user/1000/kio-fuse-x/smb/nas.example.com/share"));
+        assert_eq!(parse_dbus_string("s \"/run/user/1000/kio-fuse-x/nfs/h/e\"\n").as_deref(), Some("/run/user/1000/kio-fuse-x/nfs/h/e"));
+    }
+
+    #[test]
     fn avahi_lines_become_servers() {
         let t = "+;eth0;IPv4;NAS;_smb._tcp;local\n=;eth0;IPv4;My\\032NAS;_smb._tcp;local;nas.local;192.168.1.5;445;\"\"\n=;eth0;IPv6;NAS;_smb._tcp;local;nas.local;fe80::1;445;\"\"\n=;eth0;IPv4;Pi;_sftp-ssh._tcp;local;pi.local;192.168.1.9;22;\"\"\n=;eth0;IPv4;Printer;_ipp._tcp;local;p.local;192.168.1.7;631;\"\"\n";
         assert_eq!(
