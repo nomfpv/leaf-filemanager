@@ -1,0 +1,30 @@
+[package]
+name = "leaf-scrub"
+description = "leaf: Remove metadata. Writes a cleaned copy of a picture, PDF, Office document or audio/video file and lists what it found and removed; no UI"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+# the EXIF reader that tells what a picture carries (BSD-2-Clause); the removal itself is segment-level code in this crate
+kamadak-exif = "0.6"
+# PDF: Info dictionary, XMP, document ids, thumbnails (MIT)
+lopdf = { version = "0.47", default-features = false }
+# audio and video tags, written without touching the audio or video data (MIT OR Apache-2.0)
+lofty = "0.25"
+# Office and OpenDocument files are zips
+zip.workspace = true
+roxmltree = "0.20"
+crc32fast.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# FindFirstStreamW / DeleteFileW: alternate data streams
+windows.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# the tests make their own pictures and decode the cleaned ones
+image = { workspace = true, features = ["png", "jpeg", "webp"] }

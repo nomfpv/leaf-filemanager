@@ -1990,6 +1990,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "ecb"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26f2a8b3e564eba0877223dc343703ad0385794e882e6d13f3a4dd5c6b1f41ac"
+dependencies = [
+ "cipher 0.5.2",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2999,7 +3008,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
 dependencies = [
  "color_quant",
- "weezl",
+ "weezl 0.1.12",
 ]
 
 [[package]]
@@ -3009,7 +3018,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
 dependencies = [
  "color_quant",
- "weezl",
+ "weezl 0.1.12",
 ]
 
 [[package]]
@@ -5283,6 +5292,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf-scrub"
+version = "0.9.4"
+dependencies = [
+ "crc32fast",
+ "image",
+ "kamadak-exif",
+ "libc",
+ "lofty",
+ "lopdf",
+ "roxmltree 0.20.0",
+ "windows 0.62.2",
+ "zip 9.3.0",
+]
+
+[[package]]
 name = "leaf-share"
 version = "0.9.4"
 dependencies = [
@@ -5514,6 +5538,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "lofty"
+version = "0.25.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35d45c446382e04663705aa8e786157f64ef1fa85755d410121ffbf08f54b0db"
+dependencies = [
+ "byteorder",
+ "data-encoding",
+ "flate2",
+ "lofty_attr",
+ "log",
+ "ogg_pager",
+ "paste",
+]
+
+[[package]]
+name = "lofty_attr"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdbca1b60ba7cea959ffc84ac27f3dbdbacd6dfda168c7eabbc00e48654bb9fd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5529,6 +5579,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
+]
+
+[[package]]
+name = "lopdf"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6ad532ff9262dd4bfd6e085400cbb39959d48cb8d08518b01b68f77bdf6feca"
+dependencies = [
+ "aes 0.9.4",
+ "bitflags 2.13.2",
+ "brotli-decompressor",
+ "cbc 0.2.1",
+ "ecb",
+ "encoding_rs",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap",
+ "itoa",
+ "log",
+ "md-5 0.11.0",
+ "nom 8.0.0",
+ "rand 0.10.3",
+ "rangemap",
+ "sha2 0.11.1",
+ "stringprep",
+ "thiserror 2.0.21",
+ "weezl 0.2.1",
 ]
 
 [[package]]
@@ -6609,6 +6686,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ogg_pager"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "166611b491f939446e64c6be930843a31eb8e6798204ec3e9f57e084c18e7446"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "oid-registry"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7682,7 +7768,7 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 0.8.23",
  "uuid",
- "weezl",
+ "weezl 0.1.12",
  "zerocopy 0.8.63",
 ]
 
@@ -9284,6 +9370,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "stringprep"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4df3d392d81bd458a8a621b8bffbd2302a12ffe288a9d931670948749463b1"
+dependencies = [
+ "unicode-bidi",
+ "unicode-normalization",
+ "unicode-properties",
+]
+
+[[package]]
 name = "strum"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9802,7 +9899,7 @@ dependencies = [
  "flate2",
  "half",
  "quick-error",
- "weezl",
+ "weezl 0.1.12",
  "zune-jpeg 0.5.15",
 ]
 
@@ -10786,6 +10883,12 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weezl"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ca08e5ef825b65b056d9efbd95c8750683f0a6d0466d02e96dc2e4e360f3d2"
 
 [[package]]
 name = "wgpu"
