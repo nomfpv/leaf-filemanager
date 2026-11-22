@@ -966,6 +966,148 @@ pub(crate) fn row_geo(path: &Path) -> Option<(Bounds<Pixels>, String, FileKind)>
     })
 }
 
+/// Plays a sound FILE (wav, ogg, mp3, flac and the other audio files the preview plays) at `volume` (0 to 1), through an audio output
+/// opened once and kept for the session. Sounds overlap: each call adds a voice to one mixer. It plays nothing while "Sounds from
+/// extensions" (Settings > About > Extensions) is off, for a file that cannot be decoded (logged), for one longer than
+/// [`SOUND_MAX_SECS`], and while the system is muted (the output is the system's shared one, so its mute applies). Returns at
+/// once; decoding and mixing run on a thread of their own that waits without polling while nothing plays.
+pub fn play_sound_file(cx: &App, path: impl Into<PathBuf>, volume: f32) {
+    if !ACTIVE.load(Ordering::Relaxed) || !cx.global::<crate::settings::Settings>().ext_sounds {
+        return;
+    }
+    mixer::play(path.into(), volume.clamp(0., 1.));
+}
+
+/// The longest sound file that is played.
+pub const SOUND_MAX_SECS: u32 = 30;
+
+#[cfg(windows)]
+mod mixer {
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock, mpsc};
+
+    struct Req {
+        path: PathBuf,
+        volume: f32,
+    }
+
+    struct Voice {
+        /// Interleaved at the output's rate and channel count.
+        data: Vec<f32>,
+        pos: usize,
+        volume: f32,
+    }
+
+    static TX: OnceLock<Mutex<mpsc::Sender<Req>>> = OnceLock::new();
+
+    pub(super) fn play(path: PathBuf, volume: f32) {
+        let tx = TX.get_or_init(|| {
+            let (tx, rx) = mpsc::channel();
+            if let Err(e) = std::thread::Builder::new().name("leaf-ext-sound".into()).spawn(move || run(rx)) {
+                log::warn!("extension sound: no thread: {e}");
+            }
+            Mutex::new(tx)
+        });
+        if let Ok(tx) = tx.lock() {
+            let _ = tx.send(Req { path, volume });
+        }
+    }
+
+    fn decode(req: &Req, rate: u32, ch: usize) -> Option<Voice> {
+        let media = rf_player::open(&req.path).map_err(|e| log::warn!("extension sound {}: {e:#}", req.path.display())).ok()?;
+        let from = media.info().audio()?.channels as usize;
+        let secs = media.duration().clamp(0., f64::from(super::SOUND_MAX_SECS));
+        let frames = (secs * f64::from(rate)) as usize;
+        if frames == 0 {
+            return None;
+        }
+        let raw = media.audio(0, frames, rate).map_err(|e| log::warn!("extension sound {}: {e:#}", req.path.display())).ok()?;
+        Some(Voice { data: rf_player::map_channels(&raw, from, ch), pos: 0, volume: req.volume })
+    }
+
+    fn run(rx: mpsc::Receiver<Req>) {
+        let mut sink: Option<Box<dyn rf_player::AudioSink>> = None;
+        let mut voices: Vec<Voice> = Vec::new();
+        let mut pending: Vec<Req> = Vec::new();
+        loop {
+            // nothing playing: wait for a request (no polling)
+            if voices.is_empty() && pending.is_empty() {
+                match rx.recv() {
+                    Ok(r) => pending.push(r),
+                    Err(_) => return,
+                }
+            }
+            while let Ok(r) = rx.try_recv() {
+                pending.push(r);
+            }
+            if sink.is_none() {
+                match rf_player::wasapi_sink() {
+                    Ok(s) => sink = Some(s),
+                    Err(e) => {
+                        log::warn!("extension sound: no audio output: {e:#}");
+                        pending.clear();
+                        continue;
+                    }
+                }
+            }
+            let Some(out) = sink.as_mut() else { continue };
+            let (rate, ch) = (out.sample_rate(), out.channels() as usize);
+            for r in pending.drain(..) {
+                if voices.len() < 16
+                    && let Some(v) = decode(&r, rate, ch)
+                {
+                    voices.push(v);
+                }
+            }
+            if voices.is_empty() {
+                continue;
+            }
+            out.pause(false);
+            const CHUNK: usize = 1024;
+            while !voices.is_empty() {
+                let mut buf = vec![0f32; CHUNK * ch];
+                for v in &mut voices {
+                    let n = (v.data.len() - v.pos).min(buf.len());
+                    for (o, i) in buf.iter_mut().zip(&v.data[v.pos..v.pos + n]) {
+                        *o += i * v.volume;
+                    }
+                    v.pos += n;
+                }
+                voices.retain(|v| v.pos < v.data.len());
+                for x in &mut buf {
+                    *x = x.clamp(-1., 1.);
+                }
+                let mut off = 0;
+                while off < buf.len() {
+                    let w = out.write(&buf[off..]);
+                    off += w * ch;
+                    if w == 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+                while let Ok(r) = rx.try_recv() {
+                    pending.push(r);
+                }
+                for r in pending.drain(..) {
+                    if voices.len() < 16
+                        && let Some(v) = decode(&r, rate, ch)
+                    {
+                        voices.push(v);
+                    }
+                }
+            }
+            // the queued tail (the output holds about 100 ms) plays out, then the output rests
+            std::thread::sleep(std::time::Duration::from_millis(160));
+            out.pause(true);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod mixer {
+    pub(super) fn play(_path: std::path::PathBuf, _volume: f32) {}
+}
+
 // ------------------------------------------------------------------------------------------------------------------------- layers and slots
 
 fn layer_of(pick: impl Fn(&Registrar) -> Option<Layer>, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
@@ -1418,6 +1560,16 @@ pub(crate) fn about_rows(p: &crate::theme::Palette, cx: &mut App) -> Vec<AnyElem
         return vec![div().px_1().text_xs().text_color(p.text_secondary).child(format!("{}: {}", crate::t!("Extensions"), crate::t!("none"))).into_any_element()];
     };
     let mut out = vec![section(p, crate::t!("Extensions"))];
+    {
+        let on = cx.global::<crate::settings::Settings>().ext_sounds;
+        out.push(card(
+            p,
+            IconName::Volume2,
+            &crate::t!("Sounds from extensions"),
+            Some(&crate::t!("Lets extensions play sound files. Off: they stay silent.")),
+            switch("ext-sounds", p, on, move |_, cx| crate::settings::update(cx, |s| s.ext_sounds = !on)),
+        ));
+    }
     for (ix, e) in reg.list.iter().enumerate() {
         let (r2, pp) = (reg.clone(), *p);
         let on = !e.off.get();

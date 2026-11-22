@@ -187,7 +187,7 @@ fn video_loop(s: &Shared, media: &Media) {
 }
 
 /// `src` içindeki `from` kanallı araya karışık sesi `to` kanala çevirir.
-fn map_channels(src: &[f32], from: usize, to: usize) -> Vec<f32> {
+pub fn map_channels(src: &[f32], from: usize, to: usize) -> Vec<f32> {
     if from == to || from == 0 {
         return src.to_vec();
     }

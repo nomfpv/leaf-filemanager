@@ -956,6 +956,8 @@ pub struct Settings {
     /// Messages an extension sends between linked friends are passed on (off; needs the friend's own switch too). Only shown while
     /// an extension is registered.
     pub ext_messages: bool,
+    /// Sounds an extension plays from files (Settings > About > Extensions; on). Only shown while an extension is registered.
+    pub ext_sounds: bool,
 }
 
 /// Settings -> General: what a new tab opens.
@@ -1191,6 +1193,7 @@ impl Default for Settings {
             nearby_localsend_pin: String::new(),
             share_port: leaf_share::DEFAULT_PORT,
             ext_messages: false,
+            ext_sounds: true,
         }
     }
 }
