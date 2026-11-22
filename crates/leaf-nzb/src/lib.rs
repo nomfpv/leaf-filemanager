@@ -1,15 +1,22 @@
 //! Usenet (NZB) downloads for leaf: the NZB file, the servers (several, by priority, with connection pools), pipelined NNTP
-//! over leafs dial seam (so the VPN rule holds for every connection), yEnc with CRC checks, parts written straight into place,
+//! over leaf's dial seam (so the VPN rule holds for every connection), yEnc with CRC checks, parts written straight into place,
 //! resume after a restart, par2 verify and repair, unpack, cleanup and the move into the category folder. Blocking threads
-//! only, no async runtime; leafs Status Center is the face (rf-apps `usenet.rs`).
+//! only, no async runtime; leaf's Status Center is the face (rf-app's `usenet.rs`).
 
 pub mod dial;
 pub mod engine;
+pub mod job;
 pub mod nntp;
 pub mod nzb;
+pub mod par;
+pub mod post;
+pub mod queue;
 pub mod server;
 pub mod yenc;
+#[cfg(test)]
+mod tests;
 
+pub use job::{Done, Error, Host, Spec, Step, run};
 pub use nzb::{Nzb, NzbFile, ParseError, Segment, parse};
 pub use server::{Password, Priority, Server};
 
