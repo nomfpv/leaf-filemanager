@@ -248,6 +248,49 @@ pub fn seek_penalty(path: &std::path::Path) -> Option<bool> {
     }
 }
 
+/// Bytes read and written since boot on the volume under `path` (counters of the disk driver, `IOCTL_DISK_PERFORMANCE`): `None` when
+/// they can't be read (network paths, no access, counters off). Two readings a while apart give the throughput. No admin needed.
+pub fn disk_counters(path: &std::path::Path) -> Option<(u64, u64)> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows::Win32::System::IO::DeviceIoControl;
+    use windows::Win32::System::Ioctl::{DISK_PERFORMANCE, IOCTL_DISK_PERFORMANCE};
+    let s = path.to_str()?;
+    let b = s.as_bytes();
+    if b.len() < 2 || b[1] != b':' || !b[0].is_ascii_alphabetic() {
+        return None;
+    }
+    let dev = crate::wide::wide(format!(r"\\.\{}:", b[0] as char));
+    unsafe {
+        let h = CreateFileW(
+            windows::core::PCWSTR(dev.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            None,
+        )
+        .map_err(|e| log::debug!("disk_counters open: {e}"))
+        .ok()?;
+        let mut d = std::mem::zeroed::<DISK_PERFORMANCE>();
+        let mut got = 0u32;
+        let ok = DeviceIoControl(
+            h,
+            IOCTL_DISK_PERFORMANCE,
+            None,
+            0,
+            Some(&mut d as *mut _ as *mut _),
+            std::mem::size_of::<DISK_PERFORMANCE>() as u32,
+            Some(&mut got),
+            None,
+        );
+        let _ = CloseHandle(h);
+        ok.map_err(|e| log::debug!("disk_counters ioctl: {e}")).ok()?;
+        Some((d.BytesRead.max(0) as u64, d.BytesWritten.max(0) as u64))
+    }
+}
+
 #[cfg(test)]
 mod seek_tests {
     #[test]

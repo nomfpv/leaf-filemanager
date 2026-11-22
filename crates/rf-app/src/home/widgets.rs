@@ -83,8 +83,74 @@ fn media_of(root: &std::path::Path, local: bool, cx: &mut Context<FolderView>) -
     }
 }
 
+/// Read and write throughput per local drive root, from two readings of the disk counters (`leaf_sys::drives::disk_counters`).
+#[derive(Default)]
+struct Io {
+    roots: Vec<std::path::PathBuf>,
+    last: std::collections::HashMap<std::path::PathBuf, (std::time::Instant, u64, u64)>,
+    rate: std::collections::HashMap<std::path::PathBuf, (u64, u64)>,
+    running: bool,
+    /// When the drive tiles were last drawn: the sampling stops a few seconds after the Home page is no longer on screen.
+    seen: Option<std::time::Instant>,
+}
+static IO: std::sync::Mutex<Option<Io>> = std::sync::Mutex::new(None);
+
+fn io_with<R>(f: impl FnOnce(&mut Io) -> R) -> Option<R> {
+    IO.lock().ok().map(|mut g| f(g.get_or_insert_with(Default::default)))
+}
+
+/// Called while the drive tiles are drawn: keeps the sampler running (one reading every 2 seconds, off the UI thread) and lets it
+/// stop by itself when the tiles have not been drawn for 5 seconds.
+fn io_touch(roots: Vec<std::path::PathBuf>, cx: &mut Context<FolderView>) {
+    let start = io_with(|io| {
+        io.seen = Some(std::time::Instant::now());
+        io.roots = roots;
+        !std::mem::replace(&mut io.running, true)
+    });
+    if start != Some(true) {
+        return;
+    }
+    cx.spawn(async move |this, cx| {
+        loop {
+            let roots = io_with(|io| {
+                if io.seen.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(5)) {
+                    io.running = false;
+                    // (a reading taken long ago is no base for the next one)
+                    io.last.clear();
+                    io.rate.clear();
+                    return None;
+                }
+                Some(io.roots.clone())
+            })
+            .flatten();
+            let Some(roots) = roots else { break };
+            let got = cx
+                .background_executor()
+                .spawn(async move { roots.into_iter().filter_map(|r| leaf_sys::drives::disk_counters(&r).map(|(rd, wr)| (r, rd, wr))).collect::<Vec<_>>() })
+                .await;
+            let now = std::time::Instant::now();
+            io_with(|io| {
+                for (root, rd, wr) in got {
+                    if let Some((t0, r0, w0)) = io.last.get(&root) {
+                        let secs = now.duration_since(*t0).as_secs_f64().max(0.001);
+                        io.rate.insert(root.clone(), ((rd.saturating_sub(*r0) as f64 / secs) as u64, (wr.saturating_sub(*w0) as f64 / secs) as u64));
+                    }
+                    io.last.insert(root, (now, rd, wr));
+                }
+            });
+            if this.update(cx, |_, cx| cx.notify()).is_err() {
+                io_with(|io| io.running = false);
+                break;
+            }
+            cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+        }
+    })
+    .detach();
+}
+
 pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> Option<AnyElement> {
     let drives = v.places.read(cx).drives.clone();
+    io_touch(drives.iter().filter(|d| matches!(d.kind, leaf_sys::DriveKind::Fixed | leaf_sys::DriveKind::Removable)).map(|d| d.root.clone()).collect(), cx);
     let p = &w.p;
     let mut grid = div().grid().grid_cols(tile_cols(w.width, 240., 340., 12.)).gap_3();
     for (i, d) in drives.into_iter().enumerate() {
@@ -120,7 +186,10 @@ pub fn drives(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) ->
                                 } else {
                                     String::new()
                                 }))
-                                .when(!kind_line.is_empty(), |c| c.child(div().text_xs().text_color(p.text_tertiary).child(kind_line))),
+                                .when(!kind_line.is_empty(), |c| c.child(div().text_xs().text_color(p.text_tertiary).child(kind_line)))
+                                .children(io_with(|io| io.rate.get(&d.root).copied()).flatten().map(|(rd, wr)| {
+                                    div().text_xs().text_color(p.text_tertiary).child(format!("{} {}/s · {} {}/s", t!("Read"), format::size(rd), t!("Write"), format::size(wr)))
+                                })),
                         )
                         // where the space goes, as its own tab (the card itself opens the drive)
                         .child(

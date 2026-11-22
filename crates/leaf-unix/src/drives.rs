@@ -251,3 +251,27 @@ pub fn seek_penalty(path: &Path) -> Option<bool> {
     let read = |d: &Path| std::fs::read_to_string(d.join("queue/rotational")).ok().map(|t| t.trim() == "1");
     read(&sys).or_else(|| read(sys.parent()?))
 }
+
+/// Bytes read and written since boot on the disk under `path` (`/proc/diskstats`, sectors of 512 bytes, of the block device the mount
+/// comes from): `None` for network and virtual mounts and when the device cannot be found. Two readings a while apart give the
+/// throughput.
+pub fn disk_counters(path: &Path) -> Option<(u64, u64)> {
+    let text = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let source = text
+        .lines()
+        .filter_map(parse_mount_line)
+        .filter(|(m, _, s)| s.starts_with("/dev/") && path.starts_with(m))
+        .max_by_key(|(m, _, _)| m.len())?
+        .2;
+    let dev = std::fs::canonicalize(&source).ok()?;
+    let name = dev.file_name()?.to_str()?.to_string();
+    let stats = std::fs::read_to_string("/proc/diskstats").ok()?;
+    stats.lines().find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.get(2) != Some(&name.as_str()) {
+            return None;
+        }
+        Some((f.get(5)?.parse::<u64>().ok()? * 512, f.get(9)?.parse::<u64>().ok()? * 512))
+    })
+}
