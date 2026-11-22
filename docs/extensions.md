@@ -49,7 +49,10 @@ most twice a second per job), `DownloadFinished { name, size, kind }`, `WindowFo
 `Frame { dt_ms }` (only while frames were asked for, see Animation), `FriendLink { friend, friend_name, online }`,
 `PeerMessage { .. }`, `ItemRenamed { from, to }` (an item of a folder on this PC was renamed in the file list and it worked; not sent for
 renames inside an archive or on a server) and `SceneEnded { ext_id, by_escape }` (the scene of that extension ended: `by_escape` when
-the user pressed Esc, otherwise its time ran out, `end_scene` was called or another scene replaced it).
+the user pressed Esc, otherwise its time ran out, `end_scene` was called or another scene replaced it), `DeleteCompleted { paths,
+permanent, bytes }` (a delete or Trash job succeeded as a whole; a failed or cancelled one sends nothing; `bytes` is the size of the
+files among the first 200 items, as for `ItemsDeleted`) and `PointerMoved { pos }` (the pointer moved over the window, window
+coordinates, at most 60 a second; sent only to an extension that called `pointer_moves()` in its registration).
 
 ```rust
 e.subscribe(|ev, _cx| if let Event::FolderOpened { items, .. } = ev { println!("{items} items") });
@@ -70,7 +73,8 @@ key presses while the scene is up; they do not reach leaf. Esc is never delivere
 
 **Geometry** (window coordinates, recorded only while an extension is registered, from the last frames): `ext::row_rect(path)`
 (a visible file row), `ext::content_rect()`, `ext::pane_rects()` (one or two file panes, left to right), `ext::card_rect(job)` and
-`ext::progress_rect(job)` (a Status Center card and its bar, by the job id of the operation events), `ext::pointer(&Window)`.
+`ext::progress_rect(job)` (a Status Center card and its bar, by the job id of the operation events), `ext::pointer(&Window, &App) -> Option<Point<Pixels>>` (the pointer in window
+coordinates; `None` while the window is not the active one).
 
 ```rust
 e.overlay(|_w, _cx| div().absolute().right(px(8.)).bottom(px(8.)).size(px(6.)).rounded_full().bg(ext::theme().accent).into_any_element());
@@ -107,6 +111,10 @@ e.menu_entry(MenuTarget::Files, Command::new("n", "Count", |ctx, _| println!("{}
 
 **Presentation hooks** (display only):
 - `display_name(|&Path| -> Option<String>)`: the text shown instead of a name in the file list, tab titles and address crumbs.
+- `icon_style(|&Path, &IconInfo| -> Option<IconStyle>)`: restyles a row's icon in the details list. `IconInfo { is_dir, kind, color, picture }`
+  says what leaf would draw (the colour of its line icon, and whether it is already a picture). `IconStyle { tint, overlay, replace }`
+  (all optional, all combine) gives a colour for the line icon, an SVG asset drawn over it in that colour, or a picture instead of it.
+  `None` keeps the icon. It is called for each row while the list is painted, so keep it cheap; with no hook it is one flag check per row.
 - `row_decoration(|&RowInfo| -> Option<AnyElement>)`: an extra element after a row's name.
 - `icon_override(|&Path| -> Option<Arc<RenderImage>>)`: a picture instead of the icon.
 - `progress_bar(|&ProgressInfo| -> Option<AnyElement>)`: the element drawn in place of a transfer's progress bar in the Status Center

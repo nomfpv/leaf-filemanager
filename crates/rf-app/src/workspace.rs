@@ -6664,6 +6664,7 @@ impl Render for Workspace {
                 crate::terminal::open_location(&loc, cx);
             }))
             .relative()
+            .on_mouse_move(|ev: &MouseMoveEvent, _, cx| crate::ext::note_pointer(ev.position, cx))
             // an extension's full-window scene always ends on Esc (a question of leaf's own is answered first)
             .capture_key_down(cx.listener(|_, ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key == "escape" && crate::ext::scene_active() && crate::prompt::current(window, cx).is_none() {

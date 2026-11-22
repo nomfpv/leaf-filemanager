@@ -5166,6 +5166,28 @@ impl FolderView {
             });
             // (display only: an extension's picture instead of the icon)
             let shell_icon = if crate::ext::has_icon_hook() { self.path_of(ei).and_then(|p| crate::ext::icon_override(&p)).or(shell_icon) } else { shell_icon };
+            // (display only: an extension may tint, overlay or replace the line icon; one flag per row while none is registered)
+            let icon_style = if crate::ext::has_icon_style() {
+                self.path_of(ei).and_then(|path| {
+                    let is_dir = self.entries[ei as usize].is_dir();
+                    let info = crate::ext::IconInfo { is_dir, kind: crate::ext::FileKind::of_name(&self.entries[ei as usize].name, is_dir), color: kind_c, picture: shell_icon.is_some() };
+                    crate::ext::icon_style(&path, &info)
+                })
+            } else {
+                None
+            };
+            let shell_icon = match icon_style.as_ref().and_then(|s| s.replace.clone()) {
+                Some(im) => Some(im),
+                None => shell_icon,
+            };
+            let icon_c = icon_style.as_ref().and_then(|s| s.tint).unwrap_or(kind_c);
+            let icon_overlay = icon_style.as_ref().and_then(|s| s.overlay.clone());
+            let with_overlay = move |el: AnyElement| -> AnyElement {
+                match &icon_overlay {
+                    Some(path) => div().relative().size(px(16.)).flex_shrink_0().child(el).child(svg().absolute().top_0().left_0().size(px(16.)).path(path.clone()).text_color(icon_c)).into_any_element(),
+                    None => el,
+                }
+            };
             // an extension's mark after the name (one flag per row while none is registered)
             let row_ext: Vec<AnyElement> = if crate::ext::has_row_hook() {
                 self.path_of(ei).map(|path| crate::ext::row_decoration(&crate::ext::RowInfo { path, is_dir: self.entries[ei as usize].is_dir(), selected })).unwrap_or_default()
@@ -5523,11 +5545,11 @@ impl FolderView {
                             )
                         })
                         .child(link_marked(
-                            match &shell_icon {
+                            with_overlay(match &shell_icon {
                                 Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().when(is_cut, |d| d.opacity(0.5)).into_any_element(),
                                 // a folder's outline gets a light fill of its colour (the mockups': 26 %), laid under the line
                                 None if cat == Category::Folder => {
-                                    let c = kind_c;
+                                    let c = icon_c;
                                     div()
                                         .relative()
                                         .size(px(16.))
@@ -5540,10 +5562,10 @@ impl FolderView {
                                 None => Icon::new(icons::icon_for(cat))
                                     .size(px(16.))
                                     .flex_shrink_0()
-                                    .text_color(kind_c)
+                                    .text_color(icon_c)
                                     .when(is_cut, |d| d.opacity(0.5))
                                     .into_any_element(),
-                            },
+                            }),
                             px(16.),
                             e.link,
                             overlay,

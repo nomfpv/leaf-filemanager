@@ -1885,6 +1885,7 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
     let own_id = std::rc::Rc::new(std::cell::Cell::new(0u64));
     let own_id_done = own_id.clone();
     let retry_paths = paths.clone();
+    let done_paths = crate::ext::active().then(|| paths.clone());
     // (as administrator nothing goes to the Recycle Bin: a bin delete is offered again as a permanent one, asked first)
     let offer_retry = true;
     // for the extensions: the names and sizes as they are before the delete (read only when one is registered)
@@ -1895,6 +1896,10 @@ pub fn delete_ex(cx: &mut App, paths: Vec<std::path::PathBuf>, permanent: bool, 
         (names, sizes, paths.len())
     });
     let on_done: Option<OnDone> = Some(Box::new(move |ok, cx: &mut App| {
+        if ok && let Some(done) = done_paths && let Some((_, sizes, _)) = &gone {
+            let bytes = sizes.iter().sum();
+            crate::ext::emit(cx, || crate::ext::Event::DeleteCompleted { paths: done, permanent, bytes });
+        }
         if ok && let Some((names, sizes, total)) = gone {
             crate::ext::emit(cx, || crate::ext::Event::ItemsDeleted { names, sizes, permanent, total });
         }

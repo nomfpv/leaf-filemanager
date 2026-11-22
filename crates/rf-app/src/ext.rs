@@ -181,6 +181,12 @@ pub enum Event {
     /// The scene of extension `ext_id` ended. `by_escape`: the user pressed Esc; otherwise its time ran out, [`end_scene`] was called
     /// or another scene replaced it.
     SceneEnded { ext_id: String, by_escape: bool },
+    /// The pointer moved over the main window (window coordinates), at most 60 times a second. Delivered only to extensions that
+    /// asked for it with [`Registrar::pointer_moves`].
+    PointerMoved { pos: Point<Pixels> },
+    /// A delete or Trash job finished and succeeded as a whole (a job that failed or was cancelled sends nothing). `paths` are the
+    /// items asked for; `bytes` is the size of the files among the first 200 of them (what [`Event::ItemsDeleted`] lists).
+    DeleteCompleted { paths: Vec<PathBuf>, permanent: bool, bytes: u64 },
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- types
@@ -395,6 +401,28 @@ impl Default for ViewState {
     }
 }
 
+/// What an icon style hook is told about the icon leaf is about to draw for a row.
+#[derive(Clone, Debug)]
+pub struct IconInfo {
+    pub is_dir: bool,
+    pub kind: FileKind,
+    /// The colour leaf draws the line icon in (a picture icon ignores it).
+    pub color: Hsla,
+    /// The row already has a picture icon (a Windows icon, an icon pack, an extension's [`Registrar::icon_override`]).
+    pub picture: bool,
+}
+
+/// How an extension restyles a row's icon. All parts are optional and combine.
+#[derive(Clone, Default)]
+pub struct IconStyle {
+    /// Draw the line icon in this colour instead (and the folder's light fill in it).
+    pub tint: Option<Hsla>,
+    /// A small SVG (an asset path the toolkit can load) drawn over the icon, in the icon's colour.
+    pub overlay: Option<SharedString>,
+    /// A picture drawn instead of the icon.
+    pub replace: Option<Arc<RenderImage>>,
+}
+
 /// The height of the slot an extension's progress bar visual gets (the normal bar is 4 pixels).
 pub const PROGRESS_SLOT_H: f32 = 20.;
 
@@ -523,6 +551,8 @@ pub struct Registrar {
     progress_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<AnyElement>>>,
     speed_hook: Option<Rc<dyn Fn(&ProgressInfo) -> Option<String>>>,
     escape_hooks: Vec<Rc<dyn Fn(&mut Window, &mut App) -> bool>>,
+    icon_style_hook: Option<Rc<dyn Fn(&Path, &IconInfo) -> Option<IconStyle>>>,
+    want_pointer: bool,
     regions: Option<Rc<dyn Fn(&mut App) -> Vec<Bounds<Pixels>>>>,
     pointer_hook: Option<Rc<dyn Fn(&PointerEvent, &mut App)>>,
     key_hook: Option<Rc<dyn Fn(&KeyPress, &mut App)>>,
@@ -611,6 +641,16 @@ impl Registrar {
     pub fn speed_text(&mut self, f: impl Fn(&ProgressInfo) -> Option<String> + 'static) {
         self.speed_hook = Some(Rc::new(f));
     }
+    /// Display only: restyles the icon of a file row in the details list. The hook is told the icon leaf would draw (kind, colour,
+    /// whether it is a picture) and may return a tint, an SVG overlay or a replacement picture; `None` keeps the icon. Called for each
+    /// row while the list is painted, so keep it cheap (cache by kind or extension); it costs one flag check per row with no hook.
+    pub fn icon_style(&mut self, f: impl Fn(&Path, &IconInfo) -> Option<IconStyle> + 'static) {
+        self.icon_style_hook = Some(Rc::new(f));
+    }
+    /// Asks for [`Event::PointerMoved`] (off by default: other extensions are not sent it).
+    pub fn pointer_moves(&mut self) {
+        self.want_pointer = true;
+    }
     /// Esc handler: called when Esc is pressed in the main window, before leaf's own Esc handling and also outside scenes. Returning
     /// `true` means consumed (leaf does nothing more with that press), `false` lets leaf's normal Esc run. Not called while a scene is
     /// up (Esc ends it) or while a question of leaf's own is open (Esc answers it). Several handlers run in registration order until
@@ -698,6 +738,8 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static NAME_HOOK: AtomicBool = AtomicBool::new(false);
 static ROW_HOOK: AtomicBool = AtomicBool::new(false);
 static ICON_HOOK: AtomicBool = AtomicBool::new(false);
+static ICON_STYLE: AtomicBool = AtomicBool::new(false);
+static POINTER_WANTED: AtomicBool = AtomicBool::new(false);
 
 fn registry() -> Option<Rc<Registry>> {
     if !ACTIVE.load(Ordering::Relaxed) {
@@ -767,6 +809,8 @@ impl Registry {
         NAME_HOOK.store(any(|r| r.name_hook.is_some()), Ordering::Relaxed);
         ROW_HOOK.store(any(|r| r.row_hook.is_some()), Ordering::Relaxed);
         ICON_HOOK.store(any(|r| r.icon_hook.is_some()), Ordering::Relaxed);
+        ICON_STYLE.store(any(|r| r.icon_style_hook.is_some()), Ordering::Relaxed);
+        POINTER_WANTED.store(any(|r| r.want_pointer), Ordering::Relaxed);
     }
 }
 
@@ -793,7 +837,11 @@ pub(crate) fn install(ext: Extensions, cx: &mut App) {
 
 fn dispatch(ev: &Event, cx: &mut App) {
     let Some(reg) = registry() else { return };
+    let moved = matches!(ev, Event::PointerMoved { .. });
     for (_, e) in reg.on() {
+        if moved && !e.r.want_pointer {
+            continue;
+        }
         for s in &e.r.subs {
             let s = s.clone();
             guard(&e.id, || s(ev, cx));
@@ -1223,9 +1271,26 @@ pub fn progress_rect(id: u64) -> Option<Bounds<Pixels>> {
     })
 }
 
-/// The pointer's position in window coordinates.
-pub fn pointer(window: &Window) -> Point<Pixels> {
-    window.mouse_position()
+/// The pointer's position in window coordinates; `None` while no extension is registered or the window is not the active one.
+pub fn pointer(window: &Window, _cx: &App) -> Option<Point<Pixels>> {
+    (ACTIVE.load(Ordering::Relaxed) && window.is_window_active()).then(|| window.mouse_position())
+}
+
+thread_local! {
+    static LAST_MOVE: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+
+/// A mouse move over the main window: an event for the extensions that asked, at most 60 a second.
+pub(crate) fn note_pointer(pos: Point<Pixels>, cx: &mut App) {
+    if !POINTER_WANTED.load(Ordering::Relaxed) {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if LAST_MOVE.get().is_some_and(|t| now.duration_since(t).as_micros() < 16_000) {
+        return;
+    }
+    LAST_MOVE.set(Some(now));
+    emit(cx, || Event::PointerMoved { pos });
 }
 
 /// A row recorded for the transition hooks: `(rect, name, kind)`.
@@ -1879,6 +1944,15 @@ pub(crate) fn row_decoration(info: &RowInfo) -> Vec<AnyElement> {
 
 pub(crate) fn has_icon_hook() -> bool {
     ICON_HOOK.load(Ordering::Relaxed)
+}
+
+pub(crate) fn has_icon_style() -> bool {
+    ICON_STYLE.load(Ordering::Relaxed)
+}
+
+pub(crate) fn icon_style(path: &Path, info: &IconInfo) -> Option<IconStyle> {
+    let reg = registry()?;
+    reg.on().find_map(|(_, e)| e.r.icon_style_hook.as_ref().and_then(|f| guard(&e.id, || f(path, info)).flatten()))
 }
 
 pub(crate) fn icon_override(path: &Path) -> Option<Arc<RenderImage>> {
