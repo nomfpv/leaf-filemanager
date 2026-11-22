@@ -385,6 +385,24 @@ const W_PAD: f32 = 16.;
 /// The heading row of a widget.
 const HEAD_H: f32 = 24.;
 
+/// The height a widget of tiles needs to show all of them (0: not a tile widget): heading, padding and its rows of tiles.
+fn tiles_height(id: &str, width: f32, v: &FolderView, cx: &App) -> f32 {
+    use crate::folder_view::tile_cols;
+    let places = v.places.read(cx);
+    let (count, min, max, tile_h) = match id {
+        "drives" => (places.drives.len(), 240., 340., 116.),
+        "tags" => (cx.global::<crate::tags::Tags>().0.defs.len(), 140., 220., 64.),
+        "devices" => (places.devices.len(), 240., 340., 52.),
+        "network" => (places.network.len(), 240., 340., 64.),
+        _ => return 0.,
+    };
+    if count == 0 {
+        return 0.;
+    }
+    let rows = count.div_ceil(usize::from(tile_cols(width, min, max, 12.))) as f32;
+    HEAD_H + 12. + 2. * W_PAD + rows * tile_h + (rows - 1.) * 12.
+}
+
 /// The Home page.
 pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
     let p = *p;
@@ -409,7 +427,8 @@ pub fn render(v: &mut FolderView, p: &Palette, cx: &mut Context<FolderView>) -> 
         let span = size.span(cols);
         let width = col_w * f32::from(span) + gap * f32::from(span - 1) - 2. * W_PAD;
         let rows = size.rows(w.rows);
-        let card_h = f32::from(rows) * p.home_row + f32::from(rows - 1) * gap;
+        // (tile widgets grow to hold every tile: a row of drives or tags is never cut off by the fixed row unit)
+        let card_h = (f32::from(rows) * p.home_row + f32::from(rows - 1) * gap).max(tiles_height(w.id, width, v, cx));
         let body = (w.render)(v, &WidgetCx { p, size, width }, cx);
         if body.is_none() && !editing {
             continue;
