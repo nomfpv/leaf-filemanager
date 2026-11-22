@@ -62,10 +62,14 @@ enum Row {
     Folder(PathBuf),
     /// An index into `tabs`.
     Tab(usize),
+    /// An index into the guide's topics (`guide_topics::TOPICS`): "How do I: ...".
+    Guide(usize),
 }
 
 /// How many rows are listed under the typed path's row.
 const VISIBLE: usize = 12;
+/// At most this many guide topics under the commands.
+const GUIDE_ROWS: usize = 3;
 /// At most this many past folders among the commands (the folder-only mode lists [`VISIBLE`]).
 const FOLDERS_AMONG_COMMANDS: usize = 5;
 
@@ -162,6 +166,10 @@ fn filter(mode: PaletteMode, cmds: &[Cmd], folders: &[crate::folder_history::Vis
             out.extend(f.next().map(|(_, p)| Row::Folder(p)));
         }
     }
+    // the guide's topics that fit what is typed, after the commands and folders ("How do I: ...")
+    if matches!(mode, PaletteMode::Commands { .. }) && !q.is_empty() {
+        out.extend(crate::guide_page::matching(&q, GUIDE_ROWS).into_iter().filter_map(|t| crate::guide_topics::TOPICS.iter().position(|x| x.id == t.id)).map(Row::Guide));
+    }
     out
 }
 
@@ -213,6 +221,10 @@ impl CommandPalette {
         match self.filtered.get(ix) {
             Some(Row::Cmd(ci)) => cx.emit(PaletteEvent::Run(self.cmds[*ci].make_action())),
             Some(Row::Folder(p)) => cx.emit(PaletteEvent::Navigate(p.clone())),
+            Some(Row::Guide(ti)) => {
+                crate::guide_page::set_focus(crate::guide_topics::TOPICS[*ti].id, cx);
+                cx.emit(PaletteEvent::Run(Box::new(crate::actions::ShowGuide)));
+            }
             Some(Row::Tab(ti)) => {
                 let t = &self.tabs[*ti];
                 if self.mode == PaletteMode::Worktrees {
@@ -277,6 +289,7 @@ impl Render for CommandPalette {
                     let c = &self.cmds[ci];
                     (c.icon, crate::i18n::t(c.title).to_string(), c.shown_keys().into())
                 }
+                Row::Guide(ti) => (L::BookOpen, format!("{} {}", crate::t!("How do I:"), crate::i18n::t(crate::guide_topics::TOPICS[ti].title)), crate::t!("Guide").into()),
                 Row::Folder(path) => (
                     L::Folder,
                     rf_core::history::display_name(&path),
