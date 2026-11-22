@@ -24,6 +24,38 @@ replace the files. Uninstall removes the folder and the shortcut; it refuses whi
 at that folder (turn it off in Settings first, or pass `-Force`). Settings in `%APPDATA%` stay. This kind of install is not a
 Velopack install and does not update itself.
 
+## Install for all users (Program Files)
+```powershell
+tools\package.ps1                         # once, as above
+tools\install-local.ps1 -AllUsers         # asks for administrator permission ONCE (the normal UAC prompt, from the script)
+tools\install-local.ps1 -AllUsers -Uninstall
+tools\install-local.ps1 -AllUsers -DryRun # prints what it would do and changes nothing (also works with -Uninstall)
+```
+Installs to `%ProgramFiles%\leaf`: replaced as a whole on every run (run it again with a newer stage to update), owner
+Administrators, the access list Program Files hands down (users: read and execute), a Start menu shortcut for all users
+(`%ProgramData%`), an entry in Windows' Apps list (`HKLM\...\Uninstall\leaf`) that runs `uninstall.ps1` from the install folder
+(which asks for permission and removes the folder, the shortcut and the entry). The script never elevates silently and a
+`-DryRun` never asks. The uninstall turns off "Default file manager" for the user who runs it; other users' registrations that name
+the removed files are re-pointed by leaf the next time it starts for them (the launcher opens Explorer meanwhile).
+
+What stays per user in both kinds of install: settings, journals, caches and logs (`%APPDATA%\leaf`), the default-file-manager
+registration and its launcher (`%LOCALAPPDATA%\leaf-default-fm`), the browser hand-over host registration, the start-with-Windows
+entries (all HKCU, pointing at wherever leaf is installed). leaf writes nothing beside its programs (a portable copy's `data\`
+folder, made only where a `.portable` file asks for it, is the one exception), so a read-only install folder works. When a copy of
+one kind starts, it takes over registrations that name the other kind (an all-users install replaces a per-user one's and the
+other way round); a build folder or portable copy never does.
+
+| | Per user (`install-local.ps1`, Velopack setup) | All users (`-AllUsers`) |
+|---|---|---|
+| Folder | `%LOCALAPPDATA%\Programs\leaf` / `%LOCALAPPDATA%\leaf` | `%ProgramFiles%\leaf` |
+| Needs administrator permission | no | once, at install and uninstall |
+| "Retry as administrator" (leaf-helper.exe) | **no**: any program of the user could replace the helper, so leaf refuses to start it elevated (Settings, About says so) | yes |
+| Built-in updater | Velopack install only, and only with a feed (see Updates) | off: "Installed for all users: update by running the installer again" |
+| Start menu | this user | everyone |
+
+A per-machine Velopack setup (in Program Files) is treated as an all-users install too (updater off). Whether your `vpk` can make
+one (`vpk pack --help`, the install-location option) depends on its version; `package.ps1` makes a per-user setup.
+
 ## Install with the Velopack installer
 `dist\release\leaf-win-Setup.exe` installs to `%LOCALAPPDATA%\leaf` (program in `current\`, `Update.exe` beside it), with
 shortcuts. Uninstalling from Windows' Apps list runs leaf's hook, which turns off the default file manager, the start-with-Windows
@@ -47,7 +79,7 @@ Off by default, and leaf contains no feed address. Settings, About: "Check for l
 Only with the switch on **and** an address written (https, or a folder on this PC) does the button "Check for updates" do
 anything; otherwise no code that could contact a server runs. leaf checks only when that button is pressed, never on its own.
 A found update is downloaded and checked by Velopack against the SHA1 / SHA256 in the feed, then "Restart and update" applies it.
-Only a Velopack install updates; `install-local.ps1` copies and a build in `target\` report "not installed with the setup".
+Only a per-user Velopack install updates (an all-users install never does); `install-local.ps1` copies and a build in `target\` report "not installed with the setup".
 
 To publish a feed: put the contents of `dist\release\` on any static https host (or a folder) and write its address into
 the setting. Uploading is up to you; the scripts never do it.
