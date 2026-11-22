@@ -48,6 +48,8 @@ pub struct Options {
     /// Keep plain subtitle / caption tracks of a video (MP4 / MOV). Off: they are emptied like every other track that is not
     /// picture or sound.
     pub keep_subtitles: bool,
+    /// Keep the reduced-resolution preview pictures inside TIFF files (off: removed, they can show the uncropped original).
+    pub keep_previews: bool,
 }
 
 /// One thing a file carries.

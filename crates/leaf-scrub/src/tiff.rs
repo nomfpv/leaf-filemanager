@@ -170,12 +170,51 @@ fn plan(d: &[u8], opts: &Options) -> Result<Plan> {
     let mut seen = BTreeSet::new();
     let mut off = rd.u32(d, 4)?;
     let mut ifds = 0;
+    // where the pointer to the next directory sits, in the output, for the directory before this one: (position, index of the
+    // patch that rewrites that directory, if any)
+    let mut prev_next: (usize, Option<usize>) = (4, None);
+    let mut previews = 0;
     while off != 0 {
         if off < 8 || !seen.insert(off) || ifds >= 4096 {
             return bad("the TIFF directory chain is damaged");
         }
         ifds += 1;
         let (entries, next) = read_ifd(d, rd, off)?;
+        // a reduced-resolution copy (NewSubfileType bit 0) after the main picture: a preview that can show the picture before
+        // it was cropped or edited. It leaves the chain, its table, values and picture data are zeroed.
+        let reduced = ifds > 1
+            && !opts.keep_previews
+            && entries.iter().find(|e| e.tag == 254).and_then(|e| numbers(d, rd, e).ok()).and_then(|v| v.first().copied()).is_some_and(|v| v & 1 != 0);
+        if reduced {
+            let size = |t: usize| entries.iter().find(|e| e.tag == t).and_then(|e| numbers(d, rd, e).ok()).and_then(|v| v.first().copied()).unwrap_or(0);
+            p.findings.push(Finding::new("Preview picture (reduced-resolution copy)", format!("{} × {}", size(256), size(257)), true));
+            previews += 1;
+            zero.push((off, off + 2 + 12 * entries.len() + 4));
+            for e in &entries {
+                if !e.inline {
+                    zero.push(e.data);
+                }
+            }
+            for (o, c) in [(273, 279), (324, 325)] {
+                let offs = entries.iter().find(|e| e.tag == o).map(|e| numbers(d, rd, e)).transpose()?.unwrap_or_default();
+                let counts = entries.iter().find(|e| e.tag == c).map(|e| numbers(d, rd, e)).transpose()?.unwrap_or_default();
+                for (a, n) in offs.iter().zip(&counts) {
+                    let end = a.checked_add(*n).filter(|e| *e <= d.len()).ok_or_else(|| ScrubError::Malformed("the picture data is cut off".into()))?;
+                    zero.push((*a, end));
+                }
+            }
+            // the directory before points past this one
+            let bytes = if rd.le { (next as u32).to_le_bytes() } else { (next as u32).to_be_bytes() };
+            match prev_next.1 {
+                Some(i) => {
+                    let at = prev_next.0 - p.patches[i].0;
+                    p.patches[i].1[at..at + 4].copy_from_slice(&bytes);
+                }
+                None => p.patches.push((prev_next.0, bytes.to_vec())),
+            }
+            off = next;
+            continue;
+        }
         kept.push((off, off + 2 + 12 * entries.len() + 4));
         let mut keep_entries: Vec<&Entry> = Vec::new();
         let mut offs: Vec<usize> = vec![];
@@ -237,7 +276,9 @@ fn plan(d: &[u8], opts: &Options) -> Result<Plan> {
         if p.strips.is_empty() {
             return bad("the TIFF has no picture data");
         }
+        prev_next = (off + 2 + 12 * entries.len(), None);
         if keep_entries.len() != entries.len() {
+            prev_next = (off + 2 + 12 * keep_entries.len(), Some(p.patches.len()));
             let mut b = Vec::with_capacity(2 + 12 * entries.len() + 4);
             let cnt = keep_entries.len() as u16;
             b.extend_from_slice(&if rd.le { cnt.to_le_bytes() } else { cnt.to_be_bytes() });
@@ -258,6 +299,9 @@ fn plan(d: &[u8], opts: &Options) -> Result<Plan> {
     }
     for (a, b) in zero {
         p.patches.push((a, vec![0u8; b - a]));
+    }
+    if previews > 0 {
+        p.notes.push(format!("{previews} preview picture(s) were taken out of the file: a preview can show the picture as it was before it was cropped or edited."));
     }
     p.notes.push("The picture data (strips and tiles) is not touched. Tags leaf does not know are removed with the rest.".into());
     Ok(p)

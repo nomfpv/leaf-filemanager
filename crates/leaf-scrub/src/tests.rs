@@ -11,7 +11,7 @@ fn tmp_dir(name: &str) -> PathBuf {
 }
 
 fn opts() -> Options {
-    Options { keep_color_profile: true, keep_cover_art: false, reset_times: false, remove_signatures: false, keep_subtitles: false }
+    Options { keep_color_profile: true, keep_cover_art: false, reset_times: false, remove_signatures: false, keep_subtitles: false, keep_previews: false }
 }
 
 fn no_cancel() -> bool {
@@ -1750,5 +1750,61 @@ fn scrub_svg_local_paths_in_links_are_reduced_to_the_file_name() {
     let out = fs::read_to_string(&dst).unwrap();
     assert!(out.contains("xlink:href=\"pic.png\"") && out.contains("href=\"doc.pdf\"") && out.contains("href=\"#local\""), "{out}");
     assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A reduced-resolution preview in a TIFF (it can show the picture before it was cropped) leaves the directory chain and its
+/// picture data is zeroed; a second full page after it stays reachable and byte for byte the same.
+#[test]
+fn scrub_tiff_preview_pictures_are_removed_and_the_chain_still_reaches_every_page() {
+    let d = tmp_dir("tiff-preview");
+    let main: Vec<u8> = (0..16u8).map(|i| i * 3 + 1).collect();
+    let page2: Vec<u8> = (0..16u8).map(|i| i * 5 + 2).collect();
+    let preview = [SERIAL, &[0u8; 3]].concat(); // 20 bytes
+    let mut buf = vec![0u8; 8];
+    buf[..4].copy_from_slice(b"MM\0*");
+    let (m_at, p_at, q_at) = (8u32, 24u32, 44u32);
+    buf.extend_from_slice(&main);
+    buf.extend_from_slice(&preview);
+    buf.extend_from_slice(&page2);
+    let ifd = |buf: &mut Vec<u8>, sub: u32, strip: u32, n: u32| {
+        put_ifd(
+            buf,
+            &[
+                (254, 4, 1, long(sub)),
+                (256, 3, 1, short(4)),
+                (257, 3, 1, short(4)),
+                (258, 3, 1, short(8)),
+                (259, 3, 1, short(1)),
+                (262, 3, 1, short(1)),
+                (273, 4, 1, long(strip)),
+                (277, 3, 1, short(1)),
+                (278, 3, 1, short(4)),
+                (279, 4, 1, long(n)),
+            ],
+        )
+    };
+    let i0 = ifd(&mut buf, 0, m_at, 16);
+    let i1 = ifd(&mut buf, 1, p_at, 20);
+    let i2 = ifd(&mut buf, 2, q_at, 16);
+    let next = |i: usize| i + 2 + 12 * 10;
+    buf[4..8].copy_from_slice(&(i0 as u32).to_be_bytes());
+    buf[next(i0)..next(i0) + 4].copy_from_slice(&(i1 as u32).to_be_bytes());
+    buf[next(i1)..next(i1) + 4].copy_from_slice(&(i2 as u32).to_be_bytes());
+    let src = d.join("a.tif");
+    fs::write(&src, &buf).unwrap();
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Preview picture")), "{:?}", before.findings);
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let out = fs::read(&dst).unwrap();
+    assert_no_markers(&dst, "tiff preview");
+    assert_eq!(&out[8..24], &main[..]);
+    assert_eq!(&out[44..60], &page2[..]);
+    assert_eq!(u32::from_be_bytes(out[next(i0)..next(i0) + 4].try_into().unwrap()) as usize, i2, "the main page now points at the second page");
+    assert_clean_listing(&dst);
+    // with the tick the preview stays
+    let keep = Options { keep_previews: true, ..opts() };
+    assert!(!inspect(&src, &keep).unwrap().findings.iter().any(|f| f.label.starts_with("Preview picture")));
     let _ = fs::remove_dir_all(&d);
 }

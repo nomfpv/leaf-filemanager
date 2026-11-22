@@ -35,6 +35,7 @@ struct RunOpts {
     replace: bool,
     remove_signatures: bool,
     keep_subtitles: bool,
+    keep_previews: bool,
 }
 
 impl RunOpts {
@@ -45,6 +46,7 @@ impl RunOpts {
             reset_times: self.reset_times,
             remove_signatures: self.remove_signatures,
             keep_subtitles: self.keep_subtitles,
+            keep_previews: self.keep_previews,
         }
     }
 }
@@ -526,6 +528,7 @@ impl Render for ScrubView {
                     check(&p, "keep-cover", t!("Keep the cover art of music files"), o.keep_cover, cx.listener_toggle(|v| v.opts.keep_cover = !v.opts.keep_cover)),
                     check(&p, "no-profile", t!("Remove the colour profile of pictures too (they may look different)"), o.remove_profile, cx.listener_toggle(|v| v.opts.remove_profile = !v.opts.remove_profile)),
                     check(&p, "keep-subs", t!("Keep plain subtitle tracks of videos"), o.keep_subtitles, cx.listener_toggle(|v| v.opts.keep_subtitles = !v.opts.keep_subtitles)),
+                    check(&p, "keep-previews", t!("Keep the small preview pictures inside TIFF files (they can show the picture before it was cropped)"), o.keep_previews, cx.listener_toggle(|v| v.opts.keep_previews = !v.opts.keep_previews)),
                     check(&p, "no-sigs", t!("Remove digital signatures too (signed documents are refused otherwise; the cleaned file is no longer signed)"), o.remove_signatures, cx.listener_toggle(|v| v.opts.remove_signatures = !v.opts.remove_signatures)),
                     check(&p, "reset-times", t!("Set the file times to now"), o.reset_times, cx.listener_toggle(|v| v.opts.reset_times = !v.opts.reset_times)),
                     check(&p, "neutral", t!("Give the files a neutral name (file-1.jpg, file-2.jpg …)"), o.neutral, cx.listener_toggle(|v| v.opts.neutral = !v.opts.neutral)),
