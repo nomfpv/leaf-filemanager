@@ -12,7 +12,7 @@ starts it can work with the leaf that is running, and nothing else:
 | `copy(sources, destination)` | Copies into a folder. At most 200 sources. Only with the switch on (below). |
 | `move(sources, destination)` | Moves into a folder. At most 200 sources. Only with the switch on. |
 | `rename(path, new_name)` | A new name in the same folder. Only with the switch on. |
-| `create_folder(path)` | One new folder; its parent must exist. Only with the switch on. |
+| `create_folder(path)` | One new folder; up to 8 missing parent folders are made with it, each checked like a single new folder. Only with the switch on. |
 | `trash(paths)` | To the Recycle Bin / Trash, at most 50 items and 2,000 files / 1 GB in all per call (folders counted with what is inside), never the project folder itself. Only with the switch on. |
 
 `show_file`, `pick_files`, `search` and `list_folder` change nothing. There is no permanent delete, no overwrite, no tool that runs a

@@ -28,6 +28,8 @@ use crate::organize::safety::{ProtectedPaths, Refusal, is_inside, norm};
 
 /// Most items one `trash` call may move to the Recycle Bin / Trash.
 pub const MAX_TRASH: usize = 50;
+/// Missing parent folders `create_folder` makes on the way to a new folder.
+pub const MAX_NEW_LEVELS: usize = 8;
 /// Most sources of one `copy` or `move`.
 pub const MAX_SOURCES: usize = 200;
 /// Most results of a `search`, and how many when the agent does not say.
@@ -647,7 +649,8 @@ pub enum Plan {
     List { dir: PathBuf },
     Transfer { moving: bool, sources: Vec<PathBuf>, dest: PathBuf, targets: Vec<PathBuf> },
     Rename { from: PathBuf, to: PathBuf },
-    CreateFolder { path: PathBuf },
+    /// `parents`: the missing folders above it that are made first, the outermost first.
+    CreateFolder { path: PathBuf, parents: Vec<PathBuf> },
     /// `bytes`: what they hold in all.
     Trash { paths: Vec<PathBuf>, bytes: u64 },
 }
@@ -716,11 +719,43 @@ pub fn check(root: &Root, rules: &Rules, op: &Op) -> Result<Plan, String> {
         }
         Op::CreateFolder { path } => {
             let full = root.lexical(path, "the new folder")?;
-            let (Some(parent), Some(name)) = (full.parent(), full.file_name()) else { return Err("the new folder is the project folder itself".into()) };
-            let parent = root.folder_at(parent, "the folder the new folder goes in")?;
-            let path = root.free_target(&parent, &name.to_string_lossy())?;
-            rules.check(root, &path, Deep::No, "the new folder")?;
-            Ok(Plan::CreateFolder { path })
+            if root.is_root(&full) {
+                return Err("the new folder is the project folder itself".into());
+            }
+            // the levels that do not exist yet, the innermost first, up to the first folder that is there
+            let mut names: Vec<std::ffi::OsString> = Vec::new();
+            let mut base = full.clone();
+            while let Err(e) = std::fs::symlink_metadata(&base) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(format!("whether {} exists cannot be checked", root.shown(&base)));
+                }
+                let (Some(up), Some(name)) = (base.parent().map(Path::to_path_buf), base.file_name().map(|n| n.to_os_string())) else {
+                    return Err("the new folder is the project folder itself".into());
+                };
+                names.push(name);
+                base = up;
+            }
+            if names.is_empty() {
+                // it exists: the answer is the usual "already exists"
+                let (Some(parent), Some(name)) = (full.parent(), full.file_name()) else { return Err("the new folder is the project folder itself".into()) };
+                let parent = root.folder_at(parent, "the folder the new folder goes in")?;
+                root.free_target(&parent, &name.to_string_lossy())?;
+                return Err("the new folder exists already".into());
+            }
+            if names.len() > MAX_NEW_LEVELS + 1 {
+                return Err(format!("at most {MAX_NEW_LEVELS} missing parent folders are made with a new folder; this one needs {}", names.len() - 1));
+            }
+            let mut cur = root.folder_at(&base, "the folder the new folder goes in")?;
+            let mut made: Vec<PathBuf> = Vec::with_capacity(names.len());
+            for name in names.iter().rev() {
+                // (each level is checked like a single new folder: a valid name, inside the root, free, not protected)
+                let next = root.free_target(&cur, &name.to_string_lossy())?;
+                rules.check(root, &next, Deep::No, "the new folder")?;
+                made.push(next.clone());
+                cur = next;
+            }
+            let path = made.pop().unwrap_or(cur);
+            Ok(Plan::CreateFolder { path, parents: made })
         }
         Op::Trash { paths } => {
             if paths.is_empty() {

@@ -137,7 +137,7 @@ fn tools(changes: bool) -> Value {
             }),
             json!({
                 "name": "create_folder",
-                "description": format!("Create one new folder (its parent must exist).{note}"),
+                "description": format!("Create one new folder; missing parent folders (up to 8 levels) are made too, each checked like a single new folder.{note}"),
                 "inputSchema": { "type": "object", "properties": { "path": string_prop("The new folder.") }, "required": ["path"] },
                 "annotations": { "destructiveHint": false, "idempotentHint": false }
             }),
@@ -272,7 +272,7 @@ fn respond(ctx: &mut Ctx, msg: &Value) -> Option<Value> {
             let version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("2025-06-18");
             json!({
                 "protocolVersion": version,
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "leaf-mcp", "version": env!("CARGO_PKG_VERSION") }
             })
         }
@@ -287,21 +287,55 @@ fn respond(ctx: &mut Ctx, msg: &Value) -> Option<Value> {
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
+/// How often leaf is asked whether the switch for the changing tools flipped (a notification goes out when it did).
+const WATCH_EVERY: Duration = Duration::from_secs(10);
+
+fn send(out: &std::sync::Mutex<std::io::Stdout>, msg: &Value) -> bool {
+    let Ok(mut o) = out.lock() else { return false };
+    writeln!(o, "{msg}").is_ok() && o.flush().is_ok()
+}
+
 fn main() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     let mut ctx = Ctx { session: session_id(), agent: String::new(), root: root_arg() };
     let stdin = std::io::stdin();
-    let mut out = std::io::stdout();
+    let out = Arc::new(Mutex::new(std::io::stdout()));
+    // set when the client has said `initialized`; the last switch state a list was made for
+    let ready = Arc::new(AtomicBool::new(false));
+    let listed = Arc::new(AtomicBool::new(false));
+    {
+        let (out, ready, listed) = (out.clone(), ready.clone(), listed.clone());
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(WATCH_EVERY);
+                if !ready.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let now = changes_on();
+                if now != listed.swap(now, Ordering::Relaxed) && !send(&out, &json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" })) {
+                    break;
+                }
+            }
+        });
+    }
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
         let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(msg) => respond(&mut ctx, &msg),
+            Ok(msg) => {
+                if msg.get("method").and_then(Value::as_str) == Some("notifications/initialized") {
+                    listed.store(changes_on(), Ordering::Relaxed);
+                    ready.store(true, Ordering::Relaxed);
+                }
+                respond(&mut ctx, &msg)
+            }
             Err(_) => Some(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } })),
         };
         if let Some(r) = reply
-            && (writeln!(out, "{r}").is_err() || out.flush().is_err())
+            && !send(&out, &r)
         {
             break;
         }

@@ -595,13 +595,20 @@ fn start_job(agent: &str, root: Arc<Root>, plan: Plan, reply: Reply, cx: &mut Ap
                 }
             }, reply, cx)
         }
-        Plan::CreateFolder { path } => {
+        Plan::CreateFolder { path, parents } => {
             let title = format!("{tag} {} {}", t!("Creating folder"), short(&path));
             let p = path.clone();
             simple_job(title, root, Vec::new(), move |_| {
-                // (one level, and never over anything: an item that appeared since the check is an error here)
-                std::fs::create_dir(&p)?;
-                crate::undo::push_by_agent(&who, crate::undo::UndoOp::Created { path: p.clone() });
+                // (one level at a time, and never over anything: an item that appeared since the check is an error here;
+                // the undo takes the outermost new folder, which holds the rest)
+                let mut first: Option<PathBuf> = None;
+                for level in parents.iter().chain(std::iter::once(&p)) {
+                    std::fs::create_dir(level)?;
+                    if first.is_none() {
+                        first = Some(level.clone());
+                        crate::undo::push_by_agent(&who, crate::undo::UndoOp::Created { path: level.clone() });
+                    }
+                }
                 Ok(vec![p.clone()])
             }, |_, _| {}, reply, cx)
         }
