@@ -46,7 +46,7 @@ fn default_folder(main: &Path, branch: &str) -> PathBuf {
 impl Workspace {
     /// Asks, off the interface's thread, for the worktrees of the repository the shown folder is in, when that is not known yet.
     fn wt_poll(&mut self, cur: &Location, cx: &mut Context<Self>) {
-        if !crate::modules::enabled(cx, crate::modules::Module::Dev) {
+        if !crate::modules::enabled(cx, crate::modules::Module::Dev) || leaf_sys::window::app_hidden() {
             return;
         }
         let Some(dir) = cur.path().map(Path::to_path_buf) else { return };

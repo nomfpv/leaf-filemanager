@@ -172,7 +172,8 @@ impl ChangesView {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
                 // (a page whose tab is not shown keeps its flag and reads again when the tab comes back)
-                if this.update(cx, |v, cx| (v.tab_shown(cx) && v.dirty.swap(false, Ordering::AcqRel)).then(|| v.refresh(cx))).is_err() {
+                // (minimised or in the tray: nobody sees the list, so no git; the flag stays and the list is read when the window is back)
+                if this.update(cx, |v, cx| (v.tab_shown(cx) && !leaf_sys::window::app_hidden() && v.dirty.swap(false, Ordering::AcqRel)).then(|| v.refresh(cx))).is_err() {
                     return;
                 }
             }
@@ -222,11 +223,14 @@ impl ChangesView {
             r.update(cx, |r, cx| r.refresh(cx));
         }
         let dir = self.dir.clone();
+        // (the review page asks for a new answer itself just above: this one joins its run instead of starting another)
+        let fresh = self.mode != Mode::Review || self.review.is_none();
         let work = cx.background_spawn(async move {
             let root = gitread::repo_root(&dir)?;
-            let changes = gitread::status(&root)?;
+            let changes = crate::git_share::changes(&root, fresh)?;
             let items: Vec<Item> = changes
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|c| {
                     let path = root.join(&c.path);
                     let (size, modified_ms) = meta_of(&path);

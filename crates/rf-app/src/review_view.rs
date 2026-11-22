@@ -185,11 +185,13 @@ fn line_count(path: &Path) -> Option<u32> {
 }
 
 fn load_git(root: &Path) -> Option<Vec<FileItem>> {
-    let changes = gitread::status(root)?;
+    // (what the Changes page of the same repository reads too: one git run for both)
+    let changes = crate::git_share::changes(root, true)?;
     let un = review::numstat(root, false).unwrap_or_default();
     let st = review::numstat(root, true).unwrap_or_default();
     let mut out: Vec<FileItem> = changes
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|c| {
             let path = root.join(&c.path);
             let u = un.get(&c.path).copied();

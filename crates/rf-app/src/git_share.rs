@@ -1,6 +1,6 @@
 //! One `git status` per repository at a time, shared by every view of it. Ten tabs (or two panes) in one repository used to start ten
 //! git processes for the same answer: callers of [`status`] for a repository whose status is being read wait for that run, and a
-//! finished answer is reused for a moment.
+//! finished answer is reused for a moment. [`changes`] does the same for the per-file list of the Changes and Review pages.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -81,6 +81,14 @@ impl<K: Hash + Eq + Clone, T: Clone> Flights<K, T> {
 pub fn status(root: &Path, fresh: bool) -> Option<Arc<leaf_sys::git::GitStatus>> {
     static FLIGHTS: OnceLock<Flights<PathBuf, Option<Arc<leaf_sys::git::GitStatus>>>> = OnceLock::new();
     FLIGHTS.get_or_init(Flights::new).get(&root.to_path_buf(), fresh, REUSE, || leaf_sys::git::status(root).ok().map(Arc::new))
+}
+
+/// The changed paths of the repository at `root` (`leaf_dev::gitread::status`: every file one by one, with the staged flag), shared the same
+/// way: the Changes page and the Review page of one repository ask once, not twice. A separate run from [`status`] because the folder marks
+/// read git's collapsed form (an untracked folder as one entry) and these pages need each file.
+pub fn changes(root: &Path, fresh: bool) -> Option<Arc<Vec<leaf_dev::gitread::Change>>> {
+    static FLIGHTS: OnceLock<Flights<PathBuf, Option<Arc<Vec<leaf_dev::gitread::Change>>>>> = OnceLock::new();
+    FLIGHTS.get_or_init(Flights::new).get(&root.to_path_buf(), fresh, REUSE, || leaf_dev::gitread::status(root).map(Arc::new))
 }
 
 #[cfg(test)]

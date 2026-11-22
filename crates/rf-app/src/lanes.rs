@@ -171,7 +171,8 @@ pub fn progress(cx: &App, path: &Path) -> Option<Option<Progress>> {
 
 /// Reads every lane's progress again when the last read is older than 15 s (off the UI thread).
 pub fn poll(cx: &mut App) {
-    if !on(cx) || cx.try_global::<LanesState>().is_none() {
+    // (minimised or in the tray: the sidebar is not seen, so no git; the next draw after the window is back reads again)
+    if !on(cx) || cx.try_global::<LanesState>().is_none() || leaf_sys::window::app_hidden() {
         return;
     }
     let s = cx.global::<LanesState>();

@@ -291,7 +291,8 @@ pub fn pulse(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> 
     let c = &mut v.home_data.pulse;
     c.sync(&folder);
     c.poll();
-    if c.idle() {
+    // (minimised or in the tray: no git for a widget nobody sees; the next draw starts it)
+    if c.idle() && !leaf_sys::window::app_hidden() {
         let f = folder.clone();
         c.begin(cx, move |_| compute_pulse(&f));
     }
@@ -479,7 +480,8 @@ pub fn stats(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> 
     let c = &mut v.home_data.stats;
     c.sync(&folder);
     c.poll();
-    if c.idle() {
+    // (its git part, the hot files, waits with it)
+    if c.idle() && !leaf_sys::window::app_hidden() {
         let f = folder.clone();
         c.begin(cx, move |stop| compute_stats(&f, stop));
     }
