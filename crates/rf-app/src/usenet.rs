@@ -231,6 +231,8 @@ struct SavedJob {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct PastJob {
+    /// The job's key: its archive password (when it had one) waits in the keyring under it until the entry goes.
+    key: u64,
     title: String,
     ok: bool,
     when: u64,
@@ -295,7 +297,8 @@ pub fn history_len() -> usize {
 }
 
 pub fn clear_history() {
-    store().history.clear();
+    let gone = std::mem::take(&mut store().history);
+    drop_passwords(&gone);
     persist();
 }
 
@@ -392,6 +395,26 @@ fn forget_job_password(key: u64) {
     }
 }
 
+/// Entries that left the history: a job that failed and was never retried keeps its archive password in the keyring, and nothing
+/// would ever ask for it again.
+fn drop_passwords(gone: &[PastJob]) {
+    // (not a job that was retried and runs again: its password is still needed)
+    let live: Vec<u64> = LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|l| l.key).collect();
+    let keys: Vec<u64> = gone.iter().map(|g| g.key).filter(|k| *k != 0 && !live.contains(k)).collect();
+    if keys.is_empty() {
+        return;
+    }
+    for k in &keys {
+        PASSWORDS.lock().unwrap_or_else(|e| e.into_inner()).remove(k);
+    }
+    // (on its own thread: a keyring can wait for the user)
+    std::thread::spawn(move || {
+        for k in keys {
+            let _ = leaf_remote::vault().forget(&job_secret(k));
+        }
+    });
+}
+
 /// [`start`] for an NZB whose file name is `name` (the watch folder renames what it takes).
 fn start_named(path: PathBuf, name: String, dest: PathBuf, sort: bool, cx: &mut App) {
     let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
@@ -458,8 +481,10 @@ fn run_job(job: SavedJob, cx: &mut App) {
                 st.active.retain(|a| a.key != key);
                 if ok || was_failed {
                     let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-                    st.history.insert(0, PastJob { title: job.title.clone(), ok, when, folder: folder.clone() });
-                    st.history.truncate(HISTORY);
+                    st.history.insert(0, PastJob { key, title: job.title.clone(), ok, when, folder: folder.clone() });
+                    let keep = st.history.len().min(HISTORY);
+                    let dropped = st.history.split_off(keep);
+                    drop_passwords(&dropped);
                 }
             }
             persist();
