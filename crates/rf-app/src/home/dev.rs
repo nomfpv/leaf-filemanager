@@ -412,6 +412,8 @@ struct Stats {
     files: usize,
     /// The five largest source files: (path, bytes).
     largest: Vec<(PathBuf, u64)>,
+    /// The five files most often changed in the last 30 days (git log): (full path, commits). Empty outside a repository.
+    hot: Vec<(PathBuf, u32)>,
     partial: bool,
 }
 
@@ -454,7 +456,12 @@ fn compute_stats(folder: &Path, stop: &AtomicBool) -> Stats {
     });
     largest.sort_by(|a, b| b.1.cmp(&a.1));
     largest.truncate(5);
-    Stats { langs: rank(&by_lang, 6), lines, files, largest, partial }
+    let hot = if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        Vec::new()
+    } else {
+        gitread::repo_root(folder).and_then(|root| gitread::hot_files(&root, 30, 5).map(|v| v.into_iter().map(|(rel, n)| (root.join(rel), n)).collect())).unwrap_or_default()
+    };
+    Stats { langs: rank(&by_lang, 6), lines, files, largest, hot, partial }
 }
 
 pub fn stats_header(p: &Palette, cx: &mut Context<FolderView>) -> AnyElement {
@@ -521,6 +528,32 @@ pub fn stats(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> 
                 })),
         );
     }
+    let mut hot = v_flex().gap_0p5();
+    if !got.hot.is_empty() {
+        hot = hot.child(div().text_xs().text_color(p.text_secondary).child("Most changed, last 30 days"));
+    }
+    for (i, (path, n)) in got.hot.iter().enumerate() {
+        let parent = path.parent().map(Path::to_path_buf);
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let tip = path.to_string_lossy().into_owned();
+        hot = hot.child(
+            h_flex()
+                .id(("stats-hot", i))
+                .gap_2()
+                .text_xs()
+                .rounded(theme::RADIUS_SM)
+                .cursor_pointer()
+                .hover(|s| s.bg(p.hover))
+                .tooltip(move |win, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(win, cx))
+                .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(name))
+                .child(div().text_color(p.text_tertiary).child(if *n == 1 { "1 commit".to_string() } else { format!("{n} commits") }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(d) = parent.clone() {
+                        this.navigate(Location::Path(d), cx)
+                    }
+                })),
+        );
+    }
     let sum = format!("{} lines in {} files", group(got.lines), group(got.files as u64));
     Some(
         v_flex()
@@ -530,6 +563,7 @@ pub fn stats(v: &mut FolderView, w: &WidgetCx, cx: &mut Context<FolderView>) -> 
             .child(bar)
             .child(legend)
             .child(big)
+            .child(hot)
             .into_any_element(),
     )
 }

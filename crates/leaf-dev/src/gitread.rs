@@ -491,6 +491,49 @@ pub fn parse_log(text: &str) -> Vec<Commit> {
         .collect()
 }
 
+/// The files changed most in the last `days` days, most first: `(path relative to the root with /, commits that touched it)`.
+/// `None` when git cannot answer. Blocks: off the UI thread.
+pub fn hot_files(root: &Path, days: u32, top: usize) -> Option<Vec<(String, u32)>> {
+    let since = format!("--since={days}.days.ago");
+    let (raw, _) = run(root, &["log", &since, "--no-merges", "--no-renames", "--name-only", "--format="], Duration::from_secs(10), MAX_OUT)?;
+    Some(parse_hot(&String::from_utf8_lossy(&raw), top))
+}
+
+/// Counts how often each path appears in `git log --name-only --format=` output and keeps the `top` most frequent (ties by name).
+pub fn parse_hot(text: &str, top: usize) -> Vec<(String, u32)> {
+    let mut n: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for l in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        *n.entry(l).or_default() += 1;
+    }
+    let mut v: Vec<(String, u32)> = n.into_iter().map(|(k, c)| (k.to_string(), c)).collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v.truncate(top);
+    v
+}
+
+/// Writes a file that was deleted since the last commit back from HEAD (`git show HEAD:path`). It never overwrites: when anything
+/// is at `root/rel` already the answer is an error and nothing is read or written. Returns the path written. Blocks.
+pub fn restore_deleted(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    if rel.is_empty() || rel.starts_with('-') || rel.split('/').any(|c| c == "..") {
+        return Err("The file name is not valid".into());
+    }
+    let full = root.join(rel);
+    if full.symlink_metadata().is_ok() {
+        return Err("A file of that name is there again; nothing was changed".into());
+    }
+    let spec = format!("HEAD:{rel}");
+    let (bytes, cut) = run(root, &["show", "--end-of-options", &spec], Duration::from_secs(20), 256 * 1024 * 1024).ok_or("HEAD does not have this file")?;
+    if cut {
+        return Err("The file is too big to restore from here".into());
+    }
+    if let Some(dir) = full.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    // (create_new: a file that appeared meanwhile is never written over)
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&full).and_then(|mut f| std::io::Write::write_all(&mut f, &bytes)).map_err(|e| e.to_string())?;
+    Ok(full)
+}
+
 /// Commits ahead of and behind the upstream branch, `(ahead, behind)`; `None` without an upstream or when git is slow (5 s limit).
 pub fn ahead_behind(root: &Path) -> Option<(u32, u32)> {
     let (raw, _) = run(root, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], Duration::from_secs(5), 4096)?;
@@ -582,6 +625,33 @@ mod tests {
         assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap().trim(), "head");
         assert_eq!(std::fs::read_to_string(kept).unwrap(), "mine\n");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn restore_deleted_refuses_when_the_path_exists_again() {
+        let tmp = std::env::temp_dir().join(format!("leaf-ghost-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "new
+").unwrap();
+        let err = restore_deleted(&tmp, "a.txt").unwrap_err();
+        assert!(err.contains("there again"), "{err}");
+        assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap(), "new
+");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn hot_counts_rank_by_commits() {
+        let got = parse_hot("src/a.rs
+src/b.rs
+
+src/a.rs
+README.md
+src/a.rs
+src/b.rs
+", 2);
+        assert_eq!(got, vec![("src/a.rs".to_string(), 3), ("src/b.rs".to_string(), 2)]);
     }
 
     #[test]
