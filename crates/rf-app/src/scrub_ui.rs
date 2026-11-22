@@ -114,6 +114,16 @@ fn run_one(
     let ext = src.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
     let neutral = || leaf_scrub::neutral_name(dir, &ext, index + 1);
     let lo = o.lib();
+    if o.replace && !crate::sync_ui::bin_takes(src) {
+        // a drive without a Recycle Bin / Trash (stick, card, network share), a bin that is off or too small for the file: the
+        // original could not be kept, and the system would ask whether to delete it for good. It is never asked: the cleaned
+        // copy is saved beside the original instead, and the sheet says why.
+        let dst = if o.neutral { neutral() } else { leaf_scrub::clean_copy_name(src) };
+        let mut oc = leaf_scrub::clean_to(src, &dst, &lo, cancel)?;
+        oc.notes.insert(0, t!("Not replaced: this drive has no Recycle Bin that can take the file, so the original could not be kept. The cleaned copy is saved beside it.").to_string());
+        oc.undoable = false;
+        return Ok(oc);
+    }
     if o.replace {
         let target = if o.neutral { neutral() } else { src.to_path_buf() };
         leaf_scrub::replace(src, &target, &lo, cancel, put_away)
@@ -281,7 +291,7 @@ fn work(files: &[PathBuf], o: &RunOpts, t: &Arc<leaf_sys::fileops::Tracker>, out
         let name = name_of(src);
         let r = match run_one(src, i, o, &cancelled, &put_away) {
             Ok(oc) => {
-                if o.replace {
+                if o.replace && oc.undoable {
                     if let Some(b) = bin.lock().unwrap().clone() {
                         undo.push((oc.output.clone(), b, leaf_dev::review::Stamp::of_file(&oc.output)));
                     }
@@ -501,7 +511,7 @@ impl Render for ScrubView {
                     check(&p, "neutral", t!("Give the files a neutral name (file-1.jpg, file-2.jpg …)"), o.neutral, cx.listener_toggle(|v| v.opts.neutral = !v.opts.neutral)),
                     div().h(px(1.)).my_1().bg(p.divider).into_any_element(),
                     radio(&p, "mode-copy", t!("Save cleaned copies beside the originals (name.clean.ext)"), !o.replace, cx.listener_toggle(|v| v.opts.replace = false)),
-                    radio(&p, "mode-replace", t!("Replace the originals (they go to the Recycle Bin first; Ctrl+Z puts them back)"), o.replace, cx.listener_toggle(|v| v.opts.replace = true)),
+                    radio(&p, "mode-replace", t!("Replace the originals (they go to the Recycle Bin first and Ctrl+Z puts them back; on a drive without a Recycle Bin a cleaned copy is saved beside the original instead)"), o.replace, cx.listener_toggle(|v| v.opts.replace = true)),
                 ],
             ));
         }

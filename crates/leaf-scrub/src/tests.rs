@@ -463,6 +463,42 @@ fn scrub_replace_mode_leaves_the_original_recoverable() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// Replace mode where the "Trash" refuses: whatever the refusal did to the original, exactly one of original / cleaned file is at
+/// the path afterwards, never none, and nothing is left beside it.
+#[test]
+fn scrub_replace_mode_bin_refuses_leaves_exactly_one_file_never_none() {
+    let d = tmp_dir("replace-nobin");
+    let files = |d: &Path| fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    // 1. the bin refuses and the original stays: nothing changed, only the original
+    let src = d.join("a.jpg");
+    make_jpeg(&src);
+    let before = fs::read(&src).unwrap();
+    let refuse = |_: &Path| Err::<(), String>("this drive has no Recycle Bin".into());
+    assert!(replace(&src, &src, &opts(), &no_cancel, &refuse).is_err());
+    assert_eq!(fs::read(&src).unwrap(), before);
+    assert_eq!(files(&d), vec!["a.jpg".to_string()]);
+    // 2. the bin "refuses" but the system deleted the original for good (the user said yes to "delete permanently?"): the cleaned
+    //    file takes its place, the result says there is no undo
+    let gone = |p: &Path| {
+        fs::remove_file(p).unwrap();
+        Err::<(), String>("not in the Recycle Bin".into())
+    };
+    let out = replace(&src, &src, &opts(), &no_cancel, &gone).unwrap();
+    assert!(!out.undoable && out.notes.iter().any(|n| n.starts_with("Replaced, no undo")));
+    assert_eq!(files(&d), vec!["a.jpg".to_string()]);
+    let now = fs::read(&src).unwrap();
+    assert!(!contains(&now, b"Example Camera") && !now.is_empty());
+    // 3. the same with a neutral name as the target: still exactly one file
+    let src2 = d.join("b.jpg");
+    fs::remove_file(&src).unwrap();
+    make_jpeg(&src2);
+    let target = d.join("file-1.jpg");
+    let out = replace(&src2, &target, &opts(), &no_cancel, &gone).unwrap();
+    assert_eq!(out.output, target);
+    assert_eq!(files(&d), vec!["file-1.jpg".to_string()]);
+    let _ = fs::remove_dir_all(&d);
+}
+
 // ------------------------------------------------------------------------------------------------------------------
 // The independent second lister: the raw bytes of a cleaned file are scanned for the planted markers. This finds data that
 // the structured reader cannot see: slack space, renamed-but-not-emptied boxes, old revisions, unreferenced objects.

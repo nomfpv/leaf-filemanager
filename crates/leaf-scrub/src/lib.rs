@@ -93,6 +93,11 @@ pub struct Outcome {
     pub removed: Vec<Finding>,
     pub kept: Vec<Finding>,
     pub notes: Vec<String>,
+    /// False when "replace" put the cleaned file in place although the original did not reach the Trash ([`NO_UNDO_NOTE`]).
+    pub undoable: bool,
+    /// False for a kind of file whose contents leaf does not read (only alternate streams / extended attributes were removed):
+    /// such a file is not counted as cleaned.
+    pub contents_read: bool,
 }
 
 /// Why a file was not cleaned. The text is leaf's wording; the technical reason is in [`ScrubError::details`].
@@ -452,7 +457,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
     let mut notes = before.notes.clone();
     notes.extend(extra);
     let (removed, kept): (Vec<_>, Vec<_>) = before.findings.into_iter().partition(|f| f.remove);
-    Ok(Outcome { output: dst.to_path_buf(), format: before.format, removed, kept, notes })
+    Ok(Outcome { output: dst.to_path_buf(), format: before.format, removed, kept, notes, undoable: true, contents_read: fam != Family::Plain })
 }
 
 fn verify(tmp: &Path, opts: &Options, fam: Family) -> Result<()> {
@@ -504,10 +509,18 @@ pub fn neutral_name(dir: &Path, ext: &str, index: usize) -> PathBuf {
     }
 }
 
+/// What [`replace`] says when the Trash did not take the original but it is gone from its place all the same (the system deleted
+/// it for good, for example after asking "delete permanently?"): the cleaned file was put in its place, there is no undo.
+pub const NO_UNDO_NOTE: &str = "Replaced, no undo: the original did not go to the Recycle Bin / Trash, it was deleted by the system. The cleaned file is in its place.";
+
 /// "Replace the originals": the cleaned file is written beside `src` first (and checked), then `put_away` must move the original
 /// out of its place (leaf: into the Recycle Bin / Trash, where it stays recoverable), and only then the cleaned file takes `target`
-/// (`src` itself, or a neutral name in the same folder). If anything fails before the original is gone, nothing is changed; if
-/// the last step fails the original is in the Trash and the cleaned file is kept under a `.clean` name, and the error says so.
+/// (`src` itself, or a neutral name in the same folder).
+///
+/// The cleaned file is deleted ONLY when the original is verified to be still at its place (then nothing was changed). Whatever
+/// else happens, exactly one of the two stays: when `put_away` failed but the original is gone anyway, the cleaned file takes
+/// `target` and the result says "replaced, no undo" ([`NO_UNDO_NOTE`]); when the last rename fails, the cleaned file is kept under
+/// a `.clean` name (or, if even that fails, under its temporary name), and the error says where.
 pub fn replace(
     src: &Path,
     target: &Path,
@@ -531,30 +544,38 @@ pub fn replace(
         None => beside,
     };
     let mut out = clean_to(src, &beside, opts, cancel)?;
+    let original_there = || fs::symlink_metadata(src).is_ok();
     if cancel() {
-        let _ = fs::remove_file(&beside);
+        if original_there() {
+            let _ = fs::remove_file(&beside);
+        }
         return Err(ScrubError::Cancelled);
     }
-    if let Err(e) = put_away(src) {
+    let put = put_away(src);
+    if original_there() {
+        // the original is where it was: nothing was changed, the cleaned copy is not needed
         let _ = fs::remove_file(&beside);
-        return Err(ScrubError::Io(io::Error::other(format!("the original could not be moved to the Trash, nothing was changed ({e})"))));
-    }
-    // a put-away that returned without moving the file kept the original nowhere: never replaced
-    if fs::symlink_metadata(src).is_ok() {
-        let _ = fs::remove_file(&beside);
-        return Err(ScrubError::Io(io::Error::other("the original did not reach the Trash, nothing was changed")));
+        return Err(ScrubError::Io(io::Error::other(match put {
+            Err(e) => format!("the original could not be moved to the Trash, nothing was changed ({e})"),
+            Ok(()) => "the original did not reach the Trash, nothing was changed".to_string(),
+        })));
     }
     match fs::rename(&beside, target) {
         Ok(()) => {
             out.output = target.to_path_buf();
+            if let Err(e) = put {
+                out.notes.insert(0, format!("{NO_UNDO_NOTE} ({e})"));
+                out.undoable = false;
+            }
             Ok(out)
         }
         Err(e) => {
             let keep = clean_copy_name(src);
-            let kept = fs::rename(&beside, &keep).is_ok();
+            let at = if fs::rename(&beside, &keep).is_ok() { keep } else { beside.clone() };
+            let original = if put.is_ok() { "the original is in the Trash" } else { "the original was deleted by the system" };
             Err(ScrubError::Io(io::Error::other(format!(
-                "the cleaned file could not be put in place ({e}); the original is in the Trash{}",
-                if kept { format!(" and the cleaned file is saved as {}", keep.display()) } else { String::new() }
+                "the cleaned file could not be put in place ({e}); {original} and the cleaned file is saved as {}",
+                at.display()
             ))))
         }
     }
