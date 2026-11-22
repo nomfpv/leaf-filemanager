@@ -34,6 +34,10 @@ pub enum StartError {
     /// `leaf-helper.exe` is not beside `leaf.exe`.
     #[error("The administrator helper is not installed with leaf")]
     Missing,
+    /// leaf is installed where this user can change its programs (a per-user install): an elevated helper started from there could
+    /// be replaced by any program of the user, so it is not started.
+    #[error("leaf is installed for this user only; install it for all users to do things as administrator")]
+    Unsafe,
     #[error("The administrator helper could not be started")]
     Failed(String),
 }
@@ -99,6 +103,9 @@ pub fn helper_exe() -> Option<PathBuf> {
 /// Starts the helper: this is where Windows shows the UAC prompt (the call waits for the user's answer, so never on the UI
 /// thread). Then connects to its two pipes, checks that its own process serves them, and greets it.
 pub fn start() -> Result<Session, StartError> {
+    if let Some(why) = blocked() {
+        return Err(why);
+    }
     let exe = helper_exe().ok_or(StartError::Missing)?;
     let token = random32().map(|b| token_text(&b)).ok_or_else(|| StartError::Failed("no random bytes".into()))?;
     let channel = random32().map(|b| format!("leaf-helper-{}-{}", std::process::id(), &token_text(&b)[..16])).ok_or_else(|| StartError::Failed("no random bytes".into()))?;
@@ -174,6 +181,37 @@ fn connect(name: &str, access: u32, process: HANDLE, pid: u32) -> Option<HANDLE>
             return None;
         }
     }
+}
+
+/// Why the helper may not be started from this install: it is missing, or this user (without elevation) can change the helper,
+/// leaf, or the folder they are in. Checked on the effective access (each right asked for with an open), not on the path.
+pub fn blocked() -> Option<StartError> {
+    let Some(helper) = helper_exe() else { return Some(StartError::Missing) };
+    let leaf = std::env::current_exe().ok()?;
+    let dir = helper.parent()?.to_path_buf();
+    // GENERIC_WRITE, DELETE, WRITE_DAC, WRITE_OWNER on the programs; for the folder also adding and deleting entries in it
+    const FILE_RIGHTS: [u32; 4] = [GENERIC_WRITE, 0x0001_0000, 0x0004_0000, 0x0008_0000];
+    const DIR_RIGHTS: [u32; 7] = [0x2, 0x4, 0x40, 0x0001_0000, 0x0004_0000, 0x0008_0000, 0x100];
+    let writable = |p: &std::path::Path, rights: &[u32], dir: bool| {
+        let w = crate::wide::long_path(p);
+        rights.iter().any(|&r| {
+            let flags = if dir { windows::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS } else { Default::default() };
+            match unsafe { CreateFileW(PCWSTR(w.as_ptr()), r, windows::Win32::Storage::FileSystem::FILE_SHARE_READ | windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE, None, OPEN_EXISTING, flags, None) } {
+                Ok(h) => {
+                    unsafe {
+                        let _ = CloseHandle(h);
+                    }
+                    true
+                }
+                // only "access denied" means the right is not there; anything else (in use, …) counts as writable
+                Err(e) => e.code().0 as u32 != 0x8007_0005,
+            }
+        })
+    };
+    if writable(&helper, &FILE_RIGHTS, false) || writable(&leaf, &FILE_RIGHTS, false) || writable(&dir, &DIR_RIGHTS, true) {
+        return Some(StartError::Unsafe);
+    }
+    None
 }
 
 /// The system said "access denied" somewhere in this error (the shell's engine, a file call, leaf's own engines).

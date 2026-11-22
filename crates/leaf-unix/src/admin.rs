@@ -19,6 +19,8 @@ pub enum StartError {
     Declined,
     #[error("The administrator helper is not installed with leaf")]
     Missing,
+    #[error("leaf is installed for this user only; install it for all users to do things as administrator")]
+    Unsafe,
     #[error("The administrator helper could not be started")]
     Failed(String),
 }
@@ -73,12 +75,16 @@ pub fn helper_exe() -> Option<PathBuf> {
 
 /// Starts the helper through `pkexec` (the call waits while polkit asks; never on the UI thread), connects and greets it.
 pub fn start() -> Result<Session, StartError> {
+    if let Some(why) = blocked() {
+        return Err(why);
+    }
     let exe = helper_exe().ok_or(StartError::Missing)?;
+    let pkexec = pkexec().ok_or(StartError::Missing)?;
     let token = random32().map(|b| token_text(&b)).ok_or_else(|| StartError::Failed("no random bytes".into()))?;
     let channel = random32().map(|b| format!("leaf-helper-{}-{}", std::process::id(), &token_text(&b)[..16])).ok_or_else(|| StartError::Failed("no random bytes".into()))?;
     let uid = unsafe { libc::getuid() };
     let socket = PathBuf::from(format!("/run/user/{uid}/{channel}.sock"));
-    let mut child = Command::new("pkexec")
+    let mut child = Command::new(pkexec)
         .arg(&exe)
         .args(["--channel", &channel, "--token", &token, "--user", &uid.to_string(), "--pid", &std::process::id().to_string()])
         .spawn()
@@ -111,6 +117,30 @@ pub fn start() -> Result<Session, StartError> {
         Ok(_) => Err(StartError::Failed("another process answered".into())),
         Err(e) => Err(StartError::Failed(e.to_string())),
     }
+}
+
+/// root-owned and not writable by group, others, or this user: the helper, leaf, and their folder.
+fn root_only(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = std::fs::symlink_metadata(p) else { return false };
+    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else { return false };
+    m.uid() == 0 && m.mode() & 0o022 == 0 && unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0
+}
+
+/// `pkexec` by its absolute path (never looked up in PATH), root-owned.
+fn pkexec() -> Option<PathBuf> {
+    ["/usr/bin/pkexec", "/bin/pkexec"].iter().map(PathBuf::from).find(|p| root_only(p))
+}
+
+/// Why the helper may not be started from this install (see the Windows twin).
+pub fn blocked() -> Option<StartError> {
+    let Some(helper) = helper_exe() else { return Some(StartError::Missing) };
+    let leaf = std::env::current_exe().ok()?;
+    let dir = helper.parent()?.to_path_buf();
+    if !(root_only(&helper) && root_only(&leaf) && root_only(&dir)) {
+        return Some(StartError::Unsafe);
+    }
+    None
 }
 
 pub fn is_denied(e: &anyhow::Error) -> bool {
