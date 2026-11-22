@@ -19,17 +19,31 @@ pub struct Activity {
     /// leaf has connected and greeted (until then the watchdog allows only a short wait).
     greeted: AtomicBool,
     started: Instant,
+    /// The cancel flag of the operation that runs (for [`Activity::stop`]).
+    cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl Default for Activity {
     fn default() -> Self {
-        Self { last: Mutex::new(Instant::now()), busy: AtomicBool::new(false), greeted: AtomicBool::new(false), started: Instant::now() }
+        Self { last: Mutex::new(Instant::now()), busy: AtomicBool::new(false), greeted: AtomicBool::new(false), started: Instant::now(), cancel: Mutex::new(None) }
     }
 }
 
 impl Activity {
     fn touch(&self) {
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    }
+
+    /// Before the helper ends (leaf's process is gone): the running operation is cancelled and waited for (up to `limit`), so a
+    /// copy ends at a file's boundary and its temp file is thrown away, never left half-written under the real name.
+    pub fn stop(&self, limit: std::time::Duration) {
+        if let Some(c) = self.cancel.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            c.store(true, Ordering::Relaxed);
+        }
+        let until = Instant::now() + limit;
+        while self.busy.load(Ordering::Relaxed) && Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// The helper should end now: idle too long with nothing running, or leaf did not greet in time.
@@ -112,6 +126,7 @@ pub fn serve(mut reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>, to
                 let job = Job { cancel: cancel.clone(), send: reply.clone(), send_data: data.clone(), answers: Arc::new(Mutex::new(rx)) };
                 let (reply, activity) = (reply.clone(), activity.clone());
                 activity.busy.store(true, Ordering::Relaxed);
+                *activity.cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
                 let thread = std::thread::Builder::new().name(format!("helper-{}", op.label())).spawn(move || {
                     crate::os::thread_start();
                     let r = exec::run(&op, &job);

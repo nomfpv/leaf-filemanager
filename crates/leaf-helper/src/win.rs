@@ -83,11 +83,11 @@ fn open_nofollow(p: &Path, access: u32, share: FILE_SHARE_MODE) -> std::io::Resu
 #[derive(Clone, Copy, Debug)]
 pub struct Facts {
     pub(crate) attrs: u32,
-    tag: u32,
+    pub(crate) tag: u32,
     pub(crate) links: u32,
     pub(crate) size: u64,
-    volume: u32,
-    index: u64,
+    pub(crate) volume: u32,
+    pub(crate) index: u64,
 }
 
 impl Facts {
@@ -153,6 +153,11 @@ impl Held {
     /// The innermost folder held (the parent of the item, or the folder itself for [`hold_folder`]).
     pub(crate) fn last(&self) -> Option<&Owned> {
         self.0.last()
+    }
+
+    /// Every folder held, from the root down.
+    pub(crate) fn all(&self) -> &[Owned] {
+        &self.0
     }
 }
 
@@ -283,11 +288,15 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
         if f.attrs & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY.0 != 0 {
             return Err(Fail::Failed { denied: false, detail: "the file is read-only".into() });
         }
-        (Dacl::of(&h), f.attrs)
+        // (a DACL that cannot be read is an error: the new file would otherwise get other permissions than the old one)
+        let dacl = Dacl::of(&h).ok_or_else(|| Fail::Failed { denied: false, detail: "the file's permissions could not be read".into() })?;
+        (dacl, f.attrs)
     };
     let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else { return Err(Refusal::WrongKind.into()) };
     let name = name.to_string_lossy();
-    clean_stale_temps(&held, &name);
+    if let Ok(d) = crate::node::held_node(&held, false) {
+        crate::tree::clean_stale(&d, &format!(".{name}.leaf-helper-"), ".tmp");
+    }
     let mut n = 0;
     let (tmp, mut file) = loop {
         let tmp = dir.join(format!(".{name}.leaf-helper-{}-{n}.tmp", std::process::id()));
@@ -300,15 +309,14 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
         }
     };
     let r = (|| -> std::io::Result<()> {
-        file.write_all(&bytes)?;
+        // the old file's permissions and attributes BEFORE the first byte (nobody can read the new bytes under other permissions)
         {
             use std::os::windows::io::AsRawHandle;
             let h = HANDLE(file.as_raw_handle() as _);
-            if let Some(d) = &old.0 {
-                d.apply(h)?;
-            }
+            old.0.apply(h)?;
             set_attributes(h, old.1)?;
         }
+        file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
         // CHECK-THEN-ACT: the target's NAME between the check above and this rename. Whatever is at the name then is replaced (a link
@@ -375,28 +383,6 @@ fn set_attributes(h: HANDLE, attrs: u32) -> std::io::Result<()> {
     let b = FILE_BASIC_INFO { FileAttributes: keep, ..Default::default() };
     unsafe { SetFileInformationByHandle(h, FileBasicInfo, (&b as *const FILE_BASIC_INFO).cast(), size_of::<FILE_BASIC_INFO>() as u32) }
         .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
-}
-
-/// Temp files of an earlier helper's save of `name` in this folder (a helper ended half way: `.<name>.leaf-helper-<pid>-<n>.tmp`
-/// with another process id), removed through the held folder's handle; only plain files of exactly that pattern.
-fn clean_stale_temps(held: &Held, name: &str) {
-    let Ok(dir) = crate::node::held_node(held, false) else { return };
-    let Ok(names) = crate::node::children(&dir) else { return };
-    let prefix = format!(".{name}.leaf-helper-");
-    let me = format!("{}-", std::process::id());
-    for n in names {
-        let s = n.to_string_lossy();
-        let Some(rest) = s.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".tmp")) else { continue };
-        let ours = rest.split_once('-').is_some_and(|(pid, k)| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) && k.bytes().all(|b| b.is_ascii_digit()));
-        if !ours || rest.starts_with(&me) {
-            continue;
-        }
-        if let Ok(f) = crate::node::open_child(&dir, &n, crate::node::Want::ReadDelete) {
-            if matches!(crate::node::kind(&f), Ok(crate::node::Kind::File(_))) {
-                let _ = crate::node::remove(&dir, &n, f, false);
-            }
-        }
-    }
 }
 
 /// The open file's owner is the user the helper serves.
@@ -532,7 +518,11 @@ pub fn main(args: Vec<String>) -> i32 {
         let leaf = Arc::new(leaf);
         std::thread::spawn(move || {
             loop {
-                if unsafe { WaitForSingleObject(leaf.0, 1000) } == WAIT_OBJECT_0 || activity.expired() {
+                if unsafe { WaitForSingleObject(leaf.0, 1000) } == WAIT_OBJECT_0 {
+                    activity.stop(std::time::Duration::from_secs(30));
+                    std::process::exit(0);
+                }
+                if activity.expired() {
                     std::process::exit(0);
                 }
             }

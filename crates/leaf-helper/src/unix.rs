@@ -77,6 +77,10 @@ pub struct Held(Vec<OwnedFd>);
 
 impl Held {
     /// The innermost folder held.
+    pub(crate) fn all(&self) -> &[OwnedFd] {
+        &self.0
+    }
+
     pub(crate) fn last(&self) -> RawFd {
         self.0.last().map_or(libc::AT_FDCWD, |f| f.as_raw_fd())
     }
@@ -203,6 +207,10 @@ pub fn write_from_part(part: &Path, target: &Path) -> Result<(), Fail> {
     let held = hold_parents(target)?;
     let dir = held.last();
     let name = target.file_name().ok_or(Refusal::WrongKind)?;
+    // temp files an earlier helper left from a save of this file
+    if let Ok(d) = crate::node::held_node(&held, false) {
+        crate::tree::clean_stale(&d, &format!(".{}.leaf-helper-", name.to_string_lossy()), ".tmp");
+    }
     let old = lstat_at(dir, name)?;
     if is(&old, libc::S_IFLNK) || old.st_nlink != 1 {
         return Err(Refusal::Link.into());
@@ -346,7 +354,11 @@ pub fn main(args: Vec<String>) -> i32 {
             loop {
                 let mut p = libc::pollfd { fd: pidfd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
                 let r = unsafe { libc::poll(&mut p, 1, 1000) };
-                if (r > 0 && p.revents != 0) || activity.expired() {
+                if r > 0 && p.revents != 0 {
+                    activity.stop(std::time::Duration::from_secs(30));
+                    std::process::exit(0);
+                }
+                if activity.expired() {
                     std::process::exit(0);
                 }
             }
