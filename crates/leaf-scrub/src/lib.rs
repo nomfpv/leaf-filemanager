@@ -397,3 +397,59 @@ pub fn neutral_name(dir: &Path, ext: &str, index: usize) -> PathBuf {
         n += 1;
     }
 }
+
+/// "Replace the originals": the cleaned file is written beside `src` first (and checked), then `put_away` must move the original
+/// out of its place (leaf: into the Recycle Bin / Trash, where it stays recoverable), and only then the cleaned file takes `target`
+/// (`src` itself, or a neutral name in the same folder). If anything fails before the original is gone, nothing is changed; if
+/// the last step fails the original is in the Trash and the cleaned file is kept under a `.clean` name, and the error says so.
+pub fn replace(
+    src: &Path,
+    target: &Path,
+    opts: &Options,
+    cancel: &dyn Fn() -> bool,
+    put_away: &dyn Fn(&Path) -> std::result::Result<(), String>,
+) -> Result<Outcome> {
+    let dir = src.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut n = 0u32;
+    let beside = loop {
+        let p = dir.join(format!(".{name}.{}-{n}.leaf-scrub", std::process::id()));
+        if !p.exists() {
+            break p;
+        }
+        n += 1;
+    };
+    // (the extension stays last so the file is read as what it is: the temporary name ends in the real one)
+    let beside = match src.extension() {
+        Some(e) => beside.with_file_name(format!("{}.{}", beside.file_name().unwrap().to_string_lossy(), e.to_string_lossy())),
+        None => beside,
+    };
+    let mut out = clean_to(src, &beside, opts, cancel)?;
+    if cancel() {
+        let _ = fs::remove_file(&beside);
+        return Err(ScrubError::Cancelled);
+    }
+    if let Err(e) = put_away(src) {
+        let _ = fs::remove_file(&beside);
+        return Err(ScrubError::Io(io::Error::other(format!("the original could not be moved to the Trash, nothing was changed ({e})"))));
+    }
+    // a put-away that returned without moving the file kept the original nowhere: never replaced
+    if fs::symlink_metadata(src).is_ok() {
+        let _ = fs::remove_file(&beside);
+        return Err(ScrubError::Io(io::Error::other("the original did not reach the Trash, nothing was changed")));
+    }
+    match fs::rename(&beside, target) {
+        Ok(()) => {
+            out.output = target.to_path_buf();
+            Ok(out)
+        }
+        Err(e) => {
+            let keep = clean_copy_name(src);
+            let kept = fs::rename(&beside, &keep).is_ok();
+            Err(ScrubError::Io(io::Error::other(format!(
+                "the cleaned file could not be put in place ({e}); the original is in the Trash{}",
+                if kept { format!(" and the cleaned file is saved as {}", keep.display()) } else { String::new() }
+            ))))
+        }
+    }
+}

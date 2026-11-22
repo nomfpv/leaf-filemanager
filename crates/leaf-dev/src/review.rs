@@ -73,7 +73,24 @@ impl Stamp {
 
     /// The stamp of the file now, `None` when it cannot be read (gone, a folder).
     pub fn of_file(p: &Path) -> Option<Self> {
-        std::fs::read(p).ok().map(|b| Self::of_bytes(&b))
+        // read in blocks: the same value as `of_bytes` of the whole file, without holding a big file in memory
+        use std::io::Read;
+        let mut f = std::fs::File::open(p).ok()?;
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut len = 0u64;
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = f.read(&mut buf).ok()?;
+            if n == 0 {
+                break;
+            }
+            for &x in &buf[..n] {
+                h ^= x as u64;
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+            len += n as u64;
+        }
+        Some(Self { len, hash: h })
     }
 }
 

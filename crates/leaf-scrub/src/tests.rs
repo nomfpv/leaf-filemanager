@@ -426,3 +426,34 @@ fn scrub_refuses_cut_off_and_damaged_files_and_writes_nothing() {
     assert!(fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("leafscrub")));
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn scrub_replace_mode_leaves_the_original_recoverable() {
+    let d = tmp_dir("replace");
+    let src = d.join("a.jpg");
+    make_jpeg(&src);
+    let original = fs::read(&src).unwrap();
+    let bin = d.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    // the Trash of the test: the file is moved into a folder
+    let trash = |p: &Path| fs::rename(p, bin.join(p.file_name().unwrap())).map_err(|e| e.to_string());
+    let out = replace(&src, &src, &opts(), &no_cancel, &trash).unwrap();
+    assert_eq!(out.output, src);
+    assert_eq!(fs::read(bin.join("a.jpg")).unwrap(), original, "the original is whole in the Trash");
+    let now = fs::read(&src).unwrap();
+    assert!(!contains(&now, b"Example Camera"));
+    assert_eq!(pixels(&bin.join("a.jpg")), pixels(&src));
+    // when the Trash step fails, nothing changes and nothing is left beside
+    let src2 = d.join("b.jpg");
+    make_jpeg(&src2);
+    let before = fs::read(&src2).unwrap();
+    let broken = |_: &Path| Err::<(), String>("no bin".into());
+    assert!(replace(&src2, &src2, &opts(), &no_cancel, &broken).is_err());
+    assert_eq!(fs::read(&src2).unwrap(), before);
+    assert!(fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("leaf-scrub")));
+    // a "Trash" that does nothing: the file is never replaced
+    let noop = |_: &Path| Ok::<(), String>(());
+    assert!(replace(&src2, &src2, &opts(), &no_cancel, &noop).is_err());
+    assert_eq!(fs::read(&src2).unwrap(), before);
+    let _ = fs::remove_dir_all(&d);
+}
