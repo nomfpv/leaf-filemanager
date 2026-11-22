@@ -410,6 +410,10 @@ pub fn main() {
     {
         std::process::exit(capture::cli(&a));
     }
+    // `leaf default-fm status|on|off`: the default file manager switch of Settings, then out
+    if std::env::args().nth(1).as_deref() == Some("default-fm") {
+        std::process::exit(settings_view::default_fm_cli(std::env::args().nth(2).as_deref()));
+    }
     // Velopack (installer / updater): first, it may run an install hook and exit
     installer::startup();
     // the id Velopack gives the Start menu / taskbar shortcuts: a pin survives updates. Only the installed copy takes it: a copy

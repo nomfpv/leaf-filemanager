@@ -41,15 +41,23 @@ function Stop-Installed {
 }
 
 if ($Uninstall) {
-    # The default-file-manager switch registers a launcher that starts the leaf it was turned on for. leaf has no command line for
-    # turning it off, so this script does not touch the registry: it refuses while the switch points here.
+    # The default-file-manager switch registers a launcher that starts the leaf it was turned on for: turn it off with the installed
+    # copy (`leaf default-fm off`) before that copy goes, so Windows is not left with a program that is gone.
     $reg = Join-Path $env:LOCALAPPDATA 'leaf-default-fm\leaf-exe.txt'
-    if ((Test-Path $reg) -and -not $Force) {
+    if (Test-Path $reg) {
         $target = (Get-Content $reg -Raw).Trim()
         if ($target -and (Inside $target $dest)) {
-            Write-Host "leaf is still the default file manager through $target."
-            Write-Host 'Open leaf, Settings, turn off "Default file manager", then run this again (-Force removes the files anyway).'
-            exit 1
+            $installed = Join-Path $dest 'leaf.exe'
+            if (Test-Path $installed) {
+                & $installed default-fm off
+                if ($LASTEXITCODE -ne 0 -and -not $Force) {
+                    Write-Host 'could not turn off "Default file manager" (-Force removes the files anyway).'
+                    exit 1
+                }
+            } elseif (-not $Force) {
+                Write-Host "leaf is still the default file manager through $target, which is not there to turn it off (-Force removes the files anyway)."
+                exit 1
+            }
         }
     }
     Stop-Installed

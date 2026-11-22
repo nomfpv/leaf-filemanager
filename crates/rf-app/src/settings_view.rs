@@ -3125,15 +3125,55 @@ pub(crate) fn set_default_file_manager(on: bool, refused: bool) {
         log::warn!("default file manager: not turned on from a build folder");
         return;
     }
-    let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
     std::thread::spawn(move || {
-        let classes = leaf_sys::default_fm::CLASSES;
-        let r = if on { leaf_sys::default_fm::enable(&exe, classes) } else { leaf_sys::default_fm::disable(classes) };
-        if let Err(e) = r {
+        if let Err(e) = apply_default_file_manager(on) {
             log::warn!("default file manager: {e:#}");
         }
-        crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
     });
+}
+
+/// The work of [`set_default_file_manager`], on the calling thread (the window's switch runs it on a thread, `leaf default-fm` waits for it).
+fn apply_default_file_manager(on: bool) -> anyhow::Result<()> {
+    let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
+    let classes = leaf_sys::default_fm::CLASSES;
+    let r = if on { leaf_sys::default_fm::enable(&exe, classes) } else { leaf_sys::default_fm::disable(classes) };
+    crate::DEFAULT_FM.store(leaf_sys::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+/// `leaf default-fm status|on|off`: one plain line, the exit code (0 done / yes, 1 not done / no, 2 wrong use). `on` keeps the
+/// build-folder refusal of the Settings switch.
+pub(crate) fn default_fm_cli(arg: Option<&str>) -> i32 {
+    let classes = leaf_sys::default_fm::CLASSES;
+    let is_on = leaf_sys::default_fm::is_enabled(classes);
+    crate::DEFAULT_FM.store(is_on, std::sync::atomic::Ordering::Relaxed);
+    match arg {
+        Some("status") => {
+            println!("{}", if is_on { "leaf is the default file manager" } else { "leaf is not the default file manager" });
+            if is_on { 0 } else { 1 }
+        }
+        Some(a @ ("on" | "off")) => {
+            let on = a == "on";
+            if on && default_fm_refused() {
+                println!("{}", default_fm_refusal());
+                return 1;
+            }
+            match apply_default_file_manager(on) {
+                Ok(()) => {
+                    println!("{}", if on { "leaf is now the default file manager" } else { "leaf is no longer the default file manager" });
+                    0
+                }
+                Err(e) => {
+                    println!("could not change the default file manager: {e:#}");
+                    1
+                }
+            }
+        }
+        _ => {
+            eprintln!("leaf default-fm status | on | off");
+            2
+        }
+    }
 }
 
 /// A card that only means something on Windows (start with Windows, WSL, the default file manager, QuickLook): elsewhere it is an empty

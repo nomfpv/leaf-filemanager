@@ -5,6 +5,7 @@
     leaf --new-tab
     leaf download <address> [<folder>]
     leaf nmhost --register | --unregister
+    leaf default-fm status | on | off
 
 - `leaf <folder>` opens the folder. When leaf is already running, the running window takes it over as a new tab (or as a new
   window when "open folders from other programs in a new window" is on). A relative path is read from the folder the command
@@ -19,4 +20,7 @@
 - `leaf nmhost --register` connects the browsers (Chrome, Edge, Brave, Firefox; on Linux also Chromium and Vivaldi) to `leaf-nmhost`, the
   small program next to leaf that the leaf browser extension talks to, for this user only (no admin); `--unregister` takes that back. It
   is the same as "Connect browsers" in Settings > Advanced > Downloads. See `extension/README.md`.
+- `leaf default-fm status|on|off` is the "Default file manager" switch of Settings > Advanced: it prints one line and exits with 0 (done, or
+  yes for `status`) or 1 (not done, or no), 2 for a wrong use. `on` keeps the refusal of the switch for a build folder copy without
+  `leaf-open.exe` beside it. `tools\install-local.ps1 -Uninstall` uses `off` before it removes the installed copy.
 - Also understood: `rclone://remote/path` (needs rclone installed; WebDAV and other storage come through an rclone remote), `docker://local/` (containers and their mounts), `sftp://`, `ftp://` addresses, `shell:` names and `::{...}` namespaces, `--settings=<page>`.
