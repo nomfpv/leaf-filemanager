@@ -179,6 +179,7 @@ fn structure(path: &Path, fam: Family, opts: &Options) -> Result<Vec<String>> {
         Family::Gif => gif(&crate::image::read_all(path)?, opts),
         Family::Tiff => tiff(&crate::image::read_all(path)?, opts),
         Family::Heif(_) => heif(&crate::image::read_all(path)?, opts),
+        Family::Ico(_) => ico(&crate::image::read_all(path)?, opts),
         Family::Mp4 => mp4(path, opts)?,
         Family::Pdf => pdf(path)?,
         Family::Ooxml | Family::Odf => office(path)?,
@@ -264,6 +265,38 @@ fn png(d: &[u8], opts: &Options) -> Vec<String> {
     }
     if pos < d.len() {
         v.push(format!("{} bytes after the end of the picture", d.len() - pos));
+    }
+    v
+}
+
+/// An icon: every PNG picture against the PNG allow-list, and no bytes outside the pictures.
+fn ico(d: &[u8], opts: &Options) -> Vec<String> {
+    let mut v = Vec::new();
+    let n = d.get(4..6).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize).unwrap_or(0);
+    let mut spans = Vec::new();
+    for i in 0..n {
+        let Some(e) = d.get(6 + 16 * i..6 + 16 * i + 16) else {
+            v.push("a cut-off icon directory".into());
+            return v;
+        };
+        let len = u32::from_le_bytes(e[8..12].try_into().unwrap()) as usize;
+        let at = u32::from_le_bytes(e[12..16].try_into().unwrap()) as usize;
+        let Some(pic) = d.get(at..at.saturating_add(len)) else {
+            v.push("an icon picture outside the file".into());
+            continue;
+        };
+        if pic.starts_with(b"\x89PNG\r\n\x1a\n") {
+            v.extend(png(pic, opts).into_iter().map(|s| format!("{s} in an icon picture")));
+        }
+        spans.push((at, at + len));
+    }
+    spans.sort_unstable();
+    let mut pos = 6 + 16 * n;
+    for (s, e) in spans.into_iter().chain([(d.len(), d.len())]) {
+        if s > pos && d[pos..s].iter().any(|c| *c != 0) {
+            v.push(format!("{} bytes outside the icon's pictures", s - pos));
+        }
+        pos = pos.max(e);
     }
     v
 }

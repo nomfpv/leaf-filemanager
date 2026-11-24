@@ -10,6 +10,7 @@
 
 mod gif;
 mod heif;
+mod ico;
 mod image;
 mod mp4;
 mod office;
@@ -172,8 +173,10 @@ pub(crate) enum Family {
     Tiff,
     Gif,
     Svg,
-    /// BMP / ICO: the format has no metadata fields.
+    /// BMP: the format has no metadata fields.
     Bare(&'static str),
+    /// ICO / CUR: bitmaps and whole PNG files in a directory; the PNG ones are cleaned and the file is written again.
+    Ico(&'static str),
     /// zip (not Office), 7z, tar, gz, rar: not cleaned inside.
     Archive(&'static str),
     Pdf,
@@ -266,7 +269,8 @@ pub(crate) fn family_of(path: &Path) -> io::Result<(Family, &'static str)> {
         return Ok((Family::Bare("BMP"), "BMP"));
     }
     if (h.starts_with(&[0, 0, 1, 0]) || h.starts_with(&[0, 0, 2, 0])) && (ext == "ico" || ext == "cur") {
-        return Ok((Family::Bare("ICO"), "ICO"));
+        let name = if h[2] == 2 { "CUR" } else { "ICO" };
+        return Ok((Family::Ico(name), name));
     }
     if ext == "svg" && String::from_utf8_lossy(&h).contains("<svg") {
         return Ok((Family::Svg, "SVG"));
@@ -355,6 +359,7 @@ pub fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
         Family::Tiff => tiff::inspect(path, opts)?,
         Family::Gif => gif::inspect(path, opts)?,
         Family::Svg => svg::inspect(path, opts)?,
+        Family::Ico(kind) => ico::inspect(path, kind, opts)?,
         Family::Bare(kind) => Inspection {
             format: kind.to_string(),
             can_clean: true,
@@ -466,6 +471,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
             Family::Tiff => tiff::produce(src, &tmp, opts)?,
             Family::Gif => gif::produce(src, &tmp, opts)?,
             Family::Svg => svg::produce(src, &tmp, opts)?,
+            Family::Ico(_) => ico::produce(src, &tmp, opts)?,
             Family::Bare(_) => copy_without_attrs(src, &tmp)?,
             Family::Archive(k) => return Err(ScrubError::Unsupported(format!("a {k} keeps the metadata of the files inside it"))),
             Family::Pdf => pdf::produce(src, &tmp, opts)?,

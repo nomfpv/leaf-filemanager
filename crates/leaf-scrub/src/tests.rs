@@ -789,6 +789,50 @@ fn scrub_user_descriptions_and_data_reference_paths_do_not_stay() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// An icon holding a whole PNG with text, Exif and time chunks: the PNG is cleaned, the directory points at the right bytes
+/// afterwards, the bitmap picture is copied as it is, and bytes outside the pictures are dropped.
+#[test]
+fn scrub_ico_png_pictures_are_cleaned_and_the_directory_rewritten() {
+    let d = tmp_dir("ico");
+    let mut png = Vec::new();
+    test_image().write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png).unwrap();
+    let plain_png = png.clone();
+    let mut extra = png_chunk(b"tEXt", b"Author\0Planted Author");
+    extra.extend(png_chunk(b"eXIf", &exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat())));
+    extra.extend(png_chunk(b"tIME", &[0x07, 0xE9, 1, 2, 3, 4, 5]));
+    png.splice(33..33, extra);
+    let bmp = b"\x28\0\0\0bitmap picture data, kept as it is".to_vec();
+    let at1 = 6 + 32;
+    let at2 = at1 + bmp.len();
+    let mut file = vec![0, 0, 1, 0, 2, 0];
+    for (len, at) in [(bmp.len(), at1), (png.len(), at2)] {
+        file.extend_from_slice(&[16, 16, 0, 0, 1, 0, 32, 0]);
+        file.extend_from_slice(&(len as u32).to_le_bytes());
+        file.extend_from_slice(&(at as u32).to_le_bytes());
+    }
+    file.extend_from_slice(&bmp);
+    file.extend_from_slice(&png);
+    file.extend_from_slice(b"trailing Planted Author bytes");
+    let src = d.join("a.ico");
+    fs::write(&src, &file).unwrap();
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label == "Picture 2: Text: Author"), "{:?}", before.findings);
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Data outside")));
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let out = fs::read(&dst).unwrap();
+    assert_no_markers(&dst, "ico");
+    assert!(!contains(&out, &[0x07, 0xE9, 1, 2, 3]));
+    let pics = ico::entries(&out).unwrap();
+    assert_eq!(&out[pics[0].0..pics[0].0 + pics[0].1], &bmp[..]);
+    let p2 = &out[pics[1].0..pics[1].0 + pics[1].1];
+    assert_eq!(pics[1].0 + pics[1].1, out.len(), "nothing after the last picture");
+    let decode = |b: &[u8]| ::image::load_from_memory(b).unwrap().to_rgb8().into_raw();
+    assert_eq!(decode(p2), decode(&plain_png));
+    assert_clean_listing(&dst);
+    let _ = fs::remove_dir_all(&d);
+}
+
 fn put_ifd(buf: &mut Vec<u8>, entries: &[(u16, u16, u32, Vec<u8>)]) -> usize {
     let at = buf.len();
     let table = 2 + 12 * entries.len() + 4;
