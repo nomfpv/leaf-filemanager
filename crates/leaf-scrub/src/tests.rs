@@ -938,6 +938,67 @@ fn scrub_user_descriptions_and_data_reference_paths_do_not_stay() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// A 1 x 1 bitmap picture of an icon, 32 bits: header of `header` bytes with this colour space type (V5 only), then the picture
+/// and the mask, then `after`.
+fn icon_bitmap(header: usize, cs_type: u32, after: &[u8]) -> Vec<u8> {
+    let mut b = vec![0u8; header];
+    b[0..4].copy_from_slice(&(header as u32).to_le_bytes());
+    b[4..8].copy_from_slice(&1u32.to_le_bytes());
+    b[8..12].copy_from_slice(&2u32.to_le_bytes());
+    b[12..14].copy_from_slice(&1u16.to_le_bytes());
+    b[14..16].copy_from_slice(&32u16.to_le_bytes());
+    if header == 124 {
+        b[56..60].copy_from_slice(&cs_type.to_le_bytes());
+    }
+    b.extend_from_slice(&[1, 2, 3, 0xFF, 0, 0, 0, 0]);
+    b.extend_from_slice(after);
+    b
+}
+
+/// An icon file with these pictures, each once, in this order; `same` makes every entry point at the first picture.
+fn icon_file(pics: &[Vec<u8>], same: bool) -> Vec<u8> {
+    let mut file = vec![0, 0, 1, 0, pics.len() as u8, 0];
+    let mut at = 6 + 16 * pics.len();
+    let first = at;
+    for p in pics {
+        file.extend_from_slice(&[1, 1, 0, 0, 1, 0, 32, 0]);
+        file.extend_from_slice(&(p.len() as u32).to_le_bytes());
+        file.extend_from_slice(&(if same { first } else { at } as u32).to_le_bytes());
+        at += p.len();
+    }
+    for p in pics {
+        file.extend_from_slice(p);
+    }
+    file
+}
+
+/// Icons leaf cannot clean safely are refused and nothing is written: pictures that overlap (one big range listed again and
+/// again would be written out again and again), a bitmap with an embedded or linked colour profile, a bitmap with bytes after
+/// its end.
+#[test]
+fn scrub_ico_overlapping_or_unusual_pictures_are_refused() {
+    let d = tmp_dir("ico-refuse");
+    let plain = icon_bitmap(40, 0, &[]);
+    let cases = [
+        ("overlap", icon_file(&[plain.clone(), plain.clone()], true)),
+        ("embedded profile", icon_file(&[icon_bitmap(124, 0x4D42_4544, &[])], false)),
+        ("linked profile", icon_file(&[icon_bitmap(124, 0x4C49_4E4B, &[])], false)),
+        ("bytes after the end", icon_file(&[icon_bitmap(40, 0, b"Planted Author")], false)),
+    ];
+    for (what, bytes) in cases {
+        let src = d.join("a.ico");
+        fs::write(&src, &bytes).unwrap();
+        let dst = clean_copy_name(&src);
+        assert!(matches!(clean_to(&src, &dst, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))), "{what}");
+        assert!(!dst.exists(), "{what}");
+    }
+    // the plain one cleans
+    let src = d.join("b.ico");
+    fs::write(&src, icon_file(&[plain.clone(), icon_bitmap(124, 0x7352_4742, &[])], false)).unwrap();
+    clean_to(&src, &clean_copy_name(&src), &opts(), &no_cancel).unwrap();
+    let _ = fs::remove_dir_all(&d);
+}
+
 /// An icon holding a whole PNG with text, Exif and time chunks: the PNG is cleaned, the directory points at the right bytes
 /// afterwards, the bitmap picture is copied as it is, and bytes outside the pictures are dropped.
 #[test]
@@ -950,7 +1011,7 @@ fn scrub_ico_png_pictures_are_cleaned_and_the_directory_rewritten() {
     extra.extend(png_chunk(b"eXIf", &exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat())));
     extra.extend(png_chunk(b"tIME", &[0x07, 0xE9, 1, 2, 3, 4, 5]));
     png.splice(33..33, extra);
-    let bmp = b"\x28\0\0\0bitmap picture data, kept as it is".to_vec();
+    let bmp = icon_bitmap(40, 0, &[]);
     let at1 = 6 + 32;
     let at2 = at1 + bmp.len();
     let mut file = vec![0, 0, 1, 0, 2, 0];
