@@ -211,6 +211,11 @@ fn main_menu(window: &mut Window, cx: &mut App) {
         Item::action(t!("Reopen closed tab"), MenuIcon::Lucide(L::RotateCcw), run::<ReopenClosedTab>()).hint("Ctrl+Shift+T"),
         Item::action(t!("Save session…"), MenuIcon::Lucide(L::Save), run::<SaveSession>()),
         Item::Separator,
+    ];
+    let mut items = items;
+    items.extend(command_groups(cx));
+    items.extend([
+        Item::Separator,
         Item::action(t!("Command palette"), MenuIcon::Lucide(L::Command), run::<ToggleCommandPalette>()).hint("Ctrl+Shift+P"),
         Item::action(t!("Sync jobs"), MenuIcon::Lucide(L::RefreshCw), run::<SyncJobs>()),
         Item::action(t!("Full screen"), MenuIcon::Lucide(L::Maximize), run::<ToggleFullscreen>()).hint("F11"),
@@ -220,8 +225,50 @@ fn main_menu(window: &mut Window, cx: &mut App) {
         Item::action(t!("Guide"), MenuIcon::Lucide(L::CircleQuestionMark), run::<ShowGuide>()).hint("F1"),
         Item::action(t!("What leaf can do"), MenuIcon::Lucide(L::Sparkles), run::<ShowFeatures>()),
         Item::action(t!("Restart leaf"), MenuIcon::Lucide(L::RotateCw), run::<RestartApp>()),
-    ];
+    ]);
     crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+}
+
+/// Every command of the registry as one submenu per group, so that no command is reached by typing only: the palette's rows that
+/// are offered now, plus Redo and the tool bar switch. Made from the registry, so a new command is in the menu without a line here.
+/// Inside a group the commands of one module (downloads, sync, agents...) stand together, with a line between the modules.
+fn command_groups(cx: &App) -> Vec<Item> {
+    use crate::registry::{self, Category, CommandSpec, Places};
+    const EXTRA: [&str; 2] = ["Redo", "ToggleToolbar"];
+    let rows: Vec<&'static CommandSpec> = registry::all()
+        .filter(|c| (c.places.contains(Places::PALETTE) || EXTRA.contains(&c.id)) && c.hint.is_empty() && c.available(cx))
+        .collect();
+    let mut out = Vec::new();
+    for cat in Category::ALL {
+        let mut of: Vec<&'static CommandSpec> = rows.iter().copied().filter(|c| c.category == cat).collect();
+        // stable: the registry's order stays inside a module
+        of.sort_by_key(|c| c.module().map_or(0, |m| m as usize + 1));
+        let Some(mut last) = of.first().map(|c| c.module()) else { continue };
+        let mut items = Vec::with_capacity(of.len() + 4);
+        for c in of {
+            if c.module() != last {
+                items.push(Item::Separator);
+                last = c.module();
+            }
+            let item = Item::action(crate::i18n::t(c.title), MenuIcon::Lucide(c.icon.clone()), move |w: &mut Window, cx: &mut App| w.dispatch_action(c.make_action(), cx));
+            let keys = c.shown_keys();
+            items.push(if keys.is_empty() { item } else { item.hint(keys) });
+        }
+        let icon = match cat {
+            Category::Tabs => L::PanelTop,
+            Category::Navigation => L::FolderOpen,
+            Category::Selection => L::SquareCheck,
+            Category::Files => L::FilePlus,
+            Category::CopyPath => L::Link,
+            Category::View => L::Eye,
+            Category::Panes => L::Columns2,
+            Category::Tools => L::Wrench,
+            Category::Viewer | Category::App => L::Info,
+            Category::Custom => L::WandSparkles,
+        };
+        out.push(Item::sub(crate::i18n::t(cat.title()), MenuIcon::Lucide(icon), items));
+    }
+    out
 }
 
 /// Settings > Appearance > Visibility as a pill: its icon and the level, a click switches Standard / High.
