@@ -46,21 +46,10 @@ fn load(path: &Path) -> Result<(Document, Vec<u8>)> {
         return Err(ScrubError::Unsupported("the PDF is bigger than 1 GB".into()));
     }
     let raw = fs::read(path)?;
-    let tail_from = raw.len().saturating_sub(2048);
-    let ends = end_markers(&raw);
-    match ends.iter().filter(|(_, real)| *real).map(|(end, _)| *end).max() {
-        // the last real end marker must close the file: one further up with a `%%EOF` near the end that is not real is a file
-        // cut off inside an attached file, or one leaf cannot tell from it
-        Some(last) if last < tail_from => {
-            return Err(ScrubError::Malformed("the PDF does not end with its own end marker, it may be cut off".into()));
-        }
-        Some(_) => {}
-        // no end marker leads to this file's cross-reference data (offsets all off, the reader rebuilds them): only the
-        // marker's presence is checked
-        None if !raw[tail_from..].windows(5).any(|w| w == b"%%EOF") => {
-            return Err(ScrubError::Malformed("the PDF has no end marker, it is cut off".into()));
-        }
-        None => {}
+    // the last end marker of any kind must close the file; whether it is the file's own is the reader's to find out (it
+    // rebuilds a file whose last offset is slightly off). The real markers only count the saved versions (`revisions`).
+    if !raw[raw.len().saturating_sub(2048)..].windows(5).any(|w| w == b"%%EOF") {
+        return Err(ScrubError::Malformed("the PDF has no end marker, it is cut off".into()));
     }
     guard(&raw)?;
     let doc = Document::load_mem(&raw).map_err(|e| ScrubError::Malformed(format!("the PDF could not be read: {e}")))?;
@@ -185,6 +174,8 @@ fn xref_at(raw: &[u8], off: usize) -> bool {
 /// bare `%%EOF` inside a stream is not counted at all.
 fn end_markers(raw: &[u8]) -> Vec<(usize, bool)> {
     let mut out = Vec::new();
+    // many markers may name the same offset (a crafted file): each offset is looked at once
+    let mut seen: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
     for at in memchr::memmem::find_iter(raw, b"startxref") {
         let mut p = at + 9;
         p += raw[p..].iter().take(64).take_while(|c| is_space(**c)).count();
@@ -196,7 +187,7 @@ fn end_markers(raw: &[u8]) -> Vec<(usize, bool)> {
         p += n;
         p += raw[p..].iter().take(64).take_while(|c| is_space(**c)).count();
         if raw[p..].starts_with(b"%%EOF") {
-            out.push((p + 5, off.is_some_and(|o| xref_at(raw, o))));
+            out.push((p + 5, off.is_some_and(|o| *seen.entry(o).or_insert_with(|| xref_at(raw, o)))));
         }
     }
     out

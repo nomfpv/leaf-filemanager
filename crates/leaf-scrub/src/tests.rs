@@ -274,6 +274,20 @@ fn scrub_pdf_end_marker_inside_an_attachment_is_not_a_saved_version() {
         format!("xref\n99 1\n{obj_at:010} 00000 n \ntrailer\n<< /Size 100 /Root {} 0 R /Prev {prev} >>\nstartxref\n{xref_at}\n%%EOF\n", catalog.0).as_bytes(),
     );
     assert_eq!(pdf::revisions(&upd), 2);
+    // the same update far from the earlier one, with its last offset a few bytes off: the reader rebuilds it, the file is not
+    // taken for one cut off
+    let mut off_by = raw.clone();
+    off_by.extend_from_slice(format!("98 0 obj\n({})\nendobj\n", "x".repeat(4000)).as_bytes());
+    let obj_at = off_by.len();
+    off_by.extend_from_slice(b"99 0 obj\n<< /Producer (Planted Author) >>\nendobj\n");
+    let xref_at = off_by.len();
+    off_by.extend_from_slice(
+        format!("xref\n99 1\n{obj_at:010} 00000 n \ntrailer\n<< /Size 100 /Root {} 0 R /Prev {prev} >>\nstartxref\n{}\n%%EOF\n", catalog.0, xref_at + 3).as_bytes(),
+    );
+    let late = d.join("late.pdf");
+    fs::write(&late, &off_by).unwrap();
+    let dst = clean_copy_name(&late);
+    clean_to(&late, &dst, &opts(), &no_cancel).unwrap();
     let _ = fs::remove_dir_all(&d);
 }
 
