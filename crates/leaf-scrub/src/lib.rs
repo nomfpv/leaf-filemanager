@@ -8,6 +8,7 @@
 //!   ([`ScrubError`]), never half-cleaned;
 //! - what the removal cannot reach is said so ([`Inspection::notes`]), it is never left unmentioned.
 
+mod access;
 mod gif;
 mod heif;
 mod ico;
@@ -580,6 +581,9 @@ pub const NO_UNDO_NOTE: &str = "Replaced, no undo: the original did not go to th
 /// else happens, exactly one of the two stays: when `put_away` failed but the original is gone anyway, the cleaned file takes
 /// `target` and the result says "replaced, no undo" ([`NO_UNDO_NOTE`]); when the last rename fails, the cleaned file is kept under
 /// a `.clean` name (or, if even that fails, under its temporary name), and the error says where.
+///
+/// The cleaned file gets the original's access rules (see `access`): permissions on Linux; the read-only, hidden and system
+/// marks, encryption and the file's own access rights on Windows. Alternate streams and extended attributes are not carried.
 pub fn replace(
     src: &Path,
     target: &Path,
@@ -610,6 +614,19 @@ pub fn replace(
         }
         return Err(ScrubError::Cancelled);
     }
+    // the original's access rules (permissions, read-only / hidden marks, rights set on the file), read while it is still in its
+    // place; what can be set now is set before the original moves, so the cleaned file never stands in for it with wider rights
+    let access = match access::Access::read(src).and_then(|a| a.before(&beside).map(|()| a)) {
+        Ok(a) => a,
+        Err(e) => {
+            if original_there() {
+                let _ = fs::remove_file(&beside);
+            }
+            return Err(ScrubError::Io(io::Error::other(format!(
+                "the original's access rights could not be given to the cleaned file, nothing was changed ({e})"
+            ))));
+        }
+    };
     let put = put_away(src);
     if original_there() {
         // the original is where it was: nothing was changed, the cleaned copy is not needed
@@ -622,6 +639,7 @@ pub fn replace(
     match fs::rename(&beside, target) {
         Ok(()) => {
             out.output = target.to_path_buf();
+            out.notes.extend(access.after(target));
             if let Err(e) = put {
                 out.notes.insert(0, format!("{NO_UNDO_NOTE} ({e})"));
                 out.undoable = false;

@@ -524,6 +524,70 @@ fn scrub_replace_mode_bin_refuses_leaves_exactly_one_file_never_none() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// Replace mode: the cleaned file in the original's place has the original's read-only and hidden marks and its own access rights
+/// (Windows), or its permission bits (Linux).
+#[test]
+fn scrub_replace_mode_carries_over_attributes_and_permissions() {
+    let d = tmp_dir("replace-access");
+    let src = d.join("a.jpg");
+    make_jpeg(&src);
+    let bin = d.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let trash = |p: &Path| fs::rename(p, bin.join(p.file_name().unwrap())).map_err(|e| e.to_string());
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
+            SE_FILE_OBJECT, SetNamedSecurityInfoW,
+        };
+        use windows::Win32::Security::{
+            ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        };
+        use windows::Win32::Storage::FileSystem::{FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, SetFileAttributesW};
+        use windows::core::{PCWSTR, PWSTR};
+        let wide = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+        let sddl = |p: &Path| unsafe {
+            let (mut dacl, mut sd, mut s) = (std::ptr::null_mut::<ACL>(), PSECURITY_DESCRIPTOR::default(), PWSTR::null());
+            assert_eq!(GetNamedSecurityInfoW(PCWSTR(wide(p).as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None, Some(&mut dacl), None, &mut sd).0, 0);
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, DACL_SECURITY_INFORMATION, &mut s, None).unwrap();
+            s.to_string().unwrap()
+        };
+        // a protected access list of its own: only the built-in administrators and the owner, full access
+        unsafe {
+            let text: Vec<u16> = "D:P(A;;FA;;;BA)(A;;FA;;;OW)".encode_utf16().chain(Some(0)).collect();
+            let mut sd = PSECURITY_DESCRIPTOR::default();
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(text.as_ptr()), 1, &mut sd, None).unwrap();
+            let (mut present, mut dacl, mut defaulted) = (Default::default(), std::ptr::null_mut::<ACL>(), Default::default());
+            GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted).unwrap();
+            let how = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+            assert_eq!(SetNamedSecurityInfoW(PCWSTR(wide(&src).as_ptr()), SE_FILE_OBJECT, how, None, None, Some(dacl), None).0, 0);
+            SetFileAttributesW(PCWSTR(wide(&src).as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(0x1 | 0x2)).unwrap();
+        }
+        let rights = sddl(&src);
+        assert!(rights.starts_with("D:P"), "{rights}");
+        let out = replace(&src, &src, &opts(), &no_cancel, &trash).unwrap();
+        assert!(!out.notes.iter().any(|n| n.contains("did not get")), "{:?}", out.notes);
+        let attrs = unsafe { GetFileAttributesW(PCWSTR(wide(&src).as_ptr())) };
+        assert_eq!(attrs & 0x3, 0x3, "read-only and hidden carried over");
+        assert_eq!(sddl(&src), rights, "the file's own access rights carried over");
+        for p in [src.clone(), bin.join("a.jpg")] {
+            unsafe {
+                let _ = SetFileAttributesW(PCWSTR(wide(&p).as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(0x80));
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o600)).unwrap();
+        replace(&src, &src, &opts(), &no_cancel, &trash).unwrap();
+        assert_eq!(fs::metadata(&src).unwrap().permissions().mode() & 0o7777, 0o600);
+    }
+    assert!(!contains(&fs::read(&src).unwrap(), b"Example Camera"));
+    let _ = fs::remove_dir_all(&d);
+}
+
 /// The second look does not trust the remover: an uncleaned file fails its structural walk, and a "cleaned" file that still holds
 /// a value the original carried somewhere the walk does not look (here: inside the picture data) fails the byte scan.
 #[test]
