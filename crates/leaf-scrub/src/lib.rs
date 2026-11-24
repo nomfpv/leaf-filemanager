@@ -4,7 +4,8 @@
 //! - the original is never opened for writing; the result is written to a temporary file next to the
 //!   destination, READ BACK with the same reader that lists metadata, and only moved into place when
 //!   nothing on the removal list is left in it. Anything else counts as a failure and the temporary file is deleted; one left
-//!   behind by a run that was killed is deleted by the next run in that folder (only leaf's own names, see `sweep_stale`);
+//!   behind by a run that was killed while writing is deleted by the next run in that folder (only that exact name, see
+//!   `sweep_stale`); the checked file of replace mode is never deleted on its own, it may be the only copy;
 //! - a file that is cut off, malformed, encrypted or of a kind leaf has no safe writer for is REFUSED
 //!   ([`ScrubError`]), never half-cleaned;
 //! - what the removal cannot reach is said so ([`Inspection::notes`]), it is never left unmentioned.
@@ -442,53 +443,71 @@ pub fn name_looks_personal(name: &str) -> bool {
 /// (a run still going in another window is never that slow).
 const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(12 * 3600);
 
-/// Is `name` exactly one of leaf's own temporary names? Gives the process id in it and, for the checked file of replace mode, the
-/// name of the original it was made from.
-/// - `.leafscrub-<pid>-<n>-<name>`: the file being written by [`clean_to`];
-/// - `.<original>.<pid>-<n>.leaf-scrub` with the original's extension after it, if it has one: the checked file of [`replace`]
-///   waiting for the original to move.
-fn own_temp(name: &str) -> Option<(u32, Option<String>)> {
+/// Is `name` exactly leaf's own name for a file being written, `.leafscrub-<pid>-<n>-<name>`? Gives the process id in it.
+///
+/// The checked file of replace mode (`.<original>.<pid>-<n>.leaf-scrub...`) is never matched: after a run killed between moving
+/// the original away and the last rename it is the only copy left, and nothing tells that apart from a copy that is not needed.
+fn own_temp(name: &str) -> Option<u32> {
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if let Some(rest) = name.strip_prefix(".leafscrub-") {
-        let (pid, rest) = rest.split_once('-')?;
-        let (n, file) = rest.split_once('-')?;
-        return (digits(pid) && digits(n) && !file.is_empty()).then(|| pid.parse().ok()).flatten().map(|p| (p, None));
-    }
-    let rest = name.strip_prefix('.')?;
-    let at = rest.rfind(".leaf-scrub")?;
-    let (head, tail) = (&rest[..at], &rest[at + ".leaf-scrub".len()..]);
-    let (original, run) = head.rsplit_once('.')?;
-    let (pid, n) = run.split_once('-')?;
-    if original.is_empty() || !digits(pid) || !digits(n) {
-        return None;
-    }
-    let ext = Path::new(original).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-    (tail == ext).then(|| pid.parse().ok().map(|p| (p, Some(original.to_string())))).flatten()
+    let rest = name.strip_prefix(".leafscrub-")?;
+    let (pid, rest) = rest.split_once('-')?;
+    let (n, file) = rest.split_once('-')?;
+    (digits(pid) && digits(n) && !file.is_empty()).then(|| pid.parse().ok()).flatten()
 }
 
-/// Removes leaf's own temporary files that a killed or crashed run left in `dir`: only names that match [`own_temp`] exactly, of
-/// another process, created at least `min_age` ago, regular files. A checked file of replace mode is removed only while its
-/// original is still there (otherwise it may be the only copy left, and the error of that run said where it is).
+/// Is a process with this id running? When it cannot be told, it counts as running (its file stays).
+#[cfg(windows)]
+fn process_running(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(h) => {
+                let mut code = 0u32;
+                let ok = GetExitCodeProcess(h, &mut code).is_ok();
+                let _ = CloseHandle(h);
+                // 259: STILL_ACTIVE
+                !ok || code == 259
+            }
+            // no such process; any other refusal (access denied) means one is there
+            Err(e) => e.code() != ERROR_INVALID_PARAMETER.to_hresult(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_running(pid: u32) -> bool {
+    let Ok(p) = i32::try_from(pid) else { return true };
+    // signal 0 sends nothing, it only checks; "not permitted" means the process is there
+    let sent = unsafe { libc::kill(p, 0) } == 0;
+    sent || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// Removes the files being written that a killed or crashed run left in `dir`: only names that match [`own_temp`] exactly, of a
+/// process that is not this one and not running, created at least `min_age` ago, regular files. A partly written file is never
+/// the only copy of anything: its original was not touched.
 fn sweep_stale(dir: &Path, min_age: std::time::Duration) {
     let Ok(list) = fs::read_dir(dir) else { return };
     let me = std::process::id();
     for e in list.flatten() {
         let name = e.file_name();
-        let Some((pid, original)) = name.to_str().and_then(own_temp) else { continue };
+        let Some(pid) = name.to_str().and_then(own_temp) else { continue };
         if pid == me {
             continue;
         }
         let Ok(m) = fs::symlink_metadata(e.path()) else { continue };
         // the creation time: the modified time of a temporary file is set to the original's
         let old = m.created().ok().and_then(|c| std::time::SystemTime::now().duration_since(c).ok()).is_some_and(|a| a >= min_age);
-        if !m.file_type().is_file() || !old {
+        if !m.file_type().is_file() || !old || process_running(pid) {
             continue;
         }
-        if original.is_some_and(|o| fs::symlink_metadata(dir.join(o)).is_err()) {
-            continue;
-        }
-        let _ = fs::remove_file(e.path());
+        let _ = discard(&e.path());
     }
+}
+
+/// Deletes a file leaf made itself.
+pub(crate) fn discard(path: &Path) -> io::Result<()> {
+    fs::remove_file(path)
 }
 
 /// The first run in a folder (per process) clears what earlier runs left there.
