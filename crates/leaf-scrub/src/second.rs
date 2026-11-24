@@ -438,10 +438,20 @@ fn heif_props(d: &[u8], s: usize, e: usize, opts: &Options, v: &mut Vec<String>)
             b"colr" if matches!(d.get(ps..ps + 4), Some(b"prof" | b"rICC")) && !opts.keep_color_profile && !essential.contains(&n) => {
                 v.push("an embedded colour profile".into())
             }
+            b"udes" => v.push("a user description (name, description, tags)".into()),
             b"free" | b"skip" if d[ps..pe].iter().any(|c| *c != 0) => v.push("data in a padding box among the picture's properties".into()),
             _ => {}
         }
     }
+}
+
+/// Does a `dinf` box (body `s..e`) hold a data reference entry with a location string (a path or address of another file)?
+fn names_a_location(d: &[u8], s: usize, e: usize) -> bool {
+    boxes(d, s, e)
+        .into_iter()
+        .filter(|b| &b.0 == b"dref" && b.2 >= b.1 + 8)
+        .flat_map(|(_, rs, re)| boxes(d, rs + 8, re))
+        .any(|(_, es, ee)| ee > es + 4 && d[es + 4..ee].iter().any(|c| *c != 0))
 }
 
 fn heif(d: &[u8], opts: &Options) -> Vec<String> {
@@ -455,6 +465,7 @@ fn heif(d: &[u8], opts: &Options) -> Vec<String> {
                 for (k, ks, ke) in boxes(d, s + 4, e) {
                     match &k {
                         b"iprp" => heif_props(d, ks, ke, opts, &mut v),
+                        b"dinf" if names_a_location(d, ks, ke) => v.push("a data reference that names another file".into()),
                         b"hdlr" | b"pitm" | b"iloc" | b"iref" | b"idat" | b"dinf" | b"grpl" | b"ipro" => {}
                         b"free" | b"skip" if zero(ks, ke) => {}
                         b"iinf" => {
@@ -555,6 +566,11 @@ fn moov(b: &[u8], opts: &Options, v: &mut Vec<String>) {
                             for (m, ms, me) in boxes(b, ts, te) {
                                 match &m {
                                     b"mdhd" if !times_zero(ms, me) => v.push("a track's media time".into()),
+                                    b"minf" => {
+                                        if boxes(b, ms, me).into_iter().any(|(n, ns, ne)| &n == b"dinf" && names_a_location(b, ns, ne)) {
+                                            v.push("a data reference that names another file".into());
+                                        }
+                                    }
                                     b"hdlr" if me >= ms + 12 => {
                                         handler.copy_from_slice(&b[ms + 8..ms + 12]);
                                         if me > ms + 24 && !zero(ms + 24, me) {

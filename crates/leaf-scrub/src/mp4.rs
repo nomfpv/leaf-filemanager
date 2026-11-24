@@ -1,6 +1,7 @@
 //! MP4, MOV, M4A: the boxes that hold tags, location and device information (`udta`, `meta`, the XMP `uuid`) are renamed to
 //! `free` IN PLACE, the creation / modification times of the movie, tracks and media are zeroed, and the handler names are
 //! emptied. Nothing changes size, so no offset in the file moves and the audio and video data is not touched.
+//! A track whose data is in another file is refused: its data reference names where that file is.
 
 use crate::{Finding, Inspection, Options, Result, ScrubError};
 use std::fs;
@@ -237,7 +238,15 @@ fn walk_trak(body: &[u8], base: u64, patches: &mut Vec<Patch>, found: &mut Vec<F
                                             }
                                             for e in children(&dr.body[8..], dr.off + dr.hdr + 8)? {
                                                 if e.body.len() < 4 || e.body[3] & 1 == 0 {
+                                                    // the samples are in another file, and the entry says where (a path,
+                                                    // an alias with the volume and folder names, an address): refused below
                                                     t.self_contained = false;
+                                                } else if e.body[4..].iter().any(|b| *b != 0) {
+                                                    // "in this file", but with a location string left in it: nothing reads
+                                                    // it, it is overwritten with zeros
+                                                    let text: String = e.body[4..].iter().map(|c| if (0x20..0x7F).contains(c) { *c as char } else { ' ' }).collect();
+                                                    found.push(Finding::new("Location of another file (data reference)", text, true));
+                                                    patches.push((e.off + e.hdr + 4, vec![0u8; e.body.len() - 4]));
                                                 }
                                             }
                                         }
@@ -302,6 +311,11 @@ fn plan_tracks(
     found: &mut Vec<Finding>,
 ) -> Result<Vec<(u64, u64)>> {
     let keeps = |t: &Track| &t.handler == b"vide" || &t.handler == b"soun" || (opts.keep_subtitles && SUBTITLE_HANDLERS.contains(&&t.handler));
+    // a track whose data is in another file names that file's location (a path with the user name, a volume name); it cannot
+    // be emptied without the video losing that track, and the samples were never in this file to clean
+    if let Some(t) = tracks.iter().find(|t| !t.self_contained) {
+        return Err(ScrubError::Unsupported(format!("a track ({}) keeps its data in another file and names where that file is", track_kind(t))));
+    }
     let mut kept: Vec<(u64, u64)> = Vec::new();
     for t in tracks.iter().filter(|t| keeps(t)) {
         kept.extend(t.chunks.iter().map(|(a, n)| (*a, a.saturating_add(*n))));
@@ -323,9 +337,6 @@ fn plan_tracks(
         let kind = track_kind(t);
         if fragmented {
             return Err(ScrubError::Unsupported(format!("the video is stored in fragments and has a track that is not picture or sound ({kind}): leaf cannot empty it safely")));
-        }
-        if !t.self_contained {
-            return Err(ScrubError::Unsupported(format!("a track ({kind}) keeps its data in another file")));
         }
         if !t.tables {
             return Err(ScrubError::Unsupported(format!("a track ({kind}) has sample tables leaf cannot read, so it cannot be emptied")));

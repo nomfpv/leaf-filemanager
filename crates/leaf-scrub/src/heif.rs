@@ -11,7 +11,9 @@
 //! - an embedded colour profile (`colr` of type `prof` / `rICC`) obeys the colour-profile option: when it goes, it is emptied and
 //!   renamed to `free` like the boxes above. A property is never deleted, the association table counts properties by position.
 //!   One that an item marks as essential stays (a reader may refuse a picture whose essential property it does not know), and the
-//!   result says it was kept.
+//!   result says it was kept;
+//! - a user description property (`udes`: name, description, tags) is emptied and renamed the same way; the location string of a
+//!   data reference (a path or address of another file, never used for a picture leaf cleans) is overwritten with zeros.
 
 use crate::{Finding, Inspection, Options, Result, ScrubError};
 use std::fs;
@@ -336,11 +338,48 @@ fn properties(d: &[u8], iprp: B, opts: &Options, patches: &mut Vec<Patch>, found
                     free_box(*p, patches, d);
                 }
             }
+            // a user description: free text (a name, a description, tags) typed by whoever made or shared the picture
+            b"udes" => {
+                if essential[i] {
+                    return Err(ScrubError::Unsupported("a user description (name, description, tags) is marked as needed to show the picture, leaf cannot remove it".into()));
+                }
+                let text = d[(p.body() + 4).min(p.end)..p.end]
+                    .split(|c| *c == 0)
+                    .map(|s| String::from_utf8_lossy(s).trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                found.push(Finding::new("User description (name, description, tags)", text, true));
+                free_box(*p, patches, d);
+            }
             b"free" | b"skip" if d[p.body()..p.end].iter().any(|c| *c != 0) => {
                 found.push(Finding::new("Leftover data in padding", format!("{} bytes", p.end - p.body()), true));
                 patches.push((p.body(), zeros(p.end - p.body())));
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The data references (`dinf` / `dref`): an entry can name another file by its location (a path or a web address). No item of a
+/// file leaf cleans uses one (the item location table refuses any reference but "this file"), so the location string is
+/// overwritten with zeros in place; the entry and its size stay.
+fn data_refs(d: &[u8], dinf: B, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<()> {
+    for dr in boxes(d, dinf.body(), dinf.end)?.into_iter().filter(|b| &b.ty == b"dref") {
+        if dr.end - dr.body() < 8 {
+            return bad("a data reference is cut off");
+        }
+        for e in boxes(d, dr.body() + 8, dr.end)? {
+            if e.end - e.body() < 4 {
+                return bad("a data reference entry is cut off");
+            }
+            let loc = &d[e.body() + 4..e.end];
+            if loc.iter().any(|c| *c != 0) {
+                let text: String = loc.iter().map(|c| if (0x20..0x7F).contains(c) { *c as char } else { ' ' }).collect();
+                found.push(Finding::new("Location of another file (data reference)", text, true));
+                patches.push((e.body() + 4, zeros(loc.len())));
+            }
         }
     }
     Ok(())
@@ -402,7 +441,8 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
                 patches.push((k.body(), zeros(k.end - k.body())));
             }
             b"iprp" => properties(d, *k, opts, &mut patches, &mut found)?,
-            b"hdlr" | b"pitm" | b"iloc" | b"iinf" | b"iref" | b"idat" | b"dinf" | b"grpl" | b"free" | b"skip" | b"ipro" => {}
+            b"dinf" => data_refs(d, *k, &mut patches, &mut found)?,
+            b"hdlr" | b"pitm" | b"iloc" | b"iinf" | b"iref" | b"idat" | b"grpl" | b"free" | b"skip" | b"ipro" => {}
             // `xml ` / `bxml` (XML metadata of the file) and any box leaf does not know
             _ => odd.push(*k),
         }

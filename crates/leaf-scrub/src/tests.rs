@@ -603,11 +603,12 @@ fn infe(id: u16, ty: &[u8; 4], name: &[u8], ct: Option<&[u8]>) -> Vec<u8> {
 
 /// A HEIC-shaped file: the picture is a made-up blob of bytes (the cleaner never decodes it).
 fn make_heic(path: &Path, brand: &[u8; 4]) -> Vec<u8> {
-    make_heic_with(path, brand, &[], &[])
+    make_heic_with(path, brand, &[], &[], &[])
 }
 
 /// The same with more item properties after `ispe` and `irot` (numbers 3, 4 ...) and these boxes after `ipco` in `iprp`.
-fn make_heic_with(path: &Path, brand: &[u8; 4], more_props: &[u8], after_ipco: &[u8]) -> Vec<u8> {
+/// `in_meta` is added at the end of `meta`.
+fn make_heic_with(path: &Path, brand: &[u8; 4], more_props: &[u8], after_ipco: &[u8], in_meta: &[u8]) -> Vec<u8> {
     let image = (0..64u8).map(|i| i.wrapping_mul(7).wrapping_add(3)).collect::<Vec<u8>>();
     let mut exif = vec![0, 0, 0, 0];
     exif.extend(exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()));
@@ -633,7 +634,7 @@ fn make_heic_with(path: &Path, brand: &[u8; 4], more_props: &[u8], after_ipco: &
         let ipco = bx(b"ipco", &[bx(b"ispe", &[0u8; 12]), bx(b"irot", &[1]), more_props.to_vec()].concat());
         let iprp = bx(b"iprp", &[ipco, after_ipco.to_vec()].concat());
         let iref = full_box(b"iref", 0, &bx(b"cdsc", &[&2u16.to_be_bytes()[..], &1u16.to_be_bytes(), &1u16.to_be_bytes()].concat()));
-        let meta = full_box(b"meta", 0, &[hdlr, pitm, iinf.clone(), full_box(b"iloc", 1, &iloc), iprp, iref].concat());
+        let meta = full_box(b"meta", 0, &[hdlr, pitm, iinf.clone(), full_box(b"iloc", 1, &iloc), iprp, iref, in_meta.to_vec()].concat());
         let udta = bx(b"udta", &bx(b"\xa9xyz", b"owner Planted Author"));
         let free = bx(b"free", b"stale LEAFTESTSERIAL123 bytes");
         let mdat_body = [image.clone(), exif.clone(), xmp.clone()].concat();
@@ -730,7 +731,7 @@ fn scrub_heic_colour_profile_obeys_the_option() {
     let off = Options { keep_color_profile: false, ..opts() };
     for (n, (essential, o, gone)) in [(false, &off, true), (true, &off, false), (false, &opts(), false)].into_iter().enumerate() {
         let src = d.join(format!("a{n}.heic"));
-        make_heic_with(&src, b"heic", &props, &ipma(essential));
+        make_heic_with(&src, b"heic", &props, &ipma(essential), &[]);
         let dst = clean_copy_name(&src);
         let out = clean_to(&src, &dst, o, &no_cancel).unwrap();
         let b = fs::read(&dst).unwrap();
@@ -743,6 +744,48 @@ fn scrub_heic_colour_profile_obeys_the_option() {
         }
         assert!(leftovers(&dst, o).unwrap().is_empty());
     }
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A HEIC user description (`udes`) and a location string in a data reference are emptied; an MP4 / MOV track whose data is in
+/// another file (its reference names where) refuses the file, a leftover location in a self-contained reference is emptied.
+#[test]
+fn scrub_user_descriptions_and_data_reference_paths_do_not_stay() {
+    let d = tmp_dir("dref");
+    // HEIC: udes as property 3 of item 1, and a data reference naming a file
+    let udes = full_box(b"udes", 0, b"en\0Planted Author\0a picture of the garden\0LEAFTESTSERIAL123\0");
+    let ipma = full_box(b"ipma", 0, &[&1u32.to_be_bytes()[..], &1u16.to_be_bytes(), &[3, 1, 2, 3]].concat());
+    let dinf = bx(b"dinf", &full_box(b"dref", 0, &[&1u32.to_be_bytes()[..], &full_box(b"url ", 0, b"file:///home/user/elsewhere.heic\0")].concat()));
+    let src = d.join("a.heic");
+    make_heic_with(&src, b"heic", &udes, &ipma, &dinf);
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(before.findings.iter().any(|f| f.label.starts_with("User description") && f.value.contains("garden")), "{:?}", before.findings);
+    assert!(before.findings.iter().any(|f| f.label.starts_with("Location of another file")));
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    let b = fs::read(&dst).unwrap();
+    assert_eq!(b.len(), fs::metadata(&src).unwrap().len() as usize);
+    assert!(!contains(&b, b"garden") && !contains(&b, b"/home/user"));
+    assert_no_markers(&dst, "heic udes");
+    // MP4: a video track whose samples are in another file
+    let ftyp = bx(b"ftyp", b"isom\0\0\0\0isom");
+    let base = ftyp.len() as u32 + 8;
+    let mdat = bx(b"mdat", b"VIDEODATA0123456");
+    let movie = |url: &[u8]| [ftyp.clone(), mdat.clone(), bx(b"moov", &[bx(b"mvhd", &[0u8; 100]), mp4_trak_ref(b"vide", b"avc1", base, &[16], url)].concat())].concat();
+    let ext = d.join("ext.mov");
+    fs::write(&ext, movie(b"\0\0\0\0file:///home/user/source.mov\0")).unwrap();
+    let dst = clean_copy_name(&ext);
+    assert!(matches!(clean_to(&ext, &dst, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))));
+    assert!(!dst.exists());
+    // "in this file", with a stale location left in the entry: emptied, same size
+    let own = d.join("own.mov");
+    let file = movie(b"\0\0\0\x01file:///home/user/source.mov\0");
+    fs::write(&own, &file).unwrap();
+    let dst = clean_copy_name(&own);
+    clean_to(&own, &dst, &opts(), &no_cancel).unwrap();
+    let b = fs::read(&dst).unwrap();
+    assert_eq!(b.len(), file.len());
+    assert!(!contains(&b, b"/home/user") && contains(&b, b"VIDEODATA0123456"));
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -962,9 +1005,14 @@ fn scrub_mp4_leaves_no_marker_in_renamed_boxes() {
 
 /// One MP4 track whose samples are `sizes` long and start at `chunk` in the file (one chunk).
 fn mp4_trak(handler: &[u8; 4], entry: &[u8; 4], chunk: u32, sizes: &[u32]) -> Vec<u8> {
+    mp4_trak_ref(handler, entry, chunk, sizes, &[0, 0, 0, 1])
+}
+
+/// The same with this body (version, flags, location) for the track's one `url ` data reference.
+fn mp4_trak_ref(handler: &[u8; 4], entry: &[u8; 4], chunk: u32, sizes: &[u32], url: &[u8]) -> Vec<u8> {
     let tkhd = bx(b"tkhd", &[&[0u8, 0, 0, 3][..], &[0u8; 80]].concat());
     let hdlr = full_box(b"hdlr", 0, &[&[0u8; 4][..], handler, &[0u8; 12], b"Planted Author\0"].concat());
-    let dinf = bx(b"dinf", &full_box(b"dref", 0, &[&1u32.to_be_bytes()[..], &bx(b"url ", &[0, 0, 0, 1])].concat()));
+    let dinf = bx(b"dinf", &full_box(b"dref", 0, &[&1u32.to_be_bytes()[..], &bx(b"url ", url)].concat()));
     let stsd = full_box(b"stsd", 0, &[&1u32.to_be_bytes()[..], &bx(entry, &[0u8; 8])].concat());
     let stco = full_box(b"stco", 0, &[1u32.to_be_bytes(), chunk.to_be_bytes()].concat());
     let stsc = full_box(b"stsc", 0, &[1u32.to_be_bytes(), 1u32.to_be_bytes(), (sizes.len() as u32).to_be_bytes(), 1u32.to_be_bytes()].concat());
