@@ -3,7 +3,8 @@
 //! No UI here. The rules this crate keeps because it rewrites other people's files:
 //! - the original is never opened for writing; the result is written to a temporary file next to the
 //!   destination, READ BACK with the same reader that lists metadata, and only moved into place when
-//!   nothing on the removal list is left in it. Anything else counts as a failure and the temporary file is deleted;
+//!   nothing on the removal list is left in it. Anything else counts as a failure and the temporary file is deleted; one left
+//!   behind by a run that was killed is deleted by the next run in that folder (only leaf's own names, see `sweep_stale`);
 //! - a file that is cut off, malformed, encrypted or of a kind leaf has no safe writer for is REFUSED
 //!   ([`ScrubError`]), never half-cleaned;
 //! - what the removal cannot reach is said so ([`Inspection::notes`]), it is never left unmentioned.
@@ -437,6 +438,85 @@ pub fn name_looks_personal(name: &str) -> bool {
     ["img_", "img-", "dsc_", "dscn", "dsc0", "pxl_", "vid_", "mvi_", "screenshot", "screen shot", "whatsapp", "photo "].iter().any(|p| lower.starts_with(p)) && b.iter().any(u8::is_ascii_digit)
 }
 
+/// How old a temporary file of another leaf process must be before it counts as left behind by a run that was killed or crashed
+/// (a run still going in another window is never that slow).
+const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(12 * 3600);
+
+/// Is `name` exactly one of leaf's own temporary names? Gives the process id in it and, for the checked file of replace mode, the
+/// name of the original it was made from.
+/// - `.leafscrub-<pid>-<n>-<name>`: the file being written by [`clean_to`];
+/// - `.<original>.<pid>-<n>.leaf-scrub` with the original's extension after it, if it has one: the checked file of [`replace`]
+///   waiting for the original to move.
+fn own_temp(name: &str) -> Option<(u32, Option<String>)> {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if let Some(rest) = name.strip_prefix(".leafscrub-") {
+        let (pid, rest) = rest.split_once('-')?;
+        let (n, file) = rest.split_once('-')?;
+        return (digits(pid) && digits(n) && !file.is_empty()).then(|| pid.parse().ok()).flatten().map(|p| (p, None));
+    }
+    let rest = name.strip_prefix('.')?;
+    let at = rest.rfind(".leaf-scrub")?;
+    let (head, tail) = (&rest[..at], &rest[at + ".leaf-scrub".len()..]);
+    let (original, run) = head.rsplit_once('.')?;
+    let (pid, n) = run.split_once('-')?;
+    if original.is_empty() || !digits(pid) || !digits(n) {
+        return None;
+    }
+    let ext = Path::new(original).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    (tail == ext).then(|| pid.parse().ok().map(|p| (p, Some(original.to_string())))).flatten()
+}
+
+/// Removes leaf's own temporary files that a killed or crashed run left in `dir`: only names that match [`own_temp`] exactly, of
+/// another process, created at least `min_age` ago, regular files. A checked file of replace mode is removed only while its
+/// original is still there (otherwise it may be the only copy left, and the error of that run said where it is).
+fn sweep_stale(dir: &Path, min_age: std::time::Duration) {
+    let Ok(list) = fs::read_dir(dir) else { return };
+    let me = std::process::id();
+    for e in list.flatten() {
+        let name = e.file_name();
+        let Some((pid, original)) = name.to_str().and_then(own_temp) else { continue };
+        if pid == me {
+            continue;
+        }
+        let Ok(m) = fs::symlink_metadata(e.path()) else { continue };
+        // the creation time: the modified time of a temporary file is set to the original's
+        let old = m.created().ok().and_then(|c| std::time::SystemTime::now().duration_since(c).ok()).is_some_and(|a| a >= min_age);
+        if !m.file_type().is_file() || !old {
+            continue;
+        }
+        if original.is_some_and(|o| fs::symlink_metadata(dir.join(o)).is_err()) {
+            continue;
+        }
+        let _ = fs::remove_file(e.path());
+    }
+}
+
+/// The first run in a folder (per process) clears what earlier runs left there.
+fn sweep_once(dir: &Path) {
+    static SWEPT: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    let Ok(mut done) = SWEPT.lock() else { return };
+    if done.iter().any(|d| d == dir) {
+        return;
+    }
+    done.push(dir.to_path_buf());
+    drop(done);
+    sweep_stale(dir, STALE_AFTER);
+}
+
+/// Deletes the temporary file when the run ends without moving it into place, a panic included.
+struct TempGuard<'a> {
+    path: &'a Path,
+    armed: bool,
+}
+
+impl Drop for TempGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(self.path);
+        }
+    }
+}
+
 /// Writes the cleaned copy of `src` to `dst` (which must not exist) and checks it. On any error nothing is left at `dst`.
 pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> bool) -> Result<Outcome> {
     let (fam, name) = family_of(src)?;
@@ -450,6 +530,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
         return Err(ScrubError::Io(io::Error::new(io::ErrorKind::AlreadyExists, "the target name is taken")));
     }
     let dir = dst.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    sweep_once(dir);
     // a name of this process and this call: two runs on the same name never share (or delete) each other's temporary file
     static RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -461,6 +542,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
     if tmp.exists() {
         return Err(ScrubError::Io(io::Error::new(io::ErrorKind::AlreadyExists, "a temporary file of the same name is in the way")));
     }
+    let mut guard = TempGuard { path: &tmp, armed: true };
     let res = (|| -> Result<Vec<String>> {
         if cancel() {
             return Err(ScrubError::Cancelled);
@@ -514,6 +596,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
     }
+    guard.armed = false;
     let mut notes = before.notes.clone();
     notes.extend(extra);
     let (removed, kept): (Vec<_>, Vec<_>) = before.findings.into_iter().partition(|f| f.remove);

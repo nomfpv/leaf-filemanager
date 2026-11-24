@@ -588,6 +588,46 @@ fn scrub_replace_mode_carries_over_attributes_and_permissions() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// Temporary files a killed run left behind are cleared, and nothing else: only leaf's exact names, of another process, and a
+/// checked file of replace mode only while its original is still there.
+#[test]
+fn scrub_stale_temporary_files_are_cleared_and_nothing_else() {
+    let d = tmp_dir("stale");
+    let me = std::process::id();
+    let other = if me == 1 { 2 } else { 1 };
+    fs::write(d.join("a.jpg"), b"original").unwrap();
+    let gone = [format!(".leafscrub-{other}-0-a.jpg"), format!(".a.jpg.{other}-3.leaf-scrub.jpg")];
+    let stay = [
+        format!(".leafscrub-{me}-0-a.jpg"),          // this process: a run may still be writing it
+        format!(".b.jpg.{other}-0.leaf-scrub.jpg"),  // its original is gone: it may be the only copy
+        format!(".a.jpg.{other}-3.leaf-scrub.png"),  // the extension does not match the original's
+        format!(".leafscrub-x{other}-0-a.jpg"),      // not leaf's pattern exactly
+        format!(".leafscrub-{other}-0-"),            // no file name in it
+        format!("notes.leafscrub-{other}-0-a.jpg"),  // a user's file
+        "a.jpg".to_string(),
+    ];
+    for n in gone.iter().chain(&stay) {
+        if n != "a.jpg" {
+            fs::write(d.join(n), b"x").unwrap();
+        }
+    }
+    fs::create_dir(d.join(format!(".leafscrub-{other}-1-folder"))).unwrap();
+    sweep_stale(&d, std::time::Duration::ZERO);
+    for n in &gone {
+        assert!(!d.join(n).exists(), "{n} should be cleared");
+    }
+    for n in &stay {
+        assert!(d.join(n).exists(), "{n} must stay");
+    }
+    assert!(d.join(format!(".leafscrub-{other}-1-folder")).is_dir(), "a folder is never touched");
+    // with the real age limit, a file made just now is not stale
+    let fresh = d.join(format!(".leafscrub-{other}-9-a.jpg"));
+    fs::write(&fresh, b"x").unwrap();
+    sweep_stale(&d, STALE_AFTER);
+    assert!(fresh.exists());
+    let _ = fs::remove_dir_all(&d);
+}
+
 /// The second look does not trust the remover: an uncleaned file fails its structural walk, and a "cleaned" file that still holds
 /// a value the original carried somewhere the walk does not look (here: inside the picture data) fails the byte scan.
 #[test]
