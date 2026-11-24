@@ -234,6 +234,49 @@ fn scrub_pdf_info_and_xmp_gone_and_still_opens() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// An attached PDF stored unpacked brings its own `startxref ... %%EOF`: it is not an earlier saved version of the document, the
+/// file cleans; a real incremental update still counts.
+#[test]
+fn scrub_pdf_end_marker_inside_an_attachment_is_not_a_saved_version() {
+    use lopdf::{Dictionary, Document, Object, Stream, dictionary};
+    let d = tmp_dir("pdf-eof");
+    let src = d.join("a.pdf");
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let content = doc.add_object(Stream::new(Dictionary::new(), b"BT ET".to_vec()));
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "Contents" => content, "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()] });
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+    let inner = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\nxref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 1 >>\nstartxref\n30\n%%EOF\n".to_vec();
+    let file = doc.add_object(Stream::new(dictionary! { "Type" => "EmbeddedFile" }, inner));
+    let spec = doc.add_object(dictionary! { "Type" => "Filespec", "F" => Object::string_literal("inner.pdf"), "EF" => dictionary! { "F" => file } });
+    let names = dictionary! { "EmbeddedFiles" => dictionary! { "Names" => vec![Object::string_literal("inner.pdf"), spec.into()] } };
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id, "Names" => names });
+    doc.trailer.set("Root", catalog);
+    doc.save(&src).unwrap();
+    let raw = fs::read(&src).unwrap();
+    assert_eq!(raw.windows(5).filter(|w| *w == b"%%EOF").count(), 2, "the attachment carries the bytes");
+    assert_eq!(pdf::revisions(&raw), 1);
+    let before = inspect(&src, &opts()).unwrap();
+    assert!(!before.findings.iter().any(|f| f.label.starts_with("Earlier saved versions")), "{:?}", before.findings);
+    let dst = clean_copy_name(&src);
+    clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+    assert!(contains(&fs::read(&dst).unwrap(), b"startxref\n30\n%%EOF"), "the attachment is not touched");
+    // a real incremental update: a new object, a cross-reference section for it, a trailer pointing back
+    let prev = {
+        let at = raw.windows(9).rposition(|w| w == b"startxref").unwrap() + 10;
+        std::str::from_utf8(&raw[at..]).unwrap().split_whitespace().next().unwrap().to_string()
+    };
+    let mut upd = raw.clone();
+    let obj_at = upd.len();
+    upd.extend_from_slice(b"99 0 obj\n<< /Producer (Planted Author) >>\nendobj\n");
+    let xref_at = upd.len();
+    upd.extend_from_slice(
+        format!("xref\n99 1\n{obj_at:010} 00000 n \ntrailer\n<< /Size 100 /Root {} 0 R /Prev {prev} >>\nstartxref\n{xref_at}\n%%EOF\n", catalog.0).as_bytes(),
+    );
+    assert_eq!(pdf::revisions(&upd), 2);
+    let _ = fs::remove_dir_all(&d);
+}
+
 fn make_zip(path: &Path, entries: &[(&str, &str)]) {
     let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
     for (n, c) in entries {

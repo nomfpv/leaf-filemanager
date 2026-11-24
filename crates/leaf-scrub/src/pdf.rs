@@ -46,9 +46,21 @@ fn load(path: &Path) -> Result<(Document, Vec<u8>)> {
         return Err(ScrubError::Unsupported("the PDF is bigger than 1 GB".into()));
     }
     let raw = fs::read(path)?;
-    let tail = &raw[raw.len().saturating_sub(2048)..];
-    if !tail.windows(5).any(|w| w == b"%%EOF") {
-        return Err(ScrubError::Malformed("the PDF has no end marker, it is cut off".into()));
+    let tail_from = raw.len().saturating_sub(2048);
+    let ends = end_markers(&raw);
+    match ends.iter().filter(|(_, real)| *real).map(|(end, _)| *end).max() {
+        // the last real end marker must close the file: one further up with a `%%EOF` near the end that is not real is a file
+        // cut off inside an attached file, or one leaf cannot tell from it
+        Some(last) if last < tail_from => {
+            return Err(ScrubError::Malformed("the PDF does not end with its own end marker, it may be cut off".into()));
+        }
+        Some(_) => {}
+        // no end marker leads to this file's cross-reference data (offsets all off, the reader rebuilds them): only the
+        // marker's presence is checked
+        None if !raw[tail_from..].windows(5).any(|w| w == b"%%EOF") => {
+            return Err(ScrubError::Malformed("the PDF has no end marker, it is cut off".into()));
+        }
+        None => {}
     }
     guard(&raw)?;
     let doc = Document::load_mem(&raw).map_err(|e| ScrubError::Malformed(format!("the PDF could not be read: {e}")))?;
@@ -137,6 +149,67 @@ fn guard(raw: &[u8]) -> Result<()> {
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
+}
+
+fn is_space(c: u8) -> bool {
+    matches!(c, b' ' | b'\r' | b'\n' | b'\t' | b'\x0c' | b'\0')
+}
+
+/// Does `off` lead to cross-reference data of this file: a table (`xref`) or a cross-reference stream object?
+fn xref_at(raw: &[u8], off: usize) -> bool {
+    let Some(rest) = raw.get(off..) else { return false };
+    let rest = &rest[rest.iter().take(64).take_while(|c| is_space(**c)).count()..];
+    if rest.starts_with(b"xref") {
+        return true;
+    }
+    // `12 0 obj << /Type /XRef ... >> stream`
+    let mut p = 0;
+    for _ in 0..2 {
+        let n = rest[p..].iter().take(10).take_while(|c| c.is_ascii_digit()).count();
+        if n == 0 {
+            return false;
+        }
+        p += n;
+        p += rest[p..].iter().take(16).take_while(|c| is_space(**c)).count();
+    }
+    if !rest[p..].starts_with(b"obj") {
+        return false;
+    }
+    let head = &rest[p..rest.len().min(p + 4096)];
+    let head = &head[..find(head, b"stream").unwrap_or(head.len())];
+    head.windows(6).any(|w| w.starts_with(b"/XRef") && !w[5].is_ascii_alphanumeric())
+}
+
+/// Every `startxref <offset> %%EOF` of the file: where the marker ends, and whether it is REAL, its offset leading to this
+/// file's cross-reference data. An attached PDF stored unpacked brings its own markers, with offsets that mean nothing here; a
+/// bare `%%EOF` inside a stream is not counted at all.
+fn end_markers(raw: &[u8]) -> Vec<(usize, bool)> {
+    let mut out = Vec::new();
+    for at in memchr::memmem::find_iter(raw, b"startxref") {
+        let mut p = at + 9;
+        p += raw[p..].iter().take(64).take_while(|c| is_space(**c)).count();
+        let n = raw[p..].iter().take(20).take_while(|c| c.is_ascii_digit()).count();
+        if n == 0 {
+            continue;
+        }
+        let off = std::str::from_utf8(&raw[p..p + n]).ok().and_then(|s| s.parse::<usize>().ok());
+        p += n;
+        p += raw[p..].iter().take(64).take_while(|c| is_space(**c)).count();
+        if raw[p..].starts_with(b"%%EOF") {
+            out.push((p + 5, off.is_some_and(|o| xref_at(raw, o))));
+        }
+    }
+    out
+}
+
+/// How many saved versions the file holds: its real end markers, or, when none can be checked (offsets all off), every
+/// `startxref ... %%EOF`.
+pub(crate) fn revisions(raw: &[u8]) -> usize {
+    let ends = end_markers(raw);
+    match ends.iter().filter(|(_, real)| *real).count() {
+        0 => ends.len(),
+        n => n,
+    }
 }
 
 /// The raw (still compressed) bytes of every content stream of every page: the rewrite must give the same back. Nothing is
@@ -319,7 +392,7 @@ fn analyse(doc: &Document, raw: &[u8]) -> (Vec<Finding>, Vec<String>) {
     if piece > 0 {
         f.push(Finding::new("Application private data", format!("{piece} places"), true));
     }
-    let eofs = raw.windows(5).filter(|w| *w == b"%%EOF").count();
+    let eofs = revisions(raw);
     if eofs > 1 {
         f.push(Finding::new("Earlier saved versions inside the file", format!("{} older", eofs - 1), true));
     }
