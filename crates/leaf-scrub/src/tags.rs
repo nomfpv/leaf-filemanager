@@ -126,7 +126,7 @@ pub(crate) fn extra(path: &Path, apply: bool) -> Result<Vec<Finding>> {
             // a new file of the kept chunks, copied as they are, then in place of the old one
             let tmp = path.with_extension("leafwav");
             let written = (|| -> Result<()> {
-                let mut w = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?);
+                let mut w = std::io::BufWriter::new(crate::access::create_temp(path, &tmp)?);
                 let body: u64 = 4 + keep.iter().map(|k| k.1).sum::<u64>();
                 w.write_all(b"RIFF")?;
                 w.write_all(&u32::try_from(body).map_err(|_| ScrubError::Unsupported("the WAV is too big".into()))?.to_le_bytes())?;

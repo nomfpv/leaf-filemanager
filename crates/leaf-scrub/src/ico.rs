@@ -5,7 +5,6 @@
 //! pictures that overlap, refuse the file.
 
 use crate::{Family, Finding, Inspection, Options, Result, ScrubError};
-use std::fs;
 use std::path::Path;
 
 const PNG_SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -134,7 +133,7 @@ pub(crate) fn inspect(path: &Path, name: &'static str, opts: &Options) -> Result
 pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     let d = crate::image::read_all(src)?;
     let (out, _) = plan(&d, opts)?;
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     std::io::Write::write_all(&mut f, &out)?;
     f.sync_all()?;
     Ok(())

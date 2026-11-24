@@ -2,7 +2,6 @@
 //! left out. The frames (image descriptors, colour tables, LZW data) and the timing extensions are copied byte for byte.
 
 use crate::{Finding, Inspection, Options, Result, ScrubError};
-use std::fs;
 use std::path::Path;
 
 fn bad<T>(w: &str) -> Result<T> {
@@ -131,7 +130,7 @@ pub(crate) fn inspect(path: &Path, opts: &Options) -> Result<Inspection> {
 pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     let d = crate::image::read_all(src)?;
     let (out, _, _) = process(&d, opts)?;
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     std::io::Write::write_all(&mut f, &out)?;
     f.sync_all()?;
     Ok(())

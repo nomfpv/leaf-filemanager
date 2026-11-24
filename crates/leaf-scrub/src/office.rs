@@ -1044,7 +1044,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
         return Err(ScrubError::Unsupported(SIGNED_TEXT.into()));
     }
     let mut z = open(src)?;
-    let out = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let out = crate::access::create_temp(src, dst)?;
     let mut w = ZipWriter::new(io::BufWriter::new(out));
     let zerr = |e: zip::result::ZipError| ScrubError::Io(io::Error::other(e.to_string()));
     for (i, fate) in p.fates.iter().enumerate() {

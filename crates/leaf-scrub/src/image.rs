@@ -61,7 +61,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, fam: Family, opts: &Options) -> Re
     if out.len() > data.len() + 64 {
         return Err(ScrubError::Verify("the cleaned file came out bigger than the original".into()));
     }
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     std::io::Write::write_all(&mut f, &out)?;
     f.sync_all()?;
     Ok(())

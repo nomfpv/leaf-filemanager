@@ -505,9 +505,13 @@ fn sweep_stale(dir: &Path, min_age: std::time::Duration) {
     }
 }
 
-/// Deletes a file leaf made itself.
+/// Deletes a file leaf made itself. The access rights it was given from the original can deny leaf that: then they are reset to
+/// the folder's first.
 pub(crate) fn discard(path: &Path) -> io::Result<()> {
-    fs::remove_file(path)
+    fs::remove_file(path).or_else(|_| {
+        access::loosen(path);
+        fs::remove_file(path)
+    })
 }
 
 /// The first run in a folder (per process) clears what earlier runs left there.
@@ -531,7 +535,7 @@ struct TempGuard<'a> {
 impl Drop for TempGuard<'_> {
     fn drop(&mut self) {
         if self.armed {
-            let _ = fs::remove_file(self.path);
+            let _ = discard(self.path);
         }
     }
 }
@@ -548,6 +552,9 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
     if dst.exists() {
         return Err(ScrubError::Io(io::Error::new(io::ErrorKind::AlreadyExists, "the target name is taken")));
     }
+    // the original's permissions, given to the cleaned file before it takes its name (copy and replace mode alike)
+    let access = access::Access::read(src)
+        .map_err(|e| ScrubError::Io(io::Error::other(format!("the original's access rights could not be read, nothing was written ({e})"))))?;
     let dir = dst.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     sweep_once(dir);
     // a name of this process and this call: two runs on the same name never share (or delete) each other's temporary file
@@ -599,7 +606,7 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
     let extra = match res {
         Ok(e) => e,
         Err(e) => {
-            let _ = fs::remove_file(&tmp);
+            let _ = discard(&tmp);
             return Err(e);
         }
     };
@@ -611,8 +618,13 @@ pub fn clean_to(src: &Path, dst: &Path, opts: &Options, cancel: &dyn Fn() -> boo
             let _ = f.set_modified(m);
         }
     }
+    // last, after the times: the original's rights may not let leaf write to the file any more
+    if let Err(e) = access.rights(&tmp) {
+        let _ = discard(&tmp);
+        return Err(ScrubError::Io(io::Error::other(format!("the original's access rights could not be given to the cleaned file ({e})"))));
+    }
     if let Err(e) = fs::rename(&tmp, dst) {
-        let _ = fs::remove_file(&tmp);
+        let _ = discard(&tmp);
         return Err(e.into());
     }
     guard.armed = false;
@@ -635,7 +647,7 @@ fn verify(tmp: &Path, opts: &Options, fam: Family) -> Result<()> {
 /// Copies the bytes of `src` to `dst` and nothing else.
 pub(crate) fn copy_without_attrs(src: &Path, dst: &Path) -> io::Result<()> {
     let mut r = fs::File::open(src)?;
-    let mut w = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut w = access::create_temp(src, dst)?;
     io::copy(&mut r, &mut w)?;
     w.sync_all()
 }
@@ -684,8 +696,8 @@ pub const NO_UNDO_NOTE: &str = "Replaced, no undo: the original did not go to th
 /// `target` and the result says "replaced, no undo" ([`NO_UNDO_NOTE`]); when the last rename fails, the cleaned file is kept under
 /// a `.clean` name (or, if even that fails, under its temporary name), and the error says where.
 ///
-/// The cleaned file gets the original's access rules (see `access`): permissions on Linux; the read-only, hidden and system
-/// marks, encryption and the file's own access rights on Windows. Alternate streams and extended attributes are not carried.
+/// The cleaned file gets the original's access rules (see `access`): permissions on Linux; the file's own access rights,
+/// encryption and the read-only, hidden and system marks on Windows. Alternate streams and extended attributes are not carried.
 pub fn replace(
     src: &Path,
     target: &Path,
@@ -712,17 +724,17 @@ pub fn replace(
     let original_there = || fs::symlink_metadata(src).is_ok();
     if cancel() {
         if original_there() {
-            let _ = fs::remove_file(&beside);
+            let _ = discard(&beside);
         }
         return Err(ScrubError::Cancelled);
     }
-    // the original's access rules (permissions, read-only / hidden marks, rights set on the file), read while it is still in its
-    // place; what can be set now is set before the original moves, so the cleaned file never stands in for it with wider rights
-    let access = match access::Access::read(src).and_then(|a| a.before(&beside).map(|()| a)) {
+    // the cleaned file already has the original's permissions (`clean_to`); its marks (read-only, hidden) are read now, while
+    // the original is in its place, and set once the cleaned file is in it
+    let access = match access::Access::read(src) {
         Ok(a) => a,
         Err(e) => {
             if original_there() {
-                let _ = fs::remove_file(&beside);
+                let _ = discard(&beside);
             }
             return Err(ScrubError::Io(io::Error::other(format!(
                 "the original's access rights could not be given to the cleaned file, nothing was changed ({e})"
@@ -732,7 +744,7 @@ pub fn replace(
     let put = put_away(src);
     if original_there() {
         // the original is where it was: nothing was changed, the cleaned copy is not needed
-        let _ = fs::remove_file(&beside);
+        let _ = discard(&beside);
         return Err(ScrubError::Io(io::Error::other(match put {
             Err(e) => format!("the original could not be moved to the Trash, nothing was changed ({e})"),
             Ok(()) => "the original did not reach the Trash, nothing was changed".to_string(),
@@ -741,7 +753,7 @@ pub fn replace(
     match fs::rename(&beside, target) {
         Ok(()) => {
             out.output = target.to_path_buf();
-            out.notes.extend(access.after(target));
+            out.notes.extend(access.marks(target));
             if let Err(e) = put {
                 out.notes.insert(0, format!("{NO_UNDO_NOTE} ({e})"));
                 out.undoable = false;
@@ -751,6 +763,7 @@ pub fn replace(
         Err(e) => {
             let keep = clean_copy_name(src);
             let at = if fs::rename(&beside, &keep).is_ok() { keep } else { beside.clone() };
+            let _ = access.marks(&at);
             let original = if put.is_ok() { "the original is in the Trash" } else { "the original was deleted by the system" };
             Err(ScrubError::Io(io::Error::other(format!(
                 "the cleaned file could not be put in place ({e}); {original} and the cleaned file is saved as {}",

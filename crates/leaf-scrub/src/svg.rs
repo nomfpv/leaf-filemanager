@@ -232,7 +232,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     }
     let xml = load(&fs::read(src)?)?;
     let (out, _, _) = clean(&xml, opts)?;
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     std::io::Write::write_all(&mut f, out.as_bytes())?;
     f.sync_all()?;
     Ok(())

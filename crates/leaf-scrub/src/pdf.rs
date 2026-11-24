@@ -588,7 +588,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
         }
     }
     doc.prune_objects();
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     doc.save_to(&mut f).map_err(|e| ScrubError::Io(e))?;
     f.sync_all()?;
     drop(f);

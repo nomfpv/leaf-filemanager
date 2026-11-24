@@ -7,7 +7,6 @@
 
 use crate::{Finding, Inspection, Options, Result, ScrubError};
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 pub(crate) const RAW_TEXT: &str = "camera RAW files carry the camera's data inside the picture data: convert to another format first";
@@ -357,7 +356,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
             return Err(ScrubError::Verify("the picture data changed".into()));
         }
     }
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     std::io::Write::write_all(&mut f, &d)?;
     f.sync_all()?;
     Ok(())

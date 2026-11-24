@@ -16,7 +16,6 @@
 //!   data reference (a path or address of another file, never used for a picture leaf cleans) is overwritten with zeros.
 
 use crate::{Finding, Inspection, Options, Result, ScrubError};
-use std::fs;
 use std::path::Path;
 
 type Patch = (usize, Vec<u8>);
@@ -534,7 +533,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
         d[*off..*off + bytes.len()].copy_from_slice(bytes);
     }
     debug_assert_eq!(d.len(), len);
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut f = crate::access::create_temp(src, dst)?;
     std::io::Write::write_all(&mut f, &d)?;
     f.sync_all()?;
     drop(f);

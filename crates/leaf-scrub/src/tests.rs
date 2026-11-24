@@ -567,6 +567,55 @@ fn scrub_replace_mode_bin_refuses_leaves_exactly_one_file_never_none() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// The access list of a file as text (SDDL), and setting one from text.
+#[cfg(windows)]
+fn win_rights(p: &Path) -> String {
+    use windows::Win32::Security::Authorization::{ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+    use windows::core::{PCWSTR, PWSTR};
+    unsafe {
+        let (mut dacl, mut sd, mut s) = (std::ptr::null_mut::<ACL>(), PSECURITY_DESCRIPTOR::default(), PWSTR::null());
+        let w = access::wide(p);
+        assert_eq!(GetNamedSecurityInfoW(PCWSTR(w.as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None, Some(&mut dacl), None, &mut sd).0, 0);
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, DACL_SECURITY_INFORMATION, &mut s, None).unwrap();
+        s.to_string().unwrap()
+    }
+}
+
+#[cfg(windows)]
+fn win_set_rights(p: &Path, text: &str) {
+    use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT, SetNamedSecurityInfoW};
+    use windows::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+    use windows::core::PCWSTR;
+    unsafe {
+        let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(text.as_ptr()), 1, &mut sd, None).unwrap();
+        let (mut present, mut dacl, mut defaulted) = (Default::default(), std::ptr::null_mut::<ACL>(), Default::default());
+        GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted).unwrap();
+        let how = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+        let w = access::wide(p);
+        assert_eq!(SetNamedSecurityInfoW(PCWSTR(w.as_ptr()), SE_FILE_OBJECT, how, None, None, Some(dacl), None).0, 0);
+    }
+}
+
+#[cfg(windows)]
+fn win_attrs(p: &Path, set: Option<u32>) -> u32 {
+    use windows::Win32::Storage::FileSystem::{FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, SetFileAttributesW};
+    use windows::core::PCWSTR;
+    let w = access::wide(p);
+    unsafe {
+        if let Some(a) = set {
+            SetFileAttributesW(PCWSTR(w.as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(a)).unwrap();
+        }
+        GetFileAttributesW(PCWSTR(w.as_ptr()))
+    }
+}
+
+/// A protected access list of its own: only the built-in administrators and the owner, full access.
+#[cfg(windows)]
+const PRIVATE_RIGHTS: &str = "D:P(A;;FA;;;BA)(A;;FA;;;OW)";
+
 /// Replace mode: the cleaned file in the original's place has the original's read-only and hidden marks and its own access rights
 /// (Windows), or its permission bits (Linux).
 #[test]
@@ -579,45 +628,16 @@ fn scrub_replace_mode_carries_over_attributes_and_permissions() {
     let trash = |p: &Path| fs::rename(p, bin.join(p.file_name().unwrap())).map_err(|e| e.to_string());
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        use windows::Win32::Security::Authorization::{
-            ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
-            SE_FILE_OBJECT, SetNamedSecurityInfoW,
-        };
-        use windows::Win32::Security::{
-            ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        };
-        use windows::Win32::Storage::FileSystem::{FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, SetFileAttributesW};
-        use windows::core::{PCWSTR, PWSTR};
-        let wide = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-        let sddl = |p: &Path| unsafe {
-            let (mut dacl, mut sd, mut s) = (std::ptr::null_mut::<ACL>(), PSECURITY_DESCRIPTOR::default(), PWSTR::null());
-            assert_eq!(GetNamedSecurityInfoW(PCWSTR(wide(p).as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None, Some(&mut dacl), None, &mut sd).0, 0);
-            ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, DACL_SECURITY_INFORMATION, &mut s, None).unwrap();
-            s.to_string().unwrap()
-        };
-        // a protected access list of its own: only the built-in administrators and the owner, full access
-        unsafe {
-            let text: Vec<u16> = "D:P(A;;FA;;;BA)(A;;FA;;;OW)".encode_utf16().chain(Some(0)).collect();
-            let mut sd = PSECURITY_DESCRIPTOR::default();
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(text.as_ptr()), 1, &mut sd, None).unwrap();
-            let (mut present, mut dacl, mut defaulted) = (Default::default(), std::ptr::null_mut::<ACL>(), Default::default());
-            GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted).unwrap();
-            let how = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
-            assert_eq!(SetNamedSecurityInfoW(PCWSTR(wide(&src).as_ptr()), SE_FILE_OBJECT, how, None, None, Some(dacl), None).0, 0);
-            SetFileAttributesW(PCWSTR(wide(&src).as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(0x1 | 0x2)).unwrap();
-        }
-        let rights = sddl(&src);
+        win_set_rights(&src, PRIVATE_RIGHTS);
+        win_attrs(&src, Some(0x1 | 0x2));
+        let rights = win_rights(&src);
         assert!(rights.starts_with("D:P"), "{rights}");
         let out = replace(&src, &src, &opts(), &no_cancel, &trash).unwrap();
         assert!(!out.notes.iter().any(|n| n.contains("did not get")), "{:?}", out.notes);
-        let attrs = unsafe { GetFileAttributesW(PCWSTR(wide(&src).as_ptr())) };
-        assert_eq!(attrs & 0x3, 0x3, "read-only and hidden carried over");
-        assert_eq!(sddl(&src), rights, "the file's own access rights carried over");
+        assert_eq!(win_attrs(&src, None) & 0x3, 0x3, "read-only and hidden carried over");
+        assert_eq!(win_rights(&src), rights, "the file's own access rights carried over");
         for p in [src.clone(), bin.join("a.jpg")] {
-            unsafe {
-                let _ = SetFileAttributesW(PCWSTR(wide(&p).as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(0x80));
-            }
+            win_attrs(&p, Some(0x80));
         }
     }
     #[cfg(unix)]
@@ -629,6 +649,37 @@ fn scrub_replace_mode_carries_over_attributes_and_permissions() {
     }
     assert!(!contains(&fs::read(&src).unwrap(), b"Example Camera"));
     let _ = fs::remove_dir_all(&d);
+}
+
+/// Copy mode, in a folder whose path is longer than 260 characters: the cleaned copy gets the original's own access rights
+/// (Windows) or permission bits (Linux), not the folder's defaults; the marks (read-only, hidden) are not copied to a copy.
+#[test]
+fn scrub_copy_mode_carries_permissions_on_a_long_path() {
+    let top = tmp_dir("copy-access");
+    let d = top.join("a".repeat(100)).join("b".repeat(100)).join("c".repeat(100));
+    fs::create_dir_all(&d).unwrap();
+    assert!(d.as_os_str().len() > 300);
+    let src = d.join("a.jpg");
+    make_jpeg(&src);
+    #[cfg(windows)]
+    {
+        win_set_rights(&src, PRIVATE_RIGHTS);
+        win_attrs(&src, Some(0x2));
+        let dst = clean_copy_name(&src);
+        clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+        assert_eq!(win_rights(&dst), win_rights(&src));
+        assert_eq!(win_attrs(&dst, None) & 0x2, 0, "a copy is not hidden");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o640)).unwrap();
+        let dst = clean_copy_name(&src);
+        clean_to(&src, &dst, &opts(), &no_cancel).unwrap();
+        assert_eq!(fs::metadata(&dst).unwrap().permissions().mode() & 0o7777, 0o640);
+    }
+    assert!(fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("leafscrub")));
+    let _ = fs::remove_dir_all(&top);
 }
 
 /// Files a killed run was writing are cleared, and nothing else: only leaf's exact name for them, of another process that is not
