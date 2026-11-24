@@ -178,7 +178,7 @@ fn structure(path: &Path, fam: Family, opts: &Options) -> Result<Vec<String>> {
         Family::Webp => webp(&crate::image::read_all(path)?, opts),
         Family::Gif => gif(&crate::image::read_all(path)?, opts),
         Family::Tiff => tiff(&crate::image::read_all(path)?, opts),
-        Family::Heif(_) => heif(&crate::image::read_all(path)?),
+        Family::Heif(_) => heif(&crate::image::read_all(path)?, opts),
         Family::Mp4 => mp4(path, opts)?,
         Family::Pdf => pdf(path)?,
         Family::Ooxml | Family::Odf => office(path)?,
@@ -398,7 +398,53 @@ fn boxes(d: &[u8], start: usize, end: usize) -> Vec<([u8; 4], usize, usize)> {
     v
 }
 
-fn heif(d: &[u8]) -> Vec<String> {
+/// The 1-based property numbers that an `ipma` box (body `s..e`) marks as essential for some item.
+fn heif_essential(d: &[u8], s: usize, e: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let (Some(&ver), Some(&flags)) = (d.get(s), d.get(s + 3)) else { return out };
+    let n = d.get(s + 4..s + 8).map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize).unwrap_or(0);
+    let mut p = s + 8;
+    for _ in 0..n {
+        p += if ver < 1 { 2 } else { 4 };
+        let Some(&count) = d.get(p).filter(|_| p < e) else { break };
+        p += 1;
+        for _ in 0..count {
+            if flags & 1 != 0 {
+                let Some(v) = d.get(p..p + 2).filter(|_| p + 2 <= e).map(|b| u16::from_be_bytes([b[0], b[1]])) else { return out };
+                if v & 0x8000 != 0 {
+                    out.push((v & 0x7FFF) as usize);
+                }
+                p += 2;
+            } else {
+                let Some(&v) = d.get(p).filter(|_| p < e) else { return out };
+                if v & 0x80 != 0 {
+                    out.push((v & 0x7F) as usize);
+                }
+                p += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The item properties: a colour profile only when it is kept (by the option, or because an item cannot be shown without it).
+fn heif_props(d: &[u8], s: usize, e: usize, opts: &Options, v: &mut Vec<String>) {
+    let kids = boxes(d, s, e);
+    let essential: Vec<usize> = kids.iter().filter(|k| &k.0 == b"ipma").flat_map(|(_, ms, me)| heif_essential(d, *ms, *me)).collect();
+    let props: Vec<([u8; 4], usize, usize)> = kids.iter().filter(|k| &k.0 == b"ipco").flat_map(|(_, cs, ce)| boxes(d, *cs, *ce)).collect();
+    for (i, (t, ps, pe)) in props.into_iter().enumerate() {
+        let n = i + 1;
+        match &t {
+            b"colr" if matches!(d.get(ps..ps + 4), Some(b"prof" | b"rICC")) && !opts.keep_color_profile && !essential.contains(&n) => {
+                v.push("an embedded colour profile".into())
+            }
+            b"free" | b"skip" if d[ps..pe].iter().any(|c| *c != 0) => v.push("data in a padding box among the picture's properties".into()),
+            _ => {}
+        }
+    }
+}
+
+fn heif(d: &[u8], opts: &Options) -> Vec<String> {
     let mut v = Vec::new();
     let zero = |a: usize, b: usize| d[a..b].iter().all(|c| *c == 0);
     for (ty, s, e) in boxes(d, 0, d.len()) {
@@ -408,7 +454,8 @@ fn heif(d: &[u8]) -> Vec<String> {
             b"meta" => {
                 for (k, ks, ke) in boxes(d, s + 4, e) {
                     match &k {
-                        b"hdlr" | b"pitm" | b"iloc" | b"iref" | b"iprp" | b"idat" | b"dinf" | b"grpl" | b"ipro" => {}
+                        b"iprp" => heif_props(d, ks, ke, opts, &mut v),
+                        b"hdlr" | b"pitm" | b"iloc" | b"iref" | b"idat" | b"dinf" | b"grpl" | b"ipro" => {}
                         b"free" | b"skip" if zero(ks, ke) => {}
                         b"iinf" => {
                             let skip = if d.get(ks) == Some(&0) { 6 } else { 8 };

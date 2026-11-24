@@ -603,6 +603,11 @@ fn infe(id: u16, ty: &[u8; 4], name: &[u8], ct: Option<&[u8]>) -> Vec<u8> {
 
 /// A HEIC-shaped file: the picture is a made-up blob of bytes (the cleaner never decodes it).
 fn make_heic(path: &Path, brand: &[u8; 4]) -> Vec<u8> {
+    make_heic_with(path, brand, &[], &[])
+}
+
+/// The same with more item properties after `ispe` and `irot` (numbers 3, 4 ...) and these boxes after `ipco` in `iprp`.
+fn make_heic_with(path: &Path, brand: &[u8; 4], more_props: &[u8], after_ipco: &[u8]) -> Vec<u8> {
     let image = (0..64u8).map(|i| i.wrapping_mul(7).wrapping_add(3)).collect::<Vec<u8>>();
     let mut exif = vec![0, 0, 0, 0];
     exif.extend(exif_tiff_with(b"LEAFTESTSERIAL123\0", planted_lat()));
@@ -625,8 +630,8 @@ fn make_heic(path: &Path, brand: &[u8; 4]) -> Vec<u8> {
         }
         let hdlr = full_box(b"hdlr", 0, &[&[0u8; 4][..], b"pict", &[0u8; 12], b"\0"].concat());
         let pitm = full_box(b"pitm", 0, &1u16.to_be_bytes());
-        let ipco = bx(b"ipco", &[bx(b"ispe", &[0u8; 12]), bx(b"irot", &[1])].concat());
-        let iprp = bx(b"iprp", &ipco);
+        let ipco = bx(b"ipco", &[bx(b"ispe", &[0u8; 12]), bx(b"irot", &[1]), more_props.to_vec()].concat());
+        let iprp = bx(b"iprp", &[ipco, after_ipco.to_vec()].concat());
         let iref = full_box(b"iref", 0, &bx(b"cdsc", &[&2u16.to_be_bytes()[..], &1u16.to_be_bytes(), &1u16.to_be_bytes()].concat()));
         let meta = full_box(b"meta", 0, &[hdlr, pitm, iinf.clone(), full_box(b"iloc", 1, &iloc), iprp, iref].concat());
         let udta = bx(b"udta", &bx(b"\xa9xyz", b"owner Planted Author"));
@@ -711,6 +716,33 @@ fn scrub_heic_refuses_when_metadata_shares_bytes_with_the_picture() {
     let dst = clean_copy_name(&src);
     assert!(clean_to(&src, &dst, &opts(), &no_cancel).is_err());
     assert!(!dst.exists());
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A HEIC colour profile obeys the option like in every other picture; the `nclx` colour description always stays, and a profile
+/// an item marks as essential is kept and said to be kept.
+#[test]
+fn scrub_heic_colour_profile_obeys_the_option() {
+    let d = tmp_dir("heif-colr");
+    let props = [bx(b"colr", b"profICC Example Profile Maker"), bx(b"colr", b"nclx\0\x01\0\x0d\0\x06\x80")].concat();
+    // item 1 has ispe, irot, the profile (3) and nclx (4); `essential` sets the top bit of the profile's number
+    let ipma = |essential: bool| full_box(b"ipma", 0, &[&1u32.to_be_bytes()[..], &1u16.to_be_bytes(), &[4, 1, 2, if essential { 0x83 } else { 3 }, 4]].concat());
+    let off = Options { keep_color_profile: false, ..opts() };
+    for (n, (essential, o, gone)) in [(false, &off, true), (true, &off, false), (false, &opts(), false)].into_iter().enumerate() {
+        let src = d.join(format!("a{n}.heic"));
+        make_heic_with(&src, b"heic", &props, &ipma(essential));
+        let dst = clean_copy_name(&src);
+        let out = clean_to(&src, &dst, o, &no_cancel).unwrap();
+        let b = fs::read(&dst).unwrap();
+        assert!(contains(&b, b"nclx"), "case {n}: the colour description stays");
+        assert_eq!(!contains(&b, b"Example Profile Maker"), gone, "case {n}");
+        if gone {
+            assert!(out.removed.iter().any(|f| f.label == "Colour profile"));
+        } else {
+            assert!(out.kept.iter().any(|f| f.label.starts_with("Colour profile")), "case {n}: {:?}", out.kept);
+        }
+        assert!(leftovers(&dst, o).unwrap().is_empty());
+    }
     let _ = fs::remove_dir_all(&d);
 }
 

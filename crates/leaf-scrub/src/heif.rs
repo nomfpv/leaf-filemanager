@@ -7,7 +7,11 @@
 //!   reader skips), its name and content type are zeroed. The item is not deleted from `iinf` / `iloc` / `iref`: removing it would
 //!   mean moving every later offset, which is how pictures get damaged;
 //! - `udta` and XMP `uuid` boxes are zeroed and renamed to `free`; the contents of existing `free` / `skip` boxes are zeroed;
-//! - rotation and mirroring (`irot`, `imir`) and the colour description stay, they are part of how the picture is shown.
+//! - rotation and mirroring (`irot`, `imir`) and the colour description (`nclx`) stay, they are part of how the picture is shown;
+//! - an embedded colour profile (`colr` of type `prof` / `rICC`) obeys the colour-profile option: when it goes, it is emptied and
+//!   renamed to `free` like the boxes above. A property is never deleted, the association table counts properties by position.
+//!   One that an item marks as essential stays (a reader may refuse a picture whose essential property it does not know), and the
+//!   result says it was kept.
 
 use crate::{Finding, Inspection, Options, Result, ScrubError};
 use std::fs;
@@ -263,8 +267,86 @@ fn exif_findings(payload: &[u8]) -> Vec<Finding> {
     v
 }
 
+/// The positions (0-based, in `ipco`) of the properties that some item marks as essential in an `ipma` box.
+fn essential_props(d: &[u8], m: B) -> Result<Vec<usize>> {
+    let d = &d[..m.end];
+    let mut p = m.body();
+    let ver = *d.get(p).ok_or_else(|| ScrubError::Malformed("the property table is cut off".into()))?;
+    let wide = d.get(p + 3).is_some_and(|f| f & 1 != 0);
+    p += 4;
+    let n = be32(d, p)?;
+    p += 4;
+    let id_len = if ver < 1 { 2 } else { 4 };
+    // every entry takes at least its item id and its count: a count read from the file never runs past the box
+    if n.checked_mul(id_len + 1).is_none_or(|k| k > d.len().saturating_sub(p)) {
+        return bad("the property table lists more items than it holds");
+    }
+    let mut out = Vec::new();
+    for _ in 0..n {
+        p += id_len;
+        let count = *d.get(p).ok_or_else(|| ScrubError::Malformed("the property table is cut off".into()))?;
+        p += 1;
+        for _ in 0..count {
+            let (essential, index) = if wide {
+                let v = be16(d, p)?;
+                p += 2;
+                (v & 0x8000 != 0, v & 0x7FFF)
+            } else {
+                let v = *d.get(p).ok_or_else(|| ScrubError::Malformed("the property table is cut off".into()))? as usize;
+                p += 1;
+                (v & 0x80 != 0, v & 0x7F)
+            };
+            // index 0 means "no property"
+            if essential && index > 0 {
+                out.push(index - 1);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The item properties (`iprp`): how the picture is decoded and shown. The colour profile obeys the option; leftover data in
+/// padding goes.
+fn properties(d: &[u8], iprp: B, opts: &Options, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<()> {
+    let kids = boxes(d, iprp.body(), iprp.end)?;
+    let Some(ipco) = kids.iter().find(|k| &k.ty == b"ipco") else { return Ok(()) };
+    let props = boxes(d, ipco.body(), ipco.end)?;
+    let mut essential = vec![false; props.len()];
+    for m in kids.iter().filter(|k| &k.ty == b"ipma") {
+        for i in essential_props(d, *m)? {
+            if let Some(e) = essential.get_mut(i) {
+                *e = true;
+            }
+        }
+    }
+    for (i, p) in props.iter().enumerate() {
+        match &p.ty {
+            b"colr" => {
+                // `nclx` says how to read the colours and nothing about who made the picture; a profile can name its maker
+                let kind = d.get(p.body()..p.body() + 4).unwrap_or(&[]);
+                if kind != b"prof" && kind != b"rICC" {
+                    continue;
+                }
+                if opts.keep_color_profile {
+                    found.push(Finding::new("Colour profile", "", false));
+                } else if essential[i] {
+                    found.push(Finding::new("Colour profile (kept: the picture is marked as needing it to show)", "", false));
+                } else {
+                    found.push(Finding::new("Colour profile", "", true));
+                    free_box(*p, patches, d);
+                }
+            }
+            b"free" | b"skip" if d[p.body()..p.end].iter().any(|c| *c != 0) => {
+                found.push(Finding::new("Leftover data in padding", format!("{} bytes", p.end - p.body()), true));
+                patches.push((p.body(), zeros(p.end - p.body())));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<String>)> {
-    let _ = opts;
     let top = boxes(d, 0, d.len())?;
     let mut patches: Vec<Patch> = Vec::new();
     let mut found = Vec::new();
@@ -319,7 +401,8 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
                 found.push(Finding::new("Leftover data in padding", format!("{} bytes", k.end - k.body()), true));
                 patches.push((k.body(), zeros(k.end - k.body())));
             }
-            b"hdlr" | b"pitm" | b"iloc" | b"iinf" | b"iref" | b"iprp" | b"idat" | b"dinf" | b"grpl" | b"free" | b"skip" | b"ipro" => {}
+            b"iprp" => properties(d, *k, opts, &mut patches, &mut found)?,
+            b"hdlr" | b"pitm" | b"iloc" | b"iinf" | b"iref" | b"idat" | b"dinf" | b"grpl" | b"free" | b"skip" | b"ipro" => {}
             // `xml ` / `bxml` (XML metadata of the file) and any box leaf does not know
             _ => odd.push(*k),
         }
@@ -389,7 +472,8 @@ pub(crate) fn clean_bytes(src: &[u8], opts: &Options) -> Result<(Vec<u8>, Vec<Fi
         d[*off..*off + bytes.len()].copy_from_slice(bytes);
     }
     let (left, again, _) = plan(&d, opts)?;
-    if left.iter().any(|(_, b)| b.iter().any(|c| *c != 0)) || !again.is_empty() {
+    // (a colour profile that is kept is still listed, as kept)
+    if left.iter().any(|(_, b)| b.iter().any(|c| *c != 0)) || again.iter().any(|f| f.remove) {
         return Err(ScrubError::Verify("metadata items are still in the picture".into()));
     }
     Ok((d, found))
@@ -416,7 +500,7 @@ pub(crate) fn produce(src: &Path, dst: &Path, opts: &Options) -> Result<()> {
     drop(f);
     // the same walk over the result: nothing left to clean
     let (left, found, _) = plan(&d, opts)?;
-    let pending = left.iter().any(|(_, b)| b.iter().any(|c| *c != 0)) || !found.is_empty();
+    let pending = left.iter().any(|(_, b)| b.iter().any(|c| *c != 0)) || found.iter().any(|f| f.remove);
     if pending {
         return Err(ScrubError::Verify("metadata items are still in the file".into()));
     }
