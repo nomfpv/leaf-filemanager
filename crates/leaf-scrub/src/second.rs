@@ -463,6 +463,16 @@ fn heif_essential(d: &[u8], s: usize, e: usize) -> Vec<usize> {
 /// The item properties: a colour profile only when it is kept (by the option, or because an item cannot be shown without it).
 fn heif_props(d: &[u8], s: usize, e: usize, opts: &Options, v: &mut Vec<String>) {
     let kids = boxes(d, s, e);
+    if kids.iter().filter(|k| &k.0 == b"ipco").count() > 1 {
+        v.push("more than one property list".into());
+    }
+    for (t, ks, ke) in &kids {
+        match t {
+            b"ipco" | b"ipma" => {}
+            b"free" | b"skip" if d[*ks..*ke].iter().all(|c| *c == 0) => {}
+            other => v.push(format!("a {} box among the picture's properties", String::from_utf8_lossy(other).trim())),
+        }
+    }
     let essential: Vec<usize> = kids.iter().filter(|k| &k.0 == b"ipma").flat_map(|(_, ms, me)| heif_essential(d, *ms, *me)).collect();
     let props: Vec<([u8; 4], usize, usize)> = kids.iter().filter(|k| &k.0 == b"ipco").flat_map(|(_, cs, ce)| boxes(d, *cs, *ce)).collect();
     for (i, (t, ps, pe)) in props.into_iter().enumerate() {
@@ -478,9 +488,12 @@ fn heif_props(d: &[u8], s: usize, e: usize, opts: &Options, v: &mut Vec<String>)
     }
 }
 
-/// Does a `dinf` box (body `s..e`) hold a data reference entry with a location string (a path or address of another file)?
+/// Does a `dinf` box (body `s..e`) hold a data reference entry with a location string (a path or address of another file), or
+/// anything but data references and empty padding?
 fn names_a_location(d: &[u8], s: usize, e: usize) -> bool {
-    boxes(d, s, e)
+    let other = boxes(d, s, e).into_iter().any(|(t, ks, ke)| &t != b"dref" && !(matches!(&t, b"free" | b"skip") && d[ks..ke].iter().all(|c| *c == 0)));
+    other
+        || boxes(d, s, e)
         .into_iter()
         .filter(|b| &b.0 == b"dref" && b.2 >= b.1 + 8)
         .flat_map(|(_, rs, re)| boxes(d, rs + 8, re))

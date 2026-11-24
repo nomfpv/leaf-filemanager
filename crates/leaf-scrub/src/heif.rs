@@ -308,8 +308,19 @@ fn essential_props(d: &[u8], m: B) -> Result<Vec<usize>> {
 
 /// The item properties (`iprp`): how the picture is decoded and shown. The colour profile obeys the option; leftover data in
 /// padding goes.
-fn properties(d: &[u8], iprp: B, opts: &Options, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<()> {
+fn properties(d: &[u8], iprp: B, opts: &Options, patches: &mut Vec<Patch>, found: &mut Vec<Finding>, odd: &mut Vec<B>) -> Result<()> {
     let kids = boxes(d, iprp.body(), iprp.end)?;
+    // properties are numbered across the list; a second list would make the numbering a guess
+    if kids.iter().filter(|k| &k.ty == b"ipco").count() > 1 {
+        return Err(ScrubError::Unsupported("the picture has more than one property list, leaf cannot tell which property is which".into()));
+    }
+    for k in &kids {
+        match &k.ty {
+            b"ipco" | b"ipma" => {}
+            b"free" | b"skip" => pad(d, *k, patches, found),
+            _ => odd.push(*k),
+        }
+    }
     let Some(ipco) = kids.iter().find(|k| &k.ty == b"ipco") else { return Ok(()) };
     let props = boxes(d, ipco.body(), ipco.end)?;
     let mut essential = vec![false; props.len()];
@@ -364,8 +375,16 @@ fn properties(d: &[u8], iprp: B, opts: &Options, patches: &mut Vec<Patch>, found
 /// The data references (`dinf` / `dref`): an entry can name another file by its location (a path or a web address). No item of a
 /// file leaf cleans uses one (the item location table refuses any reference but "this file"), so the location string is
 /// overwritten with zeros in place; the entry and its size stay.
-fn data_refs(d: &[u8], dinf: B, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) -> Result<()> {
-    for dr in boxes(d, dinf.body(), dinf.end)?.into_iter().filter(|b| &b.ty == b"dref") {
+fn data_refs(d: &[u8], dinf: B, patches: &mut Vec<Patch>, found: &mut Vec<Finding>, odd: &mut Vec<B>) -> Result<()> {
+    let kids = boxes(d, dinf.body(), dinf.end)?;
+    for k in &kids {
+        match &k.ty {
+            b"dref" => {}
+            b"free" | b"skip" => pad(d, *k, patches, found),
+            _ => odd.push(*k),
+        }
+    }
+    for dr in kids.into_iter().filter(|b| &b.ty == b"dref") {
         if dr.end - dr.body() < 8 {
             return bad("a data reference is cut off");
         }
@@ -439,8 +458,8 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
                 found.push(Finding::new("Leftover data in padding", format!("{} bytes", k.end - k.body()), true));
                 patches.push((k.body(), zeros(k.end - k.body())));
             }
-            b"iprp" => properties(d, *k, opts, &mut patches, &mut found)?,
-            b"dinf" => data_refs(d, *k, &mut patches, &mut found)?,
+            b"iprp" => properties(d, *k, opts, &mut patches, &mut found, &mut odd)?,
+            b"dinf" => data_refs(d, *k, &mut patches, &mut found, &mut odd)?,
             b"hdlr" | b"pitm" | b"iloc" | b"iinf" | b"iref" | b"idat" | b"grpl" | b"free" | b"skip" | b"ipro" => {}
             // `xml ` / `bxml` (XML metadata of the file) and any box leaf does not know
             _ => odd.push(*k),
@@ -480,6 +499,10 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
             return Err(ScrubError::Unsupported("the metadata shares bytes with the picture data, it cannot be erased without damaging the picture".into()));
         }
     }
+    // every other change (properties, data references, renamed boxes) must miss the picture data as well
+    if patches.iter().any(|(off, b)| keep_ranges.iter().any(|(s, t)| *off < *t && *s < off + b.len())) {
+        return Err(ScrubError::Unsupported("the metadata shares bytes with the picture data, it cannot be erased without damaging the picture".into()));
+    }
     for b in odd {
         if keep_ranges.iter().any(|(s, t)| b.off < *t && *s < b.end) {
             return Err(ScrubError::Unsupported(format!("a box leaf does not know ({}) holds picture data", String::from_utf8_lossy(&b.ty))));
@@ -494,6 +517,14 @@ fn plan(d: &[u8], opts: &Options) -> Result<(Vec<Patch>, Vec<Finding>, Vec<Strin
     }
     notes.push("The coded picture is not touched. Rotation and mirroring stay. The metadata items were overwritten with zeros of the same length and marked as unused: they are not deleted from the item table, because deleting would move the picture data.".into());
     Ok((patches, found, notes))
+}
+
+/// A padding box: its content is overwritten with zeros when it holds anything.
+fn pad(d: &[u8], b: B, patches: &mut Vec<Patch>, found: &mut Vec<Finding>) {
+    if d[b.body()..b.end].iter().any(|c| *c != 0) {
+        found.push(Finding::new("Leftover data in padding", format!("{} bytes", b.end - b.body()), true));
+        patches.push((b.body(), zeros(b.end - b.body())));
+    }
 }
 
 fn free_box(b: B, patches: &mut Vec<Patch>, d: &[u8]) {

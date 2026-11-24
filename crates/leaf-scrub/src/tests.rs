@@ -1108,6 +1108,40 @@ fn scrub_ico_png_pictures_are_cleaned_and_the_directory_rewritten() {
     let _ = fs::remove_dir_all(&d);
 }
 
+/// HEIC property lists leaf cannot read for sure, or metadata that shares bytes with the picture, refuse the file; an unknown box
+/// among the properties is emptied like any unknown box.
+#[test]
+fn scrub_heic_property_lists_are_read_or_the_file_refused() {
+    let d = tmp_dir("heif-props");
+    let udes = full_box(b"udes", 0, b"en\0Planted Author\0\0\0");
+    let ipma = full_box(b"ipma", 0, &[&1u32.to_be_bytes()[..], &1u16.to_be_bytes(), &[2, 1, 2]].concat());
+    let refused = |what: &str, src: &Path| {
+        let dst = clean_copy_name(src);
+        assert!(matches!(clean_to(src, &dst, &opts(), &no_cancel), Err(ScrubError::Unsupported(_))), "{what}");
+        assert!(!dst.exists(), "{what}");
+    };
+    // two property lists
+    let two = d.join("two.heic");
+    make_heic_with(&two, b"heic", &[], &[bx(b"ipco", &bx(b"ispe", &[0u8; 12])), ipma.clone()].concat(), &[]);
+    refused("two property lists", &two);
+    // the picture's data said to be in the user description's bytes
+    let shared = d.join("shared.heic");
+    make_heic_with(&shared, b"heic", &udes, &ipma, &[]);
+    let mut b = fs::read(&shared).unwrap();
+    let at = b.windows(4).position(|w| w == b"udes").unwrap() + 4;
+    let item1_off = b.windows(4).position(|w| w == b"iloc").unwrap() + 4 + 4 + 2 + 2 + 2 + 4 + 2;
+    b[item1_off..item1_off + 4].copy_from_slice(&(at as u32).to_be_bytes());
+    fs::write(&shared, &b).unwrap();
+    refused("user description in the picture's bytes", &shared);
+    // an unknown box beside the property list: emptied and renamed
+    let odd = d.join("odd.heic");
+    make_heic_with(&odd, b"heic", &[], &[ipma, bx(b"xprp", b"LEAFTESTSERIAL123")].concat(), &[]);
+    let dst = clean_copy_name(&odd);
+    clean_to(&odd, &dst, &opts(), &no_cancel).unwrap();
+    assert!(!contains(&fs::read(&dst).unwrap(), SERIAL) && !contains(&fs::read(&dst).unwrap(), b"xprp"));
+    let _ = fs::remove_dir_all(&d);
+}
+
 fn put_ifd(buf: &mut Vec<u8>, entries: &[(u16, u16, u32, Vec<u8>)]) -> usize {
     let at = buf.len();
     let table = 2 + 12 * entries.len() + 4;
