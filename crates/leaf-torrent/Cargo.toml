@@ -1,0 +1,34 @@
+[package]
+name = "leaf-torrent"
+description = "leaf: BitTorrent downloads (magnet links and .torrent files) that go through leaf's VPN and nowhere else unless that rule is turned off"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+anyhow.workspace = true
+# the BitTorrent engine (Apache-2.0): peers, pieces, storage, HTTP trackers. No HTTP API, no web UI; DHT, the listener and
+# local discovery are only started on the direct route. Not its TLS feature (that would make aws-lc a second TLS crypto
+# library): its HTTPS gets rustls with ring, as the rest of leaf has it
+librqbit = { version = "9.1", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# ring is made the process's default provider for the engine's HTTPS (leaf's own TLS names its provider itself)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+# HTTPS trackers on the tunnel route are asked by leaf itself (the gateway): checked against the system's root
+# certificates read from the local store, with no verifier that fetches revocation data outside the VPN
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-native-certs = "0.8"
+# the engine's piece hashing (SHA-1): its fast back end is aws-lc (ISC / Apache-2.0 / OpenSSL licences), used for hashing
+# only. `prebuilt-nasm`: Windows builds need no NASM installed
+librqbit-core = { version = "9.1", default-features = false, features = ["sha1-ring"] }
+librqbit-sha1-wrapper = { version = "9.1", default-features = false, features = ["sha1-ring"] }
+aws-lc-rs = { version = "1", features = ["prebuilt-nasm"] }
+# the route: leaf's tunnel (its SOCKS entrance for the engine, its UDP sockets for UDP trackers)
+leaf-vpn.workspace = true
+# the engine's own runtime (leaf-remote's has one worker: not enough for hundreds of peers); started with the first torrent
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
+
+[dev-dependencies]
+sha1.workspace = true

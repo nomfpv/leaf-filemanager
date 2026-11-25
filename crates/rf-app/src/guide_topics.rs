@@ -993,6 +993,28 @@ pub static TOPICS: &[Topic] = &[
     .needs(Module::Usenet)
     .label("Open Settings > Advanced"),
     t(
+        "torrent",
+        G_DOWNLOADS,
+        "Download a torrent through the VPN",
+        &["torrent", "magnet", "bittorrent", "p2p", "vpn", "peers"],
+        &[
+            "Sign in to leaf's VPN (Settings > VPN) and press Connect.",
+            "Press Ctrl+Shift+P and choose \"Add a magnet link…\", and paste the link. Or open a .torrent file.",
+            "Follow it in the Status Center: its size, its peers and \"through the VPN\". Pause and cancel work as for any download.",
+            "When it is complete it is put in the download folder (several files get a folder of their own) and nothing more is uploaded.",
+        ],
+        &[
+            "\"Torrents only while the VPN is on\" (Settings > Advanced > Downloads) is on by default: everything a torrent sends goes through leaf's VPN and nowhere else. While the VPN is off or connecting, torrents wait as \"Waiting for the VPN\" and go on by themselves.",
+            "On the VPN route, what cannot go through it is off: DHT, incoming connections, port forwarding, local discovery and IPv6. Trackers, also UDP ones, are asked through the VPN.",
+            "Turn the rule off only if you want torrents on your own connection: every peer and tracker then sees your address. leaf asks before it does that.",
+            "A download that was cut off goes on from what is on disk when leaf starts again.",
+            "The speed limit of the downloads applies to torrents too.",
+        ],
+        Go::Page(Page::Advanced),
+    )
+    .needs(Module::Torrent)
+    .label("Open Settings > Advanced"),
+    t(
         "vpn",
         G_DOWNLOADS,
         "Send downloads and servers through the VPN",

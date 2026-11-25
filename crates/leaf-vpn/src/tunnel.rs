@@ -9,10 +9,10 @@
 //! behind one short lock (never held across an await); a stream that writes wakes the driver, the driver wakes a stream
 //! through the socket's waker.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::poll_fn;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -23,7 +23,7 @@ use boringtun::noise::{Tunn, TunnResult, errors::WireGuardError};
 use boringtun::x25519::{PublicKey, StaticSecret};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::{dns, tcp};
+use smoltcp::socket::{dns, tcp, udp};
 use smoltcp::wire::{DnsQueryType, HardwareAddress, IpAddress, IpCidr};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UdpSocket;
@@ -250,6 +250,8 @@ struct Net {
     /// The tasks waiting on each socket, one reading and one writing: both are woken when the tunnel closes (the stack's own
     /// wakers never fire again then).
     waiting: HashMap<SocketHandle, (Option<Waker>, Option<Waker>)>,
+    /// The UDP sockets ([`UdpPort`]): not TCP, so closing the tunnel leaves them to their owners.
+    udp: HashSet<SocketHandle>,
 }
 
 impl Net {
@@ -340,7 +342,7 @@ impl Tunnel {
         let mut sockets = SocketSet::new(Vec::new());
         let dns = sockets.add(dns::Socket::new(&[IpAddress::Ipv4(cfg.dns)], Vec::new()));
         let shared = Arc::new(Shared {
-            net: Mutex::new(Net { iface, dev, sockets, dns, orphans: Vec::new(), waiting: HashMap::new() }),
+            net: Mutex::new(Net { iface, dev, sockets, dns, orphans: Vec::new(), waiting: HashMap::new(), udp: HashSet::new() }),
             wake: Notify::new(),
             up: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -371,7 +373,7 @@ impl Tunnel {
             return;
         }
         let mut n = self.shared.lock();
-        let handles: Vec<SocketHandle> = n.sockets.iter().map(|(h, _)| h).filter(|h| *h != n.dns).collect();
+        let handles: Vec<SocketHandle> = n.sockets.iter().map(|(h, _)| h).filter(|h| *h != n.dns && !n.udp.contains(h)).collect();
         for h in handles {
             n.sockets.get_mut::<tcp::Socket>(h).abort();
         }
@@ -482,6 +484,96 @@ impl Tunnel {
             Ok(Err(e)) => Err(e),
             Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "no answer through the VPN")),
         }
+    }
+}
+
+impl Tunnel {
+    /// A UDP socket inside the tunnel, on a port of its own (UDP trackers; nothing listens for strangers: only answers to
+    /// what was sent are expected, and the server's NAT lets nothing else in).
+    pub fn udp(&self) -> io::Result<UdpPort> {
+        if self.shared.closed.load(Ordering::Acquire) {
+            return Err(Shared::closed_err());
+        }
+        let mut n = self.shared.lock();
+        let buf = || udp::PacketBuffer::new(vec![udp::PacketMetadata::EMPTY; 32], vec![0u8; 32 << 10]);
+        let mut s = udp::Socket::new(buf(), buf());
+        // (a port in use is tried again a few times: the range is shared with the TCP connections, which is fine, and with
+        // the other UDP sockets, which is not)
+        let mut bound = false;
+        for _ in 0..16 {
+            if s.bind(self.shared.port()).is_ok() {
+                bound = true;
+                break;
+            }
+        }
+        if !bound {
+            return Err(io::Error::new(io::ErrorKind::AddrInUse, "no UDP port is free inside the VPN"));
+        }
+        let handle = n.sockets.add(s);
+        n.udp.insert(handle);
+        Ok(UdpPort { shared: self.shared.clone(), handle })
+    }
+}
+
+/// A UDP socket inside the tunnel (see [`Tunnel::udp`]). Dropping it frees its port.
+pub struct UdpPort {
+    shared: Arc<Shared>,
+    handle: SocketHandle,
+}
+
+impl std::fmt::Debug for UdpPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("vpn::UdpPort")
+    }
+}
+
+impl Drop for UdpPort {
+    fn drop(&mut self) {
+        let mut n = self.shared.lock();
+        n.udp.remove(&self.handle);
+        n.waiting.remove(&self.handle);
+        n.sockets.remove(self.handle);
+    }
+}
+
+impl UdpPort {
+    /// Sends one datagram through the tunnel.
+    pub fn send_to(&self, data: &[u8], to: SocketAddrV4) -> io::Result<()> {
+        if self.shared.closed.load(Ordering::Acquire) {
+            return Err(Shared::closed_err());
+        }
+        let mut n = self.shared.lock();
+        let s = n.sockets.get_mut::<udp::Socket>(self.handle);
+        s.send_slice(data, (IpAddress::Ipv4(*to.ip()), to.port())).map_err(|e| io::Error::other(format!("the datagram could not be sent ({e:?})")))?;
+        drop(n);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// Waits for the next datagram: its length in `buf` (what does not fit is cut) and who sent it.
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV4)> {
+        poll_fn(|cx| {
+            if self.shared.closed.load(Ordering::Acquire) {
+                return Poll::Ready(Err(Shared::closed_err()));
+            }
+            let mut n = self.shared.lock();
+            let s = n.sockets.get_mut::<udp::Socket>(self.handle);
+            match s.recv() {
+                Ok((data, meta)) => {
+                    let k = data.len().min(buf.len());
+                    buf[..k].copy_from_slice(&data[..k]);
+                    #[allow(irrefutable_let_patterns)]
+                    let IpAddress::Ipv4(ip) = meta.endpoint.addr else { return Poll::Pending };
+                    Poll::Ready(Ok((k, SocketAddrV4::new(ip, meta.endpoint.port))))
+                }
+                Err(_) => {
+                    s.register_recv_waker(cx.waker());
+                    n.park(self.handle, cx.waker(), true);
+                    Poll::Pending
+                }
+            }
+        })
+        .await
     }
 }
 

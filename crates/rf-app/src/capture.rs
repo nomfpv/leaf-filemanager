@@ -177,6 +177,10 @@ fn start(c: Capture, cx: &mut App) {
             if crate::usenet::is_nzb(p) {
                 crate::usenet::open_nzb(p.clone(), cx);
             }
+            // a .torrent link the browser handed over: what it describes is downloaded (by the torrent rule: the VPN)
+            if crate::torrent::is_torrent(p) && crate::modules::enabled(cx, crate::modules::Module::Torrent) {
+                crate::torrent::open_torrent(p.clone(), cx);
+            }
         }
     });
     crate::downloads::start_with(cx, req, Some(after));

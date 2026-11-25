@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
-pub use tunnel::{PrivateKey, TcpStream, Tunnel, TunnelConfig, TunnelError};
+pub use tunnel::{PrivateKey, TcpStream, Tunnel, TunnelConfig, TunnelError, UdpPort};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

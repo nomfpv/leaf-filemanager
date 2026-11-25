@@ -792,6 +792,8 @@ pub struct Settings {
     pub usenet_servers: Vec<crate::usenet::UsenetServer>,
     /// Usenet only while the VPN is on: every NNTP connection goes through leaf's VPN, or waits.
     pub usenet_vpn_only: bool,
+    /// Torrents only while the VPN is on: everything a torrent sends goes through leaf's VPN, or waits.
+    pub torrent_vpn_only: bool,
     /// A folder whose NZB files are taken over (empty: off).
     pub usenet_watch_folder: String,
     /// Where Usenet jobs are put together (empty: "incomplete" in the download folder).
@@ -1120,6 +1122,7 @@ impl Default for Settings {
             vpn_downloads: false,
             usenet_servers: Vec::new(),
             usenet_vpn_only: true,
+            torrent_vpn_only: true,
             usenet_watch_folder: String::new(),
             usenet_incomplete_folder: String::new(),
             usenet_unpack: true,
@@ -1574,6 +1577,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     // (a changed download limit applies to the downloads that are running)
     crate::downloads::settings_changed(cx);
     crate::usenet::settings_changed(cx);
+    crate::torrent::settings_changed(cx);
     cx.refresh_windows();
 }
 

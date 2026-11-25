@@ -6447,6 +6447,19 @@ impl Render for Workspace {
                 let paths = this.active_tab().read(cx).selection_paths();
                 crate::usenet::download_selected(paths, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &DownloadTorrent, window, cx| {
+                let paths = this.active_tab().read(cx).selection_paths();
+                crate::torrent::download_selected(paths, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &AddMagnet, window, cx| {
+                // the folder shown, when it is a folder on this PC; else the download folder
+                let here = match this.active_tab().read(cx).location() {
+                    Location::Path(p) if crate::downloads::can_save_in(p) => Some(p.clone()),
+                    _ => None,
+                };
+                let dest = here.unwrap_or_else(|| crate::downloads::default_folder(cx.global::<crate::settings::Settings>()));
+                crate::torrent::ask_magnet(dest, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &RemoveMetadata, window, cx| {
                 let paths: Vec<PathBuf> = this.active_tab().read(cx).selection_paths().into_iter().filter(|p| p.is_file()).collect();
                 if paths.is_empty() {

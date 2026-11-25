@@ -22,6 +22,7 @@ pub enum Module {
     Downloads,
     VideoDl,
     Usenet,
+    Torrent,
     Vpn,
     Dev,
     Agents,
@@ -31,13 +32,14 @@ pub enum Module {
 }
 
 impl Module {
-    pub const ALL: [Module; 12] = [
+    pub const ALL: [Module; 13] = [
         Module::Servers,
         Module::Sync,
         Module::Shares,
         Module::Downloads,
         Module::VideoDl,
         Module::Usenet,
+        Module::Torrent,
         Module::Vpn,
         Module::Dev,
         Module::Agents,
@@ -213,6 +215,19 @@ pub static MODULES: &[Spec] = &[
         tips: NONE,
     },
     Spec {
+        module: Module::Torrent,
+        id: "torrent",
+        name: "Torrents",
+        desc: "Download magnet links and .torrent files, through leaf's VPN only unless you turn that off.",
+        icon: L::Download,
+        default_on: true,
+        hides: "Add a magnet link, Download with leaf (torrent), the Torrents cards. No torrent runs while it is off.",
+        needs: Some(Module::Downloads),
+        helpers: &[],
+        restart_note: "Turning it on again takes effect at the next start.",
+        tips: NONE,
+    },
+    Spec {
         module: Module::Vpn,
         id: "vpn",
         name: "VPN",
@@ -340,6 +355,7 @@ pub fn of_command(id: &str) -> Option<Module> {
         "ShareFolder" | "JoinSharedFolder" | "SharedFolders" | "SendToDevice" => Module::Shares,
         "DownloadHere" | "DownloadMany" | "ShowDownloadList" => Module::Downloads,
         "DownloadNzb" | "UsenetPauseAll" => Module::Usenet,
+        "DownloadTorrent" | "AddMagnet" => Module::Torrent,
         "VpnConnect" | "VpnDisconnect" => Module::Vpn,
         "ShowChanges" | "Checkpoint" | "ShowCheckpoints" | "ShowWorktrees" | "NewWorktree" | "FindBuildJunk" | "CopyAsContext" | "CopyBasketAsContext"
         | "CopyBasketAsMentions" | "ShowProjectBrain" | "OpenDocker" | "ToggleHideIgnored" => Module::Dev,

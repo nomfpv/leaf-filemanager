@@ -153,6 +153,8 @@ gpui_kit::actions!(
         DownloadMany,
         DownloadNzb,
         UsenetPauseAll,
+        DownloadTorrent,
+        AddMagnet,
         PauseAll,
         ResumeAll,
         RemoveMetadata,

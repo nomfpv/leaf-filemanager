@@ -116,7 +116,7 @@ pub fn password_by_default() -> bool {
 // ------------------------------------------------------------------------------------------------ where connections go
 
 /// A connection out of the proxy.
-pub(crate) trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
+pub trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
 
 /// Where the proxy sends its connections: the tunnel ([`Tunneled`]); the tests give their own.
@@ -153,6 +153,71 @@ impl Upstream for Tunneled {
             Ok(Box::new(s) as Box<dyn Duplex>)
         })
     }
+}
+
+// ------------------------------------------------------------------------------------------------ a proxy of leaf's own
+
+/// The address a [`Private`] proxy's own name stands for (reserved, never routed: no server can have it).
+const OWN_IP: Ipv4Addr = Ipv4Addr::new(240, 0, 0, 1);
+
+/// What answers a [`Private`] proxy's own name: a connection that ends inside leaf (given the port asked for).
+pub type Own = Arc<dyn Fn(u16) -> Box<dyn Duplex> + Send + Sync>;
+
+/// The tunnel, and one name that is answered inside leaf instead (only while the tunnel is up, as everything else).
+struct TunneledWithOwn {
+    name: String,
+    own: Own,
+}
+
+impl Upstream for TunneledWithOwn {
+    fn ready(&self) -> bool {
+        Tunneled.ready()
+    }
+    fn resolve<'a>(&'a self, name: &'a str) -> BoxFuture<'a, io::Result<Vec<Ipv4Addr>>> {
+        if name.eq_ignore_ascii_case(&self.name) {
+            return Box::pin(async { Ok(vec![OWN_IP]) });
+        }
+        Tunneled.resolve(name)
+    }
+    fn connect(&self, ip: Ipv4Addr, port: u16) -> BoxFuture<'_, io::Result<Box<dyn Duplex>>> {
+        if ip == OWN_IP {
+            return Box::pin(async move { Ok((self.own)(port)) });
+        }
+        Box::pin(async move { Tunneled.connect(ip, port).await })
+    }
+}
+
+/// A SOCKS5 proxy of its own for one part of leaf (the torrent engine, whose library takes a proxy and nothing else): on
+/// 127.0.0.1 with a free port and a random password, so no other program can use it. The same rule as the user's proxy:
+/// the tunnel or nothing, never direct, never this PC or the local network. Dropping it stops it and its connections.
+pub struct Private {
+    pub port: u16,
+    pub credentials: Credentials,
+    stop: watch::Sender<bool>,
+}
+
+impl std::fmt::Debug for Private {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "socks::Private(127.0.0.1:{})", self.port)
+    }
+}
+
+impl Drop for Private {
+    fn drop(&mut self) {
+        let _ = self.stop.send(true);
+    }
+}
+
+/// Starts a [`Private`] proxy on `rt` keeping at most `connections` at once. `own`: a name the proxy answers inside leaf
+/// instead of looking it up (the torrent engine's bridge to UDP trackers).
+pub fn start_private(rt: &tokio::runtime::Handle, connections: usize, own: Option<(String, Own)>) -> io::Result<Private> {
+    let credentials = Credentials::generate();
+    let limits = Limits { connections, idle: IDLE };
+    let (port, stop) = match own {
+        Some((name, own)) => launch_on(rt, 0, None, Some(credentials.clone()), Arc::new(TunneledWithOwn { name, own }), limits)?,
+        None => launch_on(rt, 0, None, Some(credentials.clone()), Arc::new(Tunneled), limits)?,
+    };
+    Ok(Private { port, credentials, stop })
 }
 
 // ------------------------------------------------------------------------------------------------ the one proxy
@@ -253,6 +318,10 @@ fn bind(port: u16, again: Option<u16>) -> io::Result<std::net::TcpListener> {
 
 fn launch_with<U: Upstream>(port: u16, again: Option<u16>, credentials: Option<Credentials>, up: Arc<U>, limits: Limits) -> io::Result<(u16, watch::Sender<bool>)> {
     let rt = crate::runtime().ok_or_else(|| io::Error::other("leaf's VPN is not set up in this copy of leaf"))?;
+    launch_on(&rt, port, again, credentials, up, limits)
+}
+
+fn launch_on<U: Upstream>(rt: &tokio::runtime::Handle, port: u16, again: Option<u16>, credentials: Option<Credentials>, up: Arc<U>, limits: Limits) -> io::Result<(u16, watch::Sender<bool>)> {
     let listener = bind(port, again)?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();

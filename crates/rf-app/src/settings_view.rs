@@ -3483,6 +3483,7 @@ fn advanced(p: &Palette, s: &Settings, cx: &App) -> Vec<AnyElement> {
         gated(p, s, crate::modules::Module::Downloads, download_schedule_card(p, s)),
         gated(p, s, crate::modules::Module::VideoDl, crate::videodl::settings_card(p, s)),
         gated(p, s, crate::modules::Module::Usenet, crate::usenet::servers_card(p, s)),
+        gated(p, s, crate::modules::Module::Torrent, crate::torrent::settings_card(p, s)),
         card(
             p,
             L::Globe,

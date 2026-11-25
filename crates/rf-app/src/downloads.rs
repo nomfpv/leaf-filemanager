@@ -92,6 +92,10 @@ pub fn ask(view: WeakEntity<FolderView>, dir: PathBuf, window: &mut Window, cx: 
     let vpn_on = vpn.clone();
     let go = Button::new(t!("Download"), Kind::Primary, move |text, _, cx| {
         let text = text.as_deref().unwrap_or_default();
+        // a magnet link in the box: a torrent job into this folder (by the torrent rule: the VPN)
+        if let Some(magnet) = crate::torrent::magnet_in(text).filter(|_| crate::modules::enabled(cx, crate::modules::Module::Torrent)) {
+            return if crate::torrent::start_magnet(magnet, dir.clone(), cx) { Ok(()) } else { Err(t!("This is not a magnet link or .torrent file leaf can read").into()) };
+        }
         let Some((url, sha256)) = url_and_sha(text) else {
             let word = text.split_whitespace().find(|w| dl::is_http_url(w));
             return Err(if word.is_some_and(dl::has_password) {
@@ -207,6 +211,12 @@ pub fn start_cli(url: String, folder: Option<String>, cx: &mut App) {
     if crate::usenet::is_nzb(Path::new(&url)) {
         let dest = folder.map(PathBuf::from).unwrap_or_else(|| default_folder(cx.global::<Settings>()));
         crate::usenet::start(PathBuf::from(url), dest, sort, cx);
+        return;
+    }
+    // `leaf download <magnet link> [folder]` and `leaf download x.torrent [folder]`: a torrent job
+    if crate::modules::enabled(cx, crate::modules::Module::Torrent) && (crate::torrent::magnet_in(&url).is_some() || crate::torrent::is_torrent(Path::new(&url))) {
+        let dest = folder.map(PathBuf::from).unwrap_or_else(|| default_folder(cx.global::<Settings>()));
+        crate::torrent::start_again(&url, dest, cx);
         return;
     }
     let dest = folder.map(PathBuf::from).unwrap_or_else(|| default_folder(cx.global::<Settings>()));

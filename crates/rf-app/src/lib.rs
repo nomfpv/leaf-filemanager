@@ -108,6 +108,7 @@ mod download_schedule;
 mod download_view;
 mod downloads;
 mod videodl;
+mod torrent;
 mod usenet;
 mod vpn;
 mod vpn_page;
@@ -856,6 +857,9 @@ pub fn run_with(ext: ext::Extensions) {
             downloads::init_ui(cx);
             if modules::enabled(cx, modules::Module::Usenet) {
                 usenet::init(cx);
+            }
+            if modules::enabled(cx, modules::Module::Torrent) {
+                torrent::init(cx);
             }
             // a copy or move cut off last time: ask to carry it on
             status_center::offer_resume(cx);

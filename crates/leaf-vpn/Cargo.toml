@@ -12,8 +12,8 @@ serde.workspace = true
 serde_json.workspace = true
 # WireGuard's handshake and packets, sans-IO (BSD-3-Clause); no `device` feature: no tun, no admin
 boringtun = { version = "0.7.1", default-features = false }
-# the TCP/IP stack inside the tunnel (0BSD): IPv4, TCP and DNS sockets, wakers for tokio
-smoltcp = { version = "0.14", default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "socket-tcp", "socket-dns", "async"] }
+# the TCP/IP stack inside the tunnel (0BSD): IPv4, TCP, UDP and DNS sockets, wakers for tokio
+smoltcp = { version = "0.14", default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dns", "async"] }
 # leaf-remote's runtime is used (its handle is given to `init`); no runtime of its own
 tokio = { version = "1", default-features = false, features = ["net", "time", "sync", "io-util", "macros", "rt"] }
 # HTTPS to Mullvad's API and to the exit check: rustls with ring and the system's certificates, as leaf-remote has them

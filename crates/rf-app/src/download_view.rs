@@ -110,6 +110,7 @@ pub struct Row {
 fn site_of(via: Via, from: &str) -> String {
     match via {
         Via::Usenet => t!("Usenet").to_string(),
+        Via::Torrent => t!("Torrent").to_string(),
         _ => crate::downloads::host_of(from),
     }
 }
@@ -260,6 +261,7 @@ fn via_rank(v: Via) -> u8 {
         Via::Video => 1,
         Via::Usenet => 2,
         Via::Browser => 3,
+        Via::Torrent => 4,
     }
 }
 
@@ -269,6 +271,7 @@ fn kind_word(v: Via) -> &'static str {
         Via::Video => t!("Video"),
         Via::Usenet => t!("Usenet"),
         Via::Browser => t!("From browser"),
+        Via::Torrent => t!("Torrent"),
     }
 }
 
@@ -593,7 +596,7 @@ impl DownloadView {
         if !matches!(r.st, St::Failed(_) | St::Cancelled) {
             return false;
         }
-        r.retry.is_some() || (r.op.is_none() && matches!(r.via, Via::Web | Via::Usenet) && !r.from.is_empty())
+        r.retry.is_some() || (r.op.is_none() && matches!(r.via, Via::Web | Via::Usenet | Via::Torrent) && !r.from.is_empty())
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -613,6 +616,9 @@ impl DownloadView {
                 gone.push(r.clone());
             } else if r.via == Via::Usenet && crate::usenet::is_nzb(Path::new(&r.from)) {
                 crate::usenet::start(PathBuf::from(&r.from), r.folder.clone(), false, cx);
+                started += 1;
+                gone.push(r.clone());
+            } else if r.via == Via::Torrent && crate::torrent::start_again(&r.from, r.folder.clone(), cx) {
                 started += 1;
                 gone.push(r.clone());
             }

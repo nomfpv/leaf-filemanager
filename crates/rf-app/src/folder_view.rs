@@ -4636,6 +4636,8 @@ impl FolderView {
             }
         } else if crate::usenet::is_nzb(&path) {
             crate::usenet::open_nzb(path, cx);
+        } else if crate::torrent::is_torrent(&path) && crate::modules::enabled(cx, crate::modules::Module::Torrent) {
+            crate::torrent::open_torrent(path, cx);
         } else if is_lnk(&path) {
             self.open_shortcut(path, cx);
         } else {

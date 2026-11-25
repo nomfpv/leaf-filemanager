@@ -26,6 +26,7 @@ pub enum Via {
     Video,
     Usenet,
     Browser,
+    Torrent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
