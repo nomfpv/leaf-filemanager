@@ -12,7 +12,7 @@ and the tools you would otherwise install five other programs for.
 [![CI](https://github.com/nomfpv/leaf-filemanager/actions/workflows/ci.yml/badge.svg)](https://github.com/nomfpv/leaf-filemanager/actions/workflows/ci.yml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
 
-![leaf with two panes and the preview pane](docs/readme/leaf-dual-pane.png)
+![leaf with two panes and the preview pane, on the HyperGlass backdrop](docs/readme/leaf-hyperglass.png)
 
 </div>
 
@@ -85,9 +85,15 @@ and the tools you would otherwise install five other programs for.
 ### Making it yours
 
 - Three themes, each dark and light: **Canopy** (frosted glass), **Stem** (calm and solid) and **Index** (dense, ruled rows)
+- Accent colours per theme, and a choice of window backdrops. **HyperGlass** (experimental) frosts and bends whatever is
+  behind the window; it is the backdrop in the pictures on this page.
 - [Your own theme](docs/themes.md) is one TOML file; [icon packs](docs/icon-packs.md) replace the file and folder icons
 - A Home page of widgets you can add, remove, resize and reorder
 - An [extension seam](docs/extensions.md) for add-ons that live in their own crate
+
+| Canopy, light, Lagoon accent | Canopy, dark, Sunset accent |
+|---|---|
+| ![leaf in the light Canopy theme with the Lagoon accent](docs/readme/leaf-canopy-light-lagoon.png) | ![leaf in the dark Canopy theme with the Sunset accent](docs/readme/leaf-canopy-dark-sunset.png) |
 
 ## A few shortcuts
 
