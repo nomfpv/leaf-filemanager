@@ -294,6 +294,10 @@ fn ask_files(tr: &Tracker, name: &str, files: &[(String, u64)]) -> Option<Vec<us
 
 fn run_job(job: SavedJob, cx: &mut App) {
     apply(cx.global::<Settings>());
+    // (a torrent that may go only through the VPN does not sit waiting for someone to press Connect)
+    if leaf_torrent::go_now() == leaf_torrent::Go::Wait {
+        crate::vpn::connect_for_job(cx);
+    }
     LIVE.fetch_add(1, Ordering::Relaxed);
     let key = job.key;
     let title = format!("{} {}", t!("Torrent:"), job.title);
@@ -465,7 +469,13 @@ pub fn download_selected(paths: Vec<PathBuf>, window: &mut Window, cx: &mut App)
 /// What the dialogs say about the route right now.
 fn route_line(s: &Settings) -> String {
     if s.torrent_vpn_only {
-        if leaf_vpn::is_on() { t!("It goes through leaf's VPN and nowhere else.").to_string() } else { t!("leaf's VPN is not connected: the torrent waits until it is, and sends nothing before.").to_string() }
+        if leaf_vpn::is_on() {
+            t!("It goes through leaf's VPN and nowhere else.").to_string()
+        } else if s.vpn_signed_in {
+            t!("leaf's VPN is connected for it: the torrent waits until the VPN is up, and sends nothing before.").to_string()
+        } else {
+            t!("leaf's VPN is not connected: the torrent waits until it is, and sends nothing before.").to_string()
+        }
     } else {
         t!("\"Torrents only while the VPN is on\" is turned off: peers and trackers can see this PC's own address.").to_string()
     }

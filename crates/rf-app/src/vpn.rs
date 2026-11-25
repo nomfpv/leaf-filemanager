@@ -424,6 +424,18 @@ pub fn connect(cx: &mut App) {
     .detach();
 }
 
+/// A job that may go only through the VPN (a torrent) starts while the tunnel is off: it is brought up, when there is a
+/// sign-in to do it with. Nothing while it is already connecting (also the hold of "Connect when leaf starts") or up.
+pub fn connect_for_job(cx: &mut App) {
+    if !crate::modules::enabled(cx, crate::modules::Module::Vpn) || !cx.global::<Settings>().vpn_signed_in || !STARTED.load(Ordering::Acquire) {
+        return;
+    }
+    if matches!(leaf_vpn::state(), leaf_vpn::State::Off | leaf_vpn::State::Failed(_)) && leaf_vpn::tunnel().is_none() {
+        log::info!("vpn: connecting for a torrent that waits for it");
+        connect(cx);
+    }
+}
+
 pub fn disconnect(_cx: &mut App) {
     leaf_vpn::disconnect();
 }
