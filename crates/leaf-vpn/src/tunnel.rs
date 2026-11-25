@@ -828,3 +828,133 @@ impl AsyncWrite for TcpStream {
         Poll::Ready(Ok(()))
     }
 }
+
+/// A measurement, not a check (`cargo test --profile fast -p leaf-vpn tunnel_throughput -- --ignored --nocapture`): a
+/// WireGuard peer on 127.0.0.1 (its own thread, its own stack) sends as fast as it can through TCP connections inside the
+/// tunnel; what the tunnel takes per second is printed. No network outside this PC is used.
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    const PORT: u16 = 5001;
+
+    fn serve(udp: std::net::UdpSocket, secret: StaticSecret, client: PublicKey, streams: usize, stop: Arc<AtomicBool>) {
+        let mut tunn = Tunn::new(secret, client, None, None, 7, None);
+        let mut dev = VirtDev { rx: VecDeque::new(), tx: VecDeque::new() };
+        let started = Instant::now();
+        let mut iface = Interface::new(Config::new(HardwareAddress::Ip), &mut dev, now_smol(started));
+        iface.update_ip_addrs(|a| {
+            let _ = a.push(IpCidr::new(IpAddress::Ipv4(Ipv4Addr::new(10, 64, 0, 1)), 24));
+        });
+        let mut sockets = SocketSet::new(Vec::new());
+        let handles: Vec<SocketHandle> = (0..streams).map(|_| sockets.add(tcp::Socket::new(tcp::SocketBuffer::new(vec![0u8; 256 << 10]), tcp::SocketBuffer::new(vec![0u8; 2 << 20])))).collect();
+        udp.set_nonblocking(true).unwrap();
+        let chunk = vec![0x5au8; 64 << 10];
+        let (mut out, mut inb) = (vec![0u8; 65536], vec![0u8; 65536]);
+        let mut peer = None;
+        let mut timers = Instant::now();
+        while !stop.load(Ordering::Relaxed) {
+            let mut busy = false;
+            for _ in 0..DRAIN {
+                let Ok((len, from)) = udp.recv_from(&mut inb) else { break };
+                busy = true;
+                peer = Some(from);
+                match tunn.decapsulate(None, &inb[..len], &mut out) {
+                    TunnResult::WriteToNetwork(b) => {
+                        let _ = udp.send_to(b, from);
+                        while let TunnResult::WriteToNetwork(b) = tunn.decapsulate(None, &[], &mut out) {
+                            let _ = udp.send_to(b, from);
+                        }
+                    }
+                    TunnResult::WriteToTunnelV4(p, _) => dev.rx.push_back(p.to_vec()),
+                    _ => {}
+                }
+            }
+            for h in &handles {
+                let s = sockets.get_mut::<tcp::Socket>(*h);
+                if !s.is_open() {
+                    let _ = s.listen(PORT);
+                }
+                while s.can_send() && s.send_slice(&chunk).is_ok_and(|n| n > 0) {}
+            }
+            iface.poll(now_smol(started), &mut dev, &mut sockets);
+            for p in dev.tx.drain(..) {
+                busy = true;
+                if let (TunnResult::WriteToNetwork(b), Some(to)) = (tunn.encapsulate(&p, &mut out), peer) {
+                    let _ = udp.send_to(b, to);
+                }
+            }
+            if timers.elapsed() >= Duration::from_millis(250) {
+                timers = Instant::now();
+                if let (TunnResult::WriteToNetwork(b), Some(to)) = (tunn.update_timers(&mut out), peer) {
+                    let _ = udp.send_to(b, to);
+                }
+            }
+            if !busy {
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    fn measure(streams: usize) -> f64 {
+        let (server_key, client_key) = (PrivateKey::generate(), PrivateKey::generate());
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sock = socket2::SockRef::from(&udp);
+        let _ = sock.set_recv_buffer_size(UDP_BUF);
+        let _ = sock.set_send_buffer_size(UDP_BUF);
+        let endpoint = udp.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let client_public = PublicKey::from(&client_key.secret());
+        let server = {
+            let (secret, stop) = (server_key.secret(), stop.clone());
+            std::thread::spawn(move || serve(udp, secret, client_public, streams, stop))
+        };
+        // the tunnel's driver on a runtime with one worker, as in the app; the readers on another one, as the torrent engine's
+        let driver = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        let readers = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+        let cfg = TunnelConfig { private_key: client_key, peer_public: *PublicKey::from(&server_key.secret()).as_bytes(), endpoint, address: Ipv4Addr::new(10, 64, 0, 2), dns: Ipv4Addr::new(10, 64, 0, 1) };
+        let tunnel = Arc::new(driver.block_on(Tunnel::start(cfg, Duration::from_secs(5))).expect("the handshake"));
+        let total = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let secs = 4.0;
+        let got = readers.block_on(async {
+            let mut tasks = Vec::new();
+            for _ in 0..streams {
+                let (tunnel, total) = (tunnel.clone(), total.clone());
+                tasks.push(tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt as _;
+                    let mut s = tunnel.connect(Ipv4Addr::new(10, 64, 0, 1), PORT, Duration::from_secs(5)).await.expect("the connection");
+                    let mut buf = vec![0u8; 256 << 10];
+                    while let Ok(n) = s.read(&mut buf).await {
+                        if n == 0 {
+                            break;
+                        }
+                        total.fetch_add(n as u64, Ordering::Relaxed);
+                    }
+                }));
+            }
+            // (the first second is not counted: the connections open and their windows grow)
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let before = total.load(Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+            let got = total.load(Ordering::Relaxed) - before;
+            for t in tasks {
+                t.abort();
+            }
+            got
+        });
+        stop.store(true, Ordering::Relaxed);
+        tunnel.close();
+        let _ = server.join();
+        let mb = got as f64 / secs / (1u64 << 20) as f64;
+        println!("{streams:>3} streams: {mb:>7.1} MB/s ({:.0} Mbit/s)", mb * 8.388608);
+        mb
+    }
+
+    #[test]
+    #[ignore]
+    fn tunnel_throughput() {
+        for streams in [1usize, 8, 40] {
+            let _ = measure(streams);
+        }
+    }
+}
