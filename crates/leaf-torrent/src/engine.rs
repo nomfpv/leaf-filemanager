@@ -32,6 +32,7 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 
 struct Live {
     tunnel: bool,
+    no_upload: bool,
     session: Arc<Session>,
     /// The SOCKS entrance (the tunnel route): stopped when this goes.
     _entrance: Option<leaf_vpn::socks::Private>,
@@ -77,6 +78,9 @@ async fn make(tunnel: bool, limit: u64) -> Result<Live, Error> {
         ..Default::default()
     };
     opts.ratelimits.download_bps = limit_of(limit);
+    // "Never upload": no bitfield, no "have", every request for a piece refused
+    let no_upload = crate::no_upload();
+    opts.disable_upload = no_upload;
     let entrance = if tunnel {
         let rt = tokio::runtime::Handle::current();
         let entrance = leaf_vpn::socks::start_private(&rt, TUNNEL_CONNECTIONS, Some((crate::gateway::GATEWAY_HOST.to_string(), crate::gateway::own(rt.clone())))).map_err(|e| fail("the entrance to the VPN could not be opened", e.to_string()))?;
@@ -101,7 +105,7 @@ async fn make(tunnel: bool, limit: u64) -> Result<Live, Error> {
     let session = Session::new_with_opts(std::env::temp_dir(), opts).await.map_err(|e| fail("the torrent engine could not start", format!("{e:#}")))?;
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     log::info!("torrent: the engine runs {}", if tunnel { "through the VPN only" } else { "on this PC's own network" });
-    Ok(Live { tunnel, session, _entrance: entrance, generation })
+    Ok(Live { tunnel, no_upload, session, _entrance: entrance, generation })
 }
 
 async fn stop(live: Live) {
@@ -116,6 +120,7 @@ async fn session_for(tunnel: bool, limit: u64) -> Result<(Arc<Session>, u64), Er
     let mut g = ENGINE.lock().await;
     if let Some(live) = g.as_ref()
         && live.tunnel == tunnel
+        && live.no_upload == crate::no_upload()
         && GENERATION.load(Ordering::Acquire) == live.generation
     {
         return Ok((live.session.clone(), live.generation));
@@ -127,6 +132,11 @@ async fn session_for(tunnel: bool, limit: u64) -> Result<(Arc<Session>, u64), Er
     let out = (live.session.clone(), live.generation);
     *g = Some(live);
     Ok(out)
+}
+
+/// A setting the session is made with changed: the jobs put their torrents into a new one.
+pub(crate) fn restart() {
+    GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
 struct JobGuard;

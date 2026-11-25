@@ -794,6 +794,8 @@ pub struct Settings {
     pub usenet_vpn_only: bool,
     /// Torrents only while the VPN is on: everything a torrent sends goes through leaf's VPN, or waits.
     pub torrent_vpn_only: bool,
+    /// Never upload: nothing of a torrent is sent to other peers, also while it downloads.
+    pub torrent_no_upload: bool,
     /// A folder whose NZB files are taken over (empty: off).
     pub usenet_watch_folder: String,
     /// Where Usenet jobs are put together (empty: "incomplete" in the download folder).
@@ -1123,6 +1125,7 @@ impl Default for Settings {
             usenet_servers: Vec::new(),
             usenet_vpn_only: true,
             torrent_vpn_only: true,
+            torrent_no_upload: true,
             usenet_watch_folder: String::new(),
             usenet_incomplete_folder: String::new(),
             usenet_unpack: true,

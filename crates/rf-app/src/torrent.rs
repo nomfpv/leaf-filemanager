@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prompt::{self, Button, Kind};
 use crate::settings::{self, Settings};
-use crate::settings_view::{button, card_body, shell, switch};
+use crate::settings_view::{button, card_body, shell, sw, switch};
 use crate::t;
 use crate::theme::Palette;
 
@@ -47,6 +47,7 @@ static LIMIT: LazyLock<Arc<AtomicU64>> = LazyLock::new(Default::default);
 
 fn apply(s: &Settings) {
     leaf_torrent::set_route(leaf_torrent::Route { vpn_only: s.torrent_vpn_only, through_vpn: s.vpn_downloads });
+    leaf_torrent::set_no_upload(s.torrent_no_upload);
     LIMIT.store(u64::from(s.download_speed_limit) << 20, Ordering::Relaxed);
 }
 
@@ -534,7 +535,7 @@ pub fn settings_card(p: &Palette, s: &Settings) -> AnyElement {
             p,
             L::Download,
             t!("Torrents").into(),
-            Some(t!("Magnet links and .torrent files: open a .torrent file, or add a magnet link, choose its files, and leaf downloads them into the download folder. Nothing is uploaded once a torrent is complete, and nothing runs while no torrent does.").into()),
+            Some(t!("Magnet links and .torrent files: open a .torrent file, or add a magnet link, choose its files, and leaf downloads them into the download folder. Nothing runs while no torrent does.").into()),
             Some(
                 h_flex()
                     .gap_2()
@@ -548,6 +549,13 @@ pub fn settings_card(p: &Palette, s: &Settings) -> AnyElement {
             ),
         ))
         .child(card_body(p, L::ShieldCheck, t!("Torrents only while the VPN is on").into(), Some(vpn_desc.into()), Some(vpn_control)))
+        .child(card_body(
+            p,
+            L::Upload,
+            t!("Never upload").into(),
+            Some(t!("Nothing of a torrent is sent to other peers, also while it downloads: leaf tells no peer which pieces it has and refuses every request for one. Some peers give less to a client that gives nothing, so a download can be slower. Off: leaf uploads while a torrent downloads; once it is complete nothing is uploaded either way.").into()),
+            Some(sw("torrent-no-upload", p, s.torrent_no_upload, |s, v| s.torrent_no_upload = v)),
+        ))
         .into_any_element()
 }
 

@@ -9,7 +9,9 @@
 //!   of them can be put into the tunnel.
 //! - Only when the rule is turned off does the engine get the PC's own network (then with DHT and a listener), or the
 //!   general "Downloads through VPN" setting and its kill switch decide.
-//! - Nothing is uploaded after a torrent is complete: it leaves the engine the moment its last piece is checked.
+//! - Nothing is uploaded after a torrent is complete: it leaves the engine the moment its last piece is checked. With
+//!   "Never upload" ([`set_no_upload`], on by default) nothing of a torrent is uploaded while it downloads either: the
+//!   engine tells no peer which pieces it has and refuses every request for one.
 //! - Nothing runs while no torrent does: the runtime starts with the first one, the engine stops with the last.
 
 mod dht;
@@ -77,6 +79,19 @@ static THROUGH_VPN: AtomicBool = AtomicBool::new(false);
 pub fn set_route(route: Route) {
     VPN_ONLY.store(route.vpn_only, Ordering::Release);
     THROUGH_VPN.store(route.through_vpn, Ordering::Release);
+}
+
+static NO_UPLOAD: AtomicBool = AtomicBool::new(true);
+
+/// "Never upload": running torrents follow a change at once (the engine is started again with it).
+pub fn set_no_upload(on: bool) {
+    if NO_UPLOAD.swap(on, Ordering::AcqRel) != on {
+        engine::restart();
+    }
+}
+
+pub fn no_upload() -> bool {
+    NO_UPLOAD.load(Ordering::Acquire)
 }
 
 pub fn route() -> Route {

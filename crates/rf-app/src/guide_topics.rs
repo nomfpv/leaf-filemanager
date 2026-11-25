@@ -1006,6 +1006,7 @@ pub static TOPICS: &[Topic] = &[
         &[
             "\"Torrents only while the VPN is on\" (Settings > Advanced > Downloads) is on by default: everything a torrent sends goes through leaf's VPN and nowhere else. While the VPN is off or connecting, torrents wait as \"Waiting for the VPN\" and go on by themselves.",
             "A torrent with several files asks which of them to download.",
+            "\"Never upload\" (on by default) means nothing of a torrent is sent to other peers, also while it downloads. Some peers then give less, so a download can be slower.",
             "On the VPN route, trackers and the DHT are asked through the VPN, and leaf is never listed in the DHT. What cannot go through the VPN is off: incoming connections, port forwarding, local discovery and IPv6.",
             "Turn the rule off only if you want torrents on your own connection: every peer and tracker then sees your address. leaf asks before it does that.",
             "A download that was cut off goes on from what is on disk when leaf starts again.",

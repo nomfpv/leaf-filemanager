@@ -12,7 +12,8 @@ anyhow.workspace = true
 # the BitTorrent engine (Apache-2.0): peers, pieces, storage, HTTP trackers. No HTTP API, no web UI; DHT, the listener and
 # local discovery are only started on the direct route. Not its TLS feature (that would make aws-lc a second TLS crypto
 # library): its HTTPS gets rustls with ring, as the rest of leaf has it
-librqbit = { version = "9.1", default-features = false }
+# `disable-upload`: the switch for "Never upload" (no piece is offered or sent)
+librqbit = { version = "9.1", default-features = false, features = ["disable-upload"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 # ring is made the process's default provider for the engine's HTTPS (leaf's own TLS names its provider itself)
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
