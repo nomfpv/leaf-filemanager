@@ -180,6 +180,8 @@ fn stop_reason(ctl: &Control, tunnel: bool, generation: u64) -> Option<Result<Ro
 }
 
 async fn job(spec: &Spec, parsed: &Parsed, ctl: &Control, host: &dyn Host) -> Result<Done, Error> {
+    // (asked once, also when the route changes and the torrent is put into the engine again)
+    let mut chosen: Option<Vec<usize>> = spec.only.clone();
     let mut seen = Progress { step: Step::WaitingForVpn, name: parsed.name.clone(), done_bytes: 0, total_bytes: 0, peers: 0, tunnel: true };
     loop {
         let tunnel = loop {
@@ -199,7 +201,7 @@ async fn job(spec: &Spec, parsed: &Parsed, ctl: &Control, host: &dyn Host) -> Re
         };
         seen.tunnel = tunnel;
         let (session, generation) = session_for(tunnel, ctl.limit.load(Ordering::Relaxed)).await?;
-        match round(&session, generation, tunnel, spec, parsed, ctl, host, &mut seen).await? {
+        match round(&session, generation, tunnel, spec, parsed, ctl, host, &mut seen, &mut chosen).await? {
             Round::Done(d) => return Ok(d),
             Round::Again => continue,
         }
@@ -216,7 +218,7 @@ fn add_of(tunnel: bool, parsed: &Parsed, info: Option<&[u8]>) -> AddTorrent<'sta
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn round(session: &Arc<Session>, generation: u64, tunnel: bool, spec: &Spec, parsed: &Parsed, ctl: &Control, host: &dyn Host, seen: &mut Progress) -> Result<Round, Error> {
+async fn round(session: &Arc<Session>, generation: u64, tunnel: bool, spec: &Spec, parsed: &Parsed, ctl: &Control, host: &dyn Host, seen: &mut Progress, chosen: &mut Option<Vec<usize>>) -> Result<Round, Error> {
     let engine_err = |e: anyhow::Error| Error::Engine(format!("{e:#}"));
     // 1. what the torrent holds (a magnet link: asked from the first peers, which can take a while)
     seen.step = if parsed.info.is_some() { Step::Checking } else { Step::Metadata };
@@ -256,12 +258,35 @@ async fn round(session: &Arc<Session>, generation: u64, tunnel: bool, spec: &Spe
         _ => (spec.dest.join(&name), spec.dest.join(&name)),
     };
     seen.name = Some(name.clone());
+    // several files: which of them (asked once; the answer may wait for the user, so not on a thread the engine needs)
+    if files.len() > 1 && chosen.is_none() {
+        let list: Vec<(String, u64)> = files.iter().map(|(p, len)| (p.to_string_lossy().replace('\\', "/"), *len)).collect();
+        let picked = tokio::task::block_in_place(|| host.choose(&name, &list)).map(|mut v| {
+            v.retain(|i| *i < list.len());
+            v.sort_unstable();
+            v.dedup();
+            v
+        });
+        match picked {
+            Some(v) if !v.is_empty() => *chosen = Some(v),
+            _ => return Err(Error::Cancelled),
+        }
+        if let Some(out) = stop_reason(ctl, tunnel, generation) {
+            return out;
+        }
+    }
+    let only = chosen.clone().filter(|c| files.len() > 1 && c.len() < files.len());
+    let total = match &only {
+        Some(c) => c.iter().map(|i| files[*i].1).sum(),
+        None => total,
+    };
     seen.total_bytes = total;
     // 2. into the engine for real
     let opts = AddTorrentOptions {
         output_folder: Some(folder.to_string_lossy().into_owned()),
         // (a download that was started before goes on from what is there: the pieces on disk are checked first)
         overwrite: true,
+        only_files: only,
         initial_peers: test_peers().or((!peers.is_empty()).then_some(peers)),
         paused: ctl.paused.load(Ordering::Relaxed),
         ..Default::default()
@@ -308,7 +333,8 @@ async fn round(session: &Arc<Session>, generation: u64, tunnel: bool, spec: &Spe
             return Ok(Round::Done(Done { name, path: result, bytes: stats.total_bytes }));
         }
         seen.done_bytes = stats.progress_bytes;
-        seen.total_bytes = stats.total_bytes.max(total);
+        seen.total_bytes = if stats.total_bytes > 0 { stats.total_bytes } else { total };
+        seen.done_bytes = seen.done_bytes.min(seen.total_bytes);
         seen.peers = stats.live.as_ref().map_or(0, |l| l.snapshot.peer_stats.live as usize);
         seen.step = if paused {
             Step::Paused
@@ -379,7 +405,7 @@ mod tests {
         });
         *TEST_PEERS.lock().unwrap() = Some(vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port))]);
 
-        let spec = Spec { source: Source::File(torrent), dest: dest.clone() };
+        let spec = Spec { source: Source::File(torrent), dest: dest.clone(), only: None };
         let ctl = Control::default();
         let host = Quiet(AtomicBool::new(false));
         // the rule is on and there is no VPN: nothing starts; turning the rule off lets it go

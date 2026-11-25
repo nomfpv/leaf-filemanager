@@ -69,6 +69,8 @@ struct SavedJob {
     title: String,
     /// The folder the result goes into.
     dest: PathBuf,
+    /// The files chosen (by their place in the torrent), once the question was answered: not asked again after a restart.
+    only: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -131,7 +133,7 @@ fn short(hash: &str) -> String {
 pub fn start_magnet(magnet: String, dest: PathBuf, cx: &mut App) -> bool {
     let Ok((name, hash)) = leaf_torrent::describe(&Source::Magnet(magnet.clone())) else { return false };
     let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
-    let job = SavedJob { key, magnet: Some(magnet), file: None, title: name.unwrap_or_else(|| short(&hash)), dest };
+    let job = SavedJob { key, magnet: Some(magnet), file: None, title: name.unwrap_or_else(|| short(&hash)), dest, only: None };
     store().active.push(job.clone());
     persist();
     run_job(job, cx);
@@ -147,7 +149,7 @@ pub fn start_file(path: PathBuf, dest: PathBuf, cx: &mut App) {
         std::fs::copy(&path, c).is_ok()
     });
     let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| t!("Torrent").to_string());
-    let job = SavedJob { key, magnet: None, file: Some(copy.unwrap_or(path)), title, dest };
+    let job = SavedJob { key, magnet: None, file: Some(copy.unwrap_or(path)), title, dest, only: None };
     store().active.push(job.clone());
     persist();
     run_job(job, cx);
@@ -181,8 +183,112 @@ fn restore(cx: &mut App) {
 }
 
 pub fn init(cx: &mut App) {
+    use futures::StreamExt as _;
     apply(cx.global::<Settings>());
     restore(cx);
+    // the jobs' questions (which files), shown one at a time in a main window
+    if let Some(mut rx) = ASKS.1.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        cx.spawn(async move |cx| {
+            while let Some(q) = rx.next().await {
+                let mut pending = Some(q);
+                loop {
+                    let _ = cx.update(|cx| {
+                        let mains = crate::workspace::main_windows(cx);
+                        let Some(w) = cx.active_window().filter(|a| mains.contains(a)).or_else(|| mains.first().copied()) else {
+                            // no window to ask in: dropped, which the job reads as "cancelled"
+                            pending.take();
+                            return;
+                        };
+                        if w.update(cx, |_, window, cx| prompt::current(window, cx).is_some()).unwrap_or(false) {
+                            return;
+                        }
+                        if let Some(q) = pending.take() {
+                            let _ = w.update(cx, move |_, window, cx| {
+                                window.activate_window();
+                                q(window, cx);
+                            });
+                        }
+                    });
+                    if pending.is_none() {
+                        break;
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// questions on the UI thread (which files)
+
+type Ask = Box<dyn FnOnce(&mut Window, &mut App) + Send>;
+
+static ASKS: LazyLock<(futures::channel::mpsc::UnboundedSender<Ask>, Mutex<Option<futures::channel::mpsc::UnboundedReceiver<Ask>>>)> = LazyLock::new(|| {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    (tx, Mutex::new(Some(rx)))
+});
+
+/// What the files dialog said.
+enum Picked {
+    Files(Vec<usize>),
+    Cancel,
+}
+
+/// Asks which of a torrent's files to download (all ticked at first) and waits for the answer. `None`: cancelled.
+fn ask_files(tr: &Tracker, name: &str, files: &[(String, u64)]) -> Option<Vec<usize>> {
+    let all: Vec<usize> = (0..files.len()).collect();
+    let (tx, rx) = std::sync::mpsc::channel::<Picked>();
+    (tr.on_progress)(0, 0, Some(t!("Waiting for you to choose the files").to_string()));
+    let (name, files) = (name.to_string(), files.to_vec());
+    let ask: Ask = Box::new(move |window, cx| {
+        let cells: Vec<std::rc::Rc<std::cell::Cell<bool>>> = files.iter().map(|_| std::rc::Rc::new(std::cell::Cell::new(true))).collect();
+        let checks: Vec<prompt::Check> = files.iter().zip(&cells).map(|((path, len), on)| prompt::Check { label: path.clone().into(), note: size_text(*len).into(), on: on.clone(), enabled: true }).collect();
+        let tx = std::rc::Rc::new(std::cell::Cell::new(Some(tx)));
+        let (ok_tx, no_tx) = (tx.clone(), tx);
+        let total: u64 = files.iter().map(|f| f.1).sum();
+        prompt::show_with_checks(
+            t!("Choose the files to download"),
+            Some(format!("{name}\n{} {} · {}", files.len(), t!("files"), size_text(total))),
+            None,
+            Vec::new(),
+            checks,
+            vec![
+                Button::new(t!("Download"), Kind::Primary, move |_, _, _| {
+                    let picked: Vec<usize> = cells.iter().enumerate().filter(|(_, c)| c.get()).map(|(i, _)| i).collect();
+                    if picked.is_empty() {
+                        return Err(t!("Tick at least one file").to_string());
+                    }
+                    if let Some(t) = ok_tx.take() {
+                        let _ = t.send(Picked::Files(picked));
+                    }
+                    Ok(())
+                }),
+                Button::new(t!("Cancel"), Kind::Normal, move |_, _, _| {
+                    if let Some(t) = no_tx.take() {
+                        let _ = t.send(Picked::Cancel);
+                    }
+                    Ok(())
+                }),
+            ],
+            window,
+            cx,
+        );
+    });
+    if ASKS.0.unbounded_send(ask).is_err() {
+        return Some(all);
+    }
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(Picked::Files(v)) => return Some(v),
+            Ok(Picked::Cancel) => return None,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !tr.cancel.load(Ordering::Relaxed) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return None,
+            // the dialog went without an answer (Escape), or there was no window to ask in: nothing is downloaded unasked
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
 }
 
 fn run_job(job: SavedJob, cx: &mut App) {
@@ -263,6 +369,7 @@ fn size_text(b: u64) -> String {
 struct Link<'a> {
     tr: &'a Tracker,
     label: Mutex<String>,
+    key: u64,
 }
 
 impl leaf_torrent::Host for Link<'_> {
@@ -290,6 +397,16 @@ impl leaf_torrent::Host for Link<'_> {
         drop(last);
         (self.tr.on_progress)(1000, permille, name);
     }
+
+    fn choose(&self, name: &str, files: &[(String, u64)]) -> Option<Vec<usize>> {
+        let picked = ask_files(self.tr, name, files)?;
+        // (kept with the job: a restart does not ask again)
+        if let Some(a) = store().active.iter_mut().find(|a| a.key == self.key) {
+            a.only = Some(picked.clone());
+        }
+        persist();
+        Some(picked)
+    }
 }
 
 fn work(tr: &Tracker, job: &SavedJob, got: &Arc<Mutex<Option<PathBuf>>>, failed: &AtomicBool) -> anyhow::Result<bool> {
@@ -310,8 +427,8 @@ fn work(tr: &Tracker, job: &SavedJob, got: &Arc<Mutex<Option<PathBuf>>>, failed:
         return fail(format!("{} {}\n{e}", t!("The folder could not be made:"), job.dest.display()));
     }
     let ctl = leaf_torrent::Control { cancel: tr.cancel.clone(), paused: tr.paused.clone(), limit: LIMIT.clone() };
-    let link = Link { tr, label: Mutex::new(String::new()) };
-    match leaf_torrent::run(&leaf_torrent::Spec { source, dest: job.dest.clone() }, &ctl, &link) {
+    let link = Link { tr, label: Mutex::new(String::new()), key: job.key };
+    match leaf_torrent::run(&leaf_torrent::Spec { source, dest: job.dest.clone(), only: job.only.clone() }, &ctl, &link) {
         Ok(done) => {
             *got.lock().unwrap_or_else(|e| e.into_inner()) = Some(done.path);
             Ok(true)
@@ -399,7 +516,7 @@ pub fn settings_card(p: &Palette, s: &Settings) -> AnyElement {
     let vpn_desc = if !s.vpn_signed_in && on {
         t!("You are not signed in to leaf's VPN, so torrents wait. Sign in on the VPN page.").to_string()
     } else if on {
-        t!("Everything a torrent sends (peers, trackers, name lookups) goes through leaf's VPN and nowhere else. While the VPN is off or connecting, torrents wait and go on by themselves when it is back. What cannot go through the VPN is off: DHT, incoming connections, port forwarding, local discovery and IPv6.").to_string()
+        t!("Everything a torrent sends (peers, trackers, name lookups) goes through leaf's VPN and nowhere else. While the VPN is off or connecting, torrents wait and go on by themselves when it is back. The DHT is only asked, through the VPN; leaf is never listed there. What cannot go through the VPN is off: incoming connections, port forwarding, local discovery and IPv6.").to_string()
     } else {
         t!("Off: torrents use this PC's own connection, and peers and trackers see its address.").to_string()
     };
@@ -417,7 +534,7 @@ pub fn settings_card(p: &Palette, s: &Settings) -> AnyElement {
             p,
             L::Download,
             t!("Torrents").into(),
-            Some(t!("Magnet links and .torrent files: open a .torrent file, or add a magnet link, and leaf downloads it into the download folder. Nothing is uploaded once a torrent is complete, and nothing runs while no torrent does.").into()),
+            Some(t!("Magnet links and .torrent files: open a .torrent file, or add a magnet link, choose its files, and leaf downloads them into the download folder. Nothing is uploaded once a torrent is complete, and nothing runs while no torrent does.").into()),
             Some(
                 h_flex()
                     .gap_2()

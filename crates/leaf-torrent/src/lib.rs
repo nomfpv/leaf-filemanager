@@ -4,13 +4,15 @@
 //! - **The owner's rule** ([`Route`], [`decide`]): with "Torrents only while the VPN is on" (on by default) everything a
 //!   torrent sends goes through leaf's VPN and nowhere else, or it waits. On that route the engine has no socket of its own
 //!   to the outside: peers and HTTP trackers go through a private SOCKS entrance into the tunnel (names are looked up
-//!   inside it), UDP trackers through [`gateway`] (UDP inside the tunnel), and DHT, the listener, uTP, port forwarding,
-//!   local discovery and IPv6 are off, because none of them can be put into the tunnel.
+//!   inside it), UDP and HTTPS trackers through [`gateway`], the DHT is only asked, by leaf itself through the tunnel
+//!   (`dht`), and the engine's own DHT, the listener, uTP, port forwarding, local discovery and IPv6 are off, because none
+//!   of them can be put into the tunnel.
 //! - Only when the rule is turned off does the engine get the PC's own network (then with DHT and a listener), or the
 //!   general "Downloads through VPN" setting and its kill switch decide.
 //! - Nothing is uploaded after a torrent is complete: it leaves the engine the moment its last piece is checked.
 //! - Nothing runs while no torrent does: the runtime starts with the first one, the engine stops with the last.
 
+mod dht;
 mod engine;
 pub mod gateway;
 pub mod source;
@@ -101,6 +103,9 @@ pub struct Spec {
     pub source: Source,
     /// The folder the result goes into: a single file straight into it, several files into a folder named after the torrent.
     pub dest: PathBuf,
+    /// The files to download, by their place in the torrent, when that was chosen before (a download carried on); else
+    /// [`Host::choose`] is asked.
+    pub only: Option<Vec<usize>>,
 }
 
 /// The job's switches, read while it runs.
@@ -139,6 +144,11 @@ pub struct Progress {
 
 pub trait Host: Sync {
     fn progress(&self, p: &Progress);
+    /// A torrent with several files: which of them to download, by their place in `files` (path and size). `None`: none,
+    /// the download is cancelled. May wait for the user.
+    fn choose(&self, _name: &str, files: &[(String, u64)]) -> Option<Vec<usize>> {
+        Some((0..files.len()).collect())
+    }
 }
 
 #[derive(Debug)]

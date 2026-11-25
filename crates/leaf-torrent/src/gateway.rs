@@ -43,7 +43,16 @@ async fn serve(mut s: tokio::io::DuplexStream) {
     if tokio::time::timeout(Duration::from_secs(10), read).await.ok().flatten().is_none() {
         return;
     }
-    let body = if let Some(t) = TlsTarget::parse(&head) {
+    let body = if let Some(hash) = dht_target(&head) {
+        // (the DHT is only asked, through the tunnel; with no peers yet it is asked again sooner)
+        match tokio::time::timeout(Duration::from_secs(25), crate::dht::lookup(hash)).await.unwrap_or_else(|_| Err("the DHT did not answer".into())) {
+            Ok(peers) => Answer { interval: if peers.is_empty() { 120 } else { 600 }, peers }.body(),
+            Err(why) => {
+                log::debug!("torrent: DHT: {why}");
+                failure(&why)
+            }
+        }
+    } else if let Some(t) = TlsTarget::parse(&head) {
         match tokio::time::timeout(Duration::from_secs(45), relay_tls(&t)).await.unwrap_or_else(|_| Err("the tracker did not answer".into())) {
             Ok(b) => b,
             Err(why) => {
@@ -172,6 +181,19 @@ impl Request {
     }
 }
 
+/// `GET /dht?info_hash=.. HTTP/1.1`: the hash to look up in the DHT.
+pub(crate) fn dht_target(head: &[u8]) -> Option<[u8; 20]> {
+    let text = std::str::from_utf8(head).ok()?;
+    let mut parts = text.lines().next()?.split(' ');
+    if parts.next()? != "GET" {
+        return None;
+    }
+    let target = parts.next()?;
+    let target = target.strip_prefix("http://").map(|t| t.find('/').map_or("/", |i| &t[i..])).unwrap_or(target);
+    let query = target.strip_prefix("/dht?")?;
+    query.split('&').find_map(|p| p.strip_prefix("info_hash=")).and_then(|v| unpercent(v).try_into().ok())
+}
+
 /// An HTTPS tracker's announce to pass on.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TlsTarget {
@@ -226,7 +248,7 @@ fn tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
 
 /// A tracker's public address, looked up inside the tunnel (one that points to this PC or the local network is not asked
 /// through the VPN, and never directly).
-async fn public_ip(tunnel: &leaf_vpn::Tunnel, host: &str) -> Result<Ipv4Addr, String> {
+pub(crate) async fn public_ip(tunnel: &leaf_vpn::Tunnel, host: &str) -> Result<Ipv4Addr, String> {
     let ips = tunnel.resolve(host).await.map_err(|e| e.to_string())?;
     ips.into_iter().find(|ip| !ip.is_unspecified() && !leaf_vpn::route::is_lan_ip(IpAddr::V4(*ip))).ok_or_else(|| "the tracker's name has no public address".to_string())
 }
@@ -417,6 +439,13 @@ mod tests {
         assert!(Request::parse(b"GET /udp/a.example.com/80?info_hash=abc&peer_id=-rQ0001-abcdefghijkl HTTP/1.1\r\n\r\n").is_none());
         assert!(Request::parse(b"GET /udp/a_b/80?info_hash=abc HTTP/1.1\r\n\r\n").is_none());
         assert!(Request::parse(b"GET /a.example.com/80?info_hash=aaaaaaaaaaaaaaaaaaaa&peer_id=bbbbbbbbbbbbbbbbbbbb HTTP/1.1\r\n\r\n").is_none());
+    }
+
+    #[test]
+    fn the_dht_address_gives_the_hash() {
+        assert_eq!(dht_target(b"GET /dht?info_hash=aaaaaaaaaaaaaaaaaaa%62&peer_id=x HTTP/1.1\r\n\r\n"), Some(*b"aaaaaaaaaaaaaaaaaaab"));
+        assert_eq!(dht_target(b"GET /dht?info_hash=short HTTP/1.1\r\n\r\n"), None);
+        assert_eq!(dht_target(b"GET /udp/dht/80?info_hash=aaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\n\r\n"), None);
     }
 
     #[test]

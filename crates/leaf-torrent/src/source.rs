@@ -126,6 +126,10 @@ pub(crate) fn trackers_for(tunnel: bool, p: &Parsed) -> Vec<String> {
         return p.trackers.clone();
     }
     let mut out: Vec<String> = Vec::new();
+    // (the DHT, asked through the tunnel by leaf: not for a private torrent, which must keep to its own trackers)
+    if !p.private {
+        out.push(format!("http://{GATEWAY_HOST}/dht"));
+    }
     let extra = if p.private { &[][..] } else { EXTRA_TRACKERS };
     for t in p.trackers.iter().map(String::as_str).chain(extra.iter().copied()) {
         let t = t.trim();
@@ -229,8 +233,8 @@ mod tests {
         assert!(t.contains(&format!("http://{GATEWAY_HOST}/udp/other.example.com/80")));
         assert!(t.contains(&format!("http://{GATEWAY_HOST}/tls/example.com/443/announce")));
         assert!(!t.iter().any(|t| t.contains("2001") || t.contains("bad") || t.contains("noport") || t.contains("wss")));
-        // (the public ones are added, each through the gateway)
-        assert!(t.len() > 3);
+        // (the public ones are added, each through the gateway, and the DHT, asked through it)
+        assert!(t.len() > 4 && t.contains(&format!("http://{GATEWAY_HOST}/dht")));
         // direct: as the torrent has them
         assert_eq!(trackers_for(false, &p), p.trackers);
     }
